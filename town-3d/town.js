@@ -336,6 +336,23 @@ export function createCottage(THREE, manifest = {}, options = {}) {
   const wallMat = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.88 });
   const roofMat = new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.85 });
   const trimMat = new THREE.MeshStandardMaterial({ color: trimColor, roughness: 0.82 });
+  // Warm lit windows: the town is a night scene, and a house with no windows
+  // looks dead. The emissive glass glows without needing a light source.
+  const windowMat = new THREE.MeshStandardMaterial({
+    color: '#ffd489', emissive: '#ffbe5c', emissiveIntensity: 1.4, roughness: 0.4,
+  });
+  function addWindow(x, y, z, rotY) {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.0, 0.08), trimMat);
+    frame.name = 'cottage_window_frame';
+    frame.position.set(x, y, z);
+    frame.rotation.y = rotY;
+    group.add(frame);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.1), windowMat);
+    glass.name = 'cottage_window';
+    glass.position.set(x, y, z);
+    glass.rotation.y = rotY;
+    group.add(glass);
+  }
 
   if (style === 'tower') {
     const body = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.9, 4.4, 8), wallMat);
@@ -352,6 +369,10 @@ export function createCottage(THREE, manifest = {}, options = {}) {
     door.name = 'cottage_door';
     door.position.set(0, 0.8, 1.82);
     group.add(door);
+
+    // Two small front windows, sunk slightly into the curved wall.
+    addWindow(0, 1.7, 1.78, 0);
+    addWindow(0, 3.1, 1.72, 0);
   } else if (style === 'cabin') {
     const body = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.1, 3.4), wallMat);
     body.name = 'cabin_body';
@@ -368,6 +389,11 @@ export function createCottage(THREE, manifest = {}, options = {}) {
     door.name = 'cottage_door';
     door.position.set(0, 0.75, 1.72);
     group.add(door);
+
+    addWindow(-1.3, 1.15, 1.71, 0);
+    addWindow(1.3, 1.15, 1.71, 0);
+    addWindow(-2.11, 1.15, 0, Math.PI / 2);
+    addWindow(2.11, 1.15, 0, Math.PI / 2);
   } else {
     // Gable cottage (supports two-story + rooftop terrace for Milo's rebuild)
     const twoStory = Boolean(options.twoStory);
@@ -421,6 +447,17 @@ export function createCottage(THREE, manifest = {}, options = {}) {
     door.name = 'cottage_door';
     door.position.set(0, 0.78, 1.72);
     group.add(door);
+
+    // Ground floor: two front windows flanking the door, one per side.
+    addWindow(-1.25, 1.15, 1.71, 0);
+    addWindow(1.25, 1.15, 1.71, 0);
+    addWindow(-2.01, 1.15, 0, Math.PI / 2);
+    addWindow(2.01, 1.15, 0, Math.PI / 2);
+    // Upper floor (two-story only): two front windows.
+    if (twoStory) {
+      addWindow(-1.05, 2.9, 1.61, 0);
+      addWindow(1.05, 2.9, 1.61, 0);
+    }
   }
 
   if (safeManifest.signpost_text) {
