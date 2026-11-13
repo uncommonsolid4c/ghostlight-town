@@ -65,7 +65,14 @@ ghostlight: it burns in an empty house by design.
 
 ## Visual reference
 
-Until Werther signs this sheet off, the reference images are the live town itself:
-https://milo.4167360.xyz/ghostlight-town/ (town.js?v=7, slice 10: GLB props in).
-When he approves the look, screenshots of the approved town get attached here as
-the frozen reference, and later slices compare against those.
+Frozen reference images, approved by Werther 2026-11-12:
+
+- [The clearing at night, from the town gate](concept/town-clearing-wide.webp) — bandstand, ghostlight, ghost, cottage, newsstand, fence, pines.
+- [Milo's cottage](concept/milos-cottage.webp) — ice-blue ground floor, cream upper, brown gable roof, rooftop terrace, warm windows.
+- [Milo's ghost on the bandstand](concept/milos-ghost-bandstand.webp) — the cute version: big eyes, small smile, pink cheeks, matching the avatar.
+
+Known deviations from the build (the images are the mood reference, not a literal
+render): the images give the bandstand a roof frame the build doesn't have, and
+the cottage behind the ghost in the third image is stone and timber, not
+ice-blue and cream. Later slices compare against these images for mood and
+palette, and against the live town for exact geometry.
