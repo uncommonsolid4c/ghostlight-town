@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { DatabaseSync } from 'node:sqlite';
 import { createTownServer, rawPubkeyToKeyObject, buildCanonicalString } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
 
@@ -61,7 +62,8 @@ test('town.json is valid, matches server routes, auth constants, and caps', asyn
   const raw = fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8');
   const town = JSON.parse(raw);
 
-  assert.equal(town.live, false);
+  assert.equal(town.live, true);
+  assert.ok(Array.isArray(town.origins) && town.origins.includes('direct'));
   assert.equal(town.gathering_place, 'Ghostlight Bandstand');
   assert.equal(town.currency, null);
   assert.equal(town.upkeep, null);
@@ -172,7 +174,8 @@ test('SKILL.md contains required facts and omits forbidden claims', () => {
   assert.ok(md.includes('invite_code'));
   assert.ok(md.includes('admin/approve'));
   assert.ok(lower.includes('losing your private key means losing your plot'));
-  assert.ok(lower.includes('not up yet'));
+  assert.equal(lower.includes('not up yet'), false, 'SKILL.md must reflect that the live API is up');
+  assert.ok(lower.includes('direct'));
 
   // Forbidden claims
   const oldWord = 'camp' + 'fire';
@@ -292,6 +295,155 @@ test('openssl CLI keygen from SKILL.md produces a valid 32-byte pubkey and signs
     );
     assert.equal(ok, true);
   } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('direct origin works on join and admin/invite, and invalid origins are rejected 400', async () => {
+  const srv = await startTestServer();
+  try {
+    // Join with origin: 'direct' without invite -> 201 pending
+    const k1 = generateKeypair();
+    const c1 = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'direct-pending',
+      pubkey: k1.pubkey,
+      privateKeyPem: k1.privateKeyPem,
+    });
+    const j1 = await c1.join({ origin: 'direct', bio: 'Arrived from the town page.' });
+    assert.equal(j1.status, 201);
+    assert.equal(j1.data.status, 'pending');
+    assert.equal(j1.data.origin, 'direct');
+
+    // admin/invite with origin: 'direct' -> 201
+    const inv = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'direct-invited',
+      origin: 'direct',
+    });
+    assert.equal(inv.status, 201);
+    assert.equal(inv.data.origin, 'direct');
+    assert.ok(inv.data.code);
+
+    // Join with origin: 'direct' and valid invite -> 201 active
+    const k2 = generateKeypair();
+    const c2 = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'direct-invited',
+      pubkey: k2.pubkey,
+      privateKeyPem: k2.privateKeyPem,
+    });
+    const j2 = await c2.join({ origin: 'direct', invite_code: inv.data.code });
+    assert.equal(j2.status, 201);
+    assert.equal(j2.data.status, 'active');
+    assert.equal(j2.data.origin, 'direct');
+
+    // Invalid origin 'nowhere' rejected 400 on join and on admin/invite
+    const k3 = generateKeypair();
+    const c3 = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'bad-origin-muse',
+      pubkey: k3.pubkey,
+      privateKeyPem: k3.privateKeyPem,
+    });
+    const badJoin = await c3.join({ origin: 'nowhere' });
+    assert.equal(badJoin.status, 400);
+    assert.equal(badJoin.data?.error, 'invalid_origin');
+
+    const badInvite = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      origin: 'nowhere',
+    });
+    assert.equal(badInvite.status, 400);
+    assert.equal(badInvite.data?.error, 'invalid_origin');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('startup migration upgrades old residents origin CHECK while preserving existing rows', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-migrate-test-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+
+  // Seed DB with the pre-slice-35 residents schema (old CHECK constraint)
+  const seedDb = new DatabaseSync(dbPath);
+  seedDb.exec(`
+    CREATE TABLE residents (
+      handle          TEXT PRIMARY KEY,
+      pubkey          TEXT NOT NULL,
+      origin          TEXT NOT NULL CHECK (origin IN ('musebook', 'colony', 'rstation', 'guestbook')),
+      status          TEXT NOT NULL CHECK (status IN ('pending', 'active', 'muted', 'suspended')),
+      role            TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc')),
+      bio             TEXT NOT NULL DEFAULT '',
+      plot_updated_at INTEGER,
+      created_at      INTEGER NOT NULL
+    );
+  `);
+
+  const kColony = generateKeypair();
+  const kMusebook = generateKeypair();
+  seedDb
+    .prepare(
+      'INSERT INTO residents (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    .run('wick', kColony.pubkey, 'colony', 'active', 'npc', 'Stagehand / Lamp-Trimmer', 1700000100, 1700000000);
+  seedDb
+    .prepare(
+      'INSERT INTO residents (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    .run('milo-friend', kMusebook.pubkey, 'musebook', 'pending', 'muse', 'Founding neighbor', null, 1700000050);
+  seedDb.close();
+
+  const { server, db } = createTownServer({
+    dbPath,
+    plotsDir,
+    operatorPubkey: operatorKeys.pubkey,
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const rows = db.prepare('SELECT * FROM residents ORDER BY handle').all();
+    assert.equal(rows.length, 2);
+    assert.deepEqual({ ...rows[0] }, {
+      handle: 'milo-friend',
+      pubkey: kMusebook.pubkey,
+      origin: 'musebook',
+      status: 'pending',
+      role: 'muse',
+      bio: 'Founding neighbor',
+      plot_updated_at: null,
+      created_at: 1700000050,
+    });
+    assert.deepEqual({ ...rows[1] }, {
+      handle: 'wick',
+      pubkey: kColony.pubkey,
+      origin: 'colony',
+      status: 'active',
+      role: 'npc',
+      bio: 'Stagehand / Lamp-Trimmer',
+      plot_updated_at: 1700000100,
+      created_at: 1700000000,
+    });
+
+    const master = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'residents'")
+      .get();
+    assert.ok(master.sql.includes("'direct'"));
+
+    const kDirect = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl,
+      handle: 'new-direct-muse',
+      pubkey: kDirect.pubkey,
+      privateKeyPem: kDirect.privateKeyPem,
+    });
+    const res = await client.join({ origin: 'direct', bio: 'Joined after migration' });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.origin, 'direct');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
