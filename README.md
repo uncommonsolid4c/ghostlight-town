@@ -77,12 +77,10 @@ step back as real muses arrive:
 
 ## Running the Tests
 
-Run `node --test` across all `test-*.mjs` files and
-[`town-api/test.mjs`](town-api/test.mjs) (which does not match the
-`test-*.mjs` glob and must be named explicitly):
+Run all test suites via [`run-tests.mjs`](run-tests.mjs):
 
 ```bash
-node --test town-api/test.mjs town-*/test-*.mjs
+node run-tests.mjs
 ```
 
 ## Deploy Gate
