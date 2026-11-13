@@ -1017,3 +1017,54 @@ test('Slice 15: newsstand paper stack sits on a wood shelf with two support brac
     'brackets must be positioned on opposite sides under the shelf'
   );
 });
+
+test('Slice 36: signpost text wraps deterministically without measureText', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const charBudget = (size) => Math.floor(480 / (0.6 * size));
+
+  // 1. "OPEN PLOT #1" stays exactly 1 line at 28 px
+  assert.ok(applyPlotManifest(town, 'signpost-open', { ...MILO_REBUILD_MANIFEST, signpost_text: 'OPEN PLOT #1' }));
+  const openSign = collectNodes(town.scene, (n) => n.name === 'cottage_signpost' && n.userData?.signpostText === 'OPEN PLOT #1')[0];
+  assert.ok(openSign, 'cottage_signpost with OPEN PLOT #1 must exist');
+  assert.deepEqual(openSign.userData.signpostLines, ['OPEN PLOT #1']);
+  assert.equal(openSign.userData.signpostFontSize, 28);
+
+  // 2. "Milo — Ghostlight Cottage (rebuilt)" wraps to 2 lines at 28 px
+  const miloText = 'Milo — Ghostlight Cottage (rebuilt)';
+  assert.ok(applyPlotManifest(town, 'signpost-milo', { ...MILO_REBUILD_MANIFEST, signpost_text: miloText }));
+  let sign = collectNodes(town.scene, (n) => n.userData?.signpostText === miloText)[0];
+  assert.ok(sign, 'Milo signpost must exist after applyPlotManifest');
+  assert.equal(sign.userData.signpostFontSize, 28);
+  assert.equal(sign.userData.signpostLines.length, 2);
+  assert.ok(sign.userData.signpostLines.every((l) => l.length > 0 && l.length <= 28));
+  assert.equal(sign.userData.signpostLines.join(' ').replace(/\s+/g, ' '), miloText);
+
+  // 3. 120-char signpost text fits in <= 3 lines within its font-size char budget
+  const longText = 'The Grand Ghostlight Observatory & Archive of Midnight Cartography, Field Notes, Lanterns, and Quiet Tea Studies';
+  const worstCase120 = (longText + ' ' + longText).slice(0, 120);
+  assert.ok(applyPlotManifest(town, 'signpost-long', { ...MILO_REBUILD_MANIFEST, signpost_text: worstCase120 }));
+  sign = collectNodes(town.scene, (n) => n.userData?.signpostText === worstCase120)[0];
+  assert.ok(sign, '120-char signpost must exist');
+  assert.ok([20, 24, 28].includes(sign.userData.signpostFontSize));
+  assert.ok(sign.userData.signpostLines.length >= 1 && sign.userData.signpostLines.length <= 3);
+  const longBudget = charBudget(sign.userData.signpostFontSize);
+  assert.ok(
+    sign.userData.signpostLines.every((l) => l.length > 0 && l.length <= longBudget),
+    `every line must be non-empty and <= ${longBudget} chars`
+  );
+
+  // 4. Single 40-char word with no spaces splits by character and fits in <= 3 lines
+  const word40 = 'A'.repeat(40);
+  assert.ok(applyPlotManifest(town, 'signpost-word40', { ...MILO_REBUILD_MANIFEST, signpost_text: word40 }));
+  sign = collectNodes(town.scene, (n) => n.userData?.signpostText === word40)[0];
+  assert.ok(sign, '40-char word signpost must exist');
+  assert.ok([20, 24, 28].includes(sign.userData.signpostFontSize));
+  assert.ok(sign.userData.signpostLines.length >= 1 && sign.userData.signpostLines.length <= 3);
+  const wordBudget = charBudget(sign.userData.signpostFontSize);
+  assert.ok(
+    sign.userData.signpostLines.every((l) => l.length > 0 && l.length <= wordBudget),
+    `split word lines must be non-empty and <= ${wordBudget} chars`
+  );
+  assert.equal(sign.userData.signpostLines.join(''), word40);
+});
