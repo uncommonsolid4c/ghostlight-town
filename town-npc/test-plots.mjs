@@ -67,12 +67,55 @@ test('NPC desk notes: pass HTML sanitizer, in-character, no cross-voice bleed', 
   }
 });
 
-test('static checks: no banned term, no external URLs, no hardcoded host/port in NPC plot files', () => {
+test('Milo plot manifest: matches shipped MILO_REBUILD_MANIFEST field-for-field and validates', () => {
+  // Expected values copied from MILO_REBUILD_MANIFEST in town-3d/town.js.
+  // Drift check: if the shipped 3D render changes, this test must fail until
+  // town-npc/plots/milo/manifest.json is updated to match.
+  const expectedMiloManifest = {
+    cottage: 'gable',
+    wall: '#a8d8ea',
+    roof: '#5a4332',
+    trim: '#f5efe0',
+    signpost_text: 'Milo — Ghostlight Cottage (rebuilt)',
+    props: [
+      { kind: 'desk', x: -1.2, y: 0, z: 2.2, rot_y: 180, color: '#7a5230' },
+      { kind: 'tea_kettle', x: -1.0, y: 0.78, z: 2.2, rot_y: 45, color: '#b87333' },
+      { kind: 'cat', x: 1.3, y: 0, z: 2.1, rot_y: 210, color: '#2b2b2b' },
+    ],
+  };
+
+  const manifestPath = path.join(PLOTS_DIR, 'milo', 'manifest.json');
+  assert.ok(fs.existsSync(manifestPath), 'missing manifest for milo');
+
+  const raw = fs.readFileSync(manifestPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  const result = validateManifest(parsed);
+  assert.equal(result.ok, true, `milo manifest invalid: ${JSON.stringify(result)}`);
+
+  assert.deepEqual(parsed, expectedMiloManifest);
+});
+
+test('Milo desk note: passes HTML sanitizer and mentions Milo', () => {
+  const notePath = path.join(PLOTS_DIR, 'milo', 'desk-note.html');
+  assert.ok(fs.existsSync(notePath), 'missing desk-note.html for milo');
+
+  const html = fs.readFileSync(notePath, 'utf8');
+  assert.equal(typeof html, 'string');
+  assert.ok(html.trim().length > 0, 'milo desk-note.html is empty');
+
+  const result = validateHtml(html);
+  assert.equal(result.ok, true, `milo desk-note.html failed validateHtml: ${JSON.stringify(result)}`);
+  assert.ok(/\bMilo\b/.test(html), 'milo desk-note.html must mention Milo');
+});
+
+test('static checks: no banned term, no external URLs, no hardcoded host/port in NPC and Milo plot files', () => {
   const filesToCheck = [];
   for (const npc of CHARACTERS) {
     filesToCheck.push(path.join(PLOTS_DIR, npc.handle, 'manifest.json'));
     filesToCheck.push(path.join(PLOTS_DIR, npc.handle, 'desk-note.html'));
   }
+  filesToCheck.push(path.join(PLOTS_DIR, 'milo', 'manifest.json'));
+  filesToCheck.push(path.join(PLOTS_DIR, 'milo', 'desk-note.html'));
   filesToCheck.push(path.resolve('town-npc/test-plots.mjs'));
 
   for (const filePath of filesToCheck) {
