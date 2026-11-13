@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { createTownServer } from '../town-api/server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from '../town-api/ghostlight-client.mjs';
 import { CHARACTERS, buildSystemPrompt } from './characters.mjs';
-import { decideTurn, localDateString } from './stepback.mjs';
+import { decideTurn, selectReplierForLine, localDateString } from './stepback.mjs';
 import { checkHonesty, HONESTY_DENYLIST, MAX_SAY_LEN } from './honesty.mjs';
 import { ensureKeypair, loadKeypair } from './keygen.mjs';
 import { runTurn, trimMemory, MEMORY_MAX_BYTES } from './run.mjs';
@@ -64,12 +64,12 @@ test('step-back: all handover, lit-muse, reply, and ambient cap rules', () => {
   const now = 1_760_000_000;
   const today = localDateString(now);
 
-  // 1. 0 lit real muses + real muse spoke 1h ago -> initiate
+  // 1. 0 lit real muses + real muse spoke 4h ago (outside 3h reply window) -> initiate
   const r1 = decideTurn({
     npc: wick,
     state: {
       footlights: [],
-      prompt_book: [{ handle: 'alice', role: 'muse', body: 'nice evening', created_at: now - 3600 }],
+      prompt_book: [{ handle: 'alice', role: 'muse', body: 'nice evening', created_at: now - 4 * 3600 }],
       presence: [],
     },
     npcState: { ambient_today: 0, ambient_date: today },
@@ -297,7 +297,7 @@ test('runner dry-run and dishonest draft rejection', async () => {
     const fakeState = {
       footlights: [],
       prompt_book: [
-        { handle: 'alice', role: 'muse', kind: 'say', body: 'Evening at the Bandstand.', created_at: 1_760_000_000 },
+        { id: 3, handle: 'alice', role: 'muse', kind: 'say', body: 'Evening at the Bandstand.', created_at: 1_760_000_000 },
       ],
       presence: [],
     };
@@ -325,6 +325,8 @@ test('runner dry-run and dishonest draft rejection', async () => {
     assert.equal(brainCalled, false);
     assert.ok(dry.prompt.includes('Wick'));
     assert.ok(dry.prompt.includes('Evening at the Bandstand.'));
+    assert.ok(dry.prompt.includes("alice's line #3"));
+    assert.ok(dry.prompt.includes('You are the one neighbor answering this line'));
     assert.equal(fs.existsSync(path.join(tmpDir, 'wick')), false, 'dry-run writes nothing');
 
     // Dishonest draft is rejected and posts nothing
@@ -465,4 +467,98 @@ test('static checks: no campfire, no hardcoded homelab host/port, no unauthorize
 
   const skillContent = fs.readFileSync(path.resolve('SKILL.md'), 'utf8');
   assert.ok(!/campfire/i.test(skillContent), 'no campfire in SKILL.md');
+});
+
+test('per-line reply selectivity: rotation, addressed, answered, stale, plot-zone, stability', () => {
+  const [wick, maren, tomas] = CHARACTERS;
+  const now = 1_760_000_000;
+  const today = localDateString(now);
+  const npcState = { ambient_today: 0, ambient_date: today };
+
+  // 1. One unaddressed muse line, all three NPCs -> exactly one reply (rotation), other two silent
+  const state1 = {
+    footlights: [],
+    prompt_book: [
+      { id: 1, handle: 'lampmoth', role: 'muse', kind: 'say', body: 'Evening, Bandstand...', created_at: now - 600 },
+    ],
+    presence: [],
+  };
+  const d1 = CHARACTERS.map((npc) => ({ handle: npc.handle, ...decideTurn({ npc, state: state1, npcState, now }) }));
+  assert.equal(d1.filter((d) => d.action === 'reply').length, 1);
+  assert.equal(d1.filter((d) => d.action === 'silent').length, 2);
+  const marenD1 = d1.find((d) => d.handle === 'maren');
+  assert.equal(marenD1.action, 'reply');
+  assert.deepEqual(marenD1.replyLine, { id: 1, handle: 'lampmoth' });
+  assert.ok(d1.find((d) => d.handle === 'wick').reason.includes('maren is'));
+  assert.ok(d1.find((d) => d.handle === 'tomas').reason.includes('maren is'));
+
+  // 2. Addressed line -> addressed NPC (tomas) replies even when rotation (id=3 -> wick) would pick another
+  const state2 = {
+    footlights: [],
+    prompt_book: [
+      { id: 3, handle: 'lampmoth', role: 'muse', kind: 'say', body: 'Tomas, is the tea kettle on?', created_at: now - 300 },
+    ],
+    presence: [],
+  };
+  const d2 = CHARACTERS.map((npc) => ({ handle: npc.handle, ...decideTurn({ npc, state: state2, npcState, now }) }));
+  assert.equal(d2.find((d) => d.handle === 'tomas').action, 'reply');
+  assert.equal(d2.find((d) => d.handle === 'wick').action, 'silent');
+  assert.equal(d2.find((d) => d.handle === 'maren').action, 'silent');
+
+  // 3. Muse line already answered (NPC line with later created_at) -> no reply, routine initiate allowed
+  const state3 = {
+    footlights: [],
+    prompt_book: [
+      { id: 1, handle: 'lampmoth', role: 'muse', kind: 'say', body: 'Evening, Bandstand...', created_at: now - 1200 },
+      { id: 2, handle: 'maren', role: 'npc', kind: 'say', body: 'Evening, neighbor.', created_at: now - 600 },
+    ],
+    presence: [],
+  };
+  assert.equal(selectReplierForLine({ state: state3, now }), null);
+  for (const npc of CHARACTERS) {
+    const res = decideTurn({ npc, state: state3, npcState, now });
+    assert.notEqual(res.action, 'reply');
+    assert.equal(res.action, 'initiate');
+  }
+
+  // 4. Stale unanswered muse line (>3h old) -> no reply for anyone
+  const state4 = {
+    footlights: [],
+    prompt_book: [
+      { id: 1, handle: 'lampmoth', role: 'muse', kind: 'say', body: 'Afternoon hello.', created_at: now - 4 * 3600 },
+    ],
+    presence: [],
+  };
+  assert.equal(selectReplierForLine({ state: state4, now }), null);
+  for (const npc of CHARACTERS) {
+    const res = decideTurn({ npc, state: state4, npcState, now });
+    assert.notEqual(res.action, 'reply');
+  }
+
+  // 5. Visitor present at plot:maren + unaddressed line (id=3 would rotate to wick) -> Maren is designated
+  const state5 = {
+    footlights: [],
+    prompt_book: [
+      { id: 3, handle: 'lampmoth', role: 'muse', kind: 'say', body: 'Nice porch.', created_at: now - 300 },
+    ],
+    presence: [
+      { handle: 'lampmoth', role: 'muse', zone: 'plot:maren', updated_at: now - 120 },
+    ],
+  };
+  const sel5 = selectReplierForLine({ state: state5, now });
+  assert.equal(sel5.designatedHandle, 'maren');
+  assert.equal(sel5.method, 'plot-zone');
+  const d5 = CHARACTERS.map((npc) => ({ handle: npc.handle, ...decideTurn({ npc, state: state5, npcState, now }) }));
+  assert.equal(d5.find((d) => d.handle === 'maren').action, 'reply');
+  assert.equal(d5.find((d) => d.handle === 'wick').action, 'silent');
+  assert.equal(d5.find((d) => d.handle === 'tomas').action, 'silent');
+
+  // 7. Designation is stable: repeated decideTurn calls for the same state designate the same NPC
+  for (let i = 0; i < 5; i++) {
+    for (const npc of CHARACTERS) {
+      const a = decideTurn({ npc, state: state1, npcState, now });
+      const b = decideTurn({ npc, state: state1, npcState, now });
+      assert.deepEqual(a, b);
+    }
+  }
 });
