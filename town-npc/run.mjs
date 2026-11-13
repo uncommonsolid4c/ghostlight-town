@@ -61,10 +61,63 @@ export function getPartOfDay(nowSec) {
   return 'evening';
 }
 
+const PRESENCE_WINDOW_SEC = 10800; // 3 hours, matching stepback.mjs
+const HOST_LINE = 'A visitor is at your cottage — you are the host; greet them or answer from your doorway.';
+
+function formatPresenceZone(zone, ownHandle) {
+  if (zone === 'bandstand') return { place: 'the Bandstand', atOwnPlot: false };
+  if (zone === 'gate') return { place: 'the gate', atOwnPlot: false };
+  if (zone.startsWith('plot:')) {
+    const plotHandle = zone.slice('plot:'.length);
+    if (!plotHandle) return null;
+    if (ownHandle && plotHandle === ownHandle) {
+      return { place: 'your cottage', atOwnPlot: true };
+    }
+    const owner = getCharacter(plotHandle);
+    const label = owner ? owner.name : plotHandle;
+    return { place: `${label}'s cottage`, atOwnPlot: false };
+  }
+  return { place: 'around town', atOwnPlot: false };
+}
+
+/**
+ * Format recent town presence into plain-language lines for the NPC brain prompt.
+ * @param {object} opts
+ * @returns {string}
+ */
+export function formatPresenceForPrompt({ npc, presence = [], now = Math.floor(Date.now() / 1000) } = {}) {
+  const list = Array.isArray(presence) ? presence : [];
+  const ownHandle = npc && typeof npc.handle === 'string' ? npc.handle : '';
+  const lines = [];
+  let hasHostVisitor = false;
+
+  for (const pr of list) {
+    if (!pr || typeof pr !== 'object') continue;
+    if (typeof pr.handle !== 'string' || !pr.handle) continue;
+    if (typeof pr.zone !== 'string' || !pr.zone) continue;
+    if (typeof pr.updated_at !== 'number' || !Number.isFinite(pr.updated_at)) continue;
+    if (now - pr.updated_at > PRESENCE_WINDOW_SEC) continue;
+    if (ownHandle && pr.handle === ownHandle) continue;
+
+    const formatted = formatPresenceZone(pr.zone, ownHandle);
+    if (!formatted) continue;
+    if (formatted.atOwnPlot) hasHostVisitor = true;
+    lines.push(`- ${pr.handle} is at ${formatted.place}.`);
+  }
+
+  if (lines.length === 0) {
+    return '(No visitors are about right now.)';
+  }
+  if (hasHostVisitor) {
+    lines.push(HOST_LINE);
+  }
+  return lines.join('\n');
+}
+
 /**
  * Build the full prompt passed to the NPC brain.
  */
-export function buildTurnPrompt({ npc, partOfDay, decision, promptBook, memoryText }) {
+export function buildTurnPrompt({ npc, partOfDay, decision, promptBook, presence = [], memoryText, now }) {
   const systemBlock = buildSystemPrompt(npc, partOfDay);
   const recentLines = (Array.isArray(promptBook) ? promptBook : []).slice(-20);
   const formattedBook =
@@ -78,6 +131,7 @@ export function buildTurnPrompt({ npc, partOfDay, decision, promptBook, memoryTe
           })
           .join('\n');
 
+  const formattedPresence = formatPresenceForPrompt({ npc, presence, now });
   const trimmedMem = (memoryText || '').trim() || '(No prior memories recorded yet.)';
   let turnGuidance;
   if (decision.action === 'reply') {
@@ -100,6 +154,9 @@ export function buildTurnPrompt({ npc, partOfDay, decision, promptBook, memoryTe
     '',
     'Recent Prompt Book lines:',
     formattedBook,
+    '',
+    'Where everyone is:',
+    formattedPresence,
     '',
     'Your recent memory:',
     trimmedMem,
@@ -255,7 +312,9 @@ export async function runTurn({
     partOfDay,
     decision,
     promptBook: townState.prompt_book,
+    presence: townState.presence,
     memoryText,
+    now,
   });
 
   if (dryRun) {
