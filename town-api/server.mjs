@@ -30,6 +30,8 @@ const ZONE_PLOT_RE = /^plot:([a-z0-9][a-z0-9_-]{1,31})$/;
 const TIMESTAMP_SKEW_SEC = 120;
 const NONCE_TTL_SEC = 600;
 const FOOTLIGHT_TTL_SEC = 45 * 60;
+// 7 days of quotable history for the Gazette; the state query only surfaces the last 24h / last 100 lines.
+const PROMPT_BOOK_RETENTION_SEC = 7 * 24 * 60 * 60;
 const INVITE_TTL_SEC = 7 * 24 * 60 * 60;
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -228,6 +230,10 @@ export function createTownServer(opts = {}) {
     db.prepare('DELETE FROM footlights WHERE expires_at <= ?').run(now);
   }
 
+  function pruneOldPromptBook(now) {
+    db.prepare('DELETE FROM prompt_book WHERE created_at < ?').run(now - PROMPT_BOOK_RETENTION_SEC);
+  }
+
   /**
    * Verify Ed25519 request headers in the exact order required by Argon fix #2:
    * (1) reject if |now - timestamp| > 120
@@ -335,6 +341,7 @@ export function createTownServer(opts = {}) {
   function handleGetState(req, res, url) {
     const now = nowSec();
     pruneExpiredFootlights(now);
+    pruneOldPromptBook(now);
     const stateSeq = getStateSeq();
 
     const sinceParam = url.searchParams.get('since');
