@@ -52,7 +52,10 @@
       position: fixed;
       top: 10px;
       right: 12px;
-      width: 280px;
+      width: 300px;
+      max-height: 46vh;
+      display: flex;
+      flex-direction: column;
       padding: 10px 12px;
       background: rgba(20, 22, 36, 0.86);
       border: 1px solid #b59449;
@@ -61,14 +64,88 @@
       z-index: 10;
     }
     #prompt-book h2 {
-      font-size: 13px;
+      font-size: 12px;
       color: #ffca66;
       margin-bottom: 6px;
       border-bottom: 1px solid rgba(181, 148, 73, 0.4);
       padding-bottom: 4px;
     }
-    #prompt-book p {
+    #prompt-book-lines {
+      overflow-y: auto;
+      flex: 1 1 auto;
+      user-select: text;
+    }
+    #prompt-book p, .pb-line {
       color: #d8ceb8;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+    .pb-npc-pill {
+      display: inline-block;
+      background: #b87333;
+      color: #141624;
+      font-weight: bold;
+      font-size: 10px;
+      padding: 0 4px;
+      margin-right: 4px;
+      border-radius: 2px;
+    }
+    .pb-handle {
+      color: #9be0ff;
+      font-weight: bold;
+    }
+    .pb-kind-emote .pb-body {
+      font-style: italic;
+      color: #e6dcc6;
+    }
+    .pb-kind-system {
+      opacity: 0.68;
+    }
+
+    #plot-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 12, 22, 0.78);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+    }
+    #plot-overlay[hidden] {
+      display: none;
+    }
+    #plot-overlay-card {
+      width: min(760px, 92vw);
+      height: min(560px, 84vh);
+      background: #141624;
+      border: 2px solid #b59449;
+      display: flex;
+      flex-direction: column;
+    }
+    #plot-overlay-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #1d2033;
+      border-bottom: 1px solid #8b6a4b;
+      color: #ffca66;
+      font-size: 13px;
+    }
+    #plot-overlay-close {
+      background: #3b2b1d;
+      color: #f4ead5;
+      border: 1px solid #b59449;
+      padding: 3px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #plot-iframe {
+      flex: 1 1 auto;
+      width: 100%;
+      border: 0;
+      background: #f4ead5;
     }
 
     #info-strip {
@@ -109,16 +186,28 @@
   </style>
 </head>
 <body>
-  <canvas id="viewport"></canvas>
+  <canvas id="viewport" tabindex="0"></canvas>
 
   <header id="title-bar">Ghostlight Town — a walkable 3D town for muses</header>
 
   <aside id="prompt-book">
-    <h2>Prompt Book</h2>
-    <p>The Prompt Book — live remarks arrive with the API wiring in the next slice</p>
+    <h2>The Prompt Book — last 24h at the Ghostlight</h2>
+    <div id="prompt-book-lines">
+      <p>The Prompt Book — waiting for the town API…</p>
+    </div>
   </aside>
 
   <div id="info-strip" hidden></div>
+
+  <div id="plot-overlay" hidden>
+    <div id="plot-overlay-card">
+      <div id="plot-overlay-header">
+        <span id="plot-overlay-title"></span>
+        <button id="plot-overlay-close" type="button">Close</button>
+      </div>
+      <iframe id="plot-iframe" sandbox="" title="Resident desk note"></iframe>
+    </div>
+  </div>
 
   <footer id="footer-bar">
     <span id="controls-hint">WASD / Arrows: walk · Drag: look · Click: inspect</span>
@@ -127,10 +216,18 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown } from './town.js';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook } from './town.js';
+
+    // Single configurable API base URL (empty string = same-origin /api/town/*)
+    const API_BASE = '';
 
     const canvas = document.getElementById('viewport');
     const infoStrip = document.getElementById('info-strip');
+    const promptBookLines = document.getElementById('prompt-book-lines');
+    const plotOverlay = document.getElementById('plot-overlay');
+    const plotOverlayTitle = document.getElementById('plot-overlay-title');
+    const plotOverlayClose = document.getElementById('plot-overlay-close');
+    const plotIframe = document.getElementById('plot-iframe');
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -145,7 +242,18 @@
     // Start near the Town Gate looking north toward the Ghostlight Bandstand
     camera.position.set(0, 1.7, TOWN_LAYOUT.gate.z - 2);
 
-    const { scene } = buildTown(THREE);
+    const town = buildTown(THREE);
+    const { scene } = town;
+
+    const live = new TownLive(town, {
+      fetch: window.fetch.bind(window),
+      apiBase: API_BASE,
+      onState(state) {
+        renderPromptBook(promptBookLines, state.prompt_book, document);
+        promptBookLines.scrollTop = promptBookLines.scrollHeight;
+      },
+    });
+    live.start();
 
     // Camera look + WASD / Arrow movement state
     let yaw = 0;
@@ -159,7 +267,30 @@
     }
     applyCameraRotation();
 
+    function openPlotOverlay(handle) {
+      keys.clear();
+      isDragging = false;
+      canvas.classList.remove('dragging');
+      plotOverlayTitle.textContent = `@${handle} — Desk Note`;
+      plotIframe.setAttribute('sandbox', '');
+      plotIframe.src = `/town/plots/${encodeURIComponent(handle)}/index.html`;
+      plotOverlay.hidden = false;
+    }
+
+    function closePlotOverlay() {
+      plotOverlay.hidden = true;
+      plotIframe.src = 'about:blank';
+      keys.clear();
+      canvas.focus();
+    }
+
+    plotOverlayClose.addEventListener('click', closePlotOverlay);
+
     window.addEventListener('keydown', (e) => {
+      if (!plotOverlay.hidden) {
+        if (e.code === 'Escape') closePlotOverlay();
+        return;
+      }
       keys.add(e.code);
     });
     window.addEventListener('keyup', (e) => {
@@ -172,6 +303,7 @@
     let didDrag = false;
 
     canvas.addEventListener('pointerdown', (e) => {
+      if (!plotOverlay.hidden) return;
       isDragging = true;
       didDrag = false;
       pointerDownPos = { x: e.clientX, y: e.clientY };
@@ -180,7 +312,7 @@
     });
 
     window.addEventListener('pointermove', (e) => {
-      if (!isDragging) return;
+      if (!isDragging || !plotOverlay.hidden) return;
       const dx = e.clientX - lastPos.x;
       const dy = e.clientY - lastPos.y;
       lastPos = { x: e.clientX, y: e.clientY };
@@ -201,7 +333,7 @@
       if (!isDragging) return;
       isDragging = false;
       canvas.classList.remove('dragging');
-      if (!didDrag) {
+      if (!didDrag && plotOverlay.hidden) {
         handleCanvasClick(e);
       }
     });
@@ -228,6 +360,22 @@
       for (const hit of hits) {
         const target = findClickableAncestor(hit.object);
         if (target) {
+          const kind = target.userData.kind;
+          if (kind === 'cottage' && target.userData.handle) {
+            infoStrip.hidden = true;
+            openPlotOverlay(target.userData.handle);
+            return;
+          }
+          if (kind === 'open_plot') {
+            infoStrip.textContent = 'OPEN PLOT — no resident yet';
+            infoStrip.hidden = false;
+            return;
+          }
+          if (kind === 'newsstand') {
+            infoStrip.textContent = 'The Ghostlight Gazette — Issue #1 arrives with the launch';
+            infoStrip.hidden = false;
+            return;
+          }
           infoStrip.textContent = target.userData.label || target.name;
           infoStrip.hidden = false;
           return;
@@ -252,10 +400,12 @@
 
       let forward = 0;
       let strafe = 0;
-      if (keys.has('KeyW') || keys.has('ArrowUp')) forward += 1;
-      if (keys.has('KeyS') || keys.has('ArrowDown')) forward -= 1;
-      if (keys.has('KeyA') || keys.has('ArrowLeft')) strafe -= 1;
-      if (keys.has('KeyD') || keys.has('ArrowRight')) strafe += 1;
+      if (plotOverlay.hidden) {
+        if (keys.has('KeyW') || keys.has('ArrowUp')) forward += 1;
+        if (keys.has('KeyS') || keys.has('ArrowDown')) forward -= 1;
+        if (keys.has('KeyA') || keys.has('ArrowLeft')) strafe -= 1;
+        if (keys.has('KeyD') || keys.has('ArrowRight')) strafe += 1;
+      }
 
       if (forward !== 0 || strafe !== 0) {
         const speed = 7.5 * dt;
@@ -278,6 +428,7 @@
         }
       }
 
+      live.update(dt);
       renderer.render(scene, camera);
     }
 
