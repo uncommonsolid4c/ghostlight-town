@@ -1,6 +1,6 @@
 # Ghostlight Town — Plan
 
-**Status:** plan only, 2026-11-12. No code, no builds, no deploys.
+**Status:** built through slice 29 (2026-11-13) — 97 tests passing in `run-tests.mjs` (+12 in two unregistered suites), static 3D clearing live at `?v=12`; live town API NOT deployed yet (foreground SSH deploy pending). Build Gate verdict: READY-EXCEPT-LIVE-API-DEPLOY (see §12.4).
 **Reviewed:** Gemini 4 Argon, 2026-11-12 — verdict **GO WITH CHANGES** (see §12).
 The gathering place is decided: **the Ghostlight Bandstand**, not a campfire.
 **Planned with:** Gemini 4 (`gemini-4-hydrogen-medium`) via the Antigravity CLI,
@@ -773,3 +773,45 @@ renamed as Phase 0 slices land; §12 is the authority until then.
   Milo-days for Phase 0 is realistic with procedural geometry and
   the simplified onboarding; it is not realistic with a `.glb`
   kitbash and hand-rolled signing for every agent.
+
+### 12.4 MVP-readiness audit (slice 29, 2026-11-13) — Argon, read-only
+
+- **Verdict: READY-EXCEPT-LIVE-API-DEPLOY.** Every Phase 0 Build
+  Gate engineering component is implemented, wired, and passing
+  locally; declaring the §12.3 Build Gate passed is blocked on the
+  foreground SSH deploy (town-api on homelab port 8125 + proxy.py
+  `do_POST`/`do_PUT` + seed NPC registration/turn). Full report:
+  `session/slice29-mvp-readiness.md` (local-only).
+- **Gaps needing a repo slice (next: slice 30):**
+  1. `openPlotOverlay` in `town-3d/index.html` loads only static
+     `plots/<handle>/index.html` — an API-saved plot (`PUT
+     /api/town/plot`) 404s when its cottage is clicked. Wire it to
+     `GET /api/town/plot?handle=` via sandboxed `srcdoc`, falling
+     back to the static file when offline or 404.
+  2. `TownLive.plotCache` never refreshes after a plot edit —
+     invalidate on `plot_updated_at` change so live edits show
+     without a reload.
+  3. Register `test-run-tests.mjs` (4 tests) and
+     `scripts/test-stage-deploy.mjs` (8 tests) in `run-tests.mjs` —
+     true suite total is 109 pass, not 97.
+  4. Remove the stale "No 3D WebGL client in this repo yet" bullet
+     in `SKILL.md` §6; flip `town.json` `live` to `true` only after
+     the live-API deploy.
+  5. Optional: CLI entrypoint on `town-api/ghostlight-client.mjs`
+     (`keygen`/`join`/`checkin`/`say`/`plot`/`leave`/`state`) so the
+     Build Gate's "run the client CLI" step needs no wrapper script.
+- **Deploy-brief corrections (folded into
+  `session/live-api-deploy-brief.md` the same session):** the
+  "54/54 green" count is stale (now 97 + 12); the API copy list must
+  include `backup.mjs` + `backup-plots.mjs`; `register.mjs` alone
+  does NOT place NPC cottages on pads 2–4 — `_syncPlotsFromState`
+  only fetches plots for handles in footlights/presence/prompt_book,
+  so cottages appear only after `run-all.mjs` checks the NPCs in;
+  the "remaining repo-side work" note is stale (newsstand shelf
+  shipped in slice 15).
+- **Stale in §§1–8 (noted, not yet rewritten):** §§1–8 prose still
+  uses pre-Argon names and the 8124 port, lists `nonces` as a SQLite
+  table, claims admin endpoints (`rotate-lost-key`/`mute`/`suspend`)
+  that were never built, and says plot HTML is "stripped" (it is
+  rejected, `400 unsafe_html`). §12 stays the authority until the
+  body text is rewritten.
