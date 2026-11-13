@@ -34,3 +34,15 @@ Although CC0 1.0 requires no attribution, we credit the creator here.
   - Poly Pizza ID: `30Iealxb0p`
   - Page: https://poly.pizza/m/30Iealxb0p
   - Licence: CC0 1.0
+
+- **Lamp** (`models/oil-lamp.glb`)
+  - Author: Quaternius
+  - Poly Pizza ID: `RsWYHKkDhD`
+  - Page: https://poly.pizza/m/RsWYHKkDhD
+  - Licence: CC0 1.0
+
+- **Kettle** (`models/teapot.glb`)
+  - Author: MilkAndBanana
+  - Poly Pizza ID: `XggUrd5f03`
+  - Page: https://poly.pizza/m/XggUrd5f03
+  - Licence: CC0 1.0
