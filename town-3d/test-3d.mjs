@@ -434,6 +434,24 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
   assert.equal(fl0.userData.permanent, true);
 });
 
+test("Milo's cottage uses the concept-matched builder: cream gable walls, no brown prism", () => {
+  const THREE = createThreeStub();
+  const { parts } = buildTown(THREE);
+  const roof = collectNodes(parts.milosCottage, (n) => n.name === 'cottage_gable_roof')[0];
+  assert.ok(roof, 'Milo cottage must have a cottage_gable_roof mesh');
+  assert.equal(roof.material.color, MILO_REBUILD_MANIFEST.roof);
+  // Regression guard for the concept-comparison catch (2026-11-12): the old
+  // builder made the roof a 3-sided brown prism whose end caps WERE the gable
+  // walls, so the gable ends rendered brown instead of cream. The concept
+  // builder uses a true two-slope roof over cream gable walls — no 3-sided
+  // prism anywhere in the cottage.
+  const prisms = collectNodes(
+    parts.milosCottage,
+    (n) => n.isMesh && n.geometry?.type === 'CylinderGeometry' && n.geometry?.parameters?.radialSegments === 3
+  );
+  assert.equal(prisms.length, 0, 'Milo cottage must not contain the old 3-sided roof prism');
+});
+
 test('createCottage honors tower manifest, custom colors, 0 props, and ignores unknown props', () => {
   const THREE = createThreeStub();
 
@@ -488,9 +506,10 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // Budget raised 120 -> 125 (owner decision, 2026-11-12): the growth since 120
 // is the completed planned prop set — slice 11 (street light + bookshelf) and
 // slices 12–13 (the three seed NPC character props); no further prop slices are
-// planned. 122 is the worst case (all procedural fallbacks) as live town swaps
-// GLBs in for fewer, and 122 is 2 over the 120fps/2015-iGPU reference point,
-// not a different performance regime. 125 keeps the guardrail meaningful so
+// planned. 114 is the worst case (all procedural fallbacks) as live town swaps
+// GLBs in for fewer — down from 122 after the 2026-11-12 concept-cottage swap
+// (Argon's merged cottage replaces the old multi-mesh build) — and 114 is under
+// the 120fps/2015-iGPU reference point. 125 keeps the guardrail meaningful so
 // any future prop addition requires a deliberate revisit.
 test('Draw-call budget: total mesh count in built town is < 125', () => {
   const THREE = createThreeStub();
