@@ -140,6 +140,15 @@ export const PROP_PLACEMENTS = [
     targetSize: 0.9,
     scaleAxis: 'y',
   },
+  {
+    id: 'maren_typewriter',
+    kind: 'typewriter',
+    parent: 'scene',
+    x: 9.49,
+    y: 0,
+    z: -12.42,
+    rotY: -0.6525,
+  },
 ];
 
 export const MILO_REBUILD_MANIFEST = {
@@ -1256,6 +1265,11 @@ export async function loadTownProps(THREE, propSlots, opts = {}) {
       (slot) =>
         new Promise((resolve) => {
           const { placement, anchor, fallback } = slot;
+          if (!placement.model) {
+            slot.glb = null;
+            resolve(slot);
+            return;
+          }
           loader.load(
             placement.model,
             (gltf) => {
