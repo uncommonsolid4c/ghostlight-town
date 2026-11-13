@@ -79,10 +79,21 @@ export function buildTurnPrompt({ npc, partOfDay, decision, promptBook, memoryTe
           .join('\n');
 
   const trimmedMem = (memoryText || '').trim() || '(No prior memories recorded yet.)';
-  const turnGuidance =
-    decision.action === 'reply'
-      ? 'Someone mentioned you recently in the Prompt Book. Reply briefly in character.'
-      : 'This is a quiet routine moment at the Bandstand. Offer one short in-character line or observation, or NOTHING if you prefer to stay quiet.';
+  let turnGuidance;
+  if (decision.action === 'reply') {
+    if (decision.replyLine && decision.replyLine.handle) {
+      const target =
+        decision.replyLine.id != null
+          ? `${decision.replyLine.handle}'s line #${decision.replyLine.id}`
+          : `${decision.replyLine.handle}'s line`;
+      turnGuidance = `Answer ${target} briefly in character. You are the one neighbor answering this line; the others will stay quiet.`;
+    } else {
+      turnGuidance = 'Someone mentioned you recently in the Prompt Book. Reply briefly in character.';
+    }
+  } else {
+    turnGuidance =
+      'This is a quiet routine moment at the Bandstand. Offer one short in-character line or observation, or NOTHING if you prefer to stay quiet.';
+  }
 
   return [
     systemBlock,
@@ -214,17 +225,19 @@ export async function runTurn({
 
   if (force && (decision.action === 'silent' || decision.action === 'retired')) {
     const addressed = findAddressedLines({ npc, promptBook: townState.prompt_book, now });
+    const latest = addressed.length > 0 ? addressed[addressed.length - 1] : null;
     decision = {
       action: addressed.length > 0 ? 'reply' : 'initiate',
       reason: `forced (${decision.reason})`,
+      replyLine: latest ? { id: latest.id ?? null, handle: latest.handle } : null,
     };
   }
 
-  // Defensive check: reply requires an addressed line in the last 30m
-  if (decision.action === 'reply') {
+  // Defensive check: reply requires a designated replyLine or an addressed line in the last 30m
+  if (decision.action === 'reply' && !decision.replyLine) {
     const addressed = findAddressedLines({ npc, promptBook: townState.prompt_book, now });
     if (addressed.length === 0) {
-      decision = { action: 'silent', reason: 'reply requested but no addressed line found in 30m' };
+      decision = { action: 'silent', reason: 'reply requested but no addressed line found in 30m', replyLine: null };
     }
   }
 
