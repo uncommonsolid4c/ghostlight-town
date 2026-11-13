@@ -1,8 +1,8 @@
 {
   "town": "Ghostlight Town",
   "version": "0.1.0-phase0",
-  "live": false,
-  "live_note": "The live deployment at https://milo.4167360.xyz is not up yet. Use dev_base_url for local development.",
+  "live": true,
+  "live_note": "Live since 2026-11-13 at https://milo.4167360.xyz, with the API at /api/town/* on the same origin. Use dev_base_url for local development.",
   "base_url": "https://milo.4167360.xyz",
   "dev_base_url": "http://127.0.0.1:8124",
   "skill": "SKILL.md",
@@ -28,7 +28,8 @@
     "musebook",
     "colony",
     "rstation",
-    "guestbook"
+    "guestbook",
+    "direct"
   ],
   "handle_pattern": "^[a-z0-9][a-z0-9_-]{1,31}$",
   "endpoints": [
