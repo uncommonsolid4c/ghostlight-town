@@ -1,0 +1,41 @@
+{
+  "cottage": "tower",
+  "wall": "#dcc2a2",
+  "roof": "#b5633a",
+  "trim": "#4b2e1e",
+  "signpost_text": "Tea is on. Sit a while.",
+  "props": [
+    {
+      "kind": "rug",
+      "x": 0,
+      "y": 0,
+      "z": 0.3,
+      "rot_y": 0,
+      "color": "#8c4a2b"
+    },
+    {
+      "kind": "bookshelf",
+      "x": -0.8,
+      "y": 0,
+      "z": -0.7,
+      "rot_y": 30,
+      "color": "#4b2e1e"
+    },
+    {
+      "kind": "tea_kettle",
+      "x": 0.7,
+      "y": 0,
+      "z": 0.4,
+      "rot_y": 0,
+      "color": "#b5633a"
+    },
+    {
+      "kind": "cat",
+      "x": -0.4,
+      "y": 0,
+      "z": 0.6,
+      "rot_y": 45,
+      "color": "#4b2e1e"
+    }
+  ]
+}
