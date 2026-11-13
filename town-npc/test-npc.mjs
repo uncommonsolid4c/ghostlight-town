@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 
 import { createTownServer } from '../town-api/server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from '../town-api/ghostlight-client.mjs';
-import { CHARACTERS, buildSystemPrompt } from './characters.mjs';
+import { CHARACTERS, buildSystemPrompt, getStatusText } from './characters.mjs';
 import { decideTurn, selectReplierForLine, localDateString } from './stepback.mjs';
 import { checkHonesty, HONESTY_DENYLIST, MAX_SAY_LEN } from './honesty.mjs';
 import { ensureKeypair, loadKeypair } from './keygen.mjs';
@@ -560,5 +560,87 @@ test('per-line reply selectivity: rotation, addressed, answered, stale, plot-zon
       const b = decideTurn({ npc, state: state1, npcState, now });
       assert.deepEqual(a, b);
     }
+  }
+});
+
+test('in-character status lines and getStatusText helper', () => {
+  const parts = ['morning', 'afternoon', 'evening'];
+  for (const npc of CHARACTERS) {
+    assert.ok(npc.status && typeof npc.status === 'object', `${npc.handle} has status object`);
+    for (const part of parts) {
+      const line = npc.status[part];
+      assert.equal(typeof line, 'string', `${npc.handle}.status.${part} is a string`);
+      assert.ok(line.length > 0, `${npc.handle}.status.${part} is non-empty`);
+      assert.ok(line.length <= 80, `${npc.handle}.status.${part} is <= 80 chars`);
+      assert.notEqual(
+        line,
+        npc.routine[part],
+        `${npc.handle}.status.${part} must not equal routine.${part}`
+      );
+      assert.ok(
+        !line.toLowerCase().includes('update the plot desk note'),
+        `${npc.handle}.status.${part} must not contain to-do phrasing`
+      );
+      assert.ok(
+        !line.toLowerCase().includes('stand by the porch'),
+        `${npc.handle}.status.${part} must not contain to-do phrasing`
+      );
+      assert.equal(getStatusText(npc, part), line);
+    }
+  }
+
+  // Fallback behavior: routine when status is missing, title when both are missing
+  assert.equal(
+    getStatusText({ title: 'Keeper', routine: { morning: 'check the gate' } }, 'morning'),
+    'check the gate'
+  );
+  assert.equal(
+    getStatusText({ title: 'Keeper' }, 'morning'),
+    'Keeper'
+  );
+});
+
+test('runTurn checkin posts in-character status_text for unlit Wick (fake fetch + fake brain)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-status-checkin-'));
+  const origFetch = globalThis.fetch;
+  try {
+    const morningNow = Math.floor(new Date(2026, 10, 13, 9, 0, 0).getTime() / 1000);
+    const fakeState = {
+      footlights: [],
+      prompt_book: [],
+      presence: [],
+    };
+    const posted = [];
+    const fakeFetch = async (url, init) => {
+      if (init && init.method === 'POST') {
+        posted.push({ url, body: JSON.parse(init.body) });
+        return { ok: true, status: 200, json: async () => ({ ok: true, id: posted.length }) };
+      }
+      return { ok: true, status: 200, json: async () => fakeState };
+    };
+    globalThis.fetch = fakeFetch;
+
+    const wick = CHARACTERS.find((c) => c.handle === 'wick');
+    const res = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: false,
+      now: morningNow,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'Swept the top step before the sun hit.',
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.posted, true);
+
+    const checkinPost = posted.find((p) => p.url.endsWith('/api/town/ghostlight/checkin'));
+    assert.ok(checkinPost, 'unlit Wick posted a checkin');
+    assert.equal(checkinPost.body.status_text, wick.status.morning);
+    assert.notEqual(checkinPost.body.status_text, wick.routine.morning);
+  } finally {
+    globalThis.fetch = origFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
