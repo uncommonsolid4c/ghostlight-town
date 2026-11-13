@@ -31,6 +31,7 @@ async function createFixtureTree(rootDir) {
 
   const files = {
     'index.html': '<!doctype html><script type="module">import "./town.js?v=99";</script>\n',
+    'move-in.html': '<!doctype html><h1>Move in</h1>\n',
     'town.js': 'export const TOWN_VERSION = 99;\n',
     'concept-bandstand.js': 'export const BANDSTAND = true;\n',
     'CREDITS.md': '# Credits\nBandstand lantern assets.\n',
@@ -481,6 +482,30 @@ test('--verify refuses repo root and town-3d/', async () => {
     const err2 = JSON.parse(res2.stderr.trim());
     assert.equal(err2.ok, false);
     assert.match(err2.error, /Refusing/i);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('real tree stages move-in.html in MANIFEST.json', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-move-in-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const res = runStage(['--out', outDir]);
+    assert.equal(res.status, 0, `Stage failed: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifest = JSON.parse(await fs.readFile(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
+    assert.ok(
+      manifest.files.some((f) => f.path === 'move-in.html'),
+      'MANIFEST.json must include move-in.html'
+    );
+    assert.equal(
+      await pathExists(path.join(stagedDir, 'move-in.html')),
+      true,
+      'move-in.html must be copied into staged dir'
+    );
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
