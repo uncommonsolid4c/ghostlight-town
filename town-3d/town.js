@@ -346,20 +346,88 @@ function makeSkyTexture(THREE) {
   return tex;
 }
 
+const SIGNPOST_FONT_SIZES = [28, 24, 20];
+const SIGNPOST_MAX_LINES = 3;
+const SIGNPOST_INNER_WIDTH = 480;
+
+/**
+ * Word-wrap signpost text for a fixed-width monospace board without canvas measurement.
+ */
+function wrapSignpostText(text, maxChars) {
+  const str = String(text ?? '').trim();
+  if (!str) return [];
+  const limit = Math.max(1, Math.floor(maxChars));
+  const words = str.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = '';
+
+  for (const word of words) {
+    if (word.length > limit) {
+      if (current) {
+        lines.push(current);
+        current = '';
+      }
+      for (let i = 0; i < word.length; i += limit) {
+        const chunk = word.slice(i, i + limit);
+        if (i + limit < word.length) {
+          lines.push(chunk);
+        } else {
+          current = chunk;
+        }
+      }
+      continue;
+    }
+    if (!current) {
+      current = word;
+    } else if (current.length + 1 + word.length <= limit) {
+      current += ' ' + word;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 function buildSignpost(THREE, text, name = 'signpost') {
   const group = new THREE.Group();
   group.name = name;
-  group.userData = { signpostText: text };
+
+  const rawText = String(text || 'OPEN PLOT').trim() || 'OPEN PLOT';
+  let fontSize = SIGNPOST_FONT_SIZES[0];
+  let lines = [];
+  let maxChars = Math.floor(SIGNPOST_INNER_WIDTH / (0.6 * fontSize));
+
+  for (const size of SIGNPOST_FONT_SIZES) {
+    fontSize = size;
+    maxChars = Math.floor(SIGNPOST_INNER_WIDTH / (0.6 * size));
+    lines = wrapSignpostText(rawText, maxChars);
+    if (lines.length <= SIGNPOST_MAX_LINES) break;
+  }
+
+  if (lines.length > SIGNPOST_MAX_LINES) {
+    lines = lines.slice(0, SIGNPOST_MAX_LINES);
+    const last = lines[SIGNPOST_MAX_LINES - 1];
+    lines[SIGNPOST_MAX_LINES - 1] = `${last.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  }
+
+  group.userData = {
+    signpostText: text,
+    signpostLines: lines,
+    signpostFontSize: fontSize,
+  };
 
   const postMat = new THREE.MeshStandardMaterial({ color: '#5c4028', roughness: 0.9 });
   const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.1, 0.12), postMat);
   post.position.set(0, 0.55, 0);
   group.add(post);
 
-  const boardTex = makeTextTexture(THREE, [text || 'OPEN PLOT'], {
+  const boardTex = makeTextTexture(THREE, lines, {
     width: 512,
     height: 160,
-    titleSize: 28,
+    titleSize: fontSize,
+    subSize: fontSize,
     bg: '#3b2b1d',
     border: '#7d5a3c',
   });
