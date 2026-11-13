@@ -45,6 +45,19 @@ const NOT_STAGED = [
   'town-npc/ (server-side, separate deploy)',
 ];
 
+// 2.2 MB, deliberately uncommitted, procedural trees stay
+const EXCLUDED_FILES = [
+  {
+    repoPath: 'town-3d/models/pine.glb',
+    relPath: 'models/pine.glb',
+    reason: 'deliberately uncommitted, 2.2 MB — procedural trees stay',
+  },
+];
+
+function findExcludedFile(relPath) {
+  return EXCLUDED_FILES.find((entry) => entry.relPath === relPath) ?? null;
+}
+
 function parseArgs(argv) {
   let outArg = null;
   let rootArg = null;
@@ -151,8 +164,14 @@ async function collectSourceFiles(rootDir) {
   await assertNotSymlinkDir(town3dDir, 'town-3d');
 
   const files = [];
+  const excluded = [];
 
   for (const reqFile of ['index.html', 'town.js', 'CREDITS.md']) {
+    const excludedEntry = findExcludedFile(reqFile);
+    if (excludedEntry) {
+      excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
+      continue;
+    }
     const srcPath = path.join(town3dDir, reqFile);
     await assertNotSymlinkFile(srcPath, `town-3d/${reqFile}`);
     files.push({ srcPath, relPath: reqFile });
@@ -162,6 +181,11 @@ async function collectSourceFiles(rootDir) {
   topEntries.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   for (const entry of topEntries) {
     if (/^concept-.*\.js$/.test(entry)) {
+      const excludedEntry = findExcludedFile(entry);
+      if (excludedEntry) {
+        excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
+        continue;
+      }
       const srcPath = path.join(town3dDir, entry);
       await assertNotSymlinkFile(srcPath, `town-3d/${entry}`);
       files.push({ srcPath, relPath: entry });
@@ -175,9 +199,15 @@ async function collectSourceFiles(rootDir) {
   let glbCount = 0;
   for (const entry of modelEntries) {
     if (entry.endsWith('.glb')) {
+      const relPath = `models/${entry}`;
+      const excludedEntry = findExcludedFile(relPath);
+      if (excludedEntry) {
+        excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
+        continue;
+      }
       const srcPath = path.join(modelsDir, entry);
-      await assertNotSymlinkFile(srcPath, `town-3d/models/${entry}`);
-      files.push({ srcPath, relPath: `models/${entry}` });
+      await assertNotSymlinkFile(srcPath, `town-3d/${relPath}`);
+      files.push({ srcPath, relPath });
       glbCount += 1;
     }
   }
@@ -190,17 +220,32 @@ async function collectSourceFiles(rootDir) {
   if (gazetteFiles.length === 0) {
     throw new Error('Missing required source files: town-3d/gazette/**');
   }
-  files.push(...gazetteFiles);
+  for (const item of gazetteFiles) {
+    const excludedEntry = findExcludedFile(item.relPath);
+    if (excludedEntry) {
+      excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
+    } else {
+      files.push(item);
+    }
+  }
 
   const plotsFiles = [];
   await collectDirRecursive(path.join(town3dDir, 'plots'), 'plots', plotsFiles);
   if (plotsFiles.length === 0) {
     throw new Error('Missing required source files: town-3d/plots/**');
   }
-  files.push(...plotsFiles);
+  for (const item of plotsFiles) {
+    const excludedEntry = findExcludedFile(item.relPath);
+    if (excludedEntry) {
+      excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
+    } else {
+      files.push(item);
+    }
+  }
 
   files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
-  return files;
+  excluded.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { files, excluded };
 }
 
 function checkSecretGuard(relPath, contentBuf) {
@@ -236,7 +281,7 @@ async function stageDeploy(argv) {
   const { rootDir, outDir } = parseArgs(argv);
   validateOutDir(outDir, rootDir);
 
-  const sourceFiles = await collectSourceFiles(rootDir);
+  const { files: sourceFiles, excluded } = await collectSourceFiles(rootDir);
 
   // Read and validate all files (including secret guard) before touching outDir.
   const prepared = [];
@@ -285,6 +330,7 @@ async function stageDeploy(argv) {
       total_bytes: totalBytes,
       file_count: manifestFiles.length,
       not_staged: NOT_STAGED,
+      excluded,
     };
 
     const manifestPath = path.join(stagePrefixDir, 'MANIFEST.json');
