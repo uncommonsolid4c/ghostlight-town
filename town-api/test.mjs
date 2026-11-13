@@ -373,3 +373,82 @@ test('size caps and unconfigured operator 503', async () => {
     await ctx.close();
   }
 });
+
+test('residents role exposed in /api/town/state and migrated on startup', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-role-mig-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  try {
+    // Create a legacy DB lacking the role column
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE residents (
+        handle TEXT PRIMARY KEY,
+        pubkey TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        status TEXT NOT NULL,
+        bio TEXT NOT NULL DEFAULT '',
+        plot_updated_at INTEGER,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO residents (handle, pubkey, origin, status, bio, plot_updated_at, created_at)
+      VALUES ('legacy_muse', 'AAAA', 'musebook', 'active', '', NULL, 1000);
+    `);
+    legacyDb.close();
+
+    const operatorKeys = generateKeypair();
+    const { server, db } = createTownServer({ dbPath, operatorPubkey: operatorKeys.pubkey });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const cols = db.prepare('PRAGMA table_info(residents)').all();
+      assert.ok(cols.some((c) => c.name === 'role'), 'startup migration must add role column');
+      const legacyRow = db.prepare('SELECT role FROM residents WHERE handle = ?').get('legacy_muse');
+      assert.equal(legacyRow.role, 'muse');
+
+      // Register a plain muse and an npc resident
+      const muse = new GhostlightClient({ baseUrl, handle: 'alice', ...generateKeypair() });
+      const npc = new GhostlightClient({ baseUrl, handle: 'trimmer', ...generateKeypair() });
+      await muse.join({ origin: 'musebook', bio: 'Real muse' });
+      await npc.join({ origin: 'colony', bio: 'Lamp-trimmer spirit' });
+      await adminPost(baseUrl, operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
+      await adminPost(baseUrl, operatorKeys, '/api/town/admin/approve', { handle: 'trimmer' });
+      db.prepare("UPDATE residents SET role = 'npc' WHERE handle = ?").run('trimmer');
+
+      await muse.checkin({ status_text: 'tea is hot' });
+      await muse.say('evening all');
+      const p1 = await muse.presence('bandstand');
+      assert.equal(p1.status, 200);
+
+      await npc.checkin({ status_text: 'trimming the wick' });
+      await npc.say('sweeps the steps', 'emote');
+      const p2 = await npc.presence('gate');
+      assert.equal(p2.status, 200);
+
+      const stateRes = await fetch(`${baseUrl}/api/town/state`);
+      assert.equal(stateRes.status, 200);
+      const state = await stateRes.json();
+
+      const aliceFl = state.footlights.find((f) => f.handle === 'alice');
+      const npcFl = state.footlights.find((f) => f.handle === 'trimmer');
+      assert.equal(aliceFl.role, 'muse');
+      assert.equal(npcFl.role, 'npc');
+
+      const alicePr = state.presence.find((p) => p.handle === 'alice');
+      const npcPr = state.presence.find((p) => p.handle === 'trimmer');
+      assert.equal(alicePr.role, 'muse');
+      assert.equal(npcPr.role, 'npc');
+
+      const alicePb = state.prompt_book.find((l) => l.handle === 'alice');
+      const npcPb = state.prompt_book.find((l) => l.handle === 'trimmer');
+      assert.equal(alicePb.role, 'muse');
+      assert.equal(npcPb.role, 'npc');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
