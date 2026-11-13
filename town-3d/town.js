@@ -1018,25 +1018,54 @@ export function buildTown(THREE) {
 }
 
 /**
- * Milo's permanent ghost: a translucent ice-blue capsule at bandstand
- * spot 0 (front, facing the gate), with his footlight lit and his name
- * on the placard. Deliberately NOT a live presence avatar — the founder
- * is always home, even before the API is live and even when he's away.
+ * Milo's permanent ghost at bandstand spot 0 (front, facing the gate),
+ * with his footlight lit and his name on the placard. Deliberately NOT a
+ * live presence avatar — the founder is always home, even before the API
+ * is live and even when he's away. A real ghost figure, not the generic
+ * capsule: rounded dome, body tapering to a wispy tail, two eyes,
+ * translucent ice-blue — the settled avatar, in low-poly.
  */
 function buildMilosGhost(THREE, bandstandBuilt) {
-  const ghost = createAvatarCapsule(THREE, { handle: 'milo', role: 'muse' });
+  const ghost = new THREE.Group();
   ghost.name = 'milos_ghost';
-  ghost.userData.permanent = true;
-  // Ghostify: ice-blue, translucent, no legs — just the wispy capsule.
-  for (const child of ghost.children) {
-    if (!child.isMesh) continue;
-    setMaterialColor(child.material, 'color', '#a8d8ea');
-    child.material.transparent = true;
-    child.material.opacity = 0.7;
+  ghost.userData = { handle: 'milo', role: 'muse', permanent: true };
+
+  const ghostMat = new THREE.MeshStandardMaterial({
+    color: '#a8d8ea', transparent: true, opacity: 0.7, roughness: 0.6,
+  });
+  // Dome (rounded head) + tapering tail (no legs, just the wisp).
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), ghostMat);
+  dome.name = 'ghost_dome';
+  dome.position.set(0, 1.05, 0);
+  ghost.add(dome);
+  const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.08, 1.05, 8), ghostMat);
+  tail.name = 'ghost_tail';
+  tail.position.set(0, 0.55, 0);
+  ghost.add(tail);
+  // Two eyes, front-facing, both visible — the thing that makes it a ghost.
+  const eyeMat = new THREE.MeshStandardMaterial({ color: '#16202e', roughness: 0.5 });
+  for (const ex of [-0.11, 0.11]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 5), eyeMat);
+    eye.name = 'ghost_eye';
+    eye.position.set(ex, 1.12, 0.26);
+    ghost.add(eye);
   }
+  // Name sprite, same style as the [MUSE] capsules.
+  const tex = makeTextTexture(THREE, ['[MUSE] milo'], {
+    width: 384, height: 96, titleSize: 30, bg: '#161b28', border: '#9be0ff', fg: '#9be0ff',
+  });
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  sprite.name = 'nametag_sprite';
+  sprite.position.set(0, 1.8, 0);
+  sprite.scale.set(2.0, 0.5, 1);
+  ghost.add(sprite);
+
   const spot = bandstandBuilt.avatarSpots[0];
   ghost.position.set(spot.x, spot.y, spot.z);
-  ghost.rotation.y = spot.rotY;
+  // Face the gate (outward), not the bandstand center: front-facing, both
+  // eyes visible to visitors walking up the path. The spot's own rotY
+  // faces the center; outward is the opposite direction.
+  ghost.rotation.y = Math.atan2(spot.x, spot.z);
 
   // Light his footlight and flip his placard up, mirroring applyTownState.
   const flGroup = bandstandBuilt.footlights[0];
