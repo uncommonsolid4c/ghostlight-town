@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 import {
   TOWN_LAYOUT,
   MILO_REBUILD_MANIFEST,
+  PROP_PLACEMENTS,
   buildTown,
   createCottage,
   createAvatarCapsule,
+  loadTownProps,
 } from './town.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +32,12 @@ function createThreeStub() {
       this.z = z;
       return this;
     }
+    multiplyScalar(s) {
+      this.x *= s;
+      this.y *= s;
+      this.z *= s;
+      return this;
+    }
   }
 
   class Euler {
@@ -42,6 +50,12 @@ function createThreeStub() {
       this.x = x;
       this.y = y;
       this.z = z;
+      return this;
+    }
+    multiplyScalar(s) {
+      this.x *= s;
+      this.y *= s;
+      this.z *= s;
       return this;
     }
   }
@@ -67,6 +81,16 @@ function createThreeStub() {
       for (const obj of objs) {
         obj.parent = this;
         this.children.push(obj);
+      }
+      return this;
+    }
+    remove(...objs) {
+      for (const obj of objs) {
+        const idx = this.children.indexOf(obj);
+        if (idx !== -1) {
+          this.children.splice(idx, 1);
+          obj.parent = null;
+        }
       }
       return this;
     }
@@ -220,6 +244,35 @@ function createThreeStub() {
     }
   }
 
+  class Box3 {
+    constructor() {
+      this.min = new Vector3(0, 0, 0);
+      this.max = new Vector3(0, 0, 0);
+    }
+    setFromObject(obj) {
+      const b = obj && obj.userData && obj.userData.stubBounds;
+      if (b) {
+        this.min.set(b.min[0], b.min[1], b.min[2]);
+        this.max.set(b.max[0], b.max[1], b.max[2]);
+      }
+      return this;
+    }
+    getSize(target) {
+      return target.set(
+        this.max.x - this.min.x,
+        this.max.y - this.min.y,
+        this.max.z - this.min.z
+      );
+    }
+    getCenter(target) {
+      return target.set(
+        (this.min.x + this.max.x) / 2,
+        (this.min.y + this.max.y) / 2,
+        (this.min.z + this.max.z) / 2
+      );
+    }
+  }
+
   class Fog {
     constructor(color, near, far) {
       this.color = color;
@@ -252,6 +305,7 @@ function createThreeStub() {
     PointLight,
     DirectionalLight,
     AmbientLight,
+    Box3,
     Fog,
   };
 }
@@ -431,23 +485,96 @@ test('Draw-call budget: total mesh count in built town is < 120', () => {
   assert.ok(meshes.length < 120, `Expected < 120 meshes, got ${meshes.length}`);
 });
 
-test('No campfire terminology, no .glb references, and no fetch() in town.js', async () => {
+test('No campfire terminology and no fetch() in town.js; .glb allowed only for props (not pine.glb)', async () => {
   const townJs = await fs.readFile(path.join(__dirname, 'town.js'), 'utf8');
   const indexHtml = await fs.readFile(path.join(__dirname, 'index.html'), 'utf8');
 
   assert.equal(/campfire/i.test(townJs), false, 'town.js must not contain campfire terminology');
   assert.equal(/campfire/i.test(indexHtml), false, 'index.html must not contain campfire terminology');
-  assert.equal(/\.glb/i.test(townJs), false, 'town.js must not reference .glb');
-  assert.equal(/\bfetch\s*\(/.test(townJs), false, 'town.js must not call fetch() in slice 4a');
+  assert.equal(/\bfetch\s*\(/.test(townJs), false, 'town.js must not call fetch()');
+  assert.equal(/pine\.glb/i.test(townJs), false, 'town.js must NOT reference pine.glb');
+  assert.ok(/models\/post-lantern\.glb/.test(townJs), 'town.js must reference post-lantern.glb prop');
+  assert.ok(/models\/lantern\.glb/.test(townJs), 'town.js must reference lantern.glb prop');
+  assert.ok(/models\/bench\.glb/.test(townJs), 'town.js must reference bench.glb prop');
 });
 
-test('Pinned Three.js CDN import-map URL resolves with HTTP 200', async () => {
+test('Pinned Three.js CDN import-map URL and three/addons/ entry resolve cleanly', async () => {
   const indexHtml = await fs.readFile(path.join(__dirname, 'index.html'), 'utf8');
   const match = indexHtml.match(/"three":\s*"([^"]+)"/);
   assert.ok(match, 'index.html importmap must pin "three"');
   const cdnUrl = match[1];
   assert.equal(cdnUrl, 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js');
 
+  const addonsMatch = indexHtml.match(/"three\/addons\/":\s*"([^"]+)"/);
+  assert.ok(addonsMatch, 'index.html importmap must pin "three/addons/"');
+  assert.equal(addonsMatch[1], 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/');
+
   const res = await fetch(cdnUrl, { method: 'HEAD' });
   assert.equal(res.status, 200, `Expected HTTP 200 from ${cdnUrl}, got ${res.status}`);
+});
+
+test('Adopted GLB models exist, have glTF magic bytes, and are under 100 KB', async () => {
+  const expectedModels = ['post-lantern.glb', 'lantern.glb', 'bench.glb'];
+  for (const file of expectedModels) {
+    const buf = await fs.readFile(path.join(__dirname, 'models', file));
+    assert.ok(buf.length > 12, `${file} must be a non-empty binary`);
+    assert.ok(buf.length < 100 * 1024, `${file} must be under 100 KB, got ${buf.length}`);
+    assert.equal(buf.subarray(0, 4).toString('ascii'), 'glTF', `${file} must start with glTF magic bytes`);
+  }
+});
+
+test('CREDITS.md documents all three adopted CC0 models with Poly Pizza IDs', async () => {
+  const credits = await fs.readFile(path.join(__dirname, 'CREDITS.md'), 'utf8');
+  assert.ok(/CC0 1\.0/.test(credits), 'CREDITS.md must state CC0 1.0');
+  for (const [file, id] of [
+    ['post-lantern.glb', 'ZSQ65S4lEu'],
+    ['lantern.glb', 'CtHBJ1ufeW'],
+    ['bench.glb', '6d92UYCIC1'],
+  ]) {
+    assert.ok(credits.includes(file), `CREDITS.md must name ${file}`);
+    assert.ok(credits.includes(id), `CREDITS.md must include Poly Pizza id ${id}`);
+  }
+});
+
+test('Procedural fallback builders exist and GLB load failure keeps procedural props', async () => {
+  const townJs = await fs.readFile(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(/three\/addons\/loaders\/GLTFLoader\.js/.test(townJs), 'town.js must import GLTFLoader from three/addons/loaders/GLTFLoader.js');
+  assert.ok(/function buildProceduralProp/.test(townJs), 'town.js must keep procedural prop builders');
+  assert.ok(/keeping procedural fallback/.test(townJs), 'town.js must have an error path keeping procedural fallback');
+
+  // Verify runtime fallback when GLTFLoader errors
+  const THREE = createThreeStub();
+  const warnings = [];
+  class FailingLoader {
+    load(url, onLoad, onProgress, onError) {
+      onError(new Error(`Simulated 404 for ${url}`));
+    }
+  }
+  const { parts } = buildTown(THREE, { loadProps: false });
+  assert.equal(parts.props.length, PROP_PLACEMENTS.length);
+  await loadTownProps(THREE, parts.props, {
+    GLTFLoader: FailingLoader,
+    warn: (...args) => warnings.push(args.join(' ')),
+  });
+  assert.equal(warnings.length, PROP_PLACEMENTS.length);
+  for (const slot of parts.props) {
+    assert.equal(slot.glb, null, `${slot.placement.id} must have no glb on error`);
+    assert.ok(slot.anchor.children.includes(slot.fallback), `${slot.placement.id} must retain procedural fallback`);
+  }
+
+  // Verify runtime bounding-box scaling and swap-in when GLTFLoader succeeds
+  const { parts: okParts } = buildTown(THREE, { loadProps: false });
+  class MockLoader {
+    load(url, onLoad) {
+      const glbScene = new THREE.Group();
+      glbScene.userData.stubBounds = { min: [-0.002, 0, -0.001], max: [0.002, 0.01, 0.001] };
+      onLoad({ scene: glbScene });
+    }
+  }
+  await loadTownProps(THREE, okParts.props, { GLTFLoader: MockLoader, warn: () => {} });
+  for (const slot of okParts.props) {
+    assert.ok(slot.glb, `${slot.placement.id} must swap in glb on load`);
+    assert.ok(!slot.anchor.children.includes(slot.fallback), `${slot.placement.id} must remove procedural fallback`);
+    assert.ok(slot.glb.scale.y > 1, `${slot.placement.id} must be scaled up from tiny GLB units`);
+  }
 });
