@@ -389,24 +389,42 @@ test('runAll per-line selectivity: one unaddressed muse line -> exactly one NPC 
     const fakeFetch = async (url, init) => {
       if (init && init.method === 'POST') {
         postedUrls.push(String(url));
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        const body = { ok: true };
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(body),
+          json: async () => body,
+        };
       }
-      return { ok: true, status: 200, json: async () => fakeState };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(fakeState),
+        json: async () => fakeState,
+      };
     };
 
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = fakeFetch;
     const brainCalls = [];
-    const res = await runAll({
-      apiBase: 'http://fake.local',
-      stateDir,
-      staggerMs: 0,
-      fetchImpl: fakeFetch,
-      brainImpl: async (prompt) => {
-        brainCalls.push(prompt);
-        return 'Quiet night by the steps; the kettle is warm.';
-      },
-      logger: () => {},
-      sleepImpl: async () => {},
-    });
+    let res;
+    try {
+      res = await runAll({
+        apiBase: 'http://fake.local',
+        stateDir,
+        staggerMs: 0,
+        fetchImpl: fakeFetch,
+        brainImpl: async (prompt) => {
+          brainCalls.push(prompt);
+          return 'Quiet night by the steps; the kettle is warm.';
+        },
+        logger: () => {},
+        sleepImpl: async () => {},
+      });
+    } finally {
+      globalThis.fetch = origFetch;
+    }
 
     assert.equal(res.ok, true);
     assert.equal(res.results.length, 3);
@@ -418,7 +436,7 @@ test('runAll per-line selectivity: one unaddressed muse line -> exactly one NPC 
     assert.equal(silent.length, 2, 'other two NPCs stay silent');
     assert.equal(brainCalls.length, 1);
     assert.ok(brainCalls[0].includes("lampmoth's line #4"));
-    assert.equal(postedUrls.filter((u) => u.endsWith('/api/town/say')).length, 1);
+    assert.equal(postedUrls.filter((u) => u.endsWith('/api/town/ghostlight/say')).length, 1);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
