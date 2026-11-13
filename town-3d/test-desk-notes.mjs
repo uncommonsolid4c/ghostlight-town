@@ -63,6 +63,14 @@ test('openPlotOverlay URL pattern in town-3d resolves to an existing static file
   }
 });
 
+test('tomas desk note names the tower a lighthouse and mentions the lamp kept lit in the top window', async () => {
+  const html = await fs.readFile(path.join(PLOTS_DIR, 'tomas', 'index.html'), 'utf8');
+  assert.match(html, /tower/i, 'tomas desk note must mention the tower');
+  assert.match(html, /lighthouse/i, 'tomas desk note must name it a lighthouse');
+  assert.match(html, /lamp/i, 'tomas desk note must mention the lamp');
+  assert.match(html, /top window/i, 'tomas desk note must mention the top window');
+});
+
 test('test-desk-notes.mjs contains no banned term or hardcoded host/port', async () => {
   const self = await fs.readFile(SELF_PATH, 'utf8');
   assert.ok(!BANNED_TERM_RE.test(self), 'test-desk-notes.mjs must not contain the banned term');
