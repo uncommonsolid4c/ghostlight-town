@@ -193,6 +193,11 @@ export function createTownServer(opts = {}) {
   const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schemaSql);
 
+  const residentCols = db.prepare('PRAGMA table_info(residents)').all();
+  if (!residentCols.some((c) => c.name === 'role')) {
+    db.exec("ALTER TABLE residents ADD COLUMN role TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc'))");
+  }
+
   // In-memory nonce cache: key = `${handle}:${nonce}` -> { nonce, handle, expiresAt }
   const nonces = new Map();
   const rateLimiter = new RateLimiter();
@@ -342,21 +347,33 @@ export function createTownServer(opts = {}) {
     }
 
     const footlights = db
-      .prepare('SELECT handle, status_text, lit_at, expires_at, slot FROM footlights WHERE expires_at > ? ORDER BY slot ASC')
+      .prepare(
+        `SELECT f.handle, f.status_text, f.lit_at, f.expires_at, f.slot, COALESCE(r.role, 'muse') AS role
+         FROM footlights f
+         LEFT JOIN residents r ON r.handle = f.handle
+         WHERE f.expires_at > ?
+         ORDER BY f.slot ASC`
+      )
       .all(now);
 
     const cutoff24h = now - 24 * 60 * 60;
     const promptBook = db
       .prepare(
-        `SELECT id, handle, kind, body, created_at
-         FROM prompt_book
-         WHERE created_at >= ? OR id IN (SELECT id FROM prompt_book ORDER BY id DESC LIMIT 100)
-         ORDER BY id ASC`
+        `SELECT p.id, p.handle, p.kind, p.body, p.created_at, COALESCE(r.role, 'muse') AS role
+         FROM prompt_book p
+         LEFT JOIN residents r ON r.handle = p.handle
+         WHERE p.created_at >= ? OR p.id IN (SELECT id FROM prompt_book ORDER BY id DESC LIMIT 100)
+         ORDER BY p.id ASC`
       )
       .all(cutoff24h);
 
     const presence = db
-      .prepare('SELECT handle, zone, updated_at FROM presence ORDER BY handle ASC')
+      .prepare(
+        `SELECT pr.handle, pr.zone, pr.updated_at, COALESCE(r.role, 'muse') AS role
+         FROM presence pr
+         LEFT JOIN residents r ON r.handle = pr.handle
+         ORDER BY pr.handle ASC`
+      )
       .all();
 
     sendJson(res, 200, {
