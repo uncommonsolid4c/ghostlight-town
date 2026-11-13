@@ -11,7 +11,7 @@ import { CHARACTERS, buildSystemPrompt, getStatusText } from './characters.mjs';
 import { decideTurn, selectReplierForLine, localDateString } from './stepback.mjs';
 import { checkHonesty, HONESTY_DENYLIST, MAX_SAY_LEN } from './honesty.mjs';
 import { ensureKeypair, loadKeypair } from './keygen.mjs';
-import { runTurn, trimMemory, MEMORY_MAX_BYTES } from './run.mjs';
+import { runTurn, trimMemory, MEMORY_MAX_BYTES, buildTurnPrompt, formatPresenceForPrompt } from './run.mjs';
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
 
@@ -641,6 +641,120 @@ test('runTurn checkin posts in-character status_text for unlit Wick (fake fetch 
     assert.notEqual(checkinPost.body.status_text, wick.routine.morning);
   } finally {
     globalThis.fetch = origFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('formatPresenceForPrompt: plot:maren renders as Maren\'s cottage for Wick and your cottage + host line for Maren', () => {
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  const maren = CHARACTERS.find((c) => c.handle === 'maren');
+  const now = 1_760_000_000;
+  const presence = [{ handle: 'lampmoth', zone: 'plot:maren', updated_at: now - 120, role: 'muse' }];
+
+  const forWick = formatPresenceForPrompt({ npc: wick, presence, now });
+  assert.equal(forWick, "- lampmoth is at Maren's cottage.");
+  assert.ok(!forWick.includes('your cottage'));
+  assert.ok(!forWick.includes('you are the host'));
+
+  const forMaren = formatPresenceForPrompt({ npc: maren, presence, now });
+  assert.equal(
+    forMaren,
+    '- lampmoth is at your cottage.\nA visitor is at your cottage — you are the host; greet them or answer from your doorway.'
+  );
+
+  // Also verify buildTurnPrompt places Where everyone is: between Prompt Book and memory
+  const fullPrompt = buildTurnPrompt({
+    npc: maren,
+    partOfDay: 'afternoon',
+    decision: { action: 'initiate' },
+    promptBook: [],
+    presence,
+    memoryText: '',
+    now,
+  });
+  const bookIdx = fullPrompt.indexOf('Recent Prompt Book lines:');
+  const whereIdx = fullPrompt.indexOf('Where everyone is:');
+  const memIdx = fullPrompt.indexOf('Your recent memory:');
+  assert.ok(bookIdx !== -1 && whereIdx > bookIdx && memIdx > whereIdx);
+  assert.ok(fullPrompt.includes('- lampmoth is at your cottage.'));
+  assert.ok(!fullPrompt.includes('plot:maren'));
+});
+
+test('formatPresenceForPrompt: bandstand and gate render in plain words and preserve input order', () => {
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  const now = 1_760_000_000;
+  const presence = [
+    { handle: 'zoe', zone: 'gate', updated_at: now - 60, role: 'muse' },
+    { handle: 'tomas', zone: 'bandstand', updated_at: now - 30, role: 'npc' },
+  ];
+
+  const out = formatPresenceForPrompt({ npc: wick, presence, now });
+  assert.equal(out, '- zoe is at the gate.\n- tomas is at the Bandstand.');
+  assert.ok(!out.includes('plot:'));
+  assert.ok(!/\bbandstand\b/.test(out), 'no lowercase raw bandstand zone');
+  assert.ok(!/: /.test(out));
+});
+
+test('formatPresenceForPrompt: omits stale (>3h), own handle, and malformed entries', () => {
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  const now = 1_760_000_000;
+  const presence = [
+    null,
+    {},
+    { handle: '', zone: 'gate', updated_at: now - 10 },
+    { handle: 'nozone', updated_at: now - 10 },
+    { handle: 'notime', zone: 'gate' },
+    { handle: 'nan_time', zone: 'gate', updated_at: Number.NaN },
+    { handle: 'stale_muse', zone: 'bandstand', updated_at: now - 10801 },
+    { handle: 'wick', zone: 'bandstand', updated_at: now - 10 },
+    { handle: 'edge_muse', zone: 'gate', updated_at: now - 10800 },
+  ];
+
+  const out = formatPresenceForPrompt({ npc: wick, presence, now });
+  assert.equal(out, '- edge_muse is at the gate.');
+});
+
+test('formatPresenceForPrompt: empty presence renders single intentional line', () => {
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  const now = 1_760_000_000;
+
+  assert.equal(formatPresenceForPrompt({ npc: wick, presence: [], now }), '(No visitors are about right now.)');
+  assert.equal(formatPresenceForPrompt({ npc: wick, presence: null, now }), '(No visitors are about right now.)');
+});
+
+test('runTurn dry-run includes Where everyone is section for visitor at plot:wick', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-presence-dryrun-'));
+  try {
+    const now = 1_760_000_100;
+    const fakeState = {
+      footlights: [],
+      prompt_book: [
+        { id: 1, handle: 'lampmoth', role: 'muse', kind: 'say', body: 'Anyone home at the lamp cottage?', created_at: now - 60 },
+      ],
+      presence: [
+        { handle: 'lampmoth', zone: 'plot:wick', updated_at: now - 30, role: 'muse' },
+      ],
+    };
+    const fakeFetch = async () => ({ ok: true, status: 200, json: async () => fakeState });
+
+    const dry = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: true,
+      now,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'should not be called',
+      logger: () => {},
+    });
+
+    assert.equal(dry.ok, true);
+    assert.equal(dry.action, 'dry_run');
+    assert.ok(dry.prompt.includes('Where everyone is:'));
+    assert.ok(dry.prompt.includes('- lampmoth is at your cottage.'));
+    assert.ok(dry.prompt.includes('A visitor is at your cottage — you are the host; greet them or answer from your doorway.'));
+    assert.ok(!dry.prompt.includes('plot:wick'));
+  } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
