@@ -52,7 +52,7 @@ const NOT_STAGED = [
 ];
 
 // 2.2 MB, deliberately uncommitted, procedural trees stay
-const EXCLUDED_FILES = [
+export const EXCLUDED_FILES = [
   {
     repoPath: 'town-3d/models/pine.glb',
     relPath: 'models/pine.glb',
@@ -178,8 +178,7 @@ async function collectDirRecursive(dirPath, relPrefix, results) {
   }
 }
 
-async function collectSourceFiles(rootDir) {
-  const town3dDir = path.join(rootDir, 'town-3d');
+export async function collectSourceFilesFromTown3d(town3dDir) {
   await assertNotSymlinkDir(town3dDir, 'town-3d');
 
   const files = [];
@@ -265,6 +264,15 @@ async function collectSourceFiles(rootDir) {
   files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
   excluded.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return { files, excluded };
+}
+
+export async function collectSourceFiles(rootDir) {
+  return collectSourceFilesFromTown3d(path.join(rootDir, 'town-3d'));
+}
+
+export async function listStagedFiles(town3dDir) {
+  const { files } = await collectSourceFilesFromTown3d(town3dDir);
+  return files.map((entry) => entry.relPath);
 }
 
 function checkSecretGuard(relPath, contentBuf) {
@@ -538,9 +546,14 @@ async function main(argv) {
   }
 }
 
-main(process.argv.slice(2)).catch((err) => {
-  process.stderr.write(
-    JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n'
-  );
-  process.exit(1);
-});
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main(process.argv.slice(2)).catch((err) => {
+    process.stderr.write(
+      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n'
+    );
+    process.exit(1);
+  });
+}
