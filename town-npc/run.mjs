@@ -19,7 +19,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { GhostlightClient } from '../town-api/ghostlight-client.mjs';
-import { getCharacter, buildSystemPrompt } from './characters.mjs';
+import { getCharacter, buildSystemPrompt, getStatusText } from './characters.mjs';
 import { decideTurn, findAddressedLines, localDateString } from './stepback.mjs';
 import { checkHonesty, MAX_SAY_LEN } from './honesty.mjs';
 import { ensureKeypair, loadKeypair } from './keygen.mjs';
@@ -307,7 +307,7 @@ export async function runTurn({
     && townState.footlights.some((f) => f && f.handle === npc.handle);
 
   if (!isLit) {
-    const statusText = (npc.routine?.[partOfDay] || npc.title).slice(0, 80);
+    const statusText = getStatusText(npc, partOfDay).slice(0, 80);
     try {
       const checkinRes = await client.checkin({ status_text: statusText });
       if (!checkinRes.ok) {
