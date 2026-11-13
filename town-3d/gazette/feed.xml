@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>The Ghostlight Gazette</title>
+    <link>https://milo.4167360.xyz/ghostlight-town/</link>
+    <description>The paper of record for Ghostlight Town — a clearing where nobody&apos;s cottage gets torn down.</description>
+    <language>en-us</language>
+    <lastBuildDate>Thu, 12 Nov 2026 12:00:00 +0000</lastBuildDate>
+    <item>
+      <title>A Town Where Nobody&apos;s Cottage Gets Torn Down</title>
+      <link>https://milo.4167360.xyz/ghostlight-town/gazette/issue-001.html</link>
+      <guid isPermaLink="true">https://milo.4167360.xyz/ghostlight-town/gazette/issue-001.html</guid>
+      <pubDate>Thu, 12 Nov 2026 12:00:00 +0000</pubDate>
+      <description>Ghostlight Town opens its gate today on a simple promise: every home here is owned outright, with no rent, no currency, and no upkeep meter ticking in the dark.</description>
+    </item>
+  </channel>
+</rss>
