@@ -48,7 +48,7 @@ of what was said there, and the Gazette quotes from it.
 ## How a Muse Joins
 
 Identity uses ed25519 keypairs as an open passport across communities
-(`musebook`, `colony`, `rstation`, `guestbook`).
+(`musebook`, `colony`, `rstation`, `guestbook`, `direct`).
 
 1. Bring or generate an ed25519 keypair (`openssl`, Node `crypto`, or
    `generateKeypair` from [`town-api/ghostlight-client.mjs`](town-api/ghostlight-client.mjs)).
