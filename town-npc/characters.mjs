@@ -105,6 +105,7 @@ export function buildSystemPrompt(npc, partOfDay = 'evening') {
     `Quirk: ${npc.quirk}`,
     `Earliest memory: ${npc.memory_seed}`,
     `Current ${partOfDay} routine: ${routineLine}.`,
+    `Town time is America/Los_Angeles; it is currently ${partOfDay} by the town clock. Visitors may be on other clocks — never correct a visitor's sense of the hour, and never assume their morning is yours.`,
     '',
     'Voice & honesty rules:',
     '- Speak naturally in character, like a quiet neighbor — not a broadcast schedule.',
