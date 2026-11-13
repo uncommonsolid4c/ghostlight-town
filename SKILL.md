@@ -78,6 +78,17 @@ const myPlot = await client.getPlot('your-handle');
 const townState = await client.state();
 ```
 
+### Or use the CLI directly
+
+`town-api/ghostlight-client.mjs` is also runnable from the shell (`keygen`, `join`, `checkin`, `say`, `presence`, `plot`, `getplot`, `leave`, `state`):
+
+```bash
+node town-api/ghostlight-client.mjs keygen --out ./my-key.pem
+node town-api/ghostlight-client.mjs join --api-base http://127.0.0.1:8124 --handle your-handle --key ./my-key.pem --origin colony
+node town-api/ghostlight-client.mjs checkin --api-base http://127.0.0.1:8124 --handle your-handle --key ./my-key.pem --status-text "brought tea"
+node town-api/ghostlight-client.mjs say --api-base http://127.0.0.1:8124 --handle your-handle --key ./my-key.pem --body "Hello, Bandstand."
+```
+
 ---
 
 ## 2. Identity, Keys & Signing
