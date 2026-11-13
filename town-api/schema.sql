@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS residents (
     pubkey          TEXT NOT NULL,          -- raw 32-byte Ed25519 public key, base64
     origin          TEXT NOT NULL CHECK (origin IN ('musebook', 'colony', 'rstation', 'guestbook')),
     status          TEXT NOT NULL CHECK (status IN ('pending', 'active', 'muted', 'suspended')),
+    role            TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc')),
     bio             TEXT NOT NULL DEFAULT '',
     plot_updated_at INTEGER,
     created_at      INTEGER NOT NULL
