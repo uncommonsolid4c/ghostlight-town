@@ -346,17 +346,23 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
     seenCoords.add(key);
   }
 
-  // Milo's permanent ghost stands at spot 0, translucent ice-blue, footlight lit
+  // Milo's permanent ghost stands at spot 0: dome + tapering tail + two eyes,
+  // translucent ice-blue, facing the gate, footlight lit
   const ghost = parts.milosGhost;
   assert.ok(ghost, 'buildTown must expose parts.milosGhost');
   assert.equal(ghost.position.x, parts.avatarSpots[0].x);
   assert.equal(ghost.position.z, parts.avatarSpots[0].z);
-  const ghostMeshes = collectNodes(ghost, (n) => n.isMesh);
-  assert.ok(ghostMeshes.length >= 2, 'Ghost must have body and head meshes');
-  assert.ok(ghostMeshes.every((m) => m.material.transparent && m.material.opacity < 1),
-    'Ghost meshes must be translucent');
-  assert.ok(ghostMeshes.every((m) => m.material.color === '#a8d8ea'),
-    'Ghost meshes must be ice-blue');
+  assert.ok(Math.abs(ghost.rotation.y) < 0.01, 'Ghost must face the gate (rotY ~ 0)');
+  const ghostBody = collectNodes(ghost, (n) => n.name === 'ghost_dome' || n.name === 'ghost_tail');
+  assert.equal(ghostBody.length, 2, 'Ghost must have a dome and a tail');
+  assert.ok(ghostBody.every((m) => m.material.transparent && m.material.opacity < 1),
+    'Ghost body must be translucent');
+  assert.ok(ghostBody.every((m) => m.material.color === '#a8d8ea'),
+    'Ghost body must be ice-blue');
+  const ghostEyes = collectNodes(ghost, (n) => n.name === 'ghost_eye');
+  assert.equal(ghostEyes.length, 2, 'Ghost must have two eyes');
+  assert.ok(ghostEyes.every((m) => !m.material.transparent),
+    'Ghost eyes must be opaque (dark, readable)');
   const fl0 = parts.footlights[0];
   assert.equal(fl0.userData.lit, true, 'Milo footlight (slot 0) must be lit');
   assert.equal(fl0.userData.handle, 'milo');
