@@ -3,6 +3,8 @@
  * Pure ES module, procedural low-poly Three.js geometry, PS1 dusk aesthetic.
  */
 
+import { createConceptMilosCottage } from './concept-cottage.js';
+
 export const TOWN_LAYOUT = {
   clearingRadius: 30,
   bandstand: {
@@ -432,6 +434,28 @@ export function createCottage(THREE, manifest = {}, options = {}) {
   const wallColor = safeColor(safeManifest.wall, '#d8d0c0');
   const roofColor = safeColor(safeManifest.roof, '#5a4332');
   const trimColor = safeColor(safeManifest.trim, '#f5efe0');
+
+  // Concept-matched cottage (Argon's proof, CONCEPT.md): Milo's plot 1 only.
+  // The concept builder owns walls/roof/windows/terrace; the signpost and
+  // manifest props still attach here, mirroring the tail below, so the swap
+  // loses nothing visible. Other cottages keep the classic builder.
+  if (options.conceptCottage) {
+    const conceptGroup = createConceptMilosCottage(THREE, {
+      name: options.name || 'milos_cottage',
+      label: safeManifest.signpost_text || 'Milo — Ghostlight Cottage (rebuilt)',
+    });
+    if (safeManifest.signpost_text) {
+      const sign = buildSignpost(THREE, String(safeManifest.signpost_text).slice(0, 120), 'cottage_signpost');
+      sign.position.set(2.3, 0, 2.6);
+      conceptGroup.add(sign);
+    }
+    const rawProps = Array.isArray(safeManifest.props) ? safeManifest.props : [];
+    for (const prop of rawProps) {
+      const propMesh = buildProp(THREE, prop);
+      if (propMesh) conceptGroup.add(propMesh);
+    }
+    return conceptGroup;
+  }
 
   const group = new THREE.Group();
   group.name = options.name || `cottage_${style}`;
@@ -1364,6 +1388,7 @@ export function buildTown(THREE, opts = {}) {
     twoStory: true,
     upperWall: '#f5efe0',
     rooftopTerrace: true,
+    conceptCottage: true,
   });
   milosCottage.userData.handle = 'milo';
   milosCottage.userData.plotNumber = 1;
