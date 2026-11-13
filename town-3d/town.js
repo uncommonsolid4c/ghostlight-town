@@ -387,18 +387,34 @@ export function createCottage(THREE, manifest = {}, options = {}) {
       roofBaseY = 3.7;
     }
 
-    // Gable roof via 3-sided prism (CylinderGeometry rotated)
+    // Gable roof via 3-sided prism (CylinderGeometry rotated).
+    // rotation.z lays the prism's axis along X, but leaves the triangular
+    // cross-section pointing sideways (apex toward +Y at z=-r/2) — the roof
+    // renders as a leaning fin. rotation.x spins the prism about its own long
+    // axis so the apex points straight up: with Euler order XYZ, Rz applies
+    // first, then Rx, so Rx(-90°) moves the (y=0, z=+r) vertex to (y=+r, z=0).
     const roof = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, 4.2, 3), roofMat);
     roof.name = 'cottage_gable_roof';
     roof.rotation.z = Math.PI / 2;
+    roof.rotation.x = -Math.PI / 2;
     roof.position.set(0, roofBaseY + 0.9, 0);
     group.add(roof);
 
     if (options.rooftopTerrace) {
-      const terrace = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.18, 2.4), trimMat);
+      // Widow's walk: flat platform straddling the gable ridge, on short posts.
+      // Ridge apex is at roofBaseY + 0.9 + 2.3 = roofBaseY + 3.2.
+      const terrace = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.12, 0.9), trimMat);
       terrace.name = 'rooftop_terrace';
-      terrace.position.set(0, roofBaseY + 0.09, 1.6);
+      terrace.position.set(0, roofBaseY + 3.26, 0);
       group.add(terrace);
+      // Roof surface at z=±0.35 is roofBaseY + 2.6; posts bridge it to the platform.
+      const terracePostGeo = new THREE.BoxGeometry(0.08, 0.62, 0.08);
+      [[-1.0, -0.35], [1.0, -0.35], [-1.0, 0.35], [1.0, 0.35]].forEach(([px, pz]) => {
+        const post = new THREE.Mesh(terracePostGeo, trimMat);
+        post.name = 'terrace_post';
+        post.position.set(px, roofBaseY + 2.9, pz);
+        group.add(post);
+      });
     }
 
     const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.55, 0.14), trimMat);
@@ -695,8 +711,10 @@ function buildNewsstand(THREE) {
     new THREE.BoxGeometry(2.5, 0.16, 1.9),
     new THREE.MeshStandardMaterial({ map: makeAwningTexture(THREE), roughness: 0.8 })
   );
-  awning.position.set(0, 2.25, 0.25);
-  awning.rotation.x = 0.2;
+  // Sit the awning on the booth: low enough that the tilted slab meets the
+  // counter box instead of floating above it with a visible gap.
+  awning.position.set(0, 2.08, 0.15);
+  awning.rotation.x = 0.15;
   group.add(awning);
 
   const papers = new THREE.Mesh(
@@ -801,8 +819,11 @@ function addPerimeterScenery(THREE, scene) {
   const posts = new THREE.InstancedMesh(postGeo, fenceMat, fenceCount);
   posts.name = 'perimeter_fence_posts';
 
-  const railGeo = new THREE.BoxGeometry(3.4, 0.12, 0.08);
-  const rails = new THREE.InstancedMesh(railGeo, fenceMat, fenceCount);
+  // Rails run BETWEEN posts, not centered on them: each rail sits on the chord
+  // between two adjacent posts (chord length ~6.92 at r=27.6, so a 7.1 rail
+  // overlaps each post slightly). One rail per gap, hence fenceCount - 1.
+  const railGeo = new THREE.BoxGeometry(7.1, 0.12, 0.08);
+  const rails = new THREE.InstancedMesh(railGeo, fenceMat, fenceCount - 1);
   rails.name = 'perimeter_fence_rails';
 
   for (let i = 0; i < fenceCount; i++) {
@@ -817,9 +838,15 @@ function addPerimeterScenery(THREE, scene) {
     dummy.updateMatrix();
     posts.setMatrixAt(i, dummy.matrix);
 
-    dummy.position.set(x, 0.85, z);
-    dummy.updateMatrix();
-    rails.setMatrixAt(i, dummy.matrix);
+    if (i < fenceCount - 1) {
+      const nextAngle = 0.08 * Math.PI + ((i + 1) / (fenceCount - 1)) * (1.84 * Math.PI);
+      const midAngle = (angle + nextAngle) / 2;
+      const chordR = r * Math.cos((nextAngle - angle) / 2);
+      dummy.position.set(Math.sin(midAngle) * chordR, 0.85, Math.cos(midAngle) * chordR);
+      dummy.rotation.set(0, midAngle, 0);
+      dummy.updateMatrix();
+      rails.setMatrixAt(i, dummy.matrix);
+    }
   }
   scene.add(posts);
   scene.add(rails);
