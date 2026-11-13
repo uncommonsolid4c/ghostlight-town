@@ -407,8 +407,9 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
     seenCoords.add(key);
   }
 
-  // Milo's permanent ghost stands at spot 0: dome + tapering tail + two eyes,
-  // translucent ice-blue, facing the gate, footlight lit
+  // Milo's permanent ghost stands at spot 0: dome + flared sheet + short wisp,
+  // face decal (starry eyes, smile, pink cheeks), translucent ice-blue,
+  // facing the gate, footlight lit
   const ghost = parts.milosGhost;
   assert.ok(ghost, 'buildTown must expose parts.milosGhost');
   assert.equal(ghost.position.x, parts.avatarSpots[0].x);
@@ -424,10 +425,14 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
     'Ghost body must be translucent');
   assert.ok(ghostBody.every((m) => m.material.color === '#a8d8ea'),
     'Ghost body must be ice-blue');
+  // Pure-decal mode (concept-ghost swap, 2026-11-12): the face decal carries
+  // the eyes, so the old ghost_eye spheres are gone — they'd read as dark
+  // blobs through the translucent sheet from behind or the side.
+  const faceDecal = collectNodes(ghost, (n) => n.name === 'ghost_face_decal')[0];
+  assert.ok(faceDecal, 'Ghost must have a front ghost_face_decal mesh');
+  assert.ok(faceDecal.material.map, 'Ghost face decal must have a CanvasTexture map');
   const ghostEyes = collectNodes(ghost, (n) => n.name === 'ghost_eye');
-  assert.equal(ghostEyes.length, 2, 'Ghost must have two eyes');
-  assert.ok(ghostEyes.every((m) => !m.material.transparent),
-    'Ghost eyes must be opaque (dark, readable)');
+  assert.equal(ghostEyes.length, 0, 'Ghost must not have eye spheres in pure-decal mode');
   const fl0 = parts.footlights[0];
   assert.equal(fl0.userData.lit, true, 'Milo footlight (slot 0) must be lit');
   assert.equal(fl0.userData.handle, 'milo');
@@ -506,10 +511,11 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // Budget raised 120 -> 125 (owner decision, 2026-11-12): the growth since 120
 // is the completed planned prop set — slice 11 (street light + bookshelf) and
 // slices 12–13 (the three seed NPC character props); no further prop slices are
-// planned. 114 is the worst case (all procedural fallbacks) as live town swaps
+// planned. 113 is the worst case (all procedural fallbacks) as live town swaps
 // GLBs in for fewer — down from 122 after the 2026-11-12 concept-cottage swap
-// (Argon's merged cottage replaces the old multi-mesh build) — and 114 is under
-// the 120fps/2015-iGPU reference point. 125 keeps the guardrail meaningful so
+// (Argon's merged cottage replaces the old multi-mesh build) and down one more
+// after the concept-ghost swap the same night (pure-decal ghost: 4 meshes,
+// no eye spheres) — and 113 is under the 120fps/2015-iGPU reference point. 125 keeps the guardrail meaningful so
 // any future prop addition requires a deliberate revisit.
 test('Draw-call budget: total mesh count in built town is < 125', () => {
   const THREE = createThreeStub();
