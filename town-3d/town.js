@@ -888,7 +888,10 @@ function addPerimeterScenery(THREE, scene) {
   for (let i = 0; i < treeCount; i++) {
     // Leave south gate gap open
     const angle = 0.12 * Math.PI + (i / (treeCount - 1)) * (1.76 * Math.PI);
-    const r = 29.2 + (i % 3) * 1.4;
+    // Trunks must stand ON the clearing ground (radius 30) and outside the
+    // fence (27.6): 27.8 / 28.5 / 29.2. The old 29.2 / 30.6 / 32.0 put 12 of
+    // 18 trees past the ground edge, floating over the void.
+    const r = 27.8 + (i % 3) * 0.7;
     const x = Math.sin(angle) * r;
     const z = Math.cos(angle) * r;
     const scale = 0.85 + (i % 4) * 0.15;
