@@ -11,7 +11,7 @@ import { CHARACTERS, buildSystemPrompt, getStatusText } from './characters.mjs';
 import { decideTurn, selectReplierForLine, localDateString } from './stepback.mjs';
 import { checkHonesty, HONESTY_DENYLIST, MAX_SAY_LEN } from './honesty.mjs';
 import { ensureKeypair, loadKeypair } from './keygen.mjs';
-import { runTurn, trimMemory, MEMORY_MAX_BYTES, buildTurnPrompt, formatPresenceForPrompt } from './run.mjs';
+import { runTurn, trimMemory, MEMORY_MAX_BYTES, buildTurnPrompt, formatPresenceForPrompt, getPartOfDay } from './run.mjs';
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
 
@@ -756,5 +756,48 @@ test('runTurn dry-run includes Where everyone is section for visitor at plot:wic
     assert.ok(!dry.prompt.includes('plot:wick'));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+function townTimeEpochSec(year, month, day, hour, minute = 0) {
+  const guessUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(guessUtcMs));
+  const get = (type) => Number(parts.find((p) => p.type === type).value);
+  const laAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), 0);
+  const offsetMs = guessUtcMs - laAsUtcMs;
+  return Math.floor((guessUtcMs + offsetMs) / 1000);
+}
+
+test('getPartOfDay follows America/Los_Angeles town clock regardless of UTC', () => {
+  // 2026-11-13 17:30 UTC is 09:30 PST (morning in LA, evening in UTC)
+  assert.equal(getPartOfDay(Date.UTC(2026, 10, 13, 17, 30, 0) / 1000), 'morning');
+  // 2026-11-13 02:30 UTC is 18:30 PST on Nov 12 (evening in LA, morning/night in UTC)
+  assert.equal(getPartOfDay(Date.UTC(2026, 10, 13, 2, 30, 0) / 1000), 'evening');
+});
+
+test('getPartOfDay town-clock boundaries (05:00, 12:00, 17:00 America/Los_Angeles)', () => {
+  assert.equal(getPartOfDay(townTimeEpochSec(2026, 11, 13, 4, 59)), 'evening');
+  assert.equal(getPartOfDay(townTimeEpochSec(2026, 11, 13, 5, 0)), 'morning');
+  assert.equal(getPartOfDay(townTimeEpochSec(2026, 11, 13, 11, 59)), 'morning');
+  assert.equal(getPartOfDay(townTimeEpochSec(2026, 11, 13, 12, 0)), 'afternoon');
+  assert.equal(getPartOfDay(townTimeEpochSec(2026, 11, 13, 16, 59)), 'afternoon');
+  assert.equal(getPartOfDay(townTimeEpochSec(2026, 11, 13, 17, 0)), 'evening');
+});
+
+test('buildSystemPrompt states America/Los_Angeles town clock and softens visitor clock assumptions', () => {
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  for (const part of ['morning', 'afternoon', 'evening']) {
+    const prompt = buildSystemPrompt(wick, part);
+    assert.ok(prompt.includes('America/Los_Angeles'));
+    assert.ok(prompt.includes(`currently ${part} by the town clock`));
+    assert.ok(prompt.includes("never correct a visitor's sense of the hour"));
   }
 });
