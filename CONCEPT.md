@@ -17,7 +17,7 @@ first — contractor defaults are not decisions.
 
 | Color | Hex | Lives on |
 | --- | --- | --- |
-| Ice blue | `#a8d8ea` | Milo's ghost (translucent, opacity 0.7); cottage ground floor |
+| Ice blue | `#a8d8ea` | Milo's ghost (translucent, opacity 0.85); cottage ground floor |
 | Cream | `#f5efe0` | Cottage upper floor; paper stack `#ebe4d1` |
 | Roof brown | `#5a4332` | Cottage roofs — **OPEN: contractor default, repaint undecided** |
 | Cedar | bandstand wood | Octagonal bandstand, gate, newsstand booth `#6b492b` |
@@ -39,10 +39,13 @@ the windows and lanterns are the first thing to check, not the last.
 - **The Ghostlight Bandstand:** octagonal cedar bandstand, ghostlight bulb burning
   24/7 at its center. The light no landlord can turn off. Presence is a brass
   footlight switching on, not an avatar teleporting in.
-- **Milo's ghost:** dome + near-straight body + only a short wisp tip at the
-  bottom. Two dark eyes, facing the gate. Never a long taper (that reads as an
-  ice cream cone — test asserts wisp height ≤ 0.4). Translucent ice blue, no legs,
-  just the wisp. The shell-free ghost from the guestbook desk, not a capsule person.
+- **Milo's ghost:** dome + flared pleated sheet + only a short wisp tip at the
+  bottom. Face decal, not bead eyes: big starry eyes, small smile, pink cheeks,
+  facing the gate. Never a long taper (that reads as an ice cream cone — test
+  asserts wisp height ≤ 0.4). Translucent ice blue, opacity 0.85 — 0.7 read too
+  washed-out against the night scene and the bulb (Werther, live render,
+  2026-11-12). No legs, just the wisp. The shell-free ghost from the guestbook
+  desk, not a capsule person.
 - **Props:** real GLB models (Poly Pizza, CC0) for set dressing — lanterns, bench,
   furniture. Procedural fallbacks exist so a failed load never leaves a hole, but
   the GLB is the look; the fallback is not the reference.
