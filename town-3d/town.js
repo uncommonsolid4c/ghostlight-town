@@ -92,6 +92,30 @@ export const PROP_PLACEMENTS = [
     targetSize: 0.35,
     scaleAxis: 'y',
   },
+  {
+    id: 'newsstand_street_light',
+    kind: 'street-light',
+    model: 'models/street-light.glb',
+    parent: 'scene',
+    x: 7.8,
+    y: 0,
+    z: 15.2,
+    rotY: 0,
+    targetSize: 3.0,
+    scaleAxis: 'y',
+  },
+  {
+    id: 'newsstand_bookshelf',
+    kind: 'bookshelf',
+    model: 'models/bookshelf.glb',
+    parent: 'scene',
+    x: 4.6,
+    y: 0,
+    z: 15.0,
+    rotY: +Math.atan2(-4.6, -15.0).toFixed(4),
+    targetSize: 1.6,
+    scaleAxis: 'y',
+  },
 ];
 
 export const MILO_REBUILD_MANIFEST = {
@@ -1035,10 +1059,59 @@ function buildProceduralBench(THREE) {
   return group;
 }
 
-function buildProceduralProp(THREE, kind) {
+export function buildProceduralStreetLight(THREE) {
+  const group = new THREE.Group();
+  const postMat = new THREE.MeshStandardMaterial({ color: '#2e3338', roughness: 0.85 });
+  const lampMat = new THREE.MeshStandardMaterial({
+    color: '#fff3d6',
+    emissive: '#ffe0a3',
+    emissiveIntensity: 1.2,
+  });
+
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 2.7, 6), postMat);
+  post.position.set(0, 1.35, 0);
+  group.add(post);
+
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.06, 0.06), postMat);
+  arm.position.set(0.24, 2.68, 0);
+  group.add(arm);
+
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.22, 0.24), lampMat);
+  head.position.set(0.46, 2.55, 0);
+  group.add(head);
+  return group;
+}
+
+export function buildProceduralBookshelf(THREE) {
+  const group = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const shelfMat = new THREE.MeshStandardMaterial({ color: '#825b38', roughness: 0.85 });
+  const bookMat = new THREE.MeshStandardMaterial({ color: '#8b3a3a', roughness: 0.82 });
+
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.6, 0.34), woodMat);
+  frame.position.set(0, 0.8, 0);
+  group.add(frame);
+
+  const lowerShelf = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.05, 0.36), shelfMat);
+  lowerShelf.position.set(0, 0.55, 0.01);
+  group.add(lowerShelf);
+
+  const upperShelf = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.05, 0.36), shelfMat);
+  upperShelf.position.set(0, 1.05, 0.01);
+  group.add(upperShelf);
+
+  const books = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.26, 0.24), bookMat);
+  books.position.set(-0.08, 0.71, 0.04);
+  group.add(books);
+  return group;
+}
+
+export function buildProceduralProp(THREE, kind) {
   if (kind === 'post-lantern') return buildProceduralPostLantern(THREE);
   if (kind === 'lantern') return buildProceduralLantern(THREE);
   if (kind === 'bench') return buildProceduralBench(THREE);
+  if (kind === 'street-light') return buildProceduralStreetLight(THREE);
+  if (kind === 'bookshelf') return buildProceduralBookshelf(THREE);
   return new THREE.Group();
 }
 
