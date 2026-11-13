@@ -2042,13 +2042,29 @@ export class TownLive {
 
   async _syncPlotsFromState(state) {
     if (typeof this.fetchFn !== 'function') return;
-    const handles = new Set();
-    for (const row of state?.footlights || []) if (row?.handle) handles.add(row.handle);
-    for (const row of state?.presence || []) if (row?.handle) handles.add(row.handle);
-    for (const row of state?.prompt_book || []) if (row?.handle) handles.add(row.handle);
-    handles.delete('milo');
-
     const statePlots = state?.plots && typeof state.plots === 'object' ? state.plots : null;
+
+    // Founding Law: a muse who goes quiet keeps their cottage. `state.plots`
+    // lists every resident with a saved plot, so it is the source of truth for
+    // which cottages stand; footlights / presence / Prompt Book only add
+    // handles whose plot may have appeared since.
+    const found = new Set();
+    for (const handle of Object.keys(statePlots || {})) found.add(handle);
+    for (const row of state?.footlights || []) if (row?.handle) found.add(row.handle);
+    for (const row of state?.presence || []) if (row?.handle) found.add(row.handle);
+    for (const row of state?.prompt_book || []) if (row?.handle) found.add(row.handle);
+    found.delete('milo');
+
+    // applyPlotManifest hands out free pads in call order, so sync in a fixed
+    // order (seed homes first, then by handle) rather than whoever happens to
+    // be lit or talking when the page loads. Every visitor then sees the same
+    // cottage on the same pad.
+    const handles = [...found].sort((a, b) => {
+      const aSeed = Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, a);
+      const bSeed = Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, b);
+      if (aSeed !== bSeed) return aSeed ? -1 : 1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
 
     for (const handle of handles) {
       const cached = this.plotCache.get(handle);

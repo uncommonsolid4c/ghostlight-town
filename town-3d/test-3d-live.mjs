@@ -690,6 +690,63 @@ test('TownLive invalidates plotCache when state.plots timestamp changes and skip
   assert.ok(collectNodes(town.scene, (n) => n.name === 'cottage_latecomer').length === 1);
 });
 
+test('TownLive raises cottages for quiet residents and assigns pads independent of who is lit', async () => {
+  const manifestFor = (handle) => ({
+    cottage: 'gable',
+    wall: '#ddccbb',
+    roof: '#554433',
+    trim: '#221100',
+    signpost_text: handle,
+    props: [],
+  });
+  const fakeFetch = async (url) => {
+    const m = /\/api\/town\/plot\?handle=([a-z0-9_-]+)/.exec(url);
+    if (!m) return { status: 404 };
+    return {
+      status: 200,
+      async json() {
+        return { handle: m[1], plot_updated_at: 100, manifest: manifestFor(m[1]) };
+      },
+    };
+  };
+
+  // Viewer A loads while zed is lit and talking; amy has gone quiet (plot only).
+  const townA = buildTown(createThreeStub());
+  const liveA = new TownLive(townA, { fetch: fakeFetch, apiBase: '' });
+  await liveA._syncPlotsFromState({
+    state_seq: 1,
+    footlights: [{ handle: 'zed', slot: 0, role: 'muse' }],
+    presence: [{ handle: 'zed', zone: 'bandstand', role: 'muse' }],
+    prompt_book: [{ id: 1, handle: 'zed', kind: 'say', body: 'hi' }],
+    plots: { amy: 100, zed: 100 },
+  });
+  assert.equal(
+    collectNodes(townA.scene, (n) => n.name === 'cottage_amy').length,
+    1,
+    'a resident with a saved plot keeps a cottage even with no footlight, presence, or recent remark'
+  );
+
+  // Viewer B loads later when amy is lit instead of zed.
+  const townB = buildTown(createThreeStub());
+  const liveB = new TownLive(townB, { fetch: fakeFetch, apiBase: '' });
+  await liveB._syncPlotsFromState({
+    state_seq: 2,
+    footlights: [{ handle: 'amy', slot: 0, role: 'muse' }],
+    presence: [],
+    prompt_book: [],
+    plots: { amy: 100, zed: 100 },
+  });
+
+  for (const handle of ['amy', 'zed']) {
+    assert.equal(
+      townA._live.plotAssignments.get(handle).plotNumber,
+      townB._live.plotAssignments.get(handle).plotNumber,
+      `${handle} must stand on the same pad for every viewer`
+    );
+  }
+  assert.notEqual(townA._live.plotAssignments.get('amy').plotNumber, townA._live.plotAssignments.get('zed').plotNumber);
+});
+
 test('resolvePlotOverlayContent prefers API html and falls back to static path', async () => {
   // 1. API returns valid non-empty html
   const apiRes = await resolvePlotOverlayContent('alice', {
