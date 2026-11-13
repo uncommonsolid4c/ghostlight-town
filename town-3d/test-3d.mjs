@@ -104,7 +104,19 @@ function createThreeStub() {
       }
       return this;
     }
-    updateMatrix() {}
+    updateMatrix() {
+      // Compose translation and scale into the matrix so tests can read
+      // instance positions back from InstancedMesh.matrices. Rotation is
+      // ignored: it never moves the translation part.
+      const e = this.matrix.elements;
+      e[0] = this.scale.x;
+      e[5] = this.scale.y;
+      e[10] = this.scale.z;
+      e[12] = this.position.x;
+      e[13] = this.position.y;
+      e[14] = this.position.z;
+      e[15] = 1;
+    }
   }
 
   class Scene extends Object3D {
@@ -141,7 +153,10 @@ function createThreeStub() {
       this.matrices = new Array(count);
     }
     setMatrixAt(index, matrix) {
-      this.matrices[index] = matrix;
+      // Real THREE copies the elements into the instance buffer; storing the
+      // reference would leave every instance holding the last matrix written
+      // (town.js reuses one dummy Object3D for all instances).
+      this.matrices[index] = { elements: [...matrix.elements] };
     }
   }
 
@@ -1067,4 +1082,21 @@ test('Slice 36: signpost text wraps deterministically without measureText', () =
     `split word lines must be non-empty and <= ${wordBudget} chars`
   );
   assert.equal(sign.userData.signpostLines.join(''), word40);
+});
+
+test('Perimeter trees stand on the clearing ground: trunks inside clearingRadius, bases at y=0', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const trunks = collectNodes(town.scene, (n) => n.name === 'perimeter_tree_trunks')[0];
+  assert.ok(trunks, 'perimeter_tree_trunks must exist');
+  assert.equal(trunks.count, 18, 'there must be 18 perimeter trees');
+  const trunkHalfHeight = 2.2 / 2; // CylinderGeometry height in addPerimeterScenery
+  for (let i = 0; i < trunks.count; i++) {
+    const e = trunks.matrices[i].elements;
+    const r = Math.hypot(e[12], e[14]);
+    assert.ok(r < TOWN_LAYOUT.clearingRadius, `tree ${i} trunk radius ${r} must be inside clearingRadius ${TOWN_LAYOUT.clearingRadius}`);
+    // Trunk center y is 1.1 * scale and half-height is 1.1 * scale, so the base sits at y=0.
+    const baseY = e[13] - trunkHalfHeight * e[5];
+    assert.ok(Math.abs(baseY) < 1e-9, `tree ${i} trunk base must sit at y=0, got ${baseY}`);
+  }
 });
