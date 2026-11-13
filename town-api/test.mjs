@@ -13,11 +13,12 @@ async function startTestServer(opts = {}) {
   const dbPath = path.join(tmpDir, 'town.db');
   const operatorKeys = generateKeypair();
   let clockOffset = 0;
+  const nowFn = () => Math.floor(Date.now() / 1000) + clockOffset;
 
   const { server, db } = createTownServer({
     dbPath,
     operatorPubkey: opts.operatorPubkey !== undefined ? opts.operatorPubkey : operatorKeys.pubkey,
-    nowFn: () => Math.floor(Date.now() / 1000) + clockOffset,
+    nowFn,
   });
 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -28,6 +29,7 @@ async function startTestServer(opts = {}) {
     baseUrl,
     operatorKeys,
     db,
+    nowSec: nowFn,
     advanceClock(sec) {
       clockOffset += sec;
     },
@@ -518,6 +520,103 @@ test('admin/approve optional role assignment and join ignores self-assigned role
     assert.equal(state.footlights.find((f) => f.handle === 'wick').role, 'npc');
     assert.equal(state.presence.find((p) => p.handle === 'wick').role, 'npc');
     assert.equal(state.prompt_book.find((l) => l.handle === 'wick').role, 'npc');
+  } finally {
+    await ctx.close();
+  }
+});
+
+async function signedSayAtServerTime(ctx, handle, privateKeyPem, body) {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: '/api/town/ghostlight/say',
+    body: { body, kind: 'say' },
+    handle,
+    privateKeyPem,
+    timestamp: ctx.nowSec(),
+  });
+  const res = await fetch(`${ctx.baseUrl}/api/town/ghostlight/say`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
+
+test('prompt_book prune removes >7d lines, keeps 6d and fresh lines, and does not bump state_seq', async () => {
+  const DAY_SEC = 24 * 60 * 60;
+  const ctx = await startTestServer();
+  try {
+    const aliceKeys = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...aliceKeys });
+
+    await alice.join({ origin: 'musebook' });
+    await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
+    await alice.checkin({ status_text: 'at the desk' });
+
+    const firstSay = await signedSayAtServerTime(ctx, 'alice', aliceKeys.privateKeyPem, 'eight days old');
+    assert.equal(firstSay.status, 201);
+
+    ctx.advanceClock(2 * DAY_SEC);
+    const secondSay = await signedSayAtServerTime(ctx, 'alice', aliceKeys.privateKeyPem, 'six days old');
+    assert.equal(secondSay.status, 201);
+    const seqBeforePrune = secondSay.data.state_seq;
+
+    ctx.advanceClock(6 * DAY_SEC);
+    const stateRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(stateRes.status, 200);
+    const state = await stateRes.json();
+
+    assert.equal(state.state_seq, seqBeforePrune);
+    const rowsAfterPrune = ctx.db.prepare('SELECT body FROM prompt_book ORDER BY id ASC').all();
+    assert.deepEqual(
+      rowsAfterPrune.map((r) => r.body),
+      ['six days old']
+    );
+    assert.deepEqual(
+      state.prompt_book.map((l) => l.body),
+      ['six days old']
+    );
+
+    const freshSay = await signedSayAtServerTime(ctx, 'alice', aliceKeys.privateKeyPem, 'fresh line');
+    assert.equal(freshSay.status, 201);
+
+    const afterFreshRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(afterFreshRes.status, 200);
+    const afterFresh = await afterFreshRes.json();
+    assert.deepEqual(
+      afterFresh.prompt_book.map((l) => l.body),
+      ['six days old', 'fresh line']
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('prompt_book prune leaves empty table safe for last-100 fallback', async () => {
+  const DAY_SEC = 24 * 60 * 60;
+  const ctx = await startTestServer();
+  try {
+    const aliceKeys = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...aliceKeys });
+
+    await alice.join({ origin: 'musebook' });
+    await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
+    await alice.checkin({ status_text: 'at the desk' });
+
+    const sayRes = await signedSayAtServerTime(ctx, 'alice', aliceKeys.privateKeyPem, 'soon to be pruned');
+    assert.equal(sayRes.status, 201);
+
+    ctx.advanceClock(8 * DAY_SEC);
+    const stateRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(stateRes.status, 200);
+    const state = await stateRes.json();
+    assert.deepEqual(state.prompt_book, []);
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) AS n FROM prompt_book').get().n, 0);
+
+    const secondStateRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(secondStateRes.status, 200);
+    const secondState = await secondStateRes.json();
+    assert.deepEqual(secondState.prompt_book, []);
   } finally {
     await ctx.close();
   }
