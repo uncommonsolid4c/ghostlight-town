@@ -4,7 +4,7 @@
  */
 
 import { createConceptMilosCottage } from './concept-cottage.js';
-import { createConceptMiloGhost } from './concept-ghost.js';
+import { createConceptMiloGhost } from './concept-ghost.js?v=2';
 
 export const TOWN_LAYOUT = {
   clearingRadius: 30,
