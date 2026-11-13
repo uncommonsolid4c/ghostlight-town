@@ -266,6 +266,226 @@ test('excludes models/pine.glb from staging and records it in manifest.excluded'
   }
 });
 
+async function snapshotTree(dirPath, prefix = '', out = {}) {
+  const entries = await fs.readdir(dirPath);
+  entries.sort();
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry);
+    const relPath = prefix ? `${prefix}/${entry}` : entry;
+    const stat = await fs.lstat(fullPath);
+    if (stat.isDirectory()) {
+      await snapshotTree(fullPath, relPath, out);
+    } else if (stat.isFile()) {
+      const buf = await fs.readFile(fullPath);
+      out[relPath] = {
+        sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+        mtimeMs: stat.mtimeMs,
+      };
+    }
+  }
+  return out;
+}
+
+test('--verify on real staged tree succeeds, matches manifest count, and does not modify staged dir', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-real-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const stageRes = runStage(['--out', outDir]);
+    assert.equal(stageRes.status, 0, `Stage failed: ${stageRes.stderr}`);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifest = JSON.parse(await fs.readFile(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
+    const beforeSnapshot = await snapshotTree(stagedDir);
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 0, `Verify failed: ${verifyRes.stdout} ${verifyRes.stderr}`);
+    assert.equal(verifyRes.stderr, '');
+
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'ok');
+    assert.equal(report.checked, manifest.file_count);
+    assert.equal(report.ok, manifest.file_count);
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+    assert.equal(report.town_js_v, manifest.town_js_v);
+
+    const afterSnapshot = await snapshotTree(stagedDir);
+    assert.deepEqual(afterSnapshot, beforeSnapshot, '--verify must not modify the staged dir');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify reports mismatch when one staged file is corrupted by one byte', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-mismatch-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const targetFile = path.join(stagedDir, 'town.js');
+    const buf = await fs.readFile(targetFile);
+    buf[0] = buf[0] ^ 0xff;
+    await fs.writeFile(targetFile, buf);
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.deepEqual(report.mismatch, ['town.js']);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify reports missing when one staged file is deleted', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-missing-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    await fs.rm(path.join(stagedDir, 'CREDITS.md'));
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.deepEqual(report.missing, ['CREDITS.md']);
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify reports extra when an unlisted file is present in staged dir', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-extra-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    await fs.writeFile(path.join(stagedDir, 'gazette', 'stray.html'), '<p>stray</p>\n');
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.deepEqual(report.extra, ['gazette/stray.html']);
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify fails when town.js?v= in staged index.html disagrees with manifest town_js_v', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-version-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const indexPath = path.join(stagedDir, 'index.html');
+    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('town.js?v=99', 'town.js?v=999');
+    await fs.writeFile(indexPath, updatedHtml, 'utf8');
+
+    // Also test pure town_js_v disagreement even if index.html hash in manifest were updated.
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const indexEntry = manifest.files.find((f) => f.path === 'index.html');
+    indexEntry.sha256 = crypto.createHash('sha256').update(updatedHtml, 'utf8').digest('hex');
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.equal(report.town_js_v, '99');
+    assert.equal(report.staged_town_js_v, '999');
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify fails closed with JSON error on stderr when MANIFEST.json is missing', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-no-manifest-'));
+  try {
+    const stagedDir = path.join(tmpDir, 'ghostlight-town');
+    await fs.mkdir(stagedDir, { recursive: true });
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    assert.equal(verifyRes.stdout, '');
+    const errJson = JSON.parse(verifyRes.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.match(errJson.error, /MANIFEST\.json/i);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify rejects symlink inside staged dir without following it', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-symlink-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const outsideFile = path.join(tmpDir, 'outside.txt');
+    await fs.writeFile(outsideFile, 'secret\n');
+    await fs.symlink(outsideFile, path.join(stagedDir, 'gazette', 'link.html'));
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    assert.equal(verifyRes.stdout, '');
+    const errJson = JSON.parse(verifyRes.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.match(errJson.error, /symlink/i);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify refuses repo root and town-3d/', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-refuse-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    await createFixtureTree(fixtureRoot);
+
+    const res1 = runStage(['--root', fixtureRoot, '--verify', fixtureRoot]);
+    assert.equal(res1.status, 1);
+    const err1 = JSON.parse(res1.stderr.trim());
+    assert.equal(err1.ok, false);
+    assert.match(err1.error, /Refusing/i);
+
+    const res2 = runStage(['--root', fixtureRoot, '--verify', path.join(fixtureRoot, 'town-3d')]);
+    assert.equal(res2.status, 1);
+    const err2 = JSON.parse(res2.stderr.trim());
+    assert.equal(err2.ok, false);
+    assert.match(err2.error, /Refusing/i);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('no banned term in either file and no fetch( in stage-deploy.mjs', async () => {
   const [stageSrc, testSrc] = await Promise.all([
     fs.readFile(STAGE_SCRIPT, 'utf8'),
