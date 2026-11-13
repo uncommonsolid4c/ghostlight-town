@@ -611,14 +611,28 @@ export function createTownServer(opts = {}) {
       sendJson(res, 400, { error: 'missing_handle' });
       return;
     }
-    const resident = db.prepare('SELECT handle, status FROM residents WHERE handle = ?').get(handle);
+    const role = body.role;
+    if (role !== undefined && role !== 'muse' && role !== 'npc') {
+      sendJson(res, 400, { error: 'invalid_role' });
+      return;
+    }
+    const resident = db.prepare('SELECT handle, status, role FROM residents WHERE handle = ?').get(handle);
     if (!resident) {
       sendJson(res, 404, { error: 'resident_not_found' });
       return;
     }
-    db.prepare("UPDATE residents SET status = 'active' WHERE handle = ?").run(handle);
+    if (role !== undefined) {
+      db.prepare("UPDATE residents SET status = 'active', role = ? WHERE handle = ?").run(role, handle);
+    } else {
+      db.prepare("UPDATE residents SET status = 'active' WHERE handle = ?").run(handle);
+    }
     const stateSeq = bumpStateSeq();
-    sendJson(res, 200, { handle, status: 'active', state_seq: stateSeq });
+    sendJson(res, 200, {
+      handle,
+      status: 'active',
+      role: role !== undefined ? role : resident.role,
+      state_seq: stateSeq,
+    });
   }
 
   function handleAdminInvite(req, res, body, auth) {
