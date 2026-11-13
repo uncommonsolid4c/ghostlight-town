@@ -272,10 +272,15 @@ test('applyState lights muse and npc footlights, extinguishes absent ones, and p
     ],
   });
 
-  // Footlight slot 3 lit as muse, slot 7 lit as npc, all others dark
+  // Footlight slot 3 lit as muse, slot 7 lit as npc, slot 0 stays lit as
+  // Milo's permanent footlight, all others dark
   for (const fl of town.parts.footlights) {
     const slot = fl.userData.slot;
-    if (slot === 3) {
+    if (slot === 0) {
+      assert.equal(fl.userData.lit, true, 'Milo permanent footlight stays lit');
+      assert.equal(fl.userData.handle, 'milo');
+      assert.equal(fl.userData.shell.material.emissive, FOOTLIGHT_COLORS.muse.emissive);
+    } else if (slot === 3) {
       assert.equal(fl.userData.lit, true);
       assert.equal(fl.userData.handle, 'alice');
       assert.equal(fl.userData.shell.material.emissive, FOOTLIGHT_COLORS.muse.emissive);
