@@ -345,6 +345,22 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
     assert.ok(!seenCoords.has(key), `Duplicate avatar spot at ${key}`);
     seenCoords.add(key);
   }
+
+  // Milo's permanent ghost stands at spot 0, translucent ice-blue, footlight lit
+  const ghost = parts.milosGhost;
+  assert.ok(ghost, 'buildTown must expose parts.milosGhost');
+  assert.equal(ghost.position.x, parts.avatarSpots[0].x);
+  assert.equal(ghost.position.z, parts.avatarSpots[0].z);
+  const ghostMeshes = collectNodes(ghost, (n) => n.isMesh);
+  assert.ok(ghostMeshes.length >= 2, 'Ghost must have body and head meshes');
+  assert.ok(ghostMeshes.every((m) => m.material.transparent && m.material.opacity < 1),
+    'Ghost meshes must be translucent');
+  assert.ok(ghostMeshes.every((m) => m.material.color === '#a8d8ea'),
+    'Ghost meshes must be ice-blue');
+  const fl0 = parts.footlights[0];
+  assert.equal(fl0.userData.lit, true, 'Milo footlight (slot 0) must be lit');
+  assert.equal(fl0.userData.handle, 'milo');
+  assert.equal(fl0.userData.permanent, true);
 });
 
 test('createCottage honors tower manifest, custom colors, 0 props, and ignores unknown props', () => {
