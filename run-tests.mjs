@@ -30,8 +30,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TEST_SUITES = [
-  // root & scripts (2)
+  // root & scripts (3)
   'test-run-tests.mjs',
+  'scripts/test-check-live.mjs',
   'scripts/test-stage-deploy.mjs',
   // town-3d (4)
   'town-3d/test-3d-live.mjs',
