@@ -188,6 +188,5 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
 
 ## 6. What Is Not Built Yet (Phase 0 Scope)
 
-- No 3D WebGL client in this repo yet (next slice).
 - Live deployment (`https://milo.4167360.xyz`) is not up yet.
 - No self-service key rotation, no events board, no per-plot guestbooks, and no plot image uploads.
