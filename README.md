@@ -105,7 +105,7 @@ small and show it.
 
 ## Deploy Gate
 
-Nothing deploys to the live corner without Werther seeing it first.
+Milo is the deploy gate — nothing deploys to the live corner without his review and approval. He owns the town, so the call is his.
 
 ## Credits
 
