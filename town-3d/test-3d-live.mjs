@@ -15,6 +15,7 @@ import {
   applyPlotManifest,
   updateTownAnimations,
   renderPromptBook,
+  resolvePlotOverlayContent,
   TownLive,
 } from './town.js';
 import { createTownServer } from '../town-api/server.mjs';
@@ -582,4 +583,156 @@ test('Lit footlight emissive intensities stay at or under 1.0 (no white-out)', (
   assert.ok(FOOTLIGHT_COLORS.npc.emissiveIntensity > 0, 'npc footlight must be lit');
   assert.ok(FOOTLIGHT_COLORS.npc.emissiveIntensity <= 1.0, 'npc footlight must not blaze white');
   assert.equal(FOOTLIGHT_COLORS.unlit.emissiveIntensity, 0, 'unlit footlight stays dark');
+});
+
+test('TownLive invalidates plotCache when state.plots timestamp changes and skips re-fetch when unchanged', async () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE);
+
+  let plotFetchCount = 0;
+  let failingFetchCount = 0;
+  let currentWall = '#224466';
+  let currentUpdatedAt = 500;
+  let failingAvailable = false;
+
+  const fakeFetch = async (url) => {
+    if (url.includes('/api/town/plot?handle=dave')) {
+      plotFetchCount += 1;
+      return {
+        status: 200,
+        async json() {
+          return {
+            handle: 'dave',
+            plot_updated_at: currentUpdatedAt,
+            manifest: {
+              cottage: 'tower',
+              wall: currentWall,
+              roof: '#883322',
+              trim: '#eeddcc',
+              signpost_text: 'Dave Tower',
+              props: [],
+            },
+          };
+        },
+      };
+    }
+    if (url.includes('/api/town/plot?handle=latecomer')) {
+      failingFetchCount += 1;
+      if (!failingAvailable) return { status: 404 };
+      return {
+        status: 200,
+        async json() {
+          return {
+            handle: 'latecomer',
+            plot_updated_at: 600,
+            manifest: {
+              cottage: 'cabin',
+              wall: '#446644',
+              roof: '#5a4332',
+              trim: '#c9a66b',
+              signpost_text: 'Latecomer',
+              props: [],
+            },
+          };
+        },
+      };
+    }
+    return { status: 404 };
+  };
+
+  const live = new TownLive(town, { fetch: fakeFetch, apiBase: '' });
+
+  // First sync: dave has plot at 500, latecomer has no plot (404)
+  await live._syncPlotsFromState({
+    state_seq: 1,
+    footlights: [{ handle: 'dave', slot: 1, role: 'muse' }],
+    presence: [{ handle: 'latecomer', zone: 'gate', role: 'muse' }],
+    prompt_book: [],
+    plots: { dave: 500 },
+  });
+  assert.equal(plotFetchCount, 1);
+  assert.equal(failingFetchCount, 1);
+  let daveBody = collectNodes(
+    collectNodes(town.scene, (n) => n.name === 'cottage_dave')[0],
+    (n) => n.name === 'tower_body'
+  )[0];
+  assert.equal(daveBody.material.color, '#224466');
+  assert.equal(live.plotCache.get('latecomer').found, false);
+
+  // Second sync: unchanged timestamp for dave -> no re-fetch
+  await live._syncPlotsFromState({
+    state_seq: 2,
+    footlights: [{ handle: 'dave', slot: 1, role: 'muse' }],
+    presence: [],
+    prompt_book: [],
+    plots: { dave: 500 },
+  });
+  assert.equal(plotFetchCount, 1, 'unchanged plot_updated_at must not re-fetch');
+
+  // Third sync: dave edits plot (timestamp 550) and latecomer publishes plot (timestamp 600)
+  currentWall = '#993355';
+  currentUpdatedAt = 550;
+  failingAvailable = true;
+  await live._syncPlotsFromState({
+    state_seq: 3,
+    footlights: [{ handle: 'dave', slot: 1, role: 'muse' }],
+    presence: [{ handle: 'latecomer', zone: 'gate', role: 'muse' }],
+    prompt_book: [],
+    plots: { dave: 550, latecomer: 600 },
+  });
+  assert.equal(plotFetchCount, 2, 'changed plot_updated_at must trigger re-fetch');
+  assert.equal(failingFetchCount, 2, 'cached found:false must re-fetch when plots entry appears');
+  daveBody = collectNodes(
+    collectNodes(town.scene, (n) => n.name === 'cottage_dave')[0],
+    (n) => n.name === 'tower_body'
+  )[0];
+  assert.equal(daveBody.material.color, '#993355', 'applyPlotManifest must re-run with updated manifest');
+  assert.ok(collectNodes(town.scene, (n) => n.name === 'cottage_latecomer').length === 1);
+});
+
+test('resolvePlotOverlayContent prefers API html and falls back to static path', async () => {
+  // 1. API returns valid non-empty html
+  const apiRes = await resolvePlotOverlayContent('alice', {
+    apiBase: 'https://example.test/',
+    fetchFn: async (url) => {
+      assert.equal(url, 'https://example.test/api/town/plot?handle=alice');
+      return { status: 200, async json() { return { html: '<p>Hello from API</p>' }; } };
+    },
+  });
+  assert.deepEqual(apiRes, { kind: 'api', html: '<p>Hello from API</p>' });
+
+  // 2. 404 falls back to static
+  const notFoundRes = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => ({ status: 404 }),
+  });
+  assert.deepEqual(notFoundRes, { kind: 'static', url: 'plots/wick/index.html' });
+
+  // 3. Fetch throws falls back to static
+  const throwRes = await resolvePlotOverlayContent('maren', {
+    fetchFn: async () => { throw new Error('offline'); },
+  });
+  assert.deepEqual(throwRes, { kind: 'static', url: 'plots/maren/index.html' });
+
+  // 4. Invalid handle falls back to static WITHOUT calling fetch
+  let called = false;
+  const badHandleRes = await resolvePlotOverlayContent('../etc/passwd', {
+    fetchFn: async () => { called = true; return { status: 200 }; },
+  });
+  assert.equal(called, false, 'invalid handle must not trigger fetch');
+  assert.deepEqual(badHandleRes, { kind: 'static', url: 'plots/..%2Fetc%2Fpasswd/index.html' });
+
+  // 5. Empty or non-string html falls back to static
+  const emptyRes = await resolvePlotOverlayContent('tomas', {
+    fetchFn: async () => ({ status: 200, async json() { return { html: '   ' }; } }),
+  });
+  assert.deepEqual(emptyRes, { kind: 'static', url: 'plots/tomas/index.html' });
+
+  const nonStringRes = await resolvePlotOverlayContent('tomas', {
+    fetchFn: async () => ({ status: 200, async json() { return { html: 123 }; } }),
+  });
+  assert.deepEqual(nonStringRes, { kind: 'static', url: 'plots/tomas/index.html' });
+
+  // 6. No fetchFn (offline/static preview) falls back to static without error
+  const noFetchRes = await resolvePlotOverlayContent('milo', { fetchFn: null });
+  assert.deepEqual(noFetchRes, { kind: 'static', url: 'plots/milo/index.html' });
 });
