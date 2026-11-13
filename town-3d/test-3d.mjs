@@ -8,9 +8,14 @@ import {
   TOWN_LAYOUT,
   MILO_REBUILD_MANIFEST,
   PROP_PLACEMENTS,
+  SEED_HOME_PADS,
+  applyPlotManifest,
   buildTown,
   buildProceduralStreetLight,
   buildProceduralBookshelf,
+  buildProceduralOilLamp,
+  buildProceduralTypewriter,
+  buildProceduralTeapot,
   createCottage,
   createAvatarCapsule,
   loadTownProps,
@@ -500,6 +505,8 @@ test('No campfire terminology and no fetch() in town.js; .glb allowed only for p
   assert.ok(/models\/bench\.glb/.test(townJs), 'town.js must reference bench.glb prop');
   assert.ok(/models\/street-light\.glb/.test(townJs), 'town.js must reference street-light.glb prop');
   assert.ok(/models\/bookshelf\.glb/.test(townJs), 'town.js must reference bookshelf.glb prop');
+  assert.ok(/models\/oil-lamp\.glb/.test(townJs), 'town.js must reference oil-lamp.glb prop');
+  assert.ok(/models\/teapot\.glb/.test(townJs), 'town.js must reference teapot.glb prop');
 });
 
 test('Pinned Three.js CDN import-map URL and three/addons/ entry resolve cleanly', async () => {
@@ -518,7 +525,15 @@ test('Pinned Three.js CDN import-map URL and three/addons/ entry resolve cleanly
 });
 
 test('Adopted GLB models exist, have glTF magic bytes, and are under 250 KB', async () => {
-  const expectedModels = ['post-lantern.glb', 'lantern.glb', 'bench.glb', 'street-light.glb', 'bookshelf.glb'];
+  const expectedModels = [
+    'post-lantern.glb',
+    'lantern.glb',
+    'bench.glb',
+    'street-light.glb',
+    'bookshelf.glb',
+    'oil-lamp.glb',
+    'teapot.glb',
+  ];
   for (const file of expectedModels) {
     const buf = await fs.readFile(path.join(__dirname, 'models', file));
     assert.ok(buf.length > 12, `${file} must be a non-empty binary`);
@@ -536,6 +551,8 @@ test('CREDITS.md documents all adopted CC0 models with Poly Pizza IDs', async ()
     ['bench.glb', '6d92UYCIC1'],
     ['street-light.glb', 'nFwrlcLvM5'],
     ['bookshelf.glb', '30Iealxb0p'],
+    ['oil-lamp.glb', 'RsWYHKkDhD'],
+    ['teapot.glb', 'XggUrd5f03'],
   ]) {
     assert.ok(credits.includes(file), `CREDITS.md must name ${file}`);
     assert.ok(credits.includes(id), `CREDITS.md must include Poly Pizza id ${id}`);
@@ -608,4 +625,66 @@ test('Slice 11 placements (street light + bookshelf) and procedural fallback bui
   const bookshelfMeshes = collectNodes(bookshelfGroup, (n) => n.isMesh);
   assert.ok(bookshelfMeshes.length >= 2 && bookshelfMeshes.length <= 4,
     `bookshelf fallback must have 2-4 meshes, got ${bookshelfMeshes.length}`);
+});
+
+test('Slice 12: SEED_HOME_PADS pins seed NPCs to fixed plots and reserves them from strangers', () => {
+  assert.deepEqual(SEED_HOME_PADS, { wick: 2, maren: 3, tomas: 4 });
+
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const sampleManifest = {
+    cottage_type: 'a-frame',
+    wall_color: '#6b7d8c',
+    roof_color: '#34414d',
+    trim_color: '#d8cfb8',
+    props: [],
+  };
+
+  assert.equal(applyPlotManifest(town, 'milo', sampleManifest), null, 'milo must never be reassigned');
+
+  const marenCottage = applyPlotManifest(town, 'maren', sampleManifest);
+  assert.ok(marenCottage);
+  assert.equal(marenCottage.userData.plotNumber, 3, 'maren applied first must get plot 3');
+
+  const strangerBefore = applyPlotManifest(town, 'stranger_early', sampleManifest);
+  assert.ok(strangerBefore);
+  assert.equal(strangerBefore.userData.plotNumber, 5, 'unknown handle must skip reserved seed pads');
+
+  const wickCottage = applyPlotManifest(town, 'wick', sampleManifest);
+  assert.ok(wickCottage);
+  assert.equal(wickCottage.userData.plotNumber, 2, 'wick must get pinned plot 2');
+
+  const tomasCottage = applyPlotManifest(town, 'tomas', sampleManifest);
+  assert.ok(tomasCottage);
+  assert.equal(tomasCottage.userData.plotNumber, 4, 'tomas must get pinned plot 4');
+
+  const strangerAfter = applyPlotManifest(town, 'stranger', sampleManifest);
+  assert.ok(strangerAfter);
+  assert.equal(strangerAfter.userData.plotNumber, 6, 'next unknown handle gets next free unreserved pad');
+});
+
+test('Slice 12: adopted NPC character prop placements and procedural fallback builders', () => {
+  const wickLamp = PROP_PLACEMENTS.find((p) => p.id === 'wick_oil_lamp');
+  assert.ok(wickLamp, 'PROP_PLACEMENTS must include wick_oil_lamp');
+  assert.equal(wickLamp.kind, 'oil-lamp');
+  assert.equal(wickLamp.parent, 'scene');
+  assert.equal(wickLamp.targetSize, 0.9);
+
+  const tomasTeapot = PROP_PLACEMENTS.find((p) => p.id === 'tomas_teapot');
+  assert.ok(tomasTeapot, 'PROP_PLACEMENTS must include tomas_teapot');
+  assert.equal(tomasTeapot.kind, 'teapot');
+  assert.equal(tomasTeapot.parent, 'scene');
+  assert.equal(tomasTeapot.targetSize, 0.9);
+
+  const THREE = createThreeStub();
+  for (const [name, fn] of [
+    ['oil-lamp', buildProceduralOilLamp],
+    ['typewriter', buildProceduralTypewriter],
+    ['teapot', buildProceduralTeapot],
+  ]) {
+    const group = fn(THREE);
+    const meshes = collectNodes(group, (n) => n.isMesh);
+    assert.ok(meshes.length >= 1 && meshes.length <= 3,
+      `${name} fallback must have 1-3 meshes, got ${meshes.length}`);
+  }
 });
