@@ -116,6 +116,30 @@ export const PROP_PLACEMENTS = [
     targetSize: 1.6,
     scaleAxis: 'y',
   },
+  {
+    id: 'wick_oil_lamp',
+    kind: 'oil-lamp',
+    model: 'models/oil-lamp.glb',
+    parent: 'scene',
+    x: 14.41,
+    y: 0,
+    z: -6.05,
+    rotY: -1.1733,
+    targetSize: 0.9,
+    scaleAxis: 'y',
+  },
+  {
+    id: 'tomas_teapot',
+    kind: 'teapot',
+    model: 'models/teapot.glb',
+    parent: 'scene',
+    x: 2.06,
+    y: 0,
+    z: -15.49,
+    rotY: -0.1322,
+    targetSize: 0.9,
+    scaleAxis: 'y',
+  },
 ];
 
 export const MILO_REBUILD_MANIFEST = {
@@ -1106,12 +1130,77 @@ export function buildProceduralBookshelf(THREE) {
   return group;
 }
 
+export function buildProceduralOilLamp(THREE) {
+  const group = new THREE.Group();
+  const brassMat = new THREE.MeshStandardMaterial({ color: '#9a7b3e', roughness: 0.65 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: '#fff1c9',
+    emissive: '#ffcf70',
+    emissiveIntensity: 1.1,
+  });
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.14, 8), brassMat);
+  base.position.set(0, 0.07, 0);
+  group.add(base);
+
+  const globe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.24, 8), glassMat);
+  globe.position.set(0, 0.26, 0);
+  group.add(globe);
+
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.04), brassMat);
+  handle.position.set(0.13, 0.22, 0);
+  group.add(handle);
+  return group;
+}
+
+export function buildProceduralTypewriter(THREE) {
+  const group = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color: '#2b2f33', roughness: 0.75 });
+  const rollerMat = new THREE.MeshStandardMaterial({ color: '#d8d2c5', roughness: 0.8 });
+
+  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.55), woodMat);
+  stand.position.set(0, 0.04, 0);
+  group.add(stand);
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.18, 0.36), bodyMat);
+  body.position.set(0, 0.17, 0);
+  group.add(body);
+
+  const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.42, 8), rollerMat);
+  roller.rotation.z = Math.PI / 2;
+  roller.position.set(0, 0.28, -0.1);
+  group.add(roller);
+  return group;
+}
+
+export function buildProceduralTeapot(THREE) {
+  const group = new THREE.Group();
+  const metalMat = new THREE.MeshStandardMaterial({ color: '#8f6b47', roughness: 0.65 });
+
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.28, 8), metalMat);
+  body.position.set(0, 0.14, 0);
+  group.add(body);
+
+  const spout = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.05, 0.05), metalMat);
+  spout.position.set(0.2, 0.18, 0);
+  group.add(spout);
+
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.12, 0.08, 8), metalMat);
+  lid.position.set(0, 0.32, 0);
+  group.add(lid);
+  return group;
+}
+
 export function buildProceduralProp(THREE, kind) {
   if (kind === 'post-lantern') return buildProceduralPostLantern(THREE);
   if (kind === 'lantern') return buildProceduralLantern(THREE);
   if (kind === 'bench') return buildProceduralBench(THREE);
   if (kind === 'street-light') return buildProceduralStreetLight(THREE);
   if (kind === 'bookshelf') return buildProceduralBookshelf(THREE);
+  if (kind === 'oil-lamp') return buildProceduralOilLamp(THREE);
+  if (kind === 'typewriter') return buildProceduralTypewriter(THREE);
+  if (kind === 'teapot') return buildProceduralTeapot(THREE);
   return new THREE.Group();
 }
 
@@ -1503,6 +1592,9 @@ export function renderPromptBook(containerEl, promptBook, doc = globalThis.docum
   }
 }
 
+export const SEED_HOME_PADS = { wick: 2, maren: 3, tomas: 4 };
+const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
+
 /**
  * Place or swap a resident's cottage onto an assigned plot pad (never replaces Milo's plot 1).
  */
@@ -1516,7 +1608,18 @@ export function applyPlotManifest(town, handle, manifest) {
   let assignment = live.plotAssignments.get(handle);
   if (!assignment) {
     const usedNumbers = new Set([...live.plotAssignments.values()].map((a) => a.plotNumber));
-    const freePad = town.parts.plotPads.find((p) => !usedNumbers.has(p.userData.plotNumber));
+    const pinnedNumber = Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, handle)
+      ? SEED_HOME_PADS[handle]
+      : null;
+    let freePad = null;
+    if (pinnedNumber !== null && !usedNumbers.has(pinnedNumber)) {
+      freePad = town.parts.plotPads.find((p) => p.userData.plotNumber === pinnedNumber) || null;
+    }
+    if (!freePad) {
+      freePad = town.parts.plotPads.find(
+        (p) => !usedNumbers.has(p.userData.plotNumber) && !RESERVED_SEED_PADS.has(p.userData.plotNumber)
+      ) || null;
+    }
     if (!freePad) return null;
     const layout = TOWN_LAYOUT.plots.find((pl) => pl.plotNumber === freePad.userData.plotNumber);
     if (!layout) return null;
