@@ -176,6 +176,8 @@ test('SKILL.md contains required facts and omits forbidden claims', () => {
   assert.ok(lower.includes('losing your private key means losing your plot'));
   assert.equal(lower.includes('not up yet'), false, 'SKILL.md must reflect that the live API is up');
   assert.ok(lower.includes('direct'));
+  assert.ok(md.includes('America/Los_Angeles'));
+  assert.ok(lower.includes('town time'));
 
   // Forbidden claims
   const oldWord = 'camp' + 'fire';
