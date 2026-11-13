@@ -596,15 +596,27 @@ function buildBandstand(THREE) {
       new THREE.ConeGeometry(0.18, 0.26, 6),
       new THREE.MeshStandardMaterial({ color: '#7a6230', roughness: 0.55, metalness: 0.5 })
     );
+    shell.name = 'footlight_shell';
     shell.position.set(0, 0.13, 0);
     flGroup.add(shell);
 
+    const placardMat = new THREE.MeshStandardMaterial({ color: '#4d301c', roughness: 0.9 });
     const placard = new THREE.Mesh(
       new THREE.BoxGeometry(0.34, 0.12, 0.04),
-      darkWoodMat
+      placardMat
     );
+    placard.name = 'footlight_placard';
     placard.position.set(0, 0.06, 0.22);
     flGroup.add(placard);
+
+    flGroup.userData = {
+      slot: i,
+      shell,
+      placard,
+      lit: false,
+      handle: null,
+      role: null,
+    };
 
     group.add(flGroup);
     footlights.push(flGroup);
@@ -898,6 +910,8 @@ export function buildTown(THREE) {
     upperWall: '#f5efe0',
     rooftopTerrace: true,
   });
+  milosCottage.userData.handle = 'milo';
+  milosCottage.userData.plotNumber = 1;
   milosCottage.position.set(plot1.x, 0, plot1.z);
   milosCottage.rotation.y = plot1.rotY;
   scene.add(milosCottage);
@@ -915,6 +929,7 @@ export function buildTown(THREE) {
 
   return {
     scene,
+    THREE,
     parts: {
       bandstand: bandstandBuilt.group,
       ghostlight: {
@@ -929,4 +944,539 @@ export function buildTown(THREE) {
       avatarSpots: bandstandBuilt.avatarSpots,
     },
   };
+}
+
+export const FOOTLIGHT_COLORS = {
+  muse: { color: '#bfeaff', emissive: '#9be0ff', emissiveIntensity: 1.4 },
+  npc: { color: '#ffbe55', emissive: '#ffaa33', emissiveIntensity: 1.5 },
+  unlit: { color: '#7a6230', emissive: '#000000', emissiveIntensity: 0 },
+};
+
+function setMaterialColor(mat, prop, hex) {
+  if (!mat) return;
+  if (mat[prop] && typeof mat[prop].set === 'function') {
+    mat[prop].set(hex);
+  } else {
+    mat[prop] = hex;
+  }
+}
+
+function removeFromParent(obj) {
+  if (!obj || !obj.parent) return;
+  const parent = obj.parent;
+  if (typeof parent.remove === 'function') {
+    parent.remove(obj);
+  } else if (Array.isArray(parent.children)) {
+    const idx = parent.children.indexOf(obj);
+    if (idx !== -1) parent.children.splice(idx, 1);
+    obj.parent = null;
+  }
+}
+
+function ensureLiveStore(town) {
+  if (!town._live) {
+    town._live = {
+      avatars: new Map(),
+      plotAssignments: new Map(),
+      cottagesByHandle: new Map([['milo', town.parts.milosCottage]]),
+      promptBook: [],
+    };
+  }
+  return town._live;
+}
+
+/**
+ * Format and cap Prompt Book entries to the most recent 100 lines,
+ * preserving chronological order (newest at the bottom).
+ */
+export function formatPromptBookEntries(promptBook) {
+  if (!Array.isArray(promptBook)) return [];
+  const sliced = promptBook.length > 100 ? promptBook.slice(promptBook.length - 100) : promptBook;
+  return sliced.map((entry) => ({
+    id: entry?.id ?? null,
+    handle: typeof entry?.handle === 'string' ? entry.handle : 'unknown',
+    kind: entry?.kind === 'emote' || entry?.kind === 'system' ? entry.kind : 'say',
+    body: typeof entry?.body === 'string' ? entry.body : '',
+    created_at: entry?.created_at ?? 0,
+    role: entry?.role === 'npc' ? 'npc' : 'muse',
+  }));
+}
+
+/**
+ * Render Prompt Book lines into containerEl using textContent only (never innerHTML).
+ */
+export function renderPromptBook(containerEl, promptBook, doc = globalThis.document) {
+  if (!containerEl || !doc) return;
+  while (containerEl.firstChild) {
+    containerEl.removeChild(containerEl.firstChild);
+  }
+  const entries = formatPromptBookEntries(promptBook);
+  if (entries.length === 0) {
+    const empty = doc.createElement('p');
+    empty.className = 'pb-empty';
+    empty.textContent = 'No remarks yet in the last 24h.';
+    containerEl.appendChild(empty);
+    return;
+  }
+
+  for (const entry of entries) {
+    const line = doc.createElement('div');
+    line.className = `pb-line pb-kind-${entry.kind}`;
+
+    if (entry.role === 'npc') {
+      const pill = doc.createElement('span');
+      pill.className = 'pb-npc-pill';
+      pill.textContent = '[NPC]';
+      line.appendChild(pill);
+    }
+
+    const handleEl = doc.createElement('span');
+    handleEl.className = 'pb-handle';
+    handleEl.textContent = entry.handle;
+    line.appendChild(handleEl);
+
+    const bodyEl = doc.createElement('span');
+    bodyEl.className = 'pb-body';
+    bodyEl.textContent = entry.kind === 'emote' ? ` ${entry.body}` : `: ${entry.body}`;
+    line.appendChild(bodyEl);
+
+    containerEl.appendChild(line);
+  }
+}
+
+/**
+ * Place or swap a resident's cottage onto an assigned plot pad (never replaces Milo's plot 1).
+ */
+export function applyPlotManifest(town, handle, manifest) {
+  if (!town || !town.THREE || !handle || handle === 'milo' || !manifest || typeof manifest !== 'object') {
+    return null;
+  }
+  const THREE = town.THREE;
+  const live = ensureLiveStore(town);
+
+  let assignment = live.plotAssignments.get(handle);
+  if (!assignment) {
+    const usedNumbers = new Set([...live.plotAssignments.values()].map((a) => a.plotNumber));
+    const freePad = town.parts.plotPads.find((p) => !usedNumbers.has(p.userData.plotNumber));
+    if (!freePad) return null;
+    const layout = TOWN_LAYOUT.plots.find((pl) => pl.plotNumber === freePad.userData.plotNumber);
+    if (!layout) return null;
+    assignment = { plotNumber: layout.plotNumber, pad: freePad, cottage: null, layout };
+    live.plotAssignments.set(handle, assignment);
+  }
+
+  if (assignment.cottage) {
+    removeFromParent(assignment.cottage);
+  } else {
+    removeFromParent(assignment.pad);
+  }
+
+  const cottage = createCottage(THREE, manifest, { name: `cottage_${handle}` });
+  cottage.position.set(assignment.layout.x, 0, assignment.layout.z);
+  cottage.rotation.y = assignment.layout.rotY;
+  cottage.userData.handle = handle;
+  cottage.userData.plotNumber = assignment.plotNumber;
+  cottage.userData.clickable = true;
+  cottage.userData.kind = 'cottage';
+
+  town.scene.add(cottage);
+  assignment.cottage = cottage;
+  live.cottagesByHandle.set(handle, cottage);
+  return cottage;
+}
+
+function getPlotTargetPosition(layout, indexAtPlot = 0) {
+  const fwdX = Math.sin(layout.rotY);
+  const fwdZ = Math.cos(layout.rotY);
+  const sideX = Math.cos(layout.rotY);
+  const sideZ = -Math.sin(layout.rotY);
+  const lateral = indexAtPlot === 0 ? 0 : ((indexAtPlot % 2 === 1 ? 1 : -1) * Math.ceil(indexAtPlot / 2) * 0.9);
+  return {
+    x: +(layout.x + fwdX * 3.6 + sideX * lateral).toFixed(4),
+    y: 0,
+    z: +(layout.z + fwdZ * 3.6 + sideZ * lateral).toFixed(4),
+    rotY: layout.rotY,
+  };
+}
+
+function pickBandstandSpot(avatarSpots, usedSpots, preferredSlot = null) {
+  if (
+    Number.isInteger(preferredSlot) &&
+    preferredSlot >= 0 &&
+    preferredSlot < avatarSpots.length &&
+    !usedSpots.has(preferredSlot)
+  ) {
+    usedSpots.add(preferredSlot);
+    const s = avatarSpots[preferredSlot];
+    return { x: s.x, y: s.y, z: s.z, rotY: s.rotY };
+  }
+  for (let i = 0; i < avatarSpots.length; i++) {
+    if (!usedSpots.has(i)) {
+      usedSpots.add(i);
+      const s = avatarSpots[i];
+      return { x: s.x, y: s.y, z: s.z, rotY: s.rotY };
+    }
+  }
+  // Overflow (>10 avatars at bandstand): place on an outer ring so capsules never stack
+  const overflowIdx = usedSpots.size;
+  usedSpots.add(overflowIdx);
+  const angle = ((overflowIdx % 10) / 10) * Math.PI * 2 + 0.15;
+  const r = TOWN_LAYOUT.bandstand.radius + 1.2 + Math.floor(overflowIdx / 10) * 0.9;
+  const x = +(Math.sin(angle) * r).toFixed(4);
+  const z = +(Math.cos(angle) * r).toFixed(4);
+  return { x, y: 0, z, rotY: +Math.atan2(-x, -z).toFixed(4) };
+}
+
+/**
+ * Pure state application: updates footlights, avatars, optional plots, and Prompt Book model.
+ */
+export function applyState(town, state = {}, options = {}) {
+  const THREE = options.THREE || town.THREE;
+  if (!THREE) throw new Error('THREE instance is required on town or options');
+  town.THREE = THREE;
+  const live = ensureLiveStore(town);
+
+  // 1. Footlights
+  const footlightRows = Array.isArray(state?.footlights) ? state.footlights : [];
+  const litBySlot = new Map();
+  const footlightSlotByHandle = new Map();
+  for (const row of footlightRows) {
+    if (row && Number.isInteger(row.slot) && row.slot >= 0 && row.slot < town.parts.footlights.length) {
+      litBySlot.set(row.slot, row);
+      if (typeof row.handle === 'string') {
+        footlightSlotByHandle.set(row.handle, row.slot);
+      }
+    }
+  }
+
+  for (const flGroup of town.parts.footlights) {
+    const slot = flGroup.userData.slot;
+    const { shell, placard } = flGroup.userData;
+    const row = litBySlot.get(slot);
+    if (row) {
+      const role = row.role === 'npc' ? 'npc' : 'muse';
+      const palette = FOOTLIGHT_COLORS[role];
+      setMaterialColor(shell.material, 'color', palette.color);
+      setMaterialColor(shell.material, 'emissive', palette.emissive);
+      shell.material.emissiveIntensity = palette.emissiveIntensity;
+
+      placard.rotation.x = -0.55;
+      placard.position.y = 0.14;
+      if (flGroup.userData.handle !== row.handle) {
+        placard.material.map = makeTextTexture(THREE, [row.handle], {
+          width: 256,
+          height: 96,
+          titleSize: 28,
+          bg: '#3b2b1d',
+          border: '#b59449',
+          fg: '#f4ead5',
+        });
+        setMaterialColor(placard.material, 'color', '#ffffff');
+        placard.material.needsUpdate = true;
+      }
+      flGroup.userData.lit = true;
+      flGroup.userData.handle = row.handle;
+      flGroup.userData.role = role;
+    } else {
+      const unlit = FOOTLIGHT_COLORS.unlit;
+      setMaterialColor(shell.material, 'color', unlit.color);
+      setMaterialColor(shell.material, 'emissive', unlit.emissive);
+      shell.material.emissiveIntensity = unlit.emissiveIntensity;
+
+      placard.rotation.x = 0;
+      placard.position.y = 0.06;
+      placard.material.map = null;
+      setMaterialColor(placard.material, 'color', '#4d301c');
+      placard.material.needsUpdate = true;
+
+      flGroup.userData.lit = false;
+      flGroup.userData.handle = null;
+      flGroup.userData.role = null;
+    }
+  }
+
+  // 2. Optional inline plots in state/options
+  const inlinePlots = options.plots || state?.plots;
+  if (inlinePlots && typeof inlinePlots === 'object') {
+    const entries = Array.isArray(inlinePlots)
+      ? inlinePlots.map((p) => [p.handle, p.manifest])
+      : Object.entries(inlinePlots);
+    for (const [handle, manifest] of entries) {
+      applyPlotManifest(town, handle, manifest);
+    }
+  }
+
+  // 3. Presence -> Avatars
+  const presenceRows = Array.isArray(state?.presence) ? state.presence : [];
+  const activeHandles = new Set(presenceRows.map((p) => p?.handle).filter(Boolean));
+  for (const [handle, avatar] of live.avatars.entries()) {
+    if (!activeHandles.has(handle)) {
+      removeFromParent(avatar);
+      live.avatars.delete(handle);
+    }
+  }
+
+  const usedSpots = new Set();
+  const targets = new Map();
+  const avatarSpots = town.parts.avatarSpots || [];
+
+  // Pass 1: reserve deterministic footlight spots for bandstand avatars with lit footlights
+  for (const row of presenceRows) {
+    if (!row?.handle || row.zone !== 'bandstand') continue;
+    const preferred = footlightSlotByHandle.get(row.handle);
+    if (Number.isInteger(preferred) && !usedSpots.has(preferred)) {
+      targets.set(row.handle, pickBandstandSpot(avatarSpots, usedSpots, preferred));
+    }
+  }
+
+  // Pass 2: assign remaining avatars (bandstand without footlight, gate, plot:<handle>)
+  let gateCount = 0;
+  const plotCounts = new Map();
+  for (const row of presenceRows) {
+    if (!row?.handle || targets.has(row.handle)) continue;
+    const zone = typeof row.zone === 'string' ? row.zone : 'bandstand';
+
+    if (zone === 'gate') {
+      const x = ((gateCount % 5) - 2) * 1.1;
+      const z = TOWN_LAYOUT.gate.z - 2.2 - Math.floor(gateCount / 5) * 1.0;
+      gateCount += 1;
+      targets.set(row.handle, { x, y: 0, z, rotY: Math.PI });
+    } else if (zone.startsWith('plot:')) {
+      const plotHandle = zone.slice(5);
+      const layout =
+        plotHandle === 'milo'
+          ? TOWN_LAYOUT.plots[0]
+          : live.plotAssignments.get(plotHandle)?.layout;
+      if (layout) {
+        const count = plotCounts.get(plotHandle) || 0;
+        plotCounts.set(plotHandle, count + 1);
+        targets.set(row.handle, getPlotTargetPosition(layout, count));
+      } else {
+        targets.set(row.handle, pickBandstandSpot(avatarSpots, usedSpots, null));
+      }
+    } else {
+      targets.set(row.handle, pickBandstandSpot(avatarSpots, usedSpots, null));
+    }
+  }
+
+  for (const row of presenceRows) {
+    if (!row?.handle) continue;
+    const role = row.role === 'npc' ? 'npc' : 'muse';
+    const target = targets.get(row.handle);
+    const existing = live.avatars.get(row.handle);
+
+    if (existing && existing.userData.role === role) {
+      existing.userData.target = target;
+    } else {
+      if (existing) removeFromParent(existing);
+      const avatar = createAvatarCapsule(THREE, { handle: row.handle, role });
+      avatar.position.set(target.x, target.y, target.z);
+      avatar.rotation.y = target.rotY;
+      avatar.userData.target = target;
+      town.scene.add(avatar);
+      live.avatars.set(row.handle, avatar);
+    }
+  }
+
+  // 4. Prompt Book data model
+  live.promptBook = formatPromptBookEntries(state?.prompt_book);
+
+  return live;
+}
+
+/**
+ * Smoothly lerp avatars toward their target positions (~0.5 s).
+ */
+export function updateTownAnimations(town, dt) {
+  const live = town?._live;
+  if (!live || !(dt > 0)) return;
+  const alpha = dt >= 0.5 ? 1 : 1 - Math.exp(-6 * dt);
+  for (const avatar of live.avatars.values()) {
+    const t = avatar.userData?.target;
+    if (!t) continue;
+    avatar.position.x += (t.x - avatar.position.x) * alpha;
+    avatar.position.y += (t.y - avatar.position.y) * alpha;
+    avatar.position.z += (t.z - avatar.position.z) * alpha;
+    if (typeof t.rotY === 'number') {
+      avatar.rotation.y += (t.rotY - avatar.rotation.y) * alpha;
+    }
+  }
+}
+
+/**
+ * Live API polling controller for Ghostlight Town.
+ */
+export class TownLive {
+  constructor(town, optionsOrFetch = {}, maybeApiBase = '', maybeExtra = {}) {
+    let opts = optionsOrFetch;
+    if (typeof optionsOrFetch === 'function') {
+      opts = { ...maybeExtra, fetch: optionsOrFetch, apiBase: maybeApiBase };
+    } else if (!opts || typeof opts !== 'object') {
+      opts = {};
+    }
+
+    this.town = town;
+    this.fetchFn = opts.fetch || globalThis.fetch || null;
+    this.apiBase = typeof opts.apiBase === 'string' ? opts.apiBase.replace(/\/+$/, '') : '';
+    this.baseIntervalMs = opts.pollIntervalMs || 5000;
+    this.currentIntervalMs = this.baseIntervalMs;
+    this.maxBackoffMs = opts.maxBackoffMs || 60000;
+    this.onState = typeof opts.onState === 'function' ? opts.onState : null;
+    this.onStatus = typeof opts.onStatus === 'function' ? opts.onStatus : null;
+    this.timer = opts.timer || {
+      setInterval: (...args) => globalThis.setInterval(...args),
+      clearInterval: (id) => globalThis.clearInterval(id),
+    };
+
+    this.lastSeq = null;
+    this.lastState = null;
+    this.connected = false;
+    this.plotCache = new Map();
+    this._intervalId = null;
+    this._scheduledIntervalMs = null;
+    this._running = false;
+  }
+
+  applyState(state, options = {}) {
+    this.lastState = state;
+    return applyState(this.town, state, options);
+  }
+
+  update(dt) {
+    updateTownAnimations(this.town, dt);
+  }
+
+  _rescheduleIfNeeded() {
+    if (!this._running) return;
+    if (this._scheduledIntervalMs === this.currentIntervalMs && this._intervalId !== null) return;
+    if (this._intervalId !== null) {
+      this.timer.clearInterval(this._intervalId);
+    }
+    this._scheduledIntervalMs = this.currentIntervalMs;
+    this._intervalId = this.timer.setInterval(() => {
+      this.pollOnce();
+    }, this.currentIntervalMs);
+  }
+
+  _emitStatus(extra = {}) {
+    if (this.onStatus) {
+      this.onStatus({
+        connected: this.connected,
+        intervalMs: this.currentIntervalMs,
+        stateSeq: this.lastSeq,
+        ...extra,
+      });
+    }
+  }
+
+  async _syncPlotsFromState(state) {
+    if (typeof this.fetchFn !== 'function') return;
+    const handles = new Set();
+    for (const row of state?.footlights || []) if (row?.handle) handles.add(row.handle);
+    for (const row of state?.presence || []) if (row?.handle) handles.add(row.handle);
+    for (const row of state?.prompt_book || []) if (row?.handle) handles.add(row.handle);
+    handles.delete('milo');
+
+    for (const handle of handles) {
+      const cached = this.plotCache.get(handle);
+      if (cached && cached.found) continue;
+      if (cached && cached.fetchedAtSeq === state.state_seq) continue;
+
+      try {
+        const res = await this.fetchFn(`${this.apiBase}/api/town/plot?handle=${encodeURIComponent(handle)}`);
+        if (res && res.status === 200) {
+          const data = await res.json();
+          if (data && data.manifest) {
+            this.plotCache.set(handle, {
+              found: true,
+              fetchedAtSeq: state.state_seq,
+              plotUpdatedAt: data.plot_updated_at ?? null,
+              manifest: data.manifest,
+            });
+            applyPlotManifest(this.town, handle, data.manifest);
+            continue;
+          }
+        }
+        this.plotCache.set(handle, { found: false, fetchedAtSeq: state.state_seq });
+      } catch {
+        this.plotCache.set(handle, { found: false, fetchedAtSeq: state.state_seq });
+      }
+    }
+  }
+
+  async pollOnce() {
+    if (typeof this.fetchFn !== 'function') {
+      return { changed: false, error: 'no_fetch' };
+    }
+    const qs = this.lastSeq !== null ? `?since=${encodeURIComponent(this.lastSeq)}` : '';
+    const url = `${this.apiBase}/api/town/state${qs}`;
+
+    let res;
+    try {
+      res = await this.fetchFn(url);
+    } catch (err) {
+      this.currentIntervalMs = Math.min(this.maxBackoffMs, this.currentIntervalMs * 2);
+      this._rescheduleIfNeeded();
+      this._emitStatus({ error: err?.message || 'network_error' });
+      return { changed: false, error: 'network_error' };
+    }
+
+    if (res.status === 304) {
+      this.connected = true;
+      this.currentIntervalMs = this.baseIntervalMs;
+      this._rescheduleIfNeeded();
+      this._emitStatus();
+      return { changed: false, status: 304 };
+    }
+
+    if (res.status !== 200) {
+      this.currentIntervalMs = Math.min(this.maxBackoffMs, this.currentIntervalMs * 2);
+      this._rescheduleIfNeeded();
+      this._emitStatus({ error: `http_${res.status}` });
+      return { changed: false, status: res.status, error: 'http_error' };
+    }
+
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      this.currentIntervalMs = Math.min(this.maxBackoffMs, this.currentIntervalMs * 2);
+      this._rescheduleIfNeeded();
+      this._emitStatus({ error: 'invalid_json' });
+      return { changed: false, error: 'invalid_json' };
+    }
+
+    if (!data || typeof data !== 'object' || typeof data.state_seq !== 'number') {
+      this.currentIntervalMs = Math.min(this.maxBackoffMs, this.currentIntervalMs * 2);
+      this._rescheduleIfNeeded();
+      this._emitStatus({ error: 'invalid_state' });
+      return { changed: false, error: 'invalid_state' };
+    }
+
+    this.connected = true;
+    this.currentIntervalMs = this.baseIntervalMs;
+    this.lastSeq = data.state_seq;
+    this.applyState(data);
+    await this._syncPlotsFromState(data);
+    this._rescheduleIfNeeded();
+    if (this.onState) this.onState(data);
+    this._emitStatus();
+    return { changed: true, status: 200, state: data };
+  }
+
+  start() {
+    if (this._running) return;
+    this._running = true;
+    this._rescheduleIfNeeded();
+    this.pollOnce();
+  }
+
+  stop() {
+    this._running = false;
+    if (this._intervalId !== null) {
+      this.timer.clearInterval(this._intervalId);
+      this._intervalId = null;
+      this._scheduledIntervalMs = null;
+    }
+  }
 }
