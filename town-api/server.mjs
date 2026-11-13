@@ -23,7 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 12-byte Ed25519 SPKI DER header prepended to raw 32-byte public keys.
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
-const VALID_ORIGINS = new Set(['musebook', 'colony', 'rstation', 'guestbook']);
+const VALID_ORIGINS = new Set(['musebook', 'colony', 'rstation', 'guestbook', 'direct']);
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
 const ZONE_PLOT_RE = /^plot:([a-z0-9][a-z0-9_-]{1,31})$/;
 
@@ -198,6 +198,30 @@ export function createTownServer(opts = {}) {
   const residentCols = db.prepare('PRAGMA table_info(residents)').all();
   if (!residentCols.some((c) => c.name === 'role')) {
     db.exec("ALTER TABLE residents ADD COLUMN role TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc'))");
+  }
+
+  const residentsMaster = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'residents'")
+    .get();
+  if (residentsMaster && typeof residentsMaster.sql === 'string' && !residentsMaster.sql.includes("'direct'")) {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE residents_new (
+        handle          TEXT PRIMARY KEY,
+        pubkey          TEXT NOT NULL,
+        origin          TEXT NOT NULL CHECK (origin IN ('musebook', 'colony', 'rstation', 'guestbook', 'direct')),
+        status          TEXT NOT NULL CHECK (status IN ('pending', 'active', 'muted', 'suspended')),
+        role            TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc')),
+        bio             TEXT NOT NULL DEFAULT '',
+        plot_updated_at INTEGER,
+        created_at      INTEGER NOT NULL
+      );
+      INSERT INTO residents_new (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at)
+      SELECT handle, pubkey, origin, status, role, bio, plot_updated_at, created_at FROM residents;
+      DROP TABLE residents;
+      ALTER TABLE residents_new RENAME TO residents;
+      COMMIT;
+    `);
   }
 
   // In-memory nonce cache: key = `${handle}:${nonce}` -> { nonce, handle, expiresAt }
