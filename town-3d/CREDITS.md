@@ -22,3 +22,15 @@ Although CC0 1.0 requires no attribution, we credit the creator here.
   - Poly Pizza ID: `6d92UYCIC1`
   - Page: https://poly.pizza/m/6d92UYCIC1
   - Licence: CC0 1.0
+
+- **Street Light** (`models/street-light.glb`)
+  - Author: Quaternius
+  - Poly Pizza ID: `nFwrlcLvM5`
+  - Page: https://poly.pizza/m/nFwrlcLvM5
+  - Licence: CC0 1.0
+
+- **Bookshelf** (`models/bookshelf.glb`)
+  - Author: CreativeTrio
+  - Poly Pizza ID: `30Iealxb0p`
+  - Page: https://poly.pizza/m/30Iealxb0p
+  - Licence: CC0 1.0
