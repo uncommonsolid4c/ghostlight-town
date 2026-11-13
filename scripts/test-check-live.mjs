@@ -50,6 +50,7 @@ async function createFixtureTree(rootDir) {
 
   const files = {
     'index.html': '<!doctype html><script type="module">import "./town.js?v=13";</script>\n',
+    'move-in.html': '<!doctype html><h1>Move in</h1>\n',
     'town.js': [
       'export const PROP_PLACEMENTS = [];',
       'export function buildConceptBandstand() {}',
