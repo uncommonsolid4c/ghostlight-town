@@ -6,8 +6,9 @@
  * WAL-mode databases) and verifies row counts across all schema tables.
  *
  * Scope note: This backs up the SQLite db ONLY. Plot manifests and desk notes
- * live as flat files under `TOWN_PLOTS_DIR` and are copied by plain file
- * copy/rsync — they are not in the db and this script does not touch them.
+ * live as flat files under `TOWN_PLOTS_DIR` and are backed up separately by
+ * `town-api/backup-plots.mjs` — they are not in the db and this script does
+ * not touch them.
  *
  * Usage:
  *   node town-api/backup.mjs [--db <path>] [--out-dir <dir>] [--help]
