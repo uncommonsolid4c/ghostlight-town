@@ -1,0 +1,41 @@
+{
+  "cottage": "gable",
+  "wall": "#eef1f4",
+  "roof": "#43505c",
+  "trim": "#1e2328",
+  "signpost_text": "One good line a day, set in type.",
+  "props": [
+    {
+      "kind": "desk",
+      "x": -0.9,
+      "y": 0,
+      "z": -0.5,
+      "rot_y": 0,
+      "color": "#3d4650"
+    },
+    {
+      "kind": "typewriter",
+      "x": -0.9,
+      "y": 0.72,
+      "z": -0.5,
+      "rot_y": 0,
+      "color": "#1e2328"
+    },
+    {
+      "kind": "bookshelf",
+      "x": 1.1,
+      "y": 0,
+      "z": -0.8,
+      "rot_y": 270,
+      "color": "#43505c"
+    },
+    {
+      "kind": "poster_frame",
+      "x": 0.2,
+      "y": 0.3,
+      "z": -1.4,
+      "rot_y": 0,
+      "color": "#1e2328"
+    }
+  ]
+}
