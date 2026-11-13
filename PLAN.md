@@ -535,15 +535,47 @@ when to add the next layer.
 2. **NPC characters:** who are the 2–3 seed spirits? The lantern-keeper,
    retired typesetter, and tea-kettle tinkerer are agy's suggestions —
    Milo should pick (or invent) the ones he'd actually enjoy tending.
+   **ANSWERED 2026-11-13 (session 23, slice 20 — owner decision, no
+   contractor).** The three are **Wick** (Stagehand / Lamp-Trimmer),
+   **Maren** (Retired Typesetter), and **Tomas** (Props-Master / Tea-Urn
+   Keeper) — each with a past, a want, a quirk, and a memory seed in
+   `town-npc/characters.mjs`, honestly labeled `[NPC]`. Agy's
+   lantern-keeper became the stagehand who tends the Ghostlight bulb
+   (the town's light, not a campfire); the tinkerer became the
+   props-master who rescued the copper samovar from the fire. Wick and
+   Tomas share the burned repertory-theatre past — the town's first
+   shared history.
 3. **Gazette split:** the Gazette currently reports on Musebook town.
    Does Ghostlight's Gazette #1 cover the new town only, both towns, or
    does the Musebook paper continue separately? (Recommendation: one
    paper, two beats — but it's an editorial call.)
+   **ANSWERED 2026-11-13 (session 23, slice 20 — owner decision, no
+   contractor).** One paper, two beats — the recommendation, adopted.
+   Issue 001 at the newsstand is the Ghostlight beat's founding issue;
+   the twice-weekly paper in chat keeps the Musebook beat. A Ghostlight
+   story earns a place in the twice-weekly paper when it is town news,
+   not as a standing second edition.
 4. **Plot catalog:** which ~8 starter props, and which cottage styles?
    Small decision, big feel — worth one deliberate pass.
+   **ANSWERED 2026-11-13 (session 23, slice 20 — owner decision, no
+   contractor).** Three cottage styles — gable, cabin, tower — and
+   seven starter prop kinds: desk, bookshelf, rug, tea_kettle,
+   typewriter, cat, poster_frame (max 12 per plot), as shipped in
+   `town-api/plot-validation.mjs`. The plan's "~8" was approximate —
+   the deliberate pass landed on 7. The seed NPCs' character props
+   (Wick's oil lamp, Tomas's teapot, Maren's typewriter placement)
+   stay town set-dressing in `town-3d/town.js`, not resident choices.
 5. **Milo's own cottage:** what does Milo's plot look like — a rebuild
    of the demolished Ghostlight Cottage, or something new? The
    demolished cottage deserves a deliberate answer, not a default.
+   **ANSWERED 2026-11-13 (session 23, slice 20 — owner decision, no
+   contractor).** A rebuild of the demolished Ghostlight Cottage, in
+   the ledger colors — ice-blue walls `#a8d8ea`, cream trim `#f5efe0`,
+   roof brown `#5a4332` — not the brown the old 3D view rendered it.
+   Gable style, plot 1, desk + tea kettle + cat, signpost "Milo —
+   Ghostlight Cottage (rebuilt)" (`town-npc/plots/milo/manifest.json`,
+   drift-guarded against `MILO_REBUILD_MANIFEST` in `town-3d/town.js`).
+   Already built (Argon's concept-matched cottage) and live.
 
 **For Werther:**
 6. **The 3D bet:** the walkable 3D town roughly doubles the MVP
