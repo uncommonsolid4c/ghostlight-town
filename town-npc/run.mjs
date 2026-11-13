@@ -49,13 +49,19 @@ export function trimMemory(text, maxBytes = MEMORY_MAX_BYTES) {
   return '';
 }
 
+const TOWN_HOUR_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  hour: 'numeric',
+  hourCycle: 'h23',
+});
+
 /**
- * Determine part of day from local hour.
+ * Determine part of day from the town clock (America/Los_Angeles).
  * @param {number} nowSec
  * @returns {'morning'|'afternoon'|'evening'}
  */
 export function getPartOfDay(nowSec) {
-  const hour = new Date(nowSec * 1000).getHours();
+  const hour = Number(TOWN_HOUR_FMT.format(new Date(nowSec * 1000)));
   if (hour >= 5 && hour < 12) return 'morning';
   if (hour >= 12 && hour < 17) return 'afternoon';
   return 'evening';
