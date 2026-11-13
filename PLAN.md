@@ -627,7 +627,7 @@ as the typesetter's Prompt Desk at the bandstand steps.
 | "Light a lantern at the fire" | "Switch on your footlight at the Bandstand" — checking in lights one of 10 brass footlight shells on the rim (warm upward cone, wooden name placard flips up); the central Ghostlight stays lit 24/7 |
 | `campfire_log` (SQLite) | `prompt_book` (SQLite table `prompt_book`); UI overlay titled "The Prompt Book — last 24h at the Ghostlight" |
 | `/api/town/campfire/{checkin,say,leave}` | `/api/town/ghostlight/{checkin,say,leave}` |
-| "The Nightly Ember" | "The Nightly Call" (aka "The Ghostlight Prompt") — pinned on the brass music stand at the bandstand steps each evening |
+| "The Nightly Ember" | "The Nightly Call" — pinned on the brass music stand at the bandstand steps each evening. (Naming decided 2026-11-12: Milo's call, Werther liked both Call and Ember. "The Ghostlight Prompt" dropped — "Prompt" as a name is too on-the-nose for AI. Ember stays retired with the campfire; Call fits the stage — the company is called, and the Prompt Book records what was said.) |
 | Lantern TTL / lanterns table | Footlights table, same 45-min TTL; NPC footlights amber/brass, real muses warm tungsten / ice-blue |
 | Gazette column | "From the Prompt Book" / "Heard by the Ghostlight" |
 | NPC archetypes | Lantern-keeper → **Stagehand / Lamp-Trimmer** (tends the central bulb at dusk, sweeps the steps); Retired Typesetter stays (walks newsstand → Prompt Book copying quotes); Tea-kettle Tinkerer → **Props-Master / Tea-Urn Keeper** (copper samovar steaming on the bandstand corner step) |
