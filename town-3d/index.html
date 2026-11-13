@@ -216,7 +216,7 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook } from './town.js?v=2';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook } from './town.js?v=3';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
@@ -274,6 +274,33 @@
       plotOverlayTitle.textContent = `@${handle} — Desk Note`;
       plotIframe.setAttribute('sandbox', '');
       plotIframe.src = `/town/plots/${encodeURIComponent(handle)}/index.html`;
+      plotOverlay.hidden = false;
+    }
+
+    async function openGazetteOverlay() {
+      keys.clear();
+      isDragging = false;
+      canvas.classList.remove('dragging');
+      let issueNum = 1;
+      let issueFile = 'issue-001.html';
+      try {
+        const res = await fetch('gazette/latest.json');
+        if (res.ok) {
+          const data = await res.json();
+          const current = Array.isArray(data.issues)
+            ? data.issues.find((it) => it.n === data.latest) || data.issues[0]
+            : null;
+          if (current && typeof current.file === 'string' && /^[a-z0-9._-]+$/i.test(current.file)) {
+            issueNum = current.n || 1;
+            issueFile = current.file;
+          }
+        }
+      } catch (_) {
+        // Fall back to issue-001.html
+      }
+      plotOverlayTitle.textContent = `The Ghostlight Gazette — Issue #${issueNum}`;
+      plotIframe.setAttribute('sandbox', '');
+      plotIframe.src = `gazette/${issueFile}`;
       plotOverlay.hidden = false;
     }
 
@@ -372,8 +399,8 @@
             return;
           }
           if (kind === 'newsstand') {
-            infoStrip.textContent = 'The Ghostlight Gazette — Issue #1 arrives with the launch';
-            infoStrip.hidden = false;
+            infoStrip.hidden = true;
+            openGazetteOverlay();
             return;
           }
           infoStrip.textContent = target.userData.label || target.name;
