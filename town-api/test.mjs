@@ -621,3 +621,48 @@ test('prompt_book prune leaves empty table safe for last-100 fallback', async ()
     await ctx.close();
   }
 });
+
+test('state.plots exposes plot_updated_at for residents with plots and updates on re-PUT', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...generateKeypair() });
+    const bob = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...generateKeypair() });
+
+    await alice.join({ origin: 'musebook' });
+    await bob.join({ origin: 'colony' });
+    await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
+    await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'bob' });
+
+    const s0 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.deepEqual(s0.plots, {});
+
+    const manifest1 = {
+      cottage: 'gable',
+      wall: '#f5efe0',
+      roof: '#5a4332',
+      trim: '#c9a66b',
+      signpost_text: 'Alice',
+      props: [],
+    };
+    const p1 = await alice.plot(manifest1, '<h1>Alice</h1>');
+    assert.equal(p1.status, 200);
+    const t1 = p1.data.plot_updated_at;
+    assert.equal(typeof t1, 'number');
+
+    const s1 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(s1.plots.alice, t1);
+    assert.equal(Object.prototype.hasOwnProperty.call(s1.plots, 'bob'), false);
+
+    ctx.advanceClock(10);
+    const p2 = await alice.plot({ ...manifest1, wall: '#a8d8ea' }, '<h1>Alice v2</h1>');
+    assert.equal(p2.status, 200);
+    const t2 = p2.data.plot_updated_at;
+    assert.ok(t2 > t1, `expected updated plot_updated_at (${t2}) > initial (${t1})`);
+
+    const s2 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(s2.plots.alice, t2);
+    assert.equal(Object.prototype.hasOwnProperty.call(s2.plots, 'bob'), false);
+  } finally {
+    await ctx.close();
+  }
+});
