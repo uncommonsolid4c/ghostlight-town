@@ -538,8 +538,20 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
   const npc = createAvatarCapsule(THREE, { handle: 'trimmer', role: 'npc' });
   assert.equal(muse.userData.role, 'muse');
   assert.equal(npc.userData.role, 'npc');
-  assert.ok(collectNodes(muse, (n) => n.isSprite).length === 1);
-  assert.ok(collectNodes(npc, (n) => n.isSprite).length === 1);
+  const museSprites = collectNodes(muse, (n) => n.isSprite);
+  const npcSprites = collectNodes(npc, (n) => n.isSprite);
+  assert.equal(museSprites.length, 1);
+  assert.equal(npcSprites.length, 1);
+
+  assert.equal(muse.userData.nametagLift, 0);
+  assert.equal(muse.userData.nametagSprite, museSprites[0]);
+  assert.equal(museSprites[0].scale.x, 1.5);
+  assert.equal(museSprites[0].scale.y, 0.375);
+  assert.equal(museSprites[0].position.y, 1.8);
+
+  const lifted = createAvatarCapsule(THREE, { handle: 'wick', role: 'npc', nametagLift: 0.5 });
+  assert.equal(lifted.userData.nametagLift, 0.5);
+  assert.equal(lifted.userData.nametagSprite.position.y, 2.3);
 });
 
 // Budget raised 80 -> 120 (owner decision, 2026-11-12): lit windows and the
@@ -816,6 +828,8 @@ test('Slice 14: seed NPC wanderers and Milo ghost waypoints are layout-derived a
     assert.equal(group.userData.handle, handle, `${handle} wanderer must have handle ${handle}`);
     const nametag = group.children.find((c) => c.name === 'nametag_sprite');
     assert.ok(nametag && nametag.isSprite, `${handle} wanderer must have nametag_sprite`);
+    const expectedY = handle === 'maren' ? 1.8 : 2.3;
+    assert.equal(nametag.position.y, expectedY, `${handle} wanderer nametag y must be ${expectedY}`);
     assert.equal(town._live?.avatars?.has(handle) ?? false, false, `${handle} wanderer must not be in live.avatars`);
 
     const plotLayout = TOWN_LAYOUT.plots.find((pl) => pl.plotNumber === SEED_HOME_PADS[handle]);
