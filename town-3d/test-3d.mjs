@@ -10,6 +10,7 @@ import {
   PROP_PLACEMENTS,
   SEED_HOME_PADS,
   applyPlotManifest,
+  applyState,
   buildTown,
   buildProceduralStreetLight,
   buildProceduralBookshelf,
@@ -18,7 +19,9 @@ import {
   buildProceduralTeapot,
   createCottage,
   createAvatarCapsule,
+  getPlotTargetPosition,
   loadTownProps,
+  updateTownAnimations,
 } from './town.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -340,6 +343,23 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
   assert.equal(baseMesh.geometry.type, 'CylinderGeometry');
   assert.equal(baseMesh.geometry.parameters.radialSegments, 8);
 
+  // Concept bandstand (Argon, 2026-11-12): timber A-frame roof, front steps,
+  // brass pendant + lantern hardware, emissive post-lantern glass
+  const aframeMesh = collectNodes(parts.bandstand, (n) => n.name === 'bandstand_aframe')[0];
+  const stepsMesh = collectNodes(parts.bandstand, (n) => n.name === 'bandstand_steps')[0];
+  const brassMesh = collectNodes(parts.bandstand, (n) => n.name === 'bandstand_brass_fixtures')[0];
+  const lanternGlass = collectNodes(parts.bandstand, (n) => n.name === 'bandstand_lantern_glass')[0];
+  assert.ok(aframeMesh, 'Bandstand must have a timber A-frame roof (bandstand_aframe)');
+  assert.ok(stepsMesh, 'Bandstand must have front steps and rim fascia (bandstand_steps)');
+  assert.ok(brassMesh, 'Bandstand must have brass pendant and lantern hardware (bandstand_brass_fixtures)');
+  assert.ok(lanternGlass && lanternGlass.material.emissive, 'Bandstand post lanterns must have emissive glass');
+
+  // Stage props stay on: the Nightly Call card is the topic's physical home
+  const callCard = collectNodes(parts.bandstand, (n) => n.name === 'nightly_call_card')[0];
+  const samovar = collectNodes(parts.bandstand, (n) => n.name === 'copper_samovar')[0];
+  assert.ok(callCard, 'Bandstand must keep the Nightly Call card (includeStageProps)');
+  assert.ok(samovar, 'Bandstand must keep the copper samovar (includeStageProps)');
+
   // Exactly 10 footlights
   assert.equal(parts.footlights.length, 10);
 
@@ -513,11 +533,13 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // Budget raised 120 -> 125 (owner decision, 2026-11-12): the growth since 120
 // is the completed planned prop set — slice 11 (street light + bookshelf) and
 // slices 12–13 (the three seed NPC character props); no further prop slices are
-// planned. 113 is the worst case (all procedural fallbacks) as live town swaps
+// planned. 112 is the worst case (all procedural fallbacks) as live town swaps
 // GLBs in for fewer — down from 122 after the 2026-11-12 concept-cottage swap
-// (Argon's merged cottage replaces the old multi-mesh build) and down one more
+// (Argon's merged cottage replaces the old multi-mesh build), down one more
 // after the concept-ghost swap the same night (pure-decal ghost: 4 meshes,
-// no eye spheres) — and 113 is under the 120fps/2015-iGPU reference point. 125 keeps the guardrail meaningful so
+// no eye spheres), and down one more after the concept-bandstand swap
+// (26 meshes + 4 stage props vs the old 31) — and 112 is under the
+// 120fps/2015-iGPU reference point. 125 keeps the guardrail meaningful so
 // any future prop addition requires a deliberate revisit.
 test('Draw-call budget: total mesh count in built town is < 125', () => {
   const THREE = createThreeStub();
@@ -764,4 +786,162 @@ test('Slice 13: maren_typewriter is procedural-only and skipped by loadTownProps
   assert.ok(slot, 'maren_typewriter slot must exist');
   assert.equal(slot.glb, null, 'maren_typewriter slot.glb must stay null');
   assert.ok(slot.anchor.children.includes(slot.fallback), 'maren_typewriter procedural fallback must remain in anchor');
+});
+
+test('Slice 14: seed NPC wanderers and Milo ghost waypoints are layout-derived and within clearing bounds', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const { scene, parts } = town;
+
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const group = scene.children.find((c) => c.name === `avatar_${handle}`);
+    assert.ok(group, `wanderer avatar_${handle} must be in scene`);
+    assert.equal(parts.wanderers[handle], group, `parts.wanderers.${handle} must reference the scene group`);
+    assert.equal(group.userData.role, 'npc', `${handle} wanderer must have role npc`);
+    assert.equal(group.userData.handle, handle, `${handle} wanderer must have handle ${handle}`);
+    const nametag = group.children.find((c) => c.name === 'nametag_sprite');
+    assert.ok(nametag && nametag.isSprite, `${handle} wanderer must have nametag_sprite`);
+    assert.equal(town._live?.avatars?.has(handle) ?? false, false, `${handle} wanderer must not be in live.avatars`);
+
+    const plotLayout = TOWN_LAYOUT.plots.find((pl) => pl.plotNumber === SEED_HOME_PADS[handle]);
+    const expectedHome = getPlotTargetPosition(plotLayout, 0);
+    assert.ok(Math.hypot(group.position.x - expectedHome.x, group.position.z - expectedHome.z) < 1e-4,
+      `${handle} must start at its home plot front`);
+  }
+
+  const maxR = TOWN_LAYOUT.clearingRadius - 1.5;
+  for (const w of town._wander.figures) {
+    assert.ok(w.waypoints.length >= 3, `${w.handle} must have at least 3 waypoints`);
+    for (const wp of w.waypoints) {
+      const r = Math.hypot(wp.x, wp.z);
+      assert.ok(r <= maxR, `${w.handle} waypoint (${wp.x}, ${wp.z}) radius ${r} exceeds ${maxR}`);
+    }
+  }
+
+  const ghostWander = town._wander.figures.find((w) => w.handle === 'milo');
+  assert.ok(ghostWander, 'milo ghost must be in wander figures');
+  const spot0 = parts.avatarSpots[0];
+  const hasSpot0 = ghostWander.waypoints.some(
+    (wp) => Math.abs(wp.x - spot0.x) < 1e-4 && Math.abs(wp.z - spot0.z) < 1e-4 && wp.y === spot0.y
+  );
+  assert.ok(hasSpot0, 'spot 0 must be in ghost waypoint loop');
+  const spot0Wp = ghostWander.waypoints.find(
+    (wp) => Math.abs(wp.x - spot0.x) < 1e-4 && Math.abs(wp.z - spot0.z) < 1e-4
+  );
+  for (const wp of ghostWander.waypoints) {
+    assert.equal(wp.y, TOWN_LAYOUT.bandstand.height, 'every ghost waypoint must be at deck height 0.6');
+    const r = Math.hypot(wp.x, wp.z);
+    if (wp === spot0Wp) {
+      assert.ok(r <= TOWN_LAYOUT.bandstand.radius, `spot 0 radius ${r} must be on bandstand`);
+    } else {
+      assert.ok(r <= 4.0, `ghost deck waypoint (${wp.x}, ${wp.z}) radius ${r} must be <= 4.0`);
+      assert.ok(spot0Wp.linger > wp.linger, 'ghost must linger longest at spot 0');
+    }
+  }
+});
+
+test('Slice 14: wanderers move deterministically, linger, advance, and Milo returns home to spot 0', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const wickState = town._wander.figures.find((w) => w.handle === 'wick');
+  const wickGroup = wickState.group;
+  const startPos = { x: wickGroup.position.x, y: wickGroup.position.y, z: wickGroup.position.z };
+
+  // dt <= 0 must not move anything
+  updateTownAnimations(town, 0);
+  updateTownAnimations(town, -0.5);
+  assert.deepEqual(
+    { x: wickGroup.position.x, y: wickGroup.position.y, z: wickGroup.position.z },
+    startPos,
+    'dt <= 0 must produce no movement'
+  );
+
+  // Step with fixed dt and verify step distance <= speed * dt + epsilon
+  const dt = 0.1;
+  const prev = { ...startPos };
+  updateTownAnimations(town, dt);
+  const moved = Math.hypot(wickGroup.position.x - prev.x, wickGroup.position.y - prev.y, wickGroup.position.z - prev.z);
+  assert.ok(moved > 0, 'wick must move on positive dt');
+  assert.ok(moved <= wickState.speed * dt + 1e-5, `step ${moved} exceeded speed*dt (${wickState.speed * dt})`);
+
+  // Step until wick arrives at waypoint 1 (bandstand), lingers, and advances to waypoint 2 (newsstand)
+  let arrivedAtBandstand = false;
+  let advancedToNewsstand = false;
+  for (let i = 0; i < 600; i++) {
+    updateTownAnimations(town, 0.1);
+    if (wickState.state === 'lingering' && wickState.targetIndex === 1) {
+      arrivedAtBandstand = true;
+    }
+    if (arrivedAtBandstand && wickState.state === 'walking' && wickState.targetIndex === 2) {
+      advancedToNewsstand = true;
+      break;
+    }
+  }
+  assert.ok(arrivedAtBandstand, 'wick must arrive and linger at bandstand');
+  assert.ok(advancedToNewsstand, 'wick must advance toward newsstand after lingering');
+
+  // Verify facing direction of travel within tolerance after several walking steps toward newsstand
+  for (let i = 0; i < 10; i++) updateTownAnimations(town, 0.1);
+  const newsstandWp = wickState.waypoints[2];
+  const expectedYaw = Math.atan2(newsstandWp.x - wickGroup.position.x, newsstandWp.z - wickGroup.position.z);
+  let yawDiff = Math.abs(((wickGroup.rotation.y - expectedYaw + Math.PI) % (Math.PI * 2)) - Math.PI);
+  if (yawDiff > Math.PI) yawDiff = Math.abs(yawDiff - Math.PI * 2);
+  assert.ok(yawDiff < 0.05, `wick rotation.y diff ${yawDiff} must face travel direction`);
+
+  // Drive Milo's ghost through its loop until it returns to spot 0
+  const ghostState = town._wander.figures.find((w) => w.handle === 'milo');
+  const spot0 = town.parts.avatarSpots[0];
+  let returnedHome = false;
+  for (let i = 0; i < 1200; i++) {
+    updateTownAnimations(town, 0.1);
+    if (ghostState.targetIndex === 0 && ghostState.state === 'lingering') {
+      returnedHome = true;
+      break;
+    }
+  }
+  assert.ok(returnedHome, 'milo ghost must complete loop and return to spot 0');
+  assert.ok(
+    Math.hypot(ghostState.group.position.x - spot0.x, ghostState.group.position.z - spot0.z) < 1e-4,
+    'milo ghost must be at spot 0'
+  );
+  assert.equal(ghostState.group.position.y, spot0.y);
+  assert.equal(town.parts.footlights[0].userData.lit, true, 'footlight 0 must remain lit');
+});
+
+test('Slice 14: wanderers yield to live presence avatars and resume from home when presence clears', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const wickState = town._wander.figures.find((w) => w.handle === 'wick');
+  const wickGroup = wickState.group;
+  const home = wickState.waypoints[0];
+
+  // Move wick away from home first
+  for (let i = 0; i < 20; i++) updateTownAnimations(town, 0.1);
+  const awayPos = { x: wickGroup.position.x, y: wickGroup.position.y, z: wickGroup.position.z };
+  assert.ok(Math.hypot(awayPos.x - home.x, awayPos.z - home.z) > 0.1, 'wick should have walked away from home');
+
+  // Live presence arrives for wick
+  applyState(town, {
+    presence: [{ handle: 'wick', role: 'npc', zone: 'bandstand' }],
+  });
+  assert.equal(town._live.avatars.has('wick'), true);
+
+  updateTownAnimations(town, 0.1);
+  assert.equal(wickGroup.visible, false, 'wick wander figure must hide when live avatar is present');
+  assert.deepEqual(
+    { x: wickGroup.position.x, y: wickGroup.position.y, z: wickGroup.position.z },
+    awayPos,
+    'wick wander figure must not move while yielded'
+  );
+
+  // Live presence clears
+  applyState(town, { presence: [] });
+  assert.equal(town._live.avatars.has('wick'), false);
+
+  updateTownAnimations(town, 0.1);
+  assert.equal(wickGroup.visible, true, 'wick wander figure must be visible again after presence clears');
+  assert.ok(
+    Math.hypot(wickGroup.position.x - home.x, wickGroup.position.z - home.z) < 1e-4,
+    'wick wander figure must reset to its home waypoint when resuming'
+  );
 });
