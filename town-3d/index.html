@@ -274,7 +274,7 @@
       canvas.classList.remove('dragging');
       plotOverlayTitle.textContent = `@${handle} — Desk Note`;
       plotIframe.setAttribute('sandbox', '');
-      plotIframe.src = `/town/plots/${encodeURIComponent(handle)}/index.html`;
+      plotIframe.src = `plots/${encodeURIComponent(handle)}/index.html`;
       plotOverlay.hidden = false;
     }
 
