@@ -90,7 +90,9 @@ test('index.html wires cottage click to sandboxed desk-note overlay under the to
   // the old text-town path that was sunset — every desk note 404'd. Desk notes
   // live under the town page's own plots/ dir, relative like the gazette path.
   assert.ok(!html.includes('/town/plots/'), 'index.html must not reference the sunset /town/plots/ path');
-  assert.match(html, /plotIframe\.src\s*=\s*`plots\/\$\{encodeURIComponent\(handle\)\}\/index\.html`/);
+  assert.match(html, /resolvePlotOverlayContent\(/);
+  assert.match(html, /plotIframe\.srcdoc\s*=\s*resolved\.html/);
+  assert.match(html, /plotIframe\.src\s*=\s*resolved\.url/);
 });
 
 test('no banned term and no hardcoded host or port in any new or changed file', async () => {
