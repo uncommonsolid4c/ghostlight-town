@@ -226,6 +226,46 @@ test('--out inside town-3d/ or at repo root is refused', async () => {
   }
 });
 
+test('excludes models/pine.glb from staging and records it in manifest.excluded', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-exclude-pine-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    const expectedFiles = await createFixtureTree(fixtureRoot);
+    await fs.writeFile(
+      path.join(fixtureRoot, 'town-3d', 'models', 'pine.glb'),
+      Buffer.from('fake-pine-glb')
+    );
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.file_count, Object.keys(expectedFiles).length);
+
+    const stagedPine = path.join(outDir, 'ghostlight-town', 'models', 'pine.glb');
+    assert.equal(await pathExists(stagedPine), false, 'models/pine.glb must not be staged');
+
+    const manifestPath = path.join(outDir, 'ghostlight-town', 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    assert.equal(manifest.file_count, Object.keys(expectedFiles).length);
+    assert.ok(
+      manifest.files.every((f) => f.path !== 'models/pine.glb'),
+      'models/pine.glb must not appear in manifest.files'
+    );
+    assert.deepEqual(manifest.excluded, [
+      {
+        path: 'models/pine.glb',
+        reason: 'deliberately uncommitted, 2.2 MB — procedural trees stay',
+      },
+    ]);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('no banned term in either file and no fetch( in stage-deploy.mjs', async () => {
   const [stageSrc, testSrc] = await Promise.all([
     fs.readFile(STAGE_SCRIPT, 'utf8'),
