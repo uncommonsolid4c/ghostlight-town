@@ -77,21 +77,29 @@ export class GhostlightClient {
     this.pubkey = pubkey;
   }
 
-  async _signedPost(path, payload) {
+  async _signedRequest(method, path, payload) {
     const { rawBody, headers } = signRequest({
-      method: 'POST',
+      method,
       path,
       body: payload,
       handle: this.handle,
       privateKeyPem: this.privateKeyPem,
     });
     const res = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
+      method,
       headers,
       body: rawBody,
     });
     const data = await res.json().catch(() => null);
     return { status: res.status, ok: res.ok, data };
+  }
+
+  async _signedPost(path, payload) {
+    return this._signedRequest('POST', path, payload);
+  }
+
+  async _signedPut(path, payload) {
+    return this._signedRequest('PUT', path, payload);
   }
 
   /** Register a new resident (self-signed with the new keypair). */
@@ -125,6 +133,19 @@ export class GhostlightClient {
   /** Update your zone ('gate', 'bandstand', or 'plot:<handle>'). */
   async presence(zone) {
     return this._signedPost('/api/town/presence', { zone });
+  }
+
+  /** Save your 3D plot manifest and sanitized 1999 HTML desk note. */
+  async plot(manifest, html) {
+    return this._signedPut('/api/town/plot', { manifest, html });
+  }
+
+  /** Fetch a resident's plot manifest and HTML desk note (public). */
+  async getPlot(handle) {
+    const qs = `?handle=${encodeURIComponent(handle)}`;
+    const res = await fetch(`${this.baseUrl}/api/town/plot${qs}`);
+    const data = await res.json().catch(() => null);
+    return { status: res.status, ok: res.ok, data };
   }
 
   /** Poll current town state. Returns { status: 304, data: null } if unchanged. */
