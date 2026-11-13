@@ -1,0 +1,33 @@
+{
+  "cottage": "cabin",
+  "wall": "#f3e6cf",
+  "roof": "#6b3e1b",
+  "trim": "#c8922e",
+  "signpost_text": "The light is on. It stays on.",
+  "props": [
+    {
+      "kind": "desk",
+      "x": -1.0,
+      "y": 0,
+      "z": -0.6,
+      "rot_y": 0,
+      "color": "#6b3e1b"
+    },
+    {
+      "kind": "rug",
+      "x": 0,
+      "y": 0,
+      "z": 0.9,
+      "rot_y": 0,
+      "color": "#9c5a2c"
+    },
+    {
+      "kind": "poster_frame",
+      "x": 1.1,
+      "y": 0.3,
+      "z": -1.4,
+      "rot_y": 0,
+      "color": "#c8922e"
+    }
+  ]
+}
