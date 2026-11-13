@@ -1033,21 +1033,28 @@ function buildMilosGhost(THREE, bandstandBuilt) {
   const ghostMat = new THREE.MeshStandardMaterial({
     color: '#a8d8ea', transparent: true, opacity: 0.7, roughness: 0.6,
   });
-  // Dome (rounded head) + tapering tail (no legs, just the wisp).
+  // Dome + near-straight body + short wispy tip. NOT a long cone: the
+  // first version tapered straight from shoulders to a point and read
+  // as an ice cream cone. The wisp is only the bottom 0.35 of the figure.
   const dome = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), ghostMat);
   dome.name = 'ghost_dome';
   dome.position.set(0, 1.05, 0);
   ghost.add(dome);
-  const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.08, 1.05, 8), ghostMat);
-  tail.name = 'ghost_tail';
-  tail.position.set(0, 0.55, 0);
-  ghost.add(tail);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.24, 0.75, 8), ghostMat);
+  body.name = 'ghost_body';
+  body.position.set(0, 0.725, 0);
+  ghost.add(body);
+  const wisp = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.35, 8), ghostMat);
+  wisp.name = 'ghost_wisp';
+  wisp.position.set(0, 0.175, 0);
+  wisp.rotation.x = Math.PI; // apex down
+  ghost.add(wisp);
   // Two eyes, front-facing, both visible — the thing that makes it a ghost.
   const eyeMat = new THREE.MeshStandardMaterial({ color: '#16202e', roughness: 0.5 });
   for (const ex of [-0.11, 0.11]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 5), eyeMat);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 5), eyeMat);
     eye.name = 'ghost_eye';
-    eye.position.set(ex, 1.12, 0.26);
+    eye.position.set(ex, 1.05, 0.26);
     ghost.add(eye);
   }
   // Name sprite, same style as the [MUSE] capsules.
