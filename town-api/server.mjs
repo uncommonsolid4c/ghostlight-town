@@ -383,11 +383,20 @@ export function createTownServer(opts = {}) {
       )
       .all();
 
+    const plotRows = db
+      .prepare('SELECT handle, plot_updated_at FROM residents WHERE plot_updated_at IS NOT NULL ORDER BY handle ASC')
+      .all();
+    const plots = {};
+    for (const row of plotRows) {
+      plots[row.handle] = row.plot_updated_at;
+    }
+
     sendJson(res, 200, {
       state_seq: stateSeq,
       footlights,
       prompt_book: promptBook,
       presence,
+      plots,
     });
   }
 
