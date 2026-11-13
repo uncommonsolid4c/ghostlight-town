@@ -4,6 +4,7 @@
  */
 
 import { createConceptMilosCottage } from './concept-cottage.js';
+import { createConceptMiloGhost } from './concept-ghost.js';
 
 export const TOWN_LAYOUT = {
   clearingRadius: 30,
@@ -1458,53 +1459,16 @@ export function buildTown(THREE, opts = {}) {
  * translucent ice-blue — the settled avatar, in low-poly.
  */
 function buildMilosGhost(THREE, bandstandBuilt) {
-  const ghost = new THREE.Group();
-  ghost.name = 'milos_ghost';
-  ghost.userData = { handle: 'milo', role: 'muse', permanent: true };
-
-  const ghostMat = new THREE.MeshStandardMaterial({
-    color: '#a8d8ea', transparent: true, opacity: 0.7, roughness: 0.6,
-  });
-  // Dome + near-straight body + short wispy tip. NOT a long cone: the
-  // first version tapered straight from shoulders to a point and read
-  // as an ice cream cone. The wisp is only the bottom 0.35 of the figure.
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), ghostMat);
-  dome.name = 'ghost_dome';
-  dome.position.set(0, 1.05, 0);
-  ghost.add(dome);
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.24, 0.75, 8), ghostMat);
-  body.name = 'ghost_body';
-  body.position.set(0, 0.725, 0);
-  ghost.add(body);
-  const wisp = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.35, 8), ghostMat);
-  wisp.name = 'ghost_wisp';
-  wisp.position.set(0, 0.175, 0);
-  wisp.rotation.x = Math.PI; // apex down
-  ghost.add(wisp);
-  // Two eyes, front-facing, both visible — the thing that makes it a ghost.
-  const eyeMat = new THREE.MeshStandardMaterial({ color: '#16202e', roughness: 0.5 });
-  for (const ex of [-0.11, 0.11]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 5), eyeMat);
-    eye.name = 'ghost_eye';
-    eye.position.set(ex, 1.05, 0.26);
-    ghost.add(eye);
-  }
-  // Name sprite, same style as the [MUSE] capsules.
-  const tex = makeTextTexture(THREE, ['[MUSE] milo'], {
-    width: 384, height: 96, titleSize: 30, bg: '#161b28', border: '#9be0ff', fg: '#9be0ff',
-  });
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-  sprite.name = 'nametag_sprite';
-  sprite.position.set(0, 1.8, 0);
-  sprite.scale.set(2.0, 0.5, 1);
-  ghost.add(sprite);
-
   const spot = bandstandBuilt.avatarSpots[0];
-  ghost.position.set(spot.x, spot.y, spot.z);
-  // Face the gate (outward), not the bandstand center: front-facing, both
-  // eyes visible to visitors walking up the path. The spot's own rotY
-  // faces the center; outward is the opposite direction.
-  ghost.rotation.y = Math.atan2(spot.x, spot.z);
+  // Concept-matched ghost (Argon's proof, CONCEPT.md): flared pleated sheet,
+  // wavy hem, short wisp, CanvasTexture face decal. Pure-decal mode — the old
+  // eye spheres are out (they'd read as dark blobs through the sheet from
+  // behind); the test asserts the decal instead. Nametag + spot placement
+  // come from the module; footlight/placard wiring below is unchanged.
+  const ghost = createConceptMiloGhost(THREE, {
+    spot,
+    includeEyeSpheres: false,
+  });
 
   // Light his footlight and flip his placard up, mirroring applyTownState.
   const flGroup = bandstandBuilt.footlights[0];
