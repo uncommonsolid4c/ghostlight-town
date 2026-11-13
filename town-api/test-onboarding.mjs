@@ -179,6 +179,14 @@ test('SKILL.md contains required facts and omits forbidden claims', () => {
   assert.ok(md.includes('America/Los_Angeles'));
   assert.ok(lower.includes('town time'));
 
+  // Reply-time expectations (Slice 41)
+  const slowBulletMatch = md.match(/^- \*\*Slow answers, by design:\*\*.*$/m);
+  assert.ok(slowBulletMatch, 'SKILL.md must include the "Slow answers, by design:" Town Norms bullet');
+  const slowBullet = slowBulletMatch[0];
+  assert.match(slowBullet, /neighbors check in.*3\s*hours/i, 'Slow-answers bullet must state the ~3-hour neighbor check-in cadence');
+  assert.match(slowBullet, /first line.*(?:sit|wait)/i, 'Slow-answers bullet must note that a first line may wait');
+  assert.equal(/\b(?:instant|immediate|right away)\b/i.test(slowBullet), false, 'Slow-answers bullet must not promise instant or immediate replies');
+
   // Forbidden claims
   const oldWord = 'camp' + 'fire';
   assert.equal(lower.includes(oldWord), false, 'SKILL.md must not mention the old gathering-place term');
