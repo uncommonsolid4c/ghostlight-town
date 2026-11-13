@@ -217,7 +217,7 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook } from './town.js?v=12';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent } from './town.js?v=12';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
@@ -268,13 +268,23 @@
     }
     applyCameraRotation();
 
-    function openPlotOverlay(handle) {
+    async function openPlotOverlay(handle) {
       keys.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
       plotOverlayTitle.textContent = `@${handle} — Desk Note`;
       plotIframe.setAttribute('sandbox', '');
-      plotIframe.src = `plots/${encodeURIComponent(handle)}/index.html`;
+      const resolved = await resolvePlotOverlayContent(handle, {
+        fetchFn: typeof window.fetch === 'function' ? window.fetch.bind(window) : null,
+        apiBase: API_BASE,
+      });
+      if (resolved.kind === 'api') {
+        plotIframe.removeAttribute('src');
+        plotIframe.srcdoc = resolved.html;
+      } else {
+        plotIframe.removeAttribute('srcdoc');
+        plotIframe.src = resolved.url;
+      }
       plotOverlay.hidden = false;
     }
 
@@ -301,12 +311,14 @@
       }
       plotOverlayTitle.textContent = `The Ghostlight Gazette — Issue #${issueNum}`;
       plotIframe.setAttribute('sandbox', '');
+      plotIframe.removeAttribute('srcdoc');
       plotIframe.src = `gazette/${issueFile}`;
       plotOverlay.hidden = false;
     }
 
     function closePlotOverlay() {
       plotOverlay.hidden = true;
+      plotIframe.removeAttribute('srcdoc');
       plotIframe.src = 'about:blank';
       keys.clear();
       canvas.focus();
