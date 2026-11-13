@@ -423,6 +423,8 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
     'The wisp must be short — a long taper reads as an ice cream cone');
   assert.ok(ghostBody.every((m) => m.material.transparent && m.material.opacity < 1),
     'Ghost body must be translucent');
+  assert.ok(ghostBody.every((m) => m.material.opacity >= 0.8),
+    'Ghost body must be solid enough to read ice-blue — 0.7 washed out live (2026-11-12)');
   assert.ok(ghostBody.every((m) => m.material.color === '#a8d8ea'),
     'Ghost body must be ice-blue');
   // Pure-decal mode (concept-ghost swap, 2026-11-12): the face decal carries
