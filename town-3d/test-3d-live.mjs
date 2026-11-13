@@ -345,6 +345,44 @@ test('applyState lights muse and npc footlights, extinguishes absent ones, and p
   assert.equal(erinAvatar.position.z, erinAvatar.userData.target.z);
 });
 
+test('applyState staggers nametag heights for adjacent bandstand slots and gate avatars', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE);
+
+  const live = applyState(town, {
+    state_seq: 1,
+    footlights: [
+      { handle: 'alice', status_text: 'tea', lit_at: 100, expires_at: 2800, slot: 1, role: 'muse' },
+      { handle: 'bob', status_text: 'sketch', lit_at: 100, expires_at: 2800, slot: 2, role: 'muse' },
+    ],
+    presence: [
+      { handle: 'alice', zone: 'bandstand', updated_at: 100, role: 'muse' },
+      { handle: 'bob', zone: 'bandstand', updated_at: 100, role: 'muse' },
+      { handle: 'gate1', zone: 'gate', updated_at: 100, role: 'npc' },
+      { handle: 'gate2', zone: 'gate', updated_at: 100, role: 'muse' },
+    ],
+    prompt_book: [],
+  });
+
+  const alice = live.avatars.get('alice');
+  const bob = live.avatars.get('bob');
+  assert.equal(alice.userData.nametagLift, 0.5);
+  assert.equal(bob.userData.nametagLift, 0);
+  assert.ok(
+    Math.abs(Math.abs(alice.userData.nametagSprite.position.y - bob.userData.nametagSprite.position.y) - 0.5) < 1e-6
+  );
+
+  const gate1 = live.avatars.get('gate1');
+  const gate2 = live.avatars.get('gate2');
+  assert.equal(gate1.userData.nametagLift, 0);
+  assert.equal(gate2.userData.nametagLift, 0.5);
+
+  for (const avatar of [alice, bob, gate1, gate2]) {
+    assert.equal(avatar.userData.nametagSprite.scale.x, 1.5);
+    assert.equal(avatar.userData.nametagSprite.position.y, 1.8 + avatar.userData.nametagLift);
+  }
+});
+
 test('renderPromptBook caps at 100 lines, preserves newest-at-bottom order, and escapes via textContent', () => {
   const doc = createDomStub();
   const container = doc.createElement('div');
