@@ -1455,6 +1455,37 @@ export function renderPromptBook(containerEl, promptBook, doc = globalThis.docum
 }
 
 export const SEED_HOME_PADS = { wick: 2, maren: 3, tomas: 4 };
+
+const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
+
+/**
+ * Resolve a resident's desk note for the plot overlay: API-saved HTML first,
+ * falling back to the static plots/<handle>/index.html path when offline,
+ * invalid, or missing from the API.
+ */
+export async function resolvePlotOverlayContent(handle, { fetchFn = null, apiBase = '' } = {}) {
+  const safeHandle = typeof handle === 'string' ? handle : String(handle ?? '');
+  const staticUrl = `plots/${encodeURIComponent(safeHandle)}/index.html`;
+
+  if (typeof handle !== 'string' || !HANDLE_RE.test(handle) || typeof fetchFn !== 'function') {
+    return { kind: 'static', url: staticUrl };
+  }
+
+  const base = typeof apiBase === 'string' ? apiBase.replace(/\/+$/, '') : '';
+  try {
+    const res = await fetchFn(`${base}/api/town/plot?handle=${encodeURIComponent(handle)}`);
+    if (res && res.status === 200) {
+      const data = await res.json();
+      if (data && typeof data.html === 'string' && data.html.trim().length > 0) {
+        return { kind: 'api', html: data.html };
+      }
+    }
+  } catch {
+    // Fall back to static desk note
+  }
+
+  return { kind: 'static', url: staticUrl };
+}
 const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
 
 /**
@@ -1949,10 +1980,28 @@ export class TownLive {
     for (const row of state?.prompt_book || []) if (row?.handle) handles.add(row.handle);
     handles.delete('milo');
 
+    const statePlots = state?.plots && typeof state.plots === 'object' ? state.plots : null;
+
     for (const handle of handles) {
       const cached = this.plotCache.get(handle);
-      if (cached && cached.found) continue;
-      if (cached && cached.fetchedAtSeq === state.state_seq) continue;
+      const stateUpdatedAt =
+        statePlots && Object.prototype.hasOwnProperty.call(statePlots, handle)
+          ? statePlots[handle]
+          : undefined;
+      const hasPlotTimestamp = stateUpdatedAt !== undefined && stateUpdatedAt !== null;
+
+      if (cached) {
+        if (cached.found) {
+          if (!hasPlotTimestamp || stateUpdatedAt === cached.plotUpdatedAt) {
+            continue;
+          }
+        } else if (
+          cached.fetchedAtSeq === state.state_seq &&
+          cached.plotUpdatedAt === (hasPlotTimestamp ? stateUpdatedAt : null)
+        ) {
+          continue;
+        }
+      }
 
       try {
         const res = await this.fetchFn(`${this.apiBase}/api/town/plot?handle=${encodeURIComponent(handle)}`);
@@ -1962,16 +2011,24 @@ export class TownLive {
             this.plotCache.set(handle, {
               found: true,
               fetchedAtSeq: state.state_seq,
-              plotUpdatedAt: data.plot_updated_at ?? null,
+              plotUpdatedAt: data.plot_updated_at ?? (hasPlotTimestamp ? stateUpdatedAt : null),
               manifest: data.manifest,
             });
             applyPlotManifest(this.town, handle, data.manifest);
             continue;
           }
         }
-        this.plotCache.set(handle, { found: false, fetchedAtSeq: state.state_seq });
+        this.plotCache.set(handle, {
+          found: false,
+          fetchedAtSeq: state.state_seq,
+          plotUpdatedAt: hasPlotTimestamp ? stateUpdatedAt : null,
+        });
       } catch {
-        this.plotCache.set(handle, { found: false, fetchedAtSeq: state.state_seq });
+        this.plotCache.set(handle, {
+          found: false,
+          fetchedAtSeq: state.state_seq,
+          plotUpdatedAt: hasPlotTimestamp ? stateUpdatedAt : null,
+        });
       }
     }
   }
