@@ -366,3 +366,60 @@ test('CLI rejects invalid or missing arguments with usage on stderr and exit 1',
     assert.match(res.stderr, /Usage:/);
   }
 });
+
+test('runAll per-line selectivity: one unaddressed muse line -> exactly one NPC posts', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-select-'));
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const fakeState = {
+      footlights: [],
+      prompt_book: [
+        {
+          id: 4,
+          handle: 'lampmoth',
+          role: 'muse',
+          kind: 'say',
+          body: 'Evening, Bandstand...',
+          created_at: now - 60,
+        },
+      ],
+      presence: [],
+    };
+    const postedUrls = [];
+    const fakeFetch = async (url, init) => {
+      if (init && init.method === 'POST') {
+        postedUrls.push(String(url));
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, status: 200, json: async () => fakeState };
+    };
+
+    const brainCalls = [];
+    const res = await runAll({
+      apiBase: 'http://fake.local',
+      stateDir,
+      staggerMs: 0,
+      fetchImpl: fakeFetch,
+      brainImpl: async (prompt) => {
+        brainCalls.push(prompt);
+        return 'Quiet night by the steps; the kettle is warm.';
+      },
+      logger: () => {},
+      sleepImpl: async () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.results.length, 3);
+    const posted = res.results.filter((r) => r.posted);
+    const silent = res.results.filter((r) => r.action === 'silent');
+    assert.equal(posted.length, 1, 'exactly one NPC posts');
+    assert.equal(posted[0].npc, 'maren', 'id=4 % 3 === 1 designates maren');
+    assert.equal(posted[0].action, 'reply');
+    assert.equal(silent.length, 2, 'other two NPCs stay silent');
+    assert.equal(brainCalls.length, 1);
+    assert.ok(brainCalls[0].includes("lampmoth's line #4"));
+    assert.equal(postedUrls.filter((u) => u.endsWith('/api/town/say')).length, 1);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
