@@ -485,11 +485,18 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // Budget raised 80 -> 120 (owner decision, 2026-11-12): lit windows and the
 // widow's-walk posts are worth their meshes, and Argon's review notes 120
 // standard meshes run at 120fps on a 2015 integrated GPU. Still guards bloat.
-test('Draw-call budget: total mesh count in built town is < 120', () => {
+// Budget raised 120 -> 125 (owner decision, 2026-11-12): the growth since 120
+// is the completed planned prop set — slice 11 (street light + bookshelf) and
+// slices 12–13 (the three seed NPC character props); no further prop slices are
+// planned. 122 is the worst case (all procedural fallbacks) as live town swaps
+// GLBs in for fewer, and 122 is 2 over the 120fps/2015-iGPU reference point,
+// not a different performance regime. 125 keeps the guardrail meaningful so
+// any future prop addition requires a deliberate revisit.
+test('Draw-call budget: total mesh count in built town is < 125', () => {
   const THREE = createThreeStub();
   const { scene } = buildTown(THREE);
   const meshes = collectNodes(scene, (n) => n.isMesh);
-  assert.ok(meshes.length < 120, `Expected < 120 meshes, got ${meshes.length}`);
+  assert.ok(meshes.length < 125, `Expected < 125 meshes, got ${meshes.length}`);
 });
 
 test('No campfire terminology and no fetch() in town.js; .glb allowed only for props (not pine.glb)', async () => {
@@ -579,7 +586,7 @@ test('Procedural fallback builders exist and GLB load failure keeps procedural p
     GLTFLoader: FailingLoader,
     warn: (...args) => warnings.push(args.join(' ')),
   });
-  assert.equal(warnings.length, PROP_PLACEMENTS.length);
+  assert.equal(warnings.length, PROP_PLACEMENTS.filter((p) => p.model).length);
   for (const slot of parts.props) {
     assert.equal(slot.glb, null, `${slot.placement.id} must have no glb on error`);
     assert.ok(slot.anchor.children.includes(slot.fallback), `${slot.placement.id} must retain procedural fallback`);
@@ -596,9 +603,14 @@ test('Procedural fallback builders exist and GLB load failure keeps procedural p
   }
   await loadTownProps(THREE, okParts.props, { GLTFLoader: MockLoader, warn: () => {} });
   for (const slot of okParts.props) {
-    assert.ok(slot.glb, `${slot.placement.id} must swap in glb on load`);
-    assert.ok(!slot.anchor.children.includes(slot.fallback), `${slot.placement.id} must remove procedural fallback`);
-    assert.ok(slot.glb.scale.y > 1, `${slot.placement.id} must be scaled up from tiny GLB units`);
+    if (slot.placement.model) {
+      assert.ok(slot.glb, `${slot.placement.id} must swap in glb on load`);
+      assert.ok(!slot.anchor.children.includes(slot.fallback), `${slot.placement.id} must remove procedural fallback`);
+      assert.ok(slot.glb.scale.y > 1, `${slot.placement.id} must be scaled up from tiny GLB units`);
+    } else {
+      assert.equal(slot.glb, null, `${slot.placement.id} without model must keep glb null`);
+      assert.ok(slot.anchor.children.includes(slot.fallback), `${slot.placement.id} without model must keep procedural fallback`);
+    }
   }
 });
 
@@ -687,4 +699,42 @@ test('Slice 12: adopted NPC character prop placements and procedural fallback bu
     assert.ok(meshes.length >= 1 && meshes.length <= 3,
       `${name} fallback must have 1-3 meshes, got ${meshes.length}`);
   }
+});
+
+test('Slice 13: maren_typewriter is procedural-only and skipped by loadTownProps', async () => {
+  const marenTypewriter = PROP_PLACEMENTS.find((p) => p.id === 'maren_typewriter');
+  assert.ok(marenTypewriter, 'PROP_PLACEMENTS must include maren_typewriter');
+  assert.equal(marenTypewriter.kind, 'typewriter');
+  assert.equal(marenTypewriter.parent, 'scene');
+  assert.equal(marenTypewriter.x, 9.49);
+  assert.equal(marenTypewriter.y, 0);
+  assert.equal(marenTypewriter.z, -12.42);
+  assert.equal(marenTypewriter.rotY, -0.6525);
+  assert.equal('model' in marenTypewriter, false, 'maren_typewriter must have no model property');
+
+  const THREE = createThreeStub();
+  const { parts } = buildTown(THREE, { loadProps: false });
+  const loadedUrls = [];
+  const warnings = [];
+  class RecordingLoader {
+    load(url, onLoad) {
+      loadedUrls.push(url);
+      const glbScene = new THREE.Group();
+      glbScene.userData.stubBounds = { min: [-0.002, 0, -0.001], max: [0.002, 0.01, 0.001] };
+      onLoad({ scene: glbScene });
+    }
+  }
+  await loadTownProps(THREE, parts.props, {
+    GLTFLoader: RecordingLoader,
+    warn: (...args) => warnings.push(args.join(' ')),
+  });
+
+  assert.equal(warnings.length, 0, 'model-less placement must emit no warning');
+  assert.equal(loadedUrls.length, PROP_PLACEMENTS.filter((p) => p.model).length);
+  assert.equal(loadedUrls.some((u) => !u || /typewriter/i.test(u)), false, 'loader.load must never be called for maren_typewriter');
+
+  const slot = parts.props.find((s) => s.placement.id === 'maren_typewriter');
+  assert.ok(slot, 'maren_typewriter slot must exist');
+  assert.equal(slot.glb, null, 'maren_typewriter slot.glb must stay null');
+  assert.ok(slot.anchor.children.includes(slot.fallback), 'maren_typewriter procedural fallback must remain in anchor');
 });
