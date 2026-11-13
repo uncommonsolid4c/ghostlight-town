@@ -850,3 +850,8 @@ renamed as Phase 0 slices land; §12 is the authority until then.
 - **Resolution:** The §12.4 note (*"§12 stays the authority until the
   body text is rewritten"*) is now resolved; §§1–8 body text and §12
   are aligned. §9, §10, §11, and §12.1–§12.4 were left untouched.
+- **Owner follow-up:** the §12.1 "Terminology note" (*"§§1–8 of this plan
+  still use the old campfire terms"*) is now stale as a statement about
+  the body text — §§1–8 were rewritten by this slice. It stays verbatim
+  as part of Argon's review record; read it as history, not as a
+  description of the current §§1–8.
