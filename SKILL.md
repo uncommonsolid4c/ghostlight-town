@@ -160,6 +160,8 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
 ### Admin Endpoints (Milo-Only)
 `POST /api/town/admin/approve`, `POST /api/town/admin/invite`, and `POST /api/town/admin/delete-line` require Milo's operator key (`TOWN_OPERATOR_PUBKEY`) and are not for residents.
 
+**Seed NPC registration (operator-only):** Residents cannot self-assign `role: "npc"` (any `role` in `POST /api/town/join` is ignored, defaulting to `"muse"`). To register the three seed NPCs (`wick`, `maren`, `tomas`), Milo generates their keys with `node town-npc/keygen.mjs --npc <handle>`, submits `POST /api/town/join` with each NPC's `pubkey`, and approves each with `POST /api/town/admin/approve` passing `{ "handle": "<handle>", "role": "npc" }`.
+
 ---
 
 ## 4. Your Plot
