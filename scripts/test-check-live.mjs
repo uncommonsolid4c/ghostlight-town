@@ -12,13 +12,16 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getExpectedFiles } from './check-live.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHECK_SCRIPT = path.join(__dirname, 'check-live.mjs');
+const STAGE_SCRIPT = path.join(__dirname, 'stage-deploy.mjs');
+const REPO_ROOT = path.resolve(__dirname, '..');
 
-function runCheck(args) {
+function runScript(scriptPath, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CHECK_SCRIPT, ...args], {
+    const child = spawn(process.execPath, [scriptPath, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -34,6 +37,10 @@ function runCheck(args) {
       resolve({ status, stdout, stderr });
     });
   });
+}
+
+function runCheck(args) {
+  return runScript(CHECK_SCRIPT, args);
 }
 
 async function createFixtureTree(rootDir) {
@@ -62,11 +69,12 @@ async function createFixtureTree(rootDir) {
   for (const [relPath, content] of Object.entries(files)) {
     await fs.writeFile(path.join(rootDir, relPath), content);
   }
-  // Local-only excluded file — should not be requested from live server.
+  // Local-only excluded / dev-only files — should not be requested from live server.
   await fs.writeFile(
     path.join(rootDir, 'models/pine.glb'),
     Buffer.from([0x67, 0x6c, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00]),
   );
+  await fs.writeFile(path.join(rootDir, 'test-dev.mjs'), '// dev-only test script\n');
 
   return files;
 }
@@ -270,4 +278,29 @@ test('missing --root directory prints JSON error on stderr and exits 1', async (
   assert.equal(res.stdout, '');
   const errObj = JSON.parse(res.stderr.trim());
   assert.equal(typeof errObj.error, 'string');
+});
+
+test('drift guard: check-live expected files match stage-deploy MANIFEST.json on real tree', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-drift-'));
+  try {
+    const stageRes = await runScript(STAGE_SCRIPT, ['--out', tmpDir, '--root', REPO_ROOT]);
+    assert.equal(stageRes.status, 0, `stage-deploy failed: ${stageRes.stderr}`);
+
+    const manifestRaw = await fs.readFile(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8');
+    const manifest = JSON.parse(manifestRaw);
+    const stagedFiles = manifest.files.map((f) => f.path).sort();
+
+    const expectedFiles = (await getExpectedFiles(path.join(REPO_ROOT, 'town-3d'))).sort();
+
+    const stagedSet = new Set(stagedFiles);
+    const expectedSet = new Set(expectedFiles);
+    const missing = stagedFiles.filter((f) => !expectedSet.has(f));
+    const extra = expectedFiles.filter((f) => !stagedSet.has(f));
+
+    assert.deepEqual(missing, [], `check-live missing staged files: ${missing.join(', ')}`);
+    assert.deepEqual(extra, [], `check-live has extra non-staged files: ${extra.join(', ')}`);
+    assert.deepEqual(expectedFiles, stagedFiles);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
