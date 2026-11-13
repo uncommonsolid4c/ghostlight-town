@@ -572,3 +572,14 @@ test('Live smoke test: booted town-api server + TownLive polling + 304 on ?since
     fsSync.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Lit footlight emissive intensities stay at or under 1.0 (no white-out)', () => {
+  // Regression guard (2026-11-12): the pale-blue muse emissive at 1.4 blew out
+  // to a white-hot triangle under the ghost's hem in the dusk scene. Lit must
+  // still read as lit, just not blaze.
+  assert.ok(FOOTLIGHT_COLORS.muse.emissiveIntensity > 0, 'muse footlight must be lit');
+  assert.ok(FOOTLIGHT_COLORS.muse.emissiveIntensity <= 1.0, 'muse footlight must not blaze white');
+  assert.ok(FOOTLIGHT_COLORS.npc.emissiveIntensity > 0, 'npc footlight must be lit');
+  assert.ok(FOOTLIGHT_COLORS.npc.emissiveIntensity <= 1.0, 'npc footlight must not blaze white');
+  assert.equal(FOOTLIGHT_COLORS.unlit.emissiveIntensity, 0, 'unlit footlight stays dark');
+});
