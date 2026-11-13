@@ -945,3 +945,75 @@ test('Slice 14: wanderers yield to live presence avatars and resume from home wh
     'wick wander figure must reset to its home waypoint when resuming'
   );
 });
+
+test('Slice 15: newsstand paper stack sits on a wood shelf with two support brackets', () => {
+  const THREE = createThreeStub();
+  const { parts } = buildTown(THREE, { loadProps: false });
+  const newsstand = parts.newsstand;
+  const meshes = collectNodes(newsstand, (n) => n.isMesh);
+
+  const booth = meshes.find((m) => m.geometry?.parameters?.width === 2.2);
+  const papers = meshes.find((m) => m.material?.color === '#ebe4d1');
+  const shelf = meshes.find((m) => m.name === 'newsstand_papers_shelf');
+  const bracketL = meshes.find((m) => m.name === 'newsstand_papers_bracket_l');
+  const bracketR = meshes.find((m) => m.name === 'newsstand_papers_bracket_r');
+
+  assert.ok(booth, 'newsstand booth mesh must exist');
+  assert.ok(papers, 'newsstand papers mesh must exist');
+  assert.ok(shelf, 'newsstand_papers_shelf mesh must exist');
+  assert.ok(bracketL, 'newsstand_papers_bracket_l mesh must exist');
+  assert.ok(bracketR, 'newsstand_papers_bracket_r mesh must exist');
+
+  assert.equal(shelf.material.color, booth.material.color, 'shelf must use booth wood color');
+  assert.equal(bracketL.material.color, booth.material.color, 'left bracket must use booth wood color');
+  assert.equal(bracketR.material.color, booth.material.color, 'right bracket must use booth wood color');
+
+  const papersP = papers.geometry.parameters;
+  const shelfP = shelf.geometry.parameters;
+  const boothP = booth.geometry.parameters;
+
+  const papersBottomY = papers.position.y - papersP.height / 2;
+  const shelfTopY = shelf.position.y + shelfP.height / 2;
+  const shelfBottomY = shelf.position.y - shelfP.height / 2;
+  assert.ok(
+    Math.abs(shelfTopY - papersBottomY) <= 0.03,
+    `shelf top (${shelfTopY}) must meet papers bottom (${papersBottomY}) within 0.03m`
+  );
+
+  assert.ok(shelfP.width > papersP.width, 'shelf must be wider than papers');
+  assert.ok(shelfP.depth > papersP.depth, 'shelf must be deeper than papers');
+  assert.ok(
+    shelf.position.x - shelfP.width / 2 < papers.position.x - papersP.width / 2 &&
+    shelf.position.x + shelfP.width / 2 > papers.position.x + papersP.width / 2,
+    'shelf X footprint must cover papers X footprint'
+  );
+  assert.ok(
+    shelf.position.z - shelfP.depth / 2 < papers.position.z - papersP.depth / 2 &&
+    shelf.position.z + shelfP.depth / 2 > papers.position.z + papersP.depth / 2,
+    'shelf Z footprint must cover papers Z footprint'
+  );
+
+  const boothFrontZ = booth.position.z + boothP.depth / 2;
+  for (const [label, b] of [['left', bracketL], ['right', bracketR]]) {
+    const bP = b.geometry.parameters;
+    const bTopY = b.position.y + bP.height / 2;
+    const bBackZ = b.position.z - bP.depth / 2;
+    assert.ok(
+      Math.abs(bTopY - shelfBottomY) <= 0.01,
+      `${label} bracket top (${bTopY}) must touch shelf underside (${shelfBottomY})`
+    );
+    assert.ok(
+      Math.abs(bBackZ - boothFrontZ) <= 0.02,
+      `${label} bracket back (${bBackZ}) must touch booth front face (${boothFrontZ})`
+    );
+    assert.ok(
+      b.position.x >= shelf.position.x - shelfP.width / 2 &&
+      b.position.x <= shelf.position.x + shelfP.width / 2,
+      `${label} bracket must sit under the shelf width`
+    );
+  }
+  assert.ok(
+    bracketL.position.x < shelf.position.x && bracketR.position.x > shelf.position.x,
+    'brackets must be positioned on opposite sides under the shelf'
+  );
+});
