@@ -15,6 +15,7 @@ const ISSUE_PATH = path.join(GAZETTE_DIR, 'issue-001.html');
 const LATEST_PATH = path.join(GAZETTE_DIR, 'latest.json');
 const FEED_PATH = path.join(GAZETTE_DIR, 'feed.xml');
 const BUILD_FEED_PATH = path.join(GAZETTE_DIR, 'build-feed.mjs');
+const BUILD_DIGEST_PATH = path.join(GAZETTE_DIR, 'build-digest.mjs');
 const INDEX_PATH = path.join(__dirname, 'index.html');
 const SELF_PATH = fileURLToPath(import.meta.url);
 
@@ -105,7 +106,7 @@ test('index.html wires cottage click to sandboxed desk-note overlay under the to
 });
 
 test('no banned term and no hardcoded host or port in any new or changed file', async () => {
-  const files = [ISSUE_PATH, LATEST_PATH, INDEX_PATH, SELF_PATH, BUILD_FEED_PATH];
+  const files = [ISSUE_PATH, LATEST_PATH, INDEX_PATH, SELF_PATH, BUILD_FEED_PATH, BUILD_DIGEST_PATH];
   for (const filePath of files) {
     const content = await fs.readFile(filePath, 'utf8');
     const name = path.basename(filePath);
@@ -215,5 +216,172 @@ test('gazette/feed.xml has no script, loopback host, or port, and all URLs use t
   assert.ok(urls.length >= 2, 'feed.xml must contain town URLs');
   for (const url of urls) {
     assert.ok(url.startsWith(TOWN_BASE), `URL "${url}" must start with ${TOWN_BASE}`);
+  }
+});
+
+test('build-digest.mjs filters window and groups by town time (America/Los_Angeles)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-win-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const epoch = (iso) => Math.floor(Date.parse(iso) / 1000);
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'too early PST', created_at: epoch('2026-11-10T01:00:00Z') },
+          { id: 2, handle: 'bob', role: 'muse', kind: 'say', body: 'evening before UTC midnight', created_at: epoch('2026-11-11T01:30:00Z') },
+          { id: 3, handle: 'alice', role: 'muse', kind: 'say', body: 'noon on deadline day', created_at: epoch('2026-11-12T20:15:00Z') },
+          { id: 4, handle: 'bob', role: 'muse', kind: 'say', body: 'after window closes', created_at: epoch('2026-11-13T10:00:00Z') },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-10',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.match(stdout, /^# Prompt Book digest — 2026-11-10 to 2026-11-12 \(town time\)/);
+    assert.match(stdout, /2 line\(s\) from 2 speaker\(s\) in the window/);
+    assert.match(stdout, /Source: state snapshot\(s\) only/);
+    assert.match(stdout, /## Tuesday, November 10, 2026/);
+    assert.match(stdout, /- \*\*bob\*\* 17:30 — evening before UTC midnight/);
+    assert.match(stdout, /## Thursday, November 12, 2026/);
+    assert.match(stdout, /- \*\*alice\*\* 12:15 — noon on deadline day/);
+    assert.ok(!stdout.includes('too early PST'), 'before-window line must be excluded');
+    assert.ok(!stdout.includes('after window closes'), 'after-window line must be excluded');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs merges multiple --state snapshots and dedupes by id (first wins)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-merge-'));
+  try {
+    const snap1 = path.join(tmpDir, 'state1.json');
+    const snap2 = path.join(tmpDir, 'state2.json');
+    const ts = Math.floor(Date.parse('2026-11-12T18:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snap1,
+      JSON.stringify({
+        prompt_book: [
+          { id: 10, handle: 'alice', role: 'muse', kind: 'say', body: 'first snapshot version', created_at: ts },
+        ],
+      })
+    );
+    await fs.writeFile(
+      snap2,
+      JSON.stringify({
+        prompt_book: [
+          { id: 10, handle: 'alice', role: 'muse', kind: 'say', body: 'second snapshot duplicate', created_at: ts },
+          { id: 11, handle: 'bob', role: 'muse', kind: 'say', body: 'only in second snapshot', created_at: ts + 60 },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snap1,
+      '--state', snap2,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.match(stdout, /2 line\(s\) from 2 speaker\(s\) in the window/);
+    assert.ok(stdout.includes('first snapshot version'), 'first occurrence must win');
+    assert.ok(!stdout.includes('second snapshot duplicate'), 'duplicate id must be dropped');
+    assert.ok(stdout.includes('only in second snapshot'), 'unique line from second snapshot must be included');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs formats [NPC] tags, *emote* wrapping, and Speakers counts', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-npc-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const ts = Math.floor(Date.parse('2026-11-12T19:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'trimmer', role: 'npc', kind: 'say', body: 'lamps are lit', created_at: ts },
+          { id: 2, handle: 'alice', role: 'muse', kind: 'say', body: 'good evening', created_at: ts + 60 },
+          { id: 3, handle: 'trimmer', role: 'npc', kind: 'emote', body: 'tips his hat', created_at: ts + 120 },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.match(stdout, /- \*\*trimmer\*\* \[NPC\] \d{2}:\d{2} — lamps are lit/);
+    assert.match(stdout, /- \*\*alice\*\* \d{2}:\d{2} — good evening/);
+    assert.match(stdout, /- \*\*trimmer\*\* \[NPC\] \d{2}:\d{2} — \*tips his hat\*/);
+    assert.match(stdout, /## Speakers\s+- trimmer \[NPC\]: 2 line\(s\)\s+- alice: 1 line\(s\)/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs output is byte-identical across runs with explicit dates', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-det-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const out1 = path.join(tmpDir, 'digest1.md');
+    const out2 = path.join(tmpDir, 'digest2.md');
+    const ts = Math.floor(Date.parse('2026-11-12T19:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'wick', role: 'npc', kind: 'say', body: 'steady flame', created_at: ts },
+        ],
+      })
+    );
+
+    const r1 = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH, '--state', snapPath, '--since', '2026-11-12', '--until', '2026-11-12', '--out', out1,
+    ]);
+    const r2 = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH, '--state', snapPath, '--since', '2026-11-12', '--until', '2026-11-12', '--out', out2,
+    ]);
+
+    assert.match(r1.stdout, /digest:\s*1 line\(s\),\s*1 speaker\(s\)/);
+    assert.equal(r1.stdout, r2.stdout);
+
+    const [b1, b2] = await Promise.all([fs.readFile(out1), fs.readFile(out2)]);
+    assert.equal(Buffer.compare(b1, b2), 0, 'two runs with explicit dates must be byte-identical');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs exits 1 on missing state file and invalid --since format', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-err-'));
+  try {
+    const missingPath = path.join(tmpDir, 'does-not-exist.json');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', missingPath]),
+      (err) => err.code === 1 && err.stdout === '' && err.stderr.length > 0
+    );
+
+    const validSnap = path.join(tmpDir, 'state.json');
+    await fs.writeFile(validSnap, JSON.stringify({ prompt_book: [] }));
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', validSnap, '--since', 'not-a-date']),
+      (err) => err.code === 1 && err.stdout === '' && err.stderr.length > 0
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
