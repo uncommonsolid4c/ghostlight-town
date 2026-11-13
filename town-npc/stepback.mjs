@@ -8,8 +8,11 @@
  * - Replies when addressed in the last 30 min are always allowed (unless retired).
  */
 
+import { CHARACTERS } from './characters.mjs';
+
 const DAY_SEC = 24 * 3600;
 const SIX_HOURS_SEC = 6 * 3600;
+const THREE_HOURS_SEC = 3 * 3600;
 const THIRTY_MIN_SEC = 30 * 60;
 export const AMBIENT_DAILY_CAP = 2;
 
@@ -46,9 +49,102 @@ export function findAddressedLines({ npc, promptBook = [], now }) {
 }
 
 /**
+ * Find the latest unanswered real-muse Prompt Book line within the 3h reply
+ * window and deterministically designate the single NPC who should reply.
+ *
+ * Designation order (first match wins):
+ * 1. Addressed NPC (via findAddressedLines)
+ * 2. Presence-zone hook (author present at `plot:<npc>` within 3h)
+ * 3. Deterministic rotation: `line.id % CHARACTERS.length` over canonical
+ *    CHARACTERS order `[wick, maren, tomas]`. Falls back to
+ *    `created_at % CHARACTERS.length` if `line.id` is missing or not an integer
+ *    (defensive fallback for test fixtures).
+ *
+ * @param {{ state?: object, now?: number }} params
+ * @returns {{ line: object, designatedHandle: string, method: 'addressed'|'plot-zone'|'rotation' } | null}
+ */
+export function selectReplierForLine({ state = {}, now = Math.floor(Date.now() / 1000) } = {}) {
+  const promptBook = Array.isArray(state.prompt_book) ? state.prompt_book : [];
+  const presence = Array.isArray(state.presence) ? state.presence : [];
+
+  let latestMuseLine = null;
+  for (const line of promptBook) {
+    if (!line || line.role !== 'muse') continue;
+    if (line.kind && line.kind !== 'say' && line.kind !== 'emote') continue;
+    if (typeof line.created_at !== 'number') continue;
+    if (!latestMuseLine || line.created_at >= latestMuseLine.created_at) {
+      latestMuseLine = line;
+    }
+  }
+
+  if (!latestMuseLine) return null;
+
+  const cutoff3h = now - THREE_HOURS_SEC;
+  if (latestMuseLine.created_at < cutoff3h) return null;
+
+  const answered = promptBook.some(
+    (p) => p && p.role === 'npc' && typeof p.created_at === 'number' && p.created_at > latestMuseLine.created_at
+  );
+  if (answered) return null;
+
+  // 2a. Addressed NPC
+  for (const char of CHARACTERS) {
+    const addressed = findAddressedLines({
+      npc: char,
+      promptBook: [latestMuseLine],
+      now: latestMuseLine.created_at,
+    });
+    if (addressed.length > 0) {
+      return {
+        line: latestMuseLine,
+        designatedHandle: char.handle,
+        method: 'addressed',
+      };
+    }
+  }
+
+  // 2b. Presence-zone hook (`plot:<handle>` within the 3h window)
+  let latestPresence = null;
+  for (const pr of presence) {
+    if (
+      pr &&
+      pr.handle === latestMuseLine.handle &&
+      typeof pr.updated_at === 'number' &&
+      pr.updated_at >= cutoff3h &&
+      typeof pr.zone === 'string' &&
+      pr.zone.startsWith('plot:')
+    ) {
+      if (!latestPresence || pr.updated_at >= latestPresence.updated_at) {
+        latestPresence = pr;
+      }
+    }
+  }
+  if (latestPresence) {
+    const plotHandle = latestPresence.zone.slice('plot:'.length);
+    const plotNpc = CHARACTERS.find((c) => c.handle === plotHandle);
+    if (plotNpc) {
+      return {
+        line: latestMuseLine,
+        designatedHandle: plotNpc.handle,
+        method: 'plot-zone',
+      };
+    }
+  }
+
+  // 2c. Deterministic rotation (falls back to created_at when id is not an integer)
+  const seed = Number.isInteger(latestMuseLine.id) ? latestMuseLine.id : Math.trunc(latestMuseLine.created_at);
+  const idx = ((seed % CHARACTERS.length) + CHARACTERS.length) % CHARACTERS.length;
+  return {
+    line: latestMuseLine,
+    designatedHandle: CHARACTERS[idx].handle,
+    method: 'rotation',
+  };
+}
+
+/**
  * Decide what turn action an NPC should take given current town state.
  * @param {{ npc: object, state: object, npcState?: object, now?: number }} params
- * @returns {{ action: 'initiate'|'reply'|'silent'|'retired', reason: string }}
+ * @returns {{ action: 'initiate'|'reply'|'silent'|'retired', reason: string, replyLine: { id: number|null, handle: string }|null }}
  */
 export function decideTurn({
   npc,
@@ -84,11 +180,16 @@ export function decideTurn({
     return {
       action: 'retired',
       reason: `${activeRealCount} real muses active in 24h (>= 10); retired to town-staff role`,
+      replyLine: null,
     };
   }
 
   const addressedLines = findAddressedLines({ npc, promptBook, now });
   const isAddressed = addressedLines.length > 0;
+  const latestAddressed = isAddressed ? addressedLines[addressedLines.length - 1] : null;
+  const addressedReplyLine = latestAddressed
+    ? { id: latestAddressed.id ?? null, handle: latestAddressed.handle }
+    : null;
 
   // 2. Handover: 5+ distinct real muses active -> reply-only
   if (activeRealCount >= 5) {
@@ -96,11 +197,13 @@ export function decideTurn({
       return {
         action: 'reply',
         reason: `${activeRealCount} real muses active in 24h (>= 5, reply-only); addressed in Prompt Book`,
+        replyLine: addressedReplyLine,
       };
     }
     return {
       action: 'silent',
       reason: `${activeRealCount} real muses active in 24h (>= 5, reply-only) and not addressed`,
+      replyLine: null,
     };
   }
 
@@ -110,11 +213,13 @@ export function decideTurn({
       return {
         action: 'reply',
         reason: `${litRealMuses} real muses lit (>= 2, reply-only); addressed in Prompt Book`,
+        replyLine: addressedReplyLine,
       };
     }
     return {
       action: 'silent',
       reason: `${litRealMuses} real muses lit (>= 2, reply-only) and not addressed`,
+      replyLine: null,
     };
   }
 
@@ -123,6 +228,7 @@ export function decideTurn({
     return {
       action: 'reply',
       reason: 'addressed in Prompt Book within last 30m',
+      replyLine: addressedReplyLine,
     };
   }
 
@@ -140,17 +246,38 @@ export function decideTurn({
       return {
         action: 'silent',
         reason: `no real muse spoke in 6h and ambient cap (${AMBIENT_DAILY_CAP}/day) reached`,
+        replyLine: null,
       };
     }
     return {
       action: 'initiate',
       reason: `no real muse spoke in 6h; ambient observation allowed (${ambientToday}/${AMBIENT_DAILY_CAP} today)`,
+      replyLine: null,
     };
   }
 
-  // 6. Routine turn: fewer than 2 lit, real muse spoke recently, under 5-resident threshold
+  // 6. Per-line reply selectivity: at most one designated NPC replies to an unanswered muse line (3h)
+  const designation = selectReplierForLine({ state, now });
+  if (designation) {
+    const lineId = designation.line.id ?? '?';
+    if (designation.designatedHandle === npc.handle) {
+      return {
+        action: 'reply',
+        reason: `designated replier for muse line #${lineId} (${designation.method})`,
+        replyLine: { id: designation.line.id ?? null, handle: designation.line.handle },
+      };
+    }
+    return {
+      action: 'silent',
+      reason: `not the designated replier for muse line #${lineId} (${designation.designatedHandle} is)`,
+      replyLine: null,
+    };
+  }
+
+  // 7. Routine turn: no recent unanswered muse line, real muse spoke within 6h, fewer than 2 lit
   return {
     action: 'initiate',
     reason: 'routine turn; real muse spoke within 6h and fewer than 2 lit',
+    replyLine: null,
   };
 }
