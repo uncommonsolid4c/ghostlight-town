@@ -10,13 +10,19 @@
  *
  * Usage:
  *   node scripts/stage-deploy.mjs [--out <dir>] [--root <dir>]
+ *   node scripts/stage-deploy.mjs --verify <dir> [--root <dir>]
  *
  * Options:
- *   --out <dir>   Target staging directory (default: <root>/staging).
- *                 Refuses to stage into <root> itself or into town-3d/,
- *                 town-api/, or town-npc/.
- *   --root <dir>  Repository root containing town-3d/ (default: repo root
- *                 derived from import.meta.url, one level above scripts/).
+ *   --out <dir>     Target staging directory (default: <root>/staging).
+ *                   Refuses to stage into <root> itself or into town-3d/,
+ *                   town-api/, or town-npc/.
+ *   --verify <dir>  Verify a staged directory against <dir>/MANIFEST.json
+ *                   (read-only). Checks sha256 of all manifest files, rejects
+ *                   missing/mismatched/extra files, symlinks, and town_js_v
+ *                   drift. Refuses <root> itself or town-3d/, town-api/,
+ *                   town-npc/.
+ *   --root <dir>    Repository root containing town-3d/ (default: repo root
+ *                   derived from import.meta.url, one level above scripts/).
  */
 
 import crypto from 'node:crypto';
@@ -61,6 +67,7 @@ function findExcludedFile(relPath) {
 function parseArgs(argv) {
   let outArg = null;
   let rootArg = null;
+  let verifyArg = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -74,14 +81,26 @@ function parseArgs(argv) {
         throw new Error('--root requires a directory argument');
       }
       rootArg = argv[++i];
+    } else if (arg === '--verify') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
+        throw new Error('--verify requires a directory argument');
+      }
+      verifyArg = argv[++i];
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
+  if (verifyArg !== null && outArg !== null) {
+    throw new Error('--verify cannot be combined with --out');
+  }
+
   const rootDir = path.resolve(rootArg ?? DEFAULT_ROOT);
+  if (verifyArg !== null) {
+    return { mode: 'verify', rootDir, verifyDir: path.resolve(verifyArg) };
+  }
   const outDir = path.resolve(outArg ?? path.join(rootDir, 'staging'));
-  return { rootDir, outDir };
+  return { mode: 'stage', rootDir, outDir };
 }
 
 function isSameOrInside(candidate, base) {
@@ -89,14 +108,14 @@ function isSameOrInside(candidate, base) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function validateOutDir(outDir, rootDir) {
-  if (outDir === rootDir) {
-    throw new Error(`Refusing to stage into repo root: ${outDir}`);
+function validateTargetDir(targetDir, rootDir, actionLabel) {
+  if (targetDir === rootDir) {
+    throw new Error(`Refusing to ${actionLabel} repo root: ${targetDir}`);
   }
   for (const forbidden of ['town-3d', 'town-api', 'town-npc']) {
     const forbiddenDir = path.join(rootDir, forbidden);
-    if (isSameOrInside(outDir, forbiddenDir)) {
-      throw new Error(`Refusing to stage inside ${forbidden}/: ${outDir}`);
+    if (isSameOrInside(targetDir, forbiddenDir)) {
+      throw new Error(`Refusing to ${actionLabel} inside ${forbidden}/: ${targetDir}`);
     }
   }
 }
@@ -277,9 +296,8 @@ async function pathExists(targetPath) {
   }
 }
 
-async function stageDeploy(argv) {
-  const { rootDir, outDir } = parseArgs(argv);
-  validateOutDir(outDir, rootDir);
+async function stageDeploy(rootDir, outDir) {
+  validateTargetDir(outDir, rootDir, 'stage into');
 
   const { files: sourceFiles, excluded } = await collectSourceFiles(rootDir);
 
@@ -354,7 +372,173 @@ async function stageDeploy(argv) {
   }
 }
 
-stageDeploy(process.argv.slice(2)).catch((err) => {
+async function collectStagedFiles(dirPath, relPrefix, results) {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch (err) {
+    throw new Error(`Failed to read staged directory ${relPrefix || '.'}: ${err.message}`);
+  }
+  entries.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry);
+    const relPath = relPrefix ? `${relPrefix}/${entry}` : entry;
+    const stat = await fs.lstat(fullPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing symlink in staged dir: ${relPath}`);
+    }
+    if (stat.isDirectory()) {
+      await collectStagedFiles(fullPath, relPath, results);
+    } else if (stat.isFile()) {
+      if (relPath !== 'MANIFEST.json') {
+        results.add(relPath);
+      }
+    } else {
+      throw new Error(`Unsupported file type in staged dir: ${relPath}`);
+    }
+  }
+}
+
+async function readManifest(verifyDir) {
+  const manifestPath = path.join(verifyDir, 'MANIFEST.json');
+  let stat;
+  try {
+    stat = await fs.lstat(manifestPath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(`Missing MANIFEST.json in ${verifyDir}`);
+    }
+    throw err;
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing symlink MANIFEST.json in ${verifyDir}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Expected regular file for MANIFEST.json in ${verifyDir}`);
+  }
+
+  const raw = await fs.readFile(manifestPath, 'utf8');
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Unparseable MANIFEST.json: ${err.message}`);
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || !Array.isArray(manifest.files)) {
+    throw new Error('Malformed MANIFEST.json: expected object with files array');
+  }
+  for (const entry of manifest.files) {
+    if (!entry || typeof entry.path !== 'string' || !entry.path || typeof entry.sha256 !== 'string') {
+      throw new Error('Malformed MANIFEST.json: invalid file entry');
+    }
+    const normalized = path.posix.normalize(entry.path);
+    if (
+      path.posix.isAbsolute(entry.path) ||
+      normalized === '..' ||
+      normalized.startsWith('../') ||
+      entry.path === 'MANIFEST.json'
+    ) {
+      throw new Error(`Malformed MANIFEST.json: unsafe path ${entry.path}`);
+    }
+  }
+  return manifest;
+}
+
+async function verifyDeploy(rootDir, verifyDir) {
+  validateTargetDir(verifyDir, rootDir, 'verify');
+
+  let dirStat;
+  try {
+    dirStat = await fs.lstat(verifyDir);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(`Missing verify directory: ${verifyDir}`);
+    }
+    throw err;
+  }
+  if (dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing symlink verify directory: ${verifyDir}`);
+  }
+  if (!dirStat.isDirectory()) {
+    throw new Error(`Expected directory for --verify: ${verifyDir}`);
+  }
+
+  const manifest = await readManifest(verifyDir);
+  const presentFiles = new Set();
+  await collectStagedFiles(verifyDir, '', presentFiles);
+
+  const manifestPaths = new Set();
+  const mismatch = [];
+  const missing = [];
+  const extra = [];
+  let checked = 0;
+  let okCount = 0;
+  let stagedTownJsV = null;
+
+  for (const entry of manifest.files) {
+    manifestPaths.add(entry.path);
+    checked += 1;
+    if (!presentFiles.has(entry.path)) {
+      missing.push(entry.path);
+      continue;
+    }
+    const filePath = path.join(verifyDir, entry.path);
+    const buf = await fs.readFile(filePath);
+    const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    if (sha256 === entry.sha256) {
+      okCount += 1;
+    } else {
+      mismatch.push(entry.path);
+    }
+    if (entry.path === 'index.html') {
+      stagedTownJsV = extractTownJsVersion(buf.toString('utf8'));
+    }
+  }
+
+  for (const relPath of presentFiles) {
+    if (!manifestPaths.has(relPath)) {
+      extra.push(relPath);
+    }
+  }
+
+  mismatch.sort();
+  missing.sort();
+  extra.sort();
+
+  const expectedTownJsV = manifest.town_js_v ?? null;
+  const townJsVMatches = stagedTownJsV === expectedTownJsV;
+  const allOk = mismatch.length === 0 && missing.length === 0 && extra.length === 0 && townJsVMatches;
+
+  const result = {
+    status: allOk ? 'ok' : 'fail',
+    checked,
+    ok: okCount,
+    mismatch,
+    missing,
+    extra,
+    town_js_v: expectedTownJsV,
+  };
+  if (!townJsVMatches) {
+    result.staged_town_js_v = stagedTownJsV;
+  }
+
+  process.stdout.write(JSON.stringify(result) + '\n');
+  if (!allOk) {
+    process.exitCode = 1;
+  }
+}
+
+async function main(argv) {
+  const parsed = parseArgs(argv);
+  if (parsed.mode === 'verify') {
+    await verifyDeploy(parsed.rootDir, parsed.verifyDir);
+  } else {
+    await stageDeploy(parsed.rootDir, parsed.outDir);
+  }
+}
+
+main(process.argv.slice(2)).catch((err) => {
   process.stderr.write(
     JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n'
   );
