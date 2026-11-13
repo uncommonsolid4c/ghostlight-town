@@ -48,10 +48,12 @@ test('seed desk notes contain no <script>, inline handlers, external URLs, or ba
   }
 });
 
-test('openPlotOverlay URL pattern in town-3d/index.html resolves to an existing static file for all four seed handles', async () => {
+test('openPlotOverlay URL pattern in town-3d resolves to an existing static file for all four seed handles', async () => {
   const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
-  const match = indexHtml.match(/plotIframe\.src\s*=\s*`(plots\/\$\{encodeURIComponent\(handle\)\}\/index\.html)`/);
-  assert.ok(match, 'index.html openPlotOverlay must set plotIframe.src to plots/${encodeURIComponent(handle)}/index.html');
+  const townJs = await fs.readFile(path.join(__dirname, 'town.js'), 'utf8');
+  assert.match(indexHtml, /resolvePlotOverlayContent\(/, 'index.html openPlotOverlay must call resolvePlotOverlayContent');
+  assert.match(indexHtml, /plotIframe\.src\s*=\s*resolved\.url/, 'index.html openPlotOverlay must set plotIframe.src to resolved.url on static fallback');
+  assert.match(townJs, /plots\/\$\{encodeURIComponent\(safeHandle\)\}\/index\.html/, 'town.js resolvePlotOverlayContent must build static plots/<handle>/index.html URL');
 
   for (const handle of SEED_HANDLES) {
     const relPath = `plots/${encodeURIComponent(handle)}/index.html`;
