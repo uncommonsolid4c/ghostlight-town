@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { createTownServer } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
@@ -11,12 +12,14 @@ import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-cli
 async function startTestServer(opts = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-test-'));
   const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
   const operatorKeys = generateKeypair();
   let clockOffset = 0;
   const nowFn = () => Math.floor(Date.now() / 1000) + clockOffset;
 
   const { server, db } = createTownServer({
     dbPath,
+    plotsDir,
     operatorPubkey: opts.operatorPubkey !== undefined ? opts.operatorPubkey : operatorKeys.pubkey,
     nowFn,
   });
@@ -27,6 +30,7 @@ async function startTestServer(opts = {}) {
 
   return {
     baseUrl,
+    plotsDir,
     operatorKeys,
     db,
     nowSec: nowFn,
@@ -662,6 +666,35 @@ test('state.plots exposes plot_updated_at for residents with plots and updates o
     const s2 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
     assert.equal(s2.plots.alice, t2);
     assert.equal(Object.prototype.hasOwnProperty.call(s2.plots, 'bob'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('startTestServer writes plots to temp plotsDir and does not create town-api/plots', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...generateKeypair() });
+    await alice.join({ origin: 'musebook' });
+    await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
+
+    const manifest = {
+      cottage: 'gable',
+      wall: '#f5efe0',
+      roof: '#5a4332',
+      trim: '#c9a66b',
+      signpost_text: 'Alice',
+      props: [],
+    };
+    const putRes = await alice.plot(manifest, '<h1>Alice</h1>');
+    assert.equal(putRes.status, 200);
+
+    const alicePlotDir = path.join(ctx.plotsDir, 'alice');
+    assert.equal(fs.existsSync(path.join(alicePlotDir, 'manifest.json')), true);
+    assert.equal(fs.existsSync(path.join(alicePlotDir, 'index.html')), true);
+
+    const repoPlotsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'plots');
+    assert.equal(fs.existsSync(repoPlotsDir), false);
   } finally {
     await ctx.close();
   }
