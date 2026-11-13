@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { validateManifest, validateHtml } from './plot-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,6 +43,7 @@ const RATE_LIMITS = {
   say: { max: 6, windowSec: 10 * 60 },
   checkin: { max: 1, windowSec: 60 },
   joinIp: { max: 5, windowSec: 60 * 60 },
+  plot: { max: 10, windowSec: 60 * 60 },
 };
 
 /**
@@ -151,15 +153,37 @@ class RateLimiter {
   }
 }
 
+function atomicWriteFile(targetPath, content) {
+  const dir = path.dirname(targetPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(targetPath)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`
+  );
+  try {
+    fs.writeFileSync(tmpPath, content, 'utf8');
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // ignore cleanup error
+    }
+    throw err;
+  }
+}
+
 /**
  * Create the Ghostlight Town HTTP server and SQLite handle.
  * @param {object} [opts]
  * @param {string} [opts.dbPath]
+ * @param {string} [opts.plotsDir]
  * @param {string} [opts.operatorPubkey]
  * @param {() => number} [opts.nowFn] - returns unix seconds (for deterministic tests)
  */
 export function createTownServer(opts = {}) {
   const dbPath = opts.dbPath || process.env.TOWN_DB_PATH || path.join(__dirname, 'town.db');
+  const plotsDir = opts.plotsDir || process.env.TOWN_PLOTS_DIR || path.join(__dirname, 'plots');
   const getOperatorPubkey = () =>
     opts.operatorPubkey !== undefined ? opts.operatorPubkey : process.env.TOWN_OPERATOR_PUBKEY || '';
   const nowSec = opts.nowFn || (() => Math.floor(Date.now() / 1000));
@@ -625,15 +649,98 @@ export function createTownServer(opts = {}) {
     sendJson(res, 200, { deleted: true, id, state_seq: stateSeq });
   }
 
+  function handlePutPlot(req, res, body, auth) {
+    if (!Object.hasOwn(body, 'manifest') || body.manifest === undefined) {
+      sendJson(res, 400, { error: 'missing_manifest' });
+      return;
+    }
+    if (!Object.hasOwn(body, 'html') || typeof body.html !== 'string') {
+      sendJson(res, 400, { error: 'missing_html' });
+      return;
+    }
+
+    const manifestRes = validateManifest(body.manifest);
+    if (!manifestRes.ok) {
+      const { ok: _ok, ...errPayload } = manifestRes;
+      sendJson(res, 400, errPayload);
+      return;
+    }
+
+    const htmlRes = validateHtml(body.html);
+    if (!htmlRes.ok) {
+      const { ok: _ok, ...errPayload } = htmlRes;
+      sendJson(res, 400, errPayload);
+      return;
+    }
+
+    const now = auth.now;
+    const handle = auth.handle;
+    if (!HANDLE_RE.test(handle)) {
+      sendJson(res, 400, { error: 'invalid_handle' });
+      return;
+    }
+
+    const rl = rateLimiter.consume(`plot:${handle}`, RATE_LIMITS.plot.max, RATE_LIMITS.plot.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    const handleDir = path.join(plotsDir, handle);
+    atomicWriteFile(path.join(handleDir, 'manifest.json'), JSON.stringify(manifestRes.manifest, null, 2));
+    atomicWriteFile(path.join(handleDir, 'index.html'), body.html);
+
+    db.prepare('UPDATE residents SET plot_updated_at = ? WHERE handle = ?').run(now, handle);
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 200, {
+      handle,
+      plot_updated_at: now,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleGetPlot(req, res, url) {
+    const handle = url.searchParams.get('handle') || '';
+    if (!HANDLE_RE.test(handle)) {
+      sendJson(res, 400, { error: 'invalid_handle' });
+      return;
+    }
+
+    const resident = db.prepare('SELECT handle, plot_updated_at FROM residents WHERE handle = ?').get(handle);
+    if (!resident || resident.plot_updated_at === null) {
+      sendJson(res, 404, { error: 'plot_not_found' });
+      return;
+    }
+
+    const handleDir = path.join(plotsDir, handle);
+    let manifest;
+    let html;
+    try {
+      manifest = JSON.parse(fs.readFileSync(path.join(handleDir, 'manifest.json'), 'utf8'));
+      html = fs.readFileSync(path.join(handleDir, 'index.html'), 'utf8');
+    } catch {
+      sendJson(res, 404, { error: 'plot_not_found' });
+      return;
+    }
+
+    sendJson(res, 200, {
+      handle: resident.handle,
+      manifest,
+      html,
+      plot_updated_at: resident.plot_updated_at,
+    });
+  }
+
   const WRITE_ROUTES = new Map([
-    ['/api/town/join', { mode: 'join', handler: handleJoin }],
-    ['/api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }],
-    ['/api/town/ghostlight/say', { mode: 'resident', handler: handleSay }],
-    ['/api/town/ghostlight/leave', { mode: 'resident', handler: handleLeave }],
-    ['/api/town/presence', { mode: 'resident', handler: handlePresence }],
-    ['/api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }],
-    ['/api/town/admin/invite', { mode: 'admin', handler: handleAdminInvite }],
-    ['/api/town/admin/delete-line', { mode: 'admin', handler: handleAdminDeleteLine }],
+    ['POST /api/town/join', { mode: 'join', handler: handleJoin }],
+    ['PUT /api/town/plot', { mode: 'resident', handler: handlePutPlot }],
+    ['POST /api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }],
+    ['POST /api/town/ghostlight/say', { mode: 'resident', handler: handleSay }],
+    ['POST /api/town/ghostlight/leave', { mode: 'resident', handler: handleLeave }],
+    ['POST /api/town/presence', { mode: 'resident', handler: handlePresence }],
+    ['POST /api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }],
+    ['POST /api/town/admin/invite', { mode: 'admin', handler: handleAdminInvite }],
+    ['POST /api/town/admin/delete-line', { mode: 'admin', handler: handleAdminDeleteLine }],
   ]);
 
   const server = http.createServer(async (req, res) => {
@@ -646,8 +753,13 @@ export function createTownServer(opts = {}) {
         return;
       }
 
-      if (req.method === 'POST') {
-        const route = WRITE_ROUTES.get(pathname);
+      if (req.method === 'GET' && pathname === '/api/town/plot') {
+        handleGetPlot(req, res, url);
+        return;
+      }
+
+      if (req.method === 'POST' || req.method === 'PUT') {
+        const route = WRITE_ROUTES.get(`${req.method} ${pathname}`);
         if (!route) {
           sendJson(res, 404, { error: 'not_found' });
           return;
