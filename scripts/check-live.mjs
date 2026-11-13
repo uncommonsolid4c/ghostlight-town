@@ -15,15 +15,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listStagedFiles } from './stage-deploy.mjs';
 
 const DEFAULT_BASE = 'https://milo.4167360.xyz';
 const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'town-3d');
 const REQUEST_TIMEOUT_MS = 5000;
-
-// Keep in sync with EXCLUDED_FILES in scripts/stage-deploy.mjs (not importable without running CLI).
-const EXCLUDED_FILES = new Set([
-  'models/pine.glb',
-]);
 
 const TOWN_JS_MARKERS = [
   'PROP_PLACEMENTS',
@@ -72,22 +68,8 @@ function parseArgs(argv) {
   };
 }
 
-async function walkFiles(dir, relPrefix = '', out = []) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      await walkFiles(fullPath, relPath, out);
-    } else if (entry.isFile()) {
-      if (!EXCLUDED_FILES.has(relPath)) {
-        out.push(relPath);
-      }
-    }
-  }
-  return out;
+export async function getExpectedFiles(town3dDir) {
+  return listStagedFiles(town3dDir);
 }
 
 function extractTownJsVersion(html) {
@@ -134,7 +116,7 @@ async function main(argv) {
     process.exit(1);
   }
 
-  const expectedFiles = await walkFiles(opts.root);
+  const expectedFiles = await getExpectedFiles(opts.root);
 
   let repoTownJsV = null;
   if (expectedFiles.includes('index.html')) {
@@ -253,7 +235,12 @@ async function main(argv) {
   process.exit(status === 'ok' ? 0 : 1);
 }
 
-main(process.argv.slice(2)).catch((err) => {
-  process.stderr.write(`${JSON.stringify({ error: err.message })}\n`);
-  process.exit(1);
-});
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main(process.argv.slice(2)).catch((err) => {
+    process.stderr.write(`${JSON.stringify({ error: err.message })}\n`);
+    process.exit(1);
+  });
+}
