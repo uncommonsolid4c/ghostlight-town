@@ -311,6 +311,9 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
   assert.equal(groundFloor.material.color, MILO_REBUILD_MANIFEST.wall);
   assert.equal(upperFloor.material.color, '#f5efe0');
   assert.ok(terrace, 'Milo cottage must have a rooftop_terrace mesh');
+  const windows = collectNodes(parts.milosCottage, (n) => n.name === 'cottage_window');
+  assert.ok(windows.length >= 6, `Milo cottage must have lit windows, got ${windows.length}`);
+  assert.ok(windows.every((w) => w.material.emissive), 'Cottage windows must be emissive (lit)');
 
   // Exactly 7 empty plot pads, each with OPEN PLOT signpost, within 30m, facing inward
   assert.equal(parts.plotPads.length, 7);
@@ -392,11 +395,14 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
   assert.ok(collectNodes(npc, (n) => n.isSprite).length === 1);
 });
 
-test('Draw-call budget: total mesh count in built town is < 80', () => {
+// Budget raised 80 -> 120 (owner decision, 2026-11-12): lit windows and the
+// widow's-walk posts are worth their meshes, and Argon's review notes 120
+// standard meshes run at 120fps on a 2015 integrated GPU. Still guards bloat.
+test('Draw-call budget: total mesh count in built town is < 120', () => {
   const THREE = createThreeStub();
   const { scene } = buildTown(THREE);
   const meshes = collectNodes(scene, (n) => n.isMesh);
-  assert.ok(meshes.length < 80, `Expected < 80 meshes, got ${meshes.length}`);
+  assert.ok(meshes.length < 120, `Expected < 120 meshes, got ${meshes.length}`);
 });
 
 test('No campfire terminology, no .glb references, and no fetch() in town.js', async () => {
