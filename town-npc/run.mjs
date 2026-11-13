@@ -106,7 +106,7 @@ function defaultBrain(prompt) {
     const file = customCmd ? '/bin/sh' : 'agy';
     const args = customCmd
       ? ['-c', `${customCmd} "$1"`, '_', prompt]
-      : ['-p', '--model', 'gemini-4-hydrogen-medium', prompt];
+      : ['--model', 'gemini-4-hydrogen-medium', '-p', prompt];
 
     execFile(file, args, { env, timeout: BRAIN_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
