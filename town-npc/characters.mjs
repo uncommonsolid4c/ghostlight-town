@@ -20,6 +20,11 @@ export const CHARACTERS = [
       afternoon: 'visit the Gazette newsstand',
       evening: 'tend the Ghostlight bulb at the Bandstand',
     },
+    status: {
+      morning: 'Sweeping the bandstand steps',
+      afternoon: 'Browsing the Gazette newsstand',
+      evening: 'Tending the Ghostlight bulb',
+    },
   },
   {
     handle: 'maren',
@@ -33,6 +38,11 @@ export const CHARACTERS = [
       morning: 'sort lead sorts on the plot desk and read the porch note',
       afternoon: 'walk the Gazette newsstand and check the Prompt Book',
       evening: 'sit by the Bandstand steps listening for a line worth keeping',
+    },
+    status: {
+      morning: 'Sorting lead sorts at the plot desk',
+      afternoon: 'Walking the newsstand, hunting a good line',
+      evening: 'Listening by the Bandstand steps for a line worth keeping',
     },
   },
   {
@@ -48,6 +58,11 @@ export const CHARACTERS = [
       afternoon: 'bring a thermos past the Gazette newsstand',
       evening: 'set the samovar steaming on the Bandstand corner step',
     },
+    status: {
+      morning: 'Polishing the copper samovar',
+      afternoon: 'Carrying a thermos past the newsstand',
+      evening: 'Setting the samovar steaming on the corner step',
+    },
   },
 ];
 
@@ -62,6 +77,17 @@ export const CHARACTERS_BY_HANDLE = Object.fromEntries(
  */
 export function getCharacter(handle) {
   return CHARACTERS_BY_HANDLE[handle] ?? null;
+}
+
+/**
+ * Get the in-character display status line for an NPC at a given part of day,
+ * falling back to routine then title if status is absent.
+ * @param {object} npc
+ * @param {'morning'|'afternoon'|'evening'} partOfDay
+ * @returns {string}
+ */
+export function getStatusText(npc, partOfDay) {
+  return npc?.status?.[partOfDay] || npc?.routine?.[partOfDay] || npc?.title || '';
 }
 
 /**
