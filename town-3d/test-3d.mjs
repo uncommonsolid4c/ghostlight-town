@@ -353,8 +353,12 @@ test('buildTown builds Bandstand, Ghostlight, 10 footlights, Gate, Newsstand, Mi
   assert.equal(ghost.position.x, parts.avatarSpots[0].x);
   assert.equal(ghost.position.z, parts.avatarSpots[0].z);
   assert.ok(Math.abs(ghost.rotation.y) < 0.01, 'Ghost must face the gate (rotY ~ 0)');
-  const ghostBody = collectNodes(ghost, (n) => n.name === 'ghost_dome' || n.name === 'ghost_tail');
-  assert.equal(ghostBody.length, 2, 'Ghost must have a dome and a tail');
+  const ghostBody = collectNodes(ghost, (n) =>
+    n.name === 'ghost_dome' || n.name === 'ghost_body' || n.name === 'ghost_wisp');
+  assert.equal(ghostBody.length, 3, 'Ghost must have a dome, a body, and a wisp');
+  const wisp = collectNodes(ghost, (n) => n.name === 'ghost_wisp')[0];
+  assert.ok(wisp.geometry.parameters.height <= 0.4,
+    'The wisp must be short — a long taper reads as an ice cream cone');
   assert.ok(ghostBody.every((m) => m.material.transparent && m.material.opacity < 1),
     'Ghost body must be translucent');
   assert.ok(ghostBody.every((m) => m.material.color === '#a8d8ea'),
