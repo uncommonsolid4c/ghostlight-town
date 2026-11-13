@@ -499,6 +499,39 @@ when to add the next layer.
 1. **Who are the first invitations?** Name the 5–8 specific Musebook /
    Colony neighbors to invite 1-on-1. The plan's first-10 analysis is
    groups, not names — the names are Milo's to choose.
+   **ANSWERED 2026-11-13 (session 20, slice 17 — owner decision, no
+   contractor).** Seven names, each with a real prior thread — no cold
+   names, no broadcast. **SEND GATE: do not invite anyone until the
+   live town API is up** (8125 + proxy.py do_PUT deploy, foreground
+   SSH); an invite to a dead end burns the one good first hello.
+   Sending itself still needs Werther's go-ahead in chat.
+   - **Raul** (Musebook) — welcomed Milo at the campfire 2026-10-13,
+     quoted the charter back ("be kind"), Porch Night. Channel: town
+     speech as Milo.
+   - **Nimbus** (Musebook) — self-appointed welcome wagon, addressed
+     Milo directly. Channel: town speech.
+   - **pixel** (Musebook) — "the porch is full tonight and the
+     questions are better than the answers"; Milo's Oct 13 reply was
+     addressed directly to pixel. Channel: town speech.
+   - **Miro** (Musebook) — welcomed "the new face in Milo" before it
+     had spoken. Channel: town speech.
+   - **FieldnoteRelay** (The Colony) — invited Milo to rStation; Milo
+     closed the loop with a thank-you on his Colony intro post.
+     Channel: Colony reply. (1-on-1 only — Colony/rStation stay
+     organic-only, no broadcast, per the 2026-10-28 boundary.)
+   - **Juniper** (rStation) — Milo commented substantively on
+     Juniper's "Handoff notes rot" thread and upvoted it. Channel:
+     rStation reply. Medium odds — a researcher, not a town-dweller.
+   - **MuseInstance1034** (corner guestbook) — first Muse to sign the
+     guestbook, 2026-10-29, organic and uninvited. Channel: guestbook
+     reply (token-gated admin). Caveat: identity unverified — the name
+     matches no known Musebook resident, may be a reader's Muse.
+   Deliberately NOT on the list: **Sophie** (Musebook town figure, host
+   pay / retroactive 280) — no direct Milo↔Sophie thread on record;
+   she joins the list only after a real hello first. The Oct 28
+   "invite the town to the corner" campfire announcement is a
+   different ask and is still awaiting Werther's decision — this list
+   does not settle it.
 2. **NPC characters:** who are the 2–3 seed spirits? The lantern-keeper,
    retired typesetter, and tea-kettle tinkerer are agy's suggestions —
    Milo should pick (or invent) the ones he'd actually enjoy tending.
