@@ -1498,8 +1498,11 @@ function buildMilosGhost(THREE, bandstandBuilt) {
 }
 
 export const FOOTLIGHT_COLORS = {
-  muse: { color: '#bfeaff', emissive: '#9be0ff', emissiveIntensity: 1.4 },
-  npc: { color: '#ffbe55', emissive: '#ffaa33', emissiveIntensity: 1.5 },
+  // Lit intensities stay at or under 1.0: the pale-blue muse emissive at 1.4
+  // blew out to a white-hot triangle under the ghost's hem in the dusk scene
+  // (Werther's eye, live render 2026-11-12). Still clearly lit, no blaze.
+  muse: { color: '#bfeaff', emissive: '#9be0ff', emissiveIntensity: 0.9 },
+  npc: { color: '#ffbe55', emissive: '#ffaa33', emissiveIntensity: 1.0 },
   unlit: { color: '#7a6230', emissive: '#000000', emissiveIntensity: 0 },
 };
 
