@@ -659,11 +659,13 @@ export function createConceptMiloGhost(THREE, options = {}) {
     permanent: true,
   };
 
-  // Translucent ice-blue sheet material (#a8d8ea, opacity 0.7 — governed by CONCEPT.md)
+  // Translucent ice-blue sheet material (#a8d8ea, opacity 0.85 — governed by CONCEPT.md).
+  // Owner tweak 2026-11-12: Argon's proof used 0.7, but the live render read too
+  // washed-out against the night scene and the bulb (Werther's eye), so 0.85.
   const ghostMat = new THREE.MeshStandardMaterial({
     color: GHOST_PALETTE.iceBlue,
     transparent: true,
-    opacity: 0.7,
+    opacity: 0.85,
     roughness: 0.55,
     flatShading: true,
   });
