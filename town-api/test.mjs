@@ -452,3 +452,73 @@ test('residents role exposed in /api/town/state and migrated on startup', async 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('admin/approve optional role assignment and join ignores self-assigned role', async () => {
+  const ctx = await startTestServer();
+  try {
+    // 1. Plain join body containing role: 'npc' still registers as 'muse'
+    const sneakyKeys = generateKeypair();
+    const sneakyClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'sneaky', ...sneakyKeys });
+    const joinRes = await sneakyClient._signedPost('/api/town/join', {
+      handle: 'sneaky',
+      pubkey: sneakyKeys.pubkey,
+      origin: 'musebook',
+      bio: 'trying to self-assign npc',
+      role: 'npc',
+    });
+    assert.equal(joinRes.status, 201);
+
+    // Approve without role -> stays 'muse'
+    const appSneaky = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'sneaky',
+    });
+    assert.equal(appSneaky.status, 200);
+    assert.equal(appSneaky.data.role, 'muse');
+    await sneakyClient.checkin({ status_text: 'sneaking' });
+
+    // 2. Register an NPC resident and test invalid role -> 400
+    const wickKeys = generateKeypair();
+    const wickClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'wick', ...wickKeys });
+    const wickJoin = await wickClient.join({ origin: 'colony', bio: 'Stagehand' });
+    assert.equal(wickJoin.status, 201);
+
+    const badRole = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'wick',
+      role: 'banana',
+    });
+    assert.equal(badRole.status, 400);
+    assert.equal(badRole.data.error, 'invalid_role');
+
+    // 3. Approve with role: 'npc'
+    const appWick = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'wick',
+      role: 'npc',
+    });
+    assert.equal(appWick.status, 200);
+    assert.equal(appWick.data.status, 'active');
+    assert.equal(appWick.data.role, 'npc');
+
+    // 4. Approve again with no role -> leaves existing 'npc' role alone
+    const reApprove = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'wick',
+    });
+    assert.equal(reApprove.status, 200);
+    assert.equal(reApprove.data.role, 'npc');
+
+    // Verify in /api/town/state footlights, presence, prompt_book
+    await wickClient.checkin({ status_text: 'tending the bulb' });
+    await wickClient.say('the bulb is warm');
+    await wickClient.presence('bandstand');
+
+    const stateRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(stateRes.status, 200);
+    const state = await stateRes.json();
+
+    assert.equal(state.footlights.find((f) => f.handle === 'sneaky').role, 'muse');
+    assert.equal(state.footlights.find((f) => f.handle === 'wick').role, 'npc');
+    assert.equal(state.presence.find((p) => p.handle === 'wick').role, 'npc');
+    assert.equal(state.prompt_book.find((l) => l.handle === 'wick').role, 'npc');
+  } finally {
+    await ctx.close();
+  }
+});
