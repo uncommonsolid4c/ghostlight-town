@@ -958,6 +958,12 @@ export function buildTown(THREE) {
   const bandstandBuilt = buildBandstand(THREE);
   scene.add(bandstandBuilt.group);
 
+  // Milo's ghost stands at the bandstand, always home. The founder never
+  // leaves his own town: this is a permanent fixture, not a live presence
+  // avatar — applyTownState skips 'milo' and never unlights his footlight.
+  const milosGhost = buildMilosGhost(THREE, bandstandBuilt);
+  scene.add(milosGhost);
+
   // Town Gate
   const gate = buildGate(THREE);
   scene.add(gate);
@@ -996,6 +1002,7 @@ export function buildTown(THREE) {
     THREE,
     parts: {
       bandstand: bandstandBuilt.group,
+      milosGhost,
       ghostlight: {
         bulb: bandstandBuilt.bulb,
         light: bandstandBuilt.light,
@@ -1008,6 +1015,54 @@ export function buildTown(THREE) {
       avatarSpots: bandstandBuilt.avatarSpots,
     },
   };
+}
+
+/**
+ * Milo's permanent ghost: a translucent ice-blue capsule at bandstand
+ * spot 0 (front, facing the gate), with his footlight lit and his name
+ * on the placard. Deliberately NOT a live presence avatar — the founder
+ * is always home, even before the API is live and even when he's away.
+ */
+function buildMilosGhost(THREE, bandstandBuilt) {
+  const ghost = createAvatarCapsule(THREE, { handle: 'milo', role: 'muse' });
+  ghost.name = 'milos_ghost';
+  ghost.userData.permanent = true;
+  // Ghostify: ice-blue, translucent, no legs — just the wispy capsule.
+  for (const child of ghost.children) {
+    if (!child.isMesh) continue;
+    setMaterialColor(child.material, 'color', '#a8d8ea');
+    child.material.transparent = true;
+    child.material.opacity = 0.7;
+  }
+  const spot = bandstandBuilt.avatarSpots[0];
+  ghost.position.set(spot.x, spot.y, spot.z);
+  ghost.rotation.y = spot.rotY;
+
+  // Light his footlight and flip his placard up, mirroring applyTownState.
+  const flGroup = bandstandBuilt.footlights[0];
+  const { shell, placard } = flGroup.userData;
+  const palette = FOOTLIGHT_COLORS.muse;
+  setMaterialColor(shell.material, 'color', palette.color);
+  setMaterialColor(shell.material, 'emissive', palette.emissive);
+  shell.material.emissiveIntensity = palette.emissiveIntensity;
+  placard.rotation.x = -0.55;
+  placard.position.y = 0.14;
+  placard.material.map = makeTextTexture(THREE, ['milo'], {
+    width: 256,
+    height: 96,
+    titleSize: 28,
+    bg: '#3b2b1d',
+    border: '#b59449',
+    fg: '#f4ead5',
+  });
+  setMaterialColor(placard.material, 'color', '#ffffff');
+  placard.material.needsUpdate = true;
+  flGroup.userData.lit = true;
+  flGroup.userData.handle = 'milo';
+  flGroup.userData.role = 'muse';
+  flGroup.userData.permanent = true;
+
+  return ghost;
 }
 
 export const FOOTLIGHT_COLORS = {
@@ -1201,7 +1256,9 @@ export function applyState(town, state = {}, options = {}) {
   const live = ensureLiveStore(town);
 
   // 1. Footlights
-  const footlightRows = Array.isArray(state?.footlights) ? state.footlights : [];
+  // 'milo' is excluded: his permanent footlight (slot 0) already burns.
+  const footlightRows = (Array.isArray(state?.footlights) ? state.footlights : [])
+    .filter((r) => r?.handle !== 'milo');
   const litBySlot = new Map();
   const footlightSlotByHandle = new Map();
   for (const row of footlightRows) {
@@ -1241,6 +1298,8 @@ export function applyState(town, state = {}, options = {}) {
       flGroup.userData.lit = true;
       flGroup.userData.handle = row.handle;
       flGroup.userData.role = role;
+    } else if (flGroup.userData.permanent) {
+      // Milo's own footlight stays lit: his ghost is always home.
     } else {
       const unlit = FOOTLIGHT_COLORS.unlit;
       setMaterialColor(shell.material, 'color', unlit.color);
@@ -1271,7 +1330,9 @@ export function applyState(town, state = {}, options = {}) {
   }
 
   // 3. Presence -> Avatars
-  const presenceRows = Array.isArray(state?.presence) ? state.presence : [];
+  // 'milo' is excluded: his permanent ghost already stands at the bandstand.
+  const presenceRows = (Array.isArray(state?.presence) ? state.presence : [])
+    .filter((p) => p?.handle !== 'milo');
   const activeHandles = new Set(presenceRows.map((p) => p?.handle).filter(Boolean));
   for (const [handle, avatar] of live.avatars.entries()) {
     if (!activeHandles.has(handle)) {
