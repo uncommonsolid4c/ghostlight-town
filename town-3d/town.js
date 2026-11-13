@@ -39,6 +39,61 @@ export const TOWN_LAYOUT = {
   }),
 };
 
+/**
+ * Prop placements for GLB set-dressing props (and their procedural fallbacks).
+ * Edit coordinates, rotations, or targetSize here to retune placement.
+ */
+export const PROP_PLACEMENTS = [
+  {
+    id: 'gate_lantern_left',
+    kind: 'post-lantern',
+    model: 'models/post-lantern.glb',
+    parent: 'scene',
+    x: -3.2,
+    y: 0,
+    z: 26.2,
+    rotY: 0,
+    targetSize: 2.2,
+    scaleAxis: 'y',
+  },
+  {
+    id: 'gate_lantern_right',
+    kind: 'post-lantern',
+    model: 'models/post-lantern.glb',
+    parent: 'scene',
+    x: 3.2,
+    y: 0,
+    z: 26.2,
+    rotY: 0,
+    targetSize: 2.2,
+    scaleAxis: 'y',
+  },
+  {
+    id: 'bandstand_bench',
+    kind: 'bench',
+    model: 'models/bench.glb',
+    parent: 'scene',
+    x: -6.2,
+    y: 0,
+    z: 5.5,
+    rotY: +Math.atan2(6.2, -5.5).toFixed(4),
+    targetSize: 1.8,
+    scaleAxis: 'length',
+  },
+  {
+    id: 'newsstand_lantern',
+    kind: 'lantern',
+    model: 'models/lantern.glb',
+    parent: 'newsstand',
+    x: 0.65,
+    y: 1.03,
+    z: 0.78,
+    rotY: 0,
+    targetSize: 0.35,
+    scaleAxis: 'y',
+  },
+];
+
 export const MILO_REBUILD_MANIFEST = {
   cottage: 'gable',
   wall: '#a8d8ea',
@@ -921,11 +976,165 @@ function addPerimeterScenery(THREE, scene) {
   scene.add(rock2);
 }
 
+function buildProceduralPostLantern(THREE) {
+  const group = new THREE.Group();
+  const postMat = new THREE.MeshStandardMaterial({ color: '#3b332c', roughness: 0.85 });
+  const lampMat = new THREE.MeshStandardMaterial({
+    color: '#fff3d6',
+    emissive: '#ffe0a3',
+    emissiveIntensity: 1.2,
+  });
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 1.9, 6), postMat);
+  post.position.set(0, 0.95, 0);
+  group.add(post);
+
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.32, 0.28), lampMat);
+  head.position.set(0, 2.04, 0);
+  group.add(head);
+  return group;
+}
+
+function buildProceduralLantern(THREE) {
+  const group = new THREE.Group();
+  const frameMat = new THREE.MeshStandardMaterial({ color: '#3b332c', roughness: 0.8 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: '#fff3d6',
+    emissive: '#ffca66',
+    emissiveIntensity: 1.1,
+  });
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 0.08, 6), frameMat);
+  cap.position.set(0, 0.31, 0);
+  group.add(cap);
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.26, 0.16), glassMat);
+  body.position.set(0, 0.14, 0);
+  group.add(body);
+  return group;
+}
+
+function buildProceduralBench(THREE) {
+  const group = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const ironMat = new THREE.MeshStandardMaterial({ color: '#34383d', roughness: 0.8 });
+
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 0.52), woodMat);
+  seat.position.set(0, 0.45, 0);
+  group.add(seat);
+
+  const back = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.38, 0.07), woodMat);
+  back.position.set(0, 0.72, -0.22);
+  group.add(back);
+
+  const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.48), ironMat);
+  leftLeg.position.set(-0.75, 0.225, 0);
+  group.add(leftLeg);
+
+  const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.48), ironMat);
+  rightLeg.position.set(0.75, 0.225, 0);
+  group.add(rightLeg);
+  return group;
+}
+
+function buildProceduralProp(THREE, kind) {
+  if (kind === 'post-lantern') return buildProceduralPostLantern(THREE);
+  if (kind === 'lantern') return buildProceduralLantern(THREE);
+  if (kind === 'bench') return buildProceduralBench(THREE);
+  return new THREE.Group();
+}
+
+/**
+ * Scale a loaded GLB scene uniformly so its target axis matches targetSize,
+ * centered horizontally and resting on local y = 0.
+ */
+export function fitModelToTarget(THREE, model, targetSize, scaleAxis = 'y') {
+  const box = new THREE.Box3().setFromObject(model);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  let measured = size.y;
+  if (scaleAxis === 'x') measured = size.x;
+  else if (scaleAxis === 'z') measured = size.z;
+  else if (scaleAxis === 'length') measured = Math.max(size.x, size.z);
+  else if (scaleAxis === 'max') measured = Math.max(size.x, size.y, size.z);
+
+  if (!measured || !Number.isFinite(measured) || measured <= 0) return model;
+
+  const scale = targetSize / measured;
+  model.scale.multiplyScalar(scale);
+  model.position.set(
+    -center.x * scale,
+    -box.min.y * scale,
+    -center.z * scale
+  );
+  return model;
+}
+
+/**
+ * Asynchronously load GLB props and swap them in for their procedural fallbacks.
+ * On any loader or model error, keeps the procedural fallback and logs a warning.
+ */
+export async function loadTownProps(THREE, propSlots, opts = {}) {
+  const warn = opts.warn || console.warn;
+  let GLTFLoader = opts.GLTFLoader;
+  if (!GLTFLoader) {
+    try {
+      const mod = await import('three/addons/loaders/GLTFLoader.js');
+      GLTFLoader = mod.GLTFLoader;
+    } catch (err) {
+      warn('[town-3d] GLTFLoader unavailable, keeping procedural props:', err);
+      return propSlots;
+    }
+  }
+
+  const loader = new GLTFLoader();
+  await Promise.all(
+    propSlots.map(
+      (slot) =>
+        new Promise((resolve) => {
+          const { placement, anchor, fallback } = slot;
+          loader.load(
+            placement.model,
+            (gltf) => {
+              try {
+                const model = gltf && gltf.scene ? gltf.scene : null;
+                if (!model) {
+                  warn(`[town-3d] Empty GLB scene for ${placement.model}, keeping procedural fallback`);
+                  resolve(slot);
+                  return;
+                }
+                fitModelToTarget(THREE, model, placement.targetSize, placement.scaleAxis);
+                model.name = `${placement.id}_glb`;
+                if (typeof anchor.remove === 'function') {
+                  anchor.remove(fallback);
+                } else {
+                  fallback.visible = false;
+                }
+                anchor.add(model);
+                slot.glb = model;
+              } catch (err) {
+                warn(`[town-3d] Error placing ${placement.model}, keeping procedural fallback:`, err);
+              }
+              resolve(slot);
+            },
+            undefined,
+            (err) => {
+              warn(`[town-3d] Failed to load ${placement.model}, keeping procedural fallback:`, err);
+              resolve(slot);
+            }
+          );
+        })
+    )
+  );
+  return propSlots;
+}
+
 /**
  * Build the complete static Ghostlight Town clearing.
  * Returns { scene, parts }.
  */
-export function buildTown(THREE) {
+export function buildTown(THREE, opts = {}) {
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog('#1f2238', 22, 85);
 
@@ -997,6 +1206,27 @@ export function buildTown(THREE) {
   // Perimeter trees, fence, path lanterns, rocks
   addPerimeterScenery(THREE, scene);
 
+  // Set-dressing props: render procedural fallbacks immediately, then swap in GLB models
+  const propParents = { scene, newsstand, gate, bandstand: bandstandBuilt.group };
+  const propSlots = PROP_PLACEMENTS.map((placement) => {
+    const anchor = new THREE.Group();
+    anchor.name = `prop_${placement.id}`;
+    anchor.position.set(placement.x, placement.y, placement.z);
+    anchor.rotation.y = placement.rotY || 0;
+
+    const fallback = buildProceduralProp(THREE, placement.kind);
+    fallback.name = `${placement.id}_procedural`;
+    anchor.add(fallback);
+
+    const parent = propParents[placement.parent] || scene;
+    parent.add(anchor);
+    return { placement, anchor, fallback, glb: null };
+  });
+
+  if (opts.loadProps !== false && (opts.GLTFLoader || typeof window !== 'undefined')) {
+    loadTownProps(THREE, propSlots, opts);
+  }
+
   return {
     scene,
     THREE,
@@ -1013,6 +1243,7 @@ export function buildTown(THREE) {
       milosCottage,
       plotPads,
       avatarSpots: bandstandBuilt.avatarSpots,
+      props: propSlots,
     },
   };
 }
