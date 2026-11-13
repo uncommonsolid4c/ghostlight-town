@@ -30,6 +30,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TEST_SUITES = [
+  // root & scripts (2)
+  'test-run-tests.mjs',
+  'scripts/test-stage-deploy.mjs',
   // town-3d (4)
   'town-3d/test-3d-live.mjs',
   'town-3d/test-3d.mjs',
@@ -56,7 +59,7 @@ function printHelp() {
     'Usage: node run-tests.mjs [--help]',
     '',
     'Runs all Ghostlight Town test suites sequentially from the repo root:',
-    `  - ${TEST_SUITES.length} explicit suites across town-3d/, town-api/, and town-npc/`,
+    `  - ${TEST_SUITES.length} explicit suites across repo root, scripts/, town-3d/, town-api/, and town-npc/`,
     '  - Set GHOSTLIGHT_TEST_ROOT to override the repo root for suite resolution/cwd',
     '',
     'Skip convention:',
