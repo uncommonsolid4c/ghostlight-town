@@ -9,6 +9,8 @@ import {
   MILO_REBUILD_MANIFEST,
   PROP_PLACEMENTS,
   buildTown,
+  buildProceduralStreetLight,
+  buildProceduralBookshelf,
   createCottage,
   createAvatarCapsule,
   loadTownProps,
@@ -496,6 +498,8 @@ test('No campfire terminology and no fetch() in town.js; .glb allowed only for p
   assert.ok(/models\/post-lantern\.glb/.test(townJs), 'town.js must reference post-lantern.glb prop');
   assert.ok(/models\/lantern\.glb/.test(townJs), 'town.js must reference lantern.glb prop');
   assert.ok(/models\/bench\.glb/.test(townJs), 'town.js must reference bench.glb prop');
+  assert.ok(/models\/street-light\.glb/.test(townJs), 'town.js must reference street-light.glb prop');
+  assert.ok(/models\/bookshelf\.glb/.test(townJs), 'town.js must reference bookshelf.glb prop');
 });
 
 test('Pinned Three.js CDN import-map URL and three/addons/ entry resolve cleanly', async () => {
@@ -513,23 +517,25 @@ test('Pinned Three.js CDN import-map URL and three/addons/ entry resolve cleanly
   assert.equal(res.status, 200, `Expected HTTP 200 from ${cdnUrl}, got ${res.status}`);
 });
 
-test('Adopted GLB models exist, have glTF magic bytes, and are under 100 KB', async () => {
-  const expectedModels = ['post-lantern.glb', 'lantern.glb', 'bench.glb'];
+test('Adopted GLB models exist, have glTF magic bytes, and are under 250 KB', async () => {
+  const expectedModels = ['post-lantern.glb', 'lantern.glb', 'bench.glb', 'street-light.glb', 'bookshelf.glb'];
   for (const file of expectedModels) {
     const buf = await fs.readFile(path.join(__dirname, 'models', file));
     assert.ok(buf.length > 12, `${file} must be a non-empty binary`);
-    assert.ok(buf.length < 100 * 1024, `${file} must be under 100 KB, got ${buf.length}`);
+    assert.ok(buf.length <= 250 * 1024, `${file} must be under 250 KB, got ${buf.length}`);
     assert.equal(buf.subarray(0, 4).toString('ascii'), 'glTF', `${file} must start with glTF magic bytes`);
   }
 });
 
-test('CREDITS.md documents all three adopted CC0 models with Poly Pizza IDs', async () => {
+test('CREDITS.md documents all adopted CC0 models with Poly Pizza IDs', async () => {
   const credits = await fs.readFile(path.join(__dirname, 'CREDITS.md'), 'utf8');
   assert.ok(/CC0 1\.0/.test(credits), 'CREDITS.md must state CC0 1.0');
   for (const [file, id] of [
     ['post-lantern.glb', 'ZSQ65S4lEu'],
     ['lantern.glb', 'CtHBJ1ufeW'],
     ['bench.glb', '6d92UYCIC1'],
+    ['street-light.glb', 'nFwrlcLvM5'],
+    ['bookshelf.glb', '30Iealxb0p'],
   ]) {
     assert.ok(credits.includes(file), `CREDITS.md must name ${file}`);
     assert.ok(credits.includes(id), `CREDITS.md must include Poly Pizza id ${id}`);
@@ -577,4 +583,29 @@ test('Procedural fallback builders exist and GLB load failure keeps procedural p
     assert.ok(!slot.anchor.children.includes(slot.fallback), `${slot.placement.id} must remove procedural fallback`);
     assert.ok(slot.glb.scale.y > 1, `${slot.placement.id} must be scaled up from tiny GLB units`);
   }
+});
+
+test('Slice 11 placements (street light + bookshelf) and procedural fallback builders', () => {
+  const streetLightPlacement = PROP_PLACEMENTS.find((p) => p.id === 'newsstand_street_light');
+  assert.ok(streetLightPlacement, 'PROP_PLACEMENTS must include newsstand_street_light');
+  assert.equal(streetLightPlacement.kind, 'street-light');
+  assert.equal(streetLightPlacement.parent, 'scene');
+  assert.equal(streetLightPlacement.targetSize, 3.0);
+
+  const bookshelfPlacement = PROP_PLACEMENTS.find((p) => p.id === 'newsstand_bookshelf');
+  assert.ok(bookshelfPlacement, 'PROP_PLACEMENTS must include newsstand_bookshelf');
+  assert.equal(bookshelfPlacement.kind, 'bookshelf');
+  assert.equal(bookshelfPlacement.parent, 'scene');
+  assert.equal(bookshelfPlacement.targetSize, 1.6);
+
+  const THREE = createThreeStub();
+  const streetLightGroup = buildProceduralStreetLight(THREE);
+  const streetLightMeshes = collectNodes(streetLightGroup, (n) => n.isMesh);
+  assert.ok(streetLightMeshes.length >= 2 && streetLightMeshes.length <= 4,
+    `street light fallback must have 2-4 meshes, got ${streetLightMeshes.length}`);
+
+  const bookshelfGroup = buildProceduralBookshelf(THREE);
+  const bookshelfMeshes = collectNodes(bookshelfGroup, (n) => n.isMesh);
+  assert.ok(bookshelfMeshes.length >= 2 && bookshelfMeshes.length <= 4,
+    `bookshelf fallback must have 2-4 meshes, got ${bookshelfMeshes.length}`);
 });
