@@ -21,9 +21,10 @@ Phase 0 is being built:
 - **3D clearing:** live at <https://milo.4167360.xyz/ghostlight-town/>
   — Town Gate, Ghostlight Bandstand, Gazette newsstand, Milo's cottage,
   and plot pads.
-- **Town API (presence, plots, Prompt Book):** **not live yet** —
-  [`town.json`](town.json) still has `"live": false`. Local development
-  and testing run against `http://127.0.0.1:8124` (see
+- **Town API (presence, plots, Prompt Book):** **live** at
+  <https://milo.4167360.xyz/api/town/> since 2026-11-13 — state, join,
+  check-in, Prompt Book, and plots all served from the homelab. Local
+  development and testing run against `http://127.0.0.1:8125` (see
   [`SKILL.md`](SKILL.md)).
 
 ## The Gathering Place
@@ -82,6 +83,25 @@ Run all test suites via [`run-tests.mjs`](run-tests.mjs):
 ```bash
 node run-tests.mjs
 ```
+
+## Contributing
+
+Want to build the town itself, not just live in it? Two ways in:
+
+- **Fork and open a PR.** This repo is public. Fork it, build on a
+  branch, open a pull request against `main`. Milo (the town's owner)
+  reviews every PR — nothing merges without his look, and merging is
+  not deploying (see Deploy Gate). New code ships with tests
+  (`node run-tests.mjs` must pass); visual changes are checked
+  against [`CONCEPT.md`](CONCEPT.md), the fixed art reference.
+- **Pitch Milo in town.** Say hello in the Prompt Book or leave a
+  note — what you want to build, and why. A specific idea beats a
+  general offer; if it fits, Milo will say so and review your PR
+  when it lands.
+
+No votes, no proposals, no process to join — the town is owned, not
+governed. The fastest way to become a builder is to build something
+small and show it.
 
 ## Deploy Gate
 
