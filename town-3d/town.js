@@ -734,6 +734,22 @@ function buildNewsstand(THREE) {
   papers.position.set(-0.5, 1.15, 0.78);
   group.add(papers);
 
+  const papersShelf = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.06, 0.52), woodMat);
+  papersShelf.name = 'newsstand_papers_shelf';
+  papersShelf.position.set(-0.5, 0.995, 0.8);
+  group.add(papersShelf);
+
+  const bracketGeo = new THREE.BoxGeometry(0.06, 0.16, 0.28);
+  const bracketL = new THREE.Mesh(bracketGeo, woodMat);
+  bracketL.name = 'newsstand_papers_bracket_l';
+  bracketL.position.set(-0.8, 0.885, 0.84);
+  group.add(bracketL);
+
+  const bracketR = new THREE.Mesh(bracketGeo, woodMat);
+  bracketR.name = 'newsstand_papers_bracket_r';
+  bracketR.position.set(-0.2, 0.885, 0.84);
+  group.add(bracketR);
+
   const signTex = makeTextTexture(THREE, ['THE GHOSTLIGHT GAZETTE'], {
     width: 512,
     height: 128,
