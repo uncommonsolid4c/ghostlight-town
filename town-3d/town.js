@@ -684,11 +684,11 @@ export function createCottage(THREE, manifest = {}, options = {}) {
 /**
  * Create a simple capsule avatar with a floating [MUSE] or [NPC] nametag sprite.
  */
-export function createAvatarCapsule(THREE, { handle = 'muse', role = 'muse' } = {}) {
+export function createAvatarCapsule(THREE, { handle = 'muse', role = 'muse', nametagLift = 0 } = {}) {
   const isNpc = role === 'npc';
   const group = new THREE.Group();
   group.name = `avatar_${handle}`;
-  group.userData = { handle, role: isNpc ? 'npc' : 'muse' };
+  group.userData = { handle, role: isNpc ? 'npc' : 'muse', nametagLift };
 
   const bodyColor = isNpc ? '#d49a45' : '#6cb4d8';
   const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.7 });
@@ -714,9 +714,10 @@ export function createAvatarCapsule(THREE, { handle = 'muse', role = 'muse' } = 
   const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
   const sprite = new THREE.Sprite(spriteMat);
   sprite.name = 'nametag_sprite';
-  sprite.position.set(0, 1.8, 0);
-  sprite.scale.set(2.0, 0.5, 1);
+  sprite.position.set(0, 1.8 + nametagLift, 0);
+  sprite.scale.set(1.5, 0.375, 1);
   group.add(sprite);
+  group.userData.nametagSprite = sprite;
 
   return group;
 }
@@ -1634,13 +1635,13 @@ function pickBandstandSpot(avatarSpots, usedSpots, preferredSlot = null) {
   ) {
     usedSpots.add(preferredSlot);
     const s = avatarSpots[preferredSlot];
-    return { x: s.x, y: s.y, z: s.z, rotY: s.rotY };
+    return { x: s.x, y: s.y, z: s.z, rotY: s.rotY, slot: preferredSlot, nametagLift: (preferredSlot % 2) * 0.5 };
   }
   for (let i = 0; i < avatarSpots.length; i++) {
     if (!usedSpots.has(i)) {
       usedSpots.add(i);
       const s = avatarSpots[i];
-      return { x: s.x, y: s.y, z: s.z, rotY: s.rotY };
+      return { x: s.x, y: s.y, z: s.z, rotY: s.rotY, slot: i, nametagLift: (i % 2) * 0.5 };
     }
   }
   // Overflow (>10 avatars at bandstand): place on an outer ring so capsules never stack
@@ -1650,7 +1651,7 @@ function pickBandstandSpot(avatarSpots, usedSpots, preferredSlot = null) {
   const r = TOWN_LAYOUT.bandstand.radius + 1.2 + Math.floor(overflowIdx / 10) * 0.9;
   const x = +(Math.sin(angle) * r).toFixed(4);
   const z = +(Math.cos(angle) * r).toFixed(4);
-  return { x, y: 0, z, rotY: +Math.atan2(-x, -z).toFixed(4) };
+  return { x, y: 0, z, rotY: +Math.atan2(-x, -z).toFixed(4), slot: overflowIdx, nametagLift: (overflowIdx % 2) * 0.5 };
 }
 
 /**
@@ -1771,8 +1772,9 @@ export function applyState(town, state = {}, options = {}) {
     if (zone === 'gate') {
       const x = ((gateCount % 5) - 2) * 1.1;
       const z = TOWN_LAYOUT.gate.z - 2.2 - Math.floor(gateCount / 5) * 1.0;
+      const nametagLift = (gateCount % 2) * 0.5;
       gateCount += 1;
-      targets.set(row.handle, { x, y: 0, z, rotY: Math.PI });
+      targets.set(row.handle, { x, y: 0, z, rotY: Math.PI, nametagLift });
     } else if (zone.startsWith('plot:')) {
       const plotHandle = zone.slice(5);
       const layout =
@@ -1782,7 +1784,7 @@ export function applyState(town, state = {}, options = {}) {
       if (layout) {
         const count = plotCounts.get(plotHandle) || 0;
         plotCounts.set(plotHandle, count + 1);
-        targets.set(row.handle, getPlotTargetPosition(layout, count));
+        targets.set(row.handle, { ...getPlotTargetPosition(layout, count), nametagLift: (count % 2) * 0.5 });
       } else {
         targets.set(row.handle, pickBandstandSpot(avatarSpots, usedSpots, null));
       }
@@ -1796,17 +1798,23 @@ export function applyState(town, state = {}, options = {}) {
     const role = row.role === 'npc' ? 'npc' : 'muse';
     const target = targets.get(row.handle);
     const existing = live.avatars.get(row.handle);
+    let avatar;
 
     if (existing && existing.userData.role === role) {
-      existing.userData.target = target;
+      avatar = existing;
     } else {
       if (existing) removeFromParent(existing);
-      const avatar = createAvatarCapsule(THREE, { handle: row.handle, role });
+      avatar = createAvatarCapsule(THREE, { handle: row.handle, role });
       avatar.position.set(target.x, target.y, target.z);
       avatar.rotation.y = target.rotY;
-      avatar.userData.target = target;
       town.scene.add(avatar);
       live.avatars.set(row.handle, avatar);
+    }
+    avatar.userData.target = target;
+    const lift = target.nametagLift || 0;
+    avatar.userData.nametagLift = lift;
+    if (avatar.userData.nametagSprite) {
+      avatar.userData.nametagSprite.position.y = 1.8 + lift;
     }
   }
 
@@ -1845,7 +1853,11 @@ function buildWanderState(THREE, scene, avatarSpots, milosGhost) {
     const home = getPlotTargetPosition(plotLayout, 0);
     const spot = avatarSpots[cfg.bandstandSlot];
 
-    const group = createAvatarCapsule(THREE, { handle: cfg.handle, role: 'npc' });
+    const group = createAvatarCapsule(THREE, {
+      handle: cfg.handle,
+      role: 'npc',
+      nametagLift: (cfg.bandstandSlot % 2) * 0.5,
+    });
     group.visible = true;
     group.position.set(home.x, home.y, home.z);
     group.rotation.y = home.rotY;
