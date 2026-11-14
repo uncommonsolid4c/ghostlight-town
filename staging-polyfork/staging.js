@@ -52,6 +52,7 @@ import {
 } from './tap-glide.mjs';
 import { animate } from './kit-medieval/clips.mjs';
 import { attachIdleAnimation, updateNpcAnimations } from './npc-animation.mjs';
+import { attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -831,6 +832,7 @@ async function init() {
   const sign = buildStagingSignpost('Milo — Ghostlight Cottage (rebuilt)');
   sign.position.set(2.3, 0, 2.6);
   milosCottage.add(sign);
+  attachPlotProps(THREE, milosCottage, MILO_PLOT_PROPS);
   milosCottage.position.set(MILO_PLOT.x, camp.groundAt(MILO_PLOT.x, MILO_PLOT.z), MILO_PLOT.z);
   milosCottage.rotation.y = faceCenter(MILO_PLOT.x, MILO_PLOT.z);
   scene.add(milosCottage);
