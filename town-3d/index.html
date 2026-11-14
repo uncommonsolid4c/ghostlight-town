@@ -292,7 +292,7 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, stepGlide, pinchFov } from './town.js?v=14';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, resolveGuestbookOverlayContent, stepGlide, pinchFov } from './town.js?v=14';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
@@ -409,6 +409,28 @@
       plotIframe.setAttribute('sandbox', '');
       const resolved = await resolveInnOverlayContent({
         innState: live.lastState?.inn,
+        fetchFn: typeof window.fetch === 'function' ? window.fetch.bind(window) : null,
+        apiBase: API_BASE,
+      });
+      if (resolved.kind === 'api') {
+        plotIframe.removeAttribute('src');
+        plotIframe.srcdoc = resolved.html;
+      } else {
+        plotIframe.removeAttribute('srcdoc');
+        plotIframe.src = resolved.url;
+      }
+      plotOverlay.hidden = false;
+    }
+
+    async function openGuestbookOverlay() {
+      keys.clear();
+      glideTarget = null;
+      activePointers.clear();
+      isDragging = false;
+      canvas.classList.remove('dragging');
+      plotOverlayTitle.textContent = 'Town Gate Guestbook';
+      plotIframe.setAttribute('sandbox', '');
+      const resolved = await resolveGuestbookOverlayContent({
         fetchFn: typeof window.fetch === 'function' ? window.fetch.bind(window) : null,
         apiBase: API_BASE,
       });
@@ -585,6 +607,11 @@
           if (kind === 'inn') {
             infoStrip.hidden = true;
             openInnOverlay();
+            return true;
+          }
+          if (kind === 'gate') {
+            infoStrip.hidden = true;
+            openGuestbookOverlay();
             return true;
           }
           infoStrip.textContent = target.userData.label || target.name;
