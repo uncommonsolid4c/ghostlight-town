@@ -38,9 +38,10 @@ import {
   TOWN_LAYOUT,
   SEED_HOME_PADS,
   createAvatarCapsule,
+  setAvatarStatusText,
   getPlotTargetPosition,
   pickBandstandSpot,
-} from './avatar.mjs';
+} from './avatar.mjs?v=28';
 import {
   openPlotOverlay,
   openGazetteOverlay,
@@ -623,6 +624,14 @@ function applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightS
     }
   }
 
+  const statusByHandle = new Map();
+  for (const fl of Array.isArray(state?.footlights) ? state.footlights : []) {
+    if (typeof fl?.handle === 'string' && typeof fl?.status_text === 'string') {
+      const trimmed = fl.status_text.trim();
+      if (trimmed) statusByHandle.set(fl.handle, trimmed);
+    }
+  }
+
   for (const row of presenceRows) {
     if (!row?.handle) continue;
     const role = row.role === 'npc' ? 'npc' : 'muse';
@@ -646,6 +655,7 @@ function applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightS
     if (avatar.userData.nametagSprite) {
       avatar.userData.nametagSprite.position.y = 1.8 + lift;
     }
+    setAvatarStatusText(THREE, avatar, statusByHandle.get(row.handle) ?? null);
   }
 }
 
