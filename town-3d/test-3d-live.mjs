@@ -17,6 +17,7 @@ import {
   updateTownAnimations,
   renderPromptBook,
   resolvePlotOverlayContent,
+  resolveInnOverlayContent,
   TownLive,
 } from './town.js';
 import { createTownServer } from '../town-api/server.mjs';
@@ -925,4 +926,99 @@ test('applyState ignores unknown inn room keys without throwing', () => {
   for (const idx of [0, 1, 2, 3, 7]) {
     assert.equal(getInnWindow(town, idx).material.emissiveIntensity, 1.4, `common inn_window_${idx} unchanged`);
   }
+});
+
+test('resolveInnOverlayContent renders occupied nights-left and vacant rooms from innState', async () => {
+  const nowSec = 1700000000;
+  const res = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'wick', nights: 3, expires_at: nowSec + 2.5 * 86400 },
+      window: null,
+      quiet: { handle: 'maren', nights: 1, expires_at: nowSec + 0.2 * 86400 },
+    },
+    nowSec,
+  });
+
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes('Ghostlight Inn &mdash; The Guest Book'));
+  assert.ok(res.html.includes('Occupied — @wick, 3 nights left.'));
+  assert.ok(res.html.includes('Vacant — free tonight.'));
+  assert.ok(res.html.includes('Occupied — @maren, 1 night left.'));
+  assert.equal((res.html.match(/class="occupancy"/g) || []).length, 3);
+});
+
+test('resolveInnOverlayContent falls back to static when innState is missing or null', async () => {
+  assert.deepEqual(await resolveInnOverlayContent(), { kind: 'static', url: 'inn/index.html' });
+  assert.deepEqual(await resolveInnOverlayContent({ innState: null }), { kind: 'static', url: 'inn/index.html' });
+  assert.deepEqual(await resolveInnOverlayContent({ innState: {} }), { kind: 'static', url: 'inn/index.html' });
+});
+
+test('resolveInnOverlayContent fetches /api/town/state when innState is absent and falls back on errors', async () => {
+  const nowSec = 1700000000;
+  const called = [];
+  const okRes = await resolveInnOverlayContent({
+    apiBase: 'https://town.example/',
+    nowSec,
+    fetchFn: async (url) => {
+      called.push(url);
+      return {
+        status: 200,
+        async json() {
+          return {
+            inn: {
+              lantern: { handle: 'tomas', nights: 2, expires_at: nowSec + 1.5 * 86400 },
+              window: null,
+              quiet: null,
+            },
+          };
+        },
+      };
+    },
+  });
+  assert.deepEqual(called, ['https://town.example/api/town/state']);
+  assert.equal(okRes.kind, 'api');
+  assert.ok(okRes.html.includes('Occupied — @tomas, 2 nights left.'));
+
+  const notFound = await resolveInnOverlayContent({
+    fetchFn: async () => ({ status: 404, async json() { return {}; } }),
+  });
+  assert.deepEqual(notFound, { kind: 'static', url: 'inn/index.html' });
+
+  const badJson = await resolveInnOverlayContent({
+    fetchFn: async () => ({ status: 200, async json() { throw new SyntaxError('bad json'); } }),
+  });
+  assert.deepEqual(badJson, { kind: 'static', url: 'inn/index.html' });
+
+  const netErr = await resolveInnOverlayContent({
+    fetchFn: async () => { throw new Error('offline'); },
+  });
+  assert.deepEqual(netErr, { kind: 'static', url: 'inn/index.html' });
+
+  const noInnInPayload = await resolveInnOverlayContent({
+    fetchFn: async () => ({ status: 200, async json() { return { footlights: [] }; } }),
+  });
+  assert.deepEqual(noInnInPayload, { kind: 'static', url: 'inn/index.html' });
+});
+
+test('resolveInnOverlayContent never leaks key_code, ignores unknown rooms, and escapes handles', async () => {
+  const nowSec = 1700000000;
+  const secretKey = 'SECRET-ROOM-KEY-9999';
+  const res = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: '<script>wick</script>', nights: 2, expires_at: nowSec + 86400, key_code: secretKey },
+      window: null,
+      quiet: null,
+      penthouse: { handle: 'intruder', nights: 5, expires_at: nowSec + 5 * 86400 },
+      key_code: secretKey,
+    },
+    nowSec,
+  });
+
+  assert.equal(res.kind, 'api');
+  assert.equal(res.html.includes(secretKey), false, 'room key_code must never appear in HTML');
+  assert.equal(res.html.includes('penthouse'), false, 'unknown room key must be ignored');
+  assert.equal(res.html.includes('intruder'), false, 'unknown room handle must be ignored');
+  assert.equal((res.html.match(/<li>/g) || []).length, 3, 'exactly three room list items');
+  assert.equal(res.html.includes('<script>'), false, 'handle must be HTML-escaped');
+  assert.ok(res.html.includes('&lt;script&gt;wick&lt;/script&gt;'));
 });
