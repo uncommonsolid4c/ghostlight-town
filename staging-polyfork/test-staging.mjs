@@ -111,12 +111,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=17, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=18, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=17["']/, 'index.html must reference ./staging.js?v=17');
+  assert.match(html, /src=["']\.\/staging\.js\?v=18["']/, 'index.html must reference ./staging.js?v=18');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
