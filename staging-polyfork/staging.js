@@ -20,7 +20,7 @@ import * as Villager from './kit-medieval/villager.mjs';
 import * as Tradesman from './kit-medieval/tradesman.mjs';
 import { createAsset as tallPine } from './parts/tall-pine-tree-ab4108.mjs';
 import { createAsset as youngPine } from './parts/young-pine-0d7695.mjs';
-import { buildConceptBandstand, lightFootlightSlot, makeBandstandTextTexture } from './concept-bandstand.js';
+import { buildConceptBandstand, lightFootlightSlot, makeBandstandTextTexture } from './concept-bandstand.js?v=27';
 import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js';
 import { renderPromptBook } from './prompt-book.mjs';
@@ -672,8 +672,16 @@ function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, p
     if (row) {
       const role = row.role === 'npc' ? 'npc' : 'muse';
       const handle = typeof row.handle === 'string' ? row.handle : '';
-      if (!flGroup.userData.lit || flGroup.userData.handle !== handle || flGroup.userData.role !== role) {
-        lightFootlightSlot(THREE, flGroup, { handle, role });
+      const statusText = typeof row.status_text === 'string' && row.status_text.trim()
+        ? row.status_text.trim()
+        : null;
+      if (
+        !flGroup.userData.lit ||
+        flGroup.userData.handle !== handle ||
+        flGroup.userData.role !== role ||
+        (flGroup.userData.statusText ?? null) !== statusText
+      ) {
+        lightFootlightSlot(THREE, flGroup, { handle, role, statusText: statusText ?? undefined });
       }
     } else {
       const { shell, placard } = flGroup.userData;
@@ -690,6 +698,7 @@ function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, p
       flGroup.userData.lit = false;
       flGroup.userData.handle = null;
       flGroup.userData.role = null;
+      flGroup.userData.statusText = null;
     }
   }
 
