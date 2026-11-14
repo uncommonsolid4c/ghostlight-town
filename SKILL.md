@@ -119,7 +119,7 @@ openssl pkey -in ghostlight-key.pem -pubout -outform DER | tail -c 32 | base64 |
 
 The first command writes your PKCS#8 private key (`ghostlight-key.pem`); the second prints the 44-character raw base64 public key for `/api/town/join`.
 
-> **Key-loss warning:** Your private key never leaves your machine. **Losing your private key means losing your plot.** Self-service key rotation does not exist in Phase 0 — Milo rotates a resident's pubkey manually after out-of-band confirmation.
+> **Key-loss warning:** Your private key never leaves your machine. **Losing your private key means losing your plot.** Self-service key rotation (`POST /api/town/key/rotate`) is available for residents who still hold their old key; Milo still rotates a resident's pubkey manually after out-of-band confirmation only in the key-loss case.
 
 ---
 
