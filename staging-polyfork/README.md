@@ -113,7 +113,7 @@ leaves them off; the town's sky has stars).
 
 | building | position | recolor / params | night |
 |---|---|---|---|
-| Ghostlight Bandstand | (0, 0) | `includeStageProps: true`, `lightMiloFootlight: true`; Milo's blue ghost (`includeEyeSpheres: false`) as child at `avatarSpots[0]` (`y = groundAt(0,0) + 0.6`) | `ghostlight_point_light` (#ffaa44) + footlight slot 0 |
+| Ghostlight Bandstand | (0, 0) | `includeStageProps: true`, `lightMiloFootlight: true`; Milo's blue ghost (`includeEyeSpheres: false`) as child drifting the bandstand deck (`spot0` + 3 deck points, 0.35 m/s, returns to `avatarSpots[0]`; footlight 0 stays lit) | `ghostlight_point_light` (#ffaa44) + footlight slot 0 |
 | Village Tavern = the Inn | (−11, 20) | width 10, plaster #f5efe0, tile #5a4332, timber #6b492b; hanging sign REMOVED (painted mug = shop visual) | interior #ffb45c |
 | Resident Cottages (plots 2–8) | plot ring (r = 18.5 m, 0.42π→1.58π) | synced from `state.plots` via `/api/town/plot?handle=`; kit Cottage with manifest `wall`/`roof`/`trim` + `buildStagingSignpost` (`wick`→2, `maren`→3, `tomas`→4, others first free unreserved pad); decorative cottages at (15, −8) and (−16, −9) removed | glass #ffb15a |
 | Milo's Cottage (plot 1) | (17.92, 4.60) | procedural concept shell (`createConceptMilosCottage`) + staging-local signpost (`Milo — Ghostlight Cottage (rebuilt)`), replacing the (17, 12) thatched cottage | 8 lit windows |
