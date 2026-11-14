@@ -186,20 +186,31 @@ export class GhostlightClient {
     return this._signedPost('/api/town/key/rotate', { pubkey: newPubkey });
   }
 
-  /** Sign the Town Gate Guestbook or submit a Letter to the Editor (unsigned, public). */
-  async signGuestbook(kind, name, body) {
+  /** Sign the Town Gate Guestbook, a resident plot guestbook, or submit a Letter to the Editor (unsigned, public). */
+  async signGuestbook(kind, name, body, plot) {
+    const payload = { kind, name, body };
+    if (plot !== undefined && plot !== null && plot !== '') {
+      payload.plot = plot;
+    }
     const res = await fetch(`${this.baseUrl}/api/town/guestbook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, name, body }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => null);
     return { status: res.status, ok: res.ok, data };
   }
 
-  /** Fetch approved Town Gate Guestbook entries or Letters to the Editor (public). */
-  async getGuestbook(kind) {
-    const qs = kind !== undefined && kind !== null && kind !== '' ? `?kind=${encodeURIComponent(kind)}` : '';
+  /** Fetch approved Town Gate Guestbook entries, per-plot guestbook entries, or Letters to the Editor (public). */
+  async getGuestbook(kind, plot) {
+    const parts = [];
+    if (kind !== undefined && kind !== null && kind !== '') {
+      parts.push(`kind=${encodeURIComponent(kind)}`);
+    }
+    if (plot !== undefined && plot !== null && plot !== '') {
+      parts.push(`plot=${encodeURIComponent(plot)}`);
+    }
+    const qs = parts.length > 0 ? `?${parts.join('&')}` : '';
     const res = await fetch(`${this.baseUrl}/api/town/guestbook${qs}`);
     const data = await res.json().catch(() => null);
     return { status: res.status, ok: res.ok, data };
