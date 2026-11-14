@@ -48,6 +48,8 @@ const CAPS = {
   say: 500,
   statusText: 120,
   bio: 500,
+  guestbookName: 40,
+  guestbookBody: 500,
 };
 
 const RATE_LIMITS = {
@@ -57,6 +59,7 @@ const RATE_LIMITS = {
   plot: { max: 10, windowSec: 60 * 60 },
   innClaim: { max: 10, windowSec: 60 * 60 },
   keyRotate: { max: 3, windowSec: 60 * 60 },
+  guestbook: { max: 3, windowSec: 60 * 60 },
 };
 
 function generateInnKey() {
@@ -317,6 +320,10 @@ export function createTownServer(opts = {}) {
    * (4) verify Ed25519 signature against the resolved pubkey
    */
   function verifyWriteAuth(req, pathname, rawBody, body, mode) {
+    if (mode === 'public') {
+      return { ok: true, now: nowSec() };
+    }
+
     const handle = req.headers['x-muse-handle'];
     const tsHeader = req.headers['x-muse-timestamp'];
     const nonce = req.headers['x-muse-nonce'];
@@ -489,6 +496,17 @@ export function createTownServer(opts = {}) {
       presence,
       plots,
       inn,
+      guestbook: (() => {
+        const rows = db
+          .prepare("SELECT kind, COUNT(*) AS cnt FROM guestbook WHERE status = 'approved' GROUP BY kind")
+          .all();
+        const counts = { signed: 0, letters: 0 };
+        for (const r of rows) {
+          if (r.kind === 'guestbook') counts.signed = r.cnt;
+          else if (r.kind === 'letter') counts.letters = r.cnt;
+        }
+        return counts;
+      })(),
     };
 
     if (nightlyTopics) {
@@ -1090,6 +1108,112 @@ export function createTownServer(opts = {}) {
     });
   }
 
+  function handlePostGuestbook(req, res, body, auth) {
+    const kind = body.kind;
+    if (kind !== 'guestbook' && kind !== 'letter') {
+      sendJson(res, 400, { error: 'invalid_kind' });
+      return;
+    }
+
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (name.length < 1 || name.length > CAPS.guestbookName) {
+      sendJson(res, 400, { error: 'invalid_name', max: CAPS.guestbookName });
+      return;
+    }
+
+    const text = typeof body.body === 'string' ? body.body.trim() : '';
+    if (text.length < 1 || text.length > CAPS.guestbookBody) {
+      sendJson(res, 400, { error: 'invalid_body', max: CAPS.guestbookBody });
+      return;
+    }
+
+    if (/https?:\/\//i.test(text)) {
+      sendJson(res, 400, { error: 'urls_not_allowed' });
+      return;
+    }
+
+    const now = auth.now;
+    const ip = getClientIp(req);
+    const rl = rateLimiter.consume(`guestbook:${ip}`, RATE_LIMITS.guestbook.max, RATE_LIMITS.guestbook.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    const inserted = db
+      .prepare("INSERT INTO guestbook (kind, name, body, status, created_at) VALUES (?, ?, ?, 'pending', ?) RETURNING id")
+      .get(kind, name, text, now);
+
+    sendJson(res, 201, { id: inserted.id, status: 'pending' });
+  }
+
+  function handleGetGuestbook(req, res, url) {
+    const kindParam = url.searchParams.get('kind');
+    const kind = kindParam !== null && kindParam !== '' ? kindParam : null;
+    if (kind !== null && kind !== 'guestbook' && kind !== 'letter') {
+      sendJson(res, 400, { error: 'invalid_kind' });
+      return;
+    }
+
+    const limitParam = url.searchParams.get('limit');
+    let limit = 50;
+    if (limitParam !== null && limitParam !== '') {
+      const parsed = Number(limitParam);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        sendJson(res, 400, { error: 'invalid_limit' });
+        return;
+      }
+      limit = Math.min(parsed, 50);
+    }
+
+    const entries = kind !== null
+      ? db
+          .prepare(
+            "SELECT id, kind, name, body, created_at FROM guestbook WHERE status = 'approved' AND kind = ? ORDER BY created_at DESC, id DESC LIMIT ?"
+          )
+          .all(kind, limit)
+      : db
+          .prepare(
+            "SELECT id, kind, name, body, created_at FROM guestbook WHERE status = 'approved' ORDER BY created_at DESC, id DESC LIMIT ?"
+          )
+          .all(limit);
+
+    sendJson(res, 200, { entries });
+  }
+
+  function handleAdminGuestbook(req, res, body) {
+    const id = body.id;
+    if (!Number.isInteger(id) || id <= 0) {
+      sendJson(res, 400, { error: 'invalid_id' });
+      return;
+    }
+
+    const action = body.action;
+    if (action !== 'approve' && action !== 'reject') {
+      sendJson(res, 400, { error: 'invalid_action' });
+      return;
+    }
+
+    const row = db.prepare('SELECT id, status FROM guestbook WHERE id = ?').get(id);
+    if (!row) {
+      sendJson(res, 404, { error: 'guestbook_not_found' });
+      return;
+    }
+
+    if (row.status !== 'pending') {
+      sendJson(res, 409, { error: 'already_decided', status: row.status });
+      return;
+    }
+
+    const status = action === 'approve' ? 'approved' : 'rejected';
+    db.prepare('UPDATE guestbook SET status = ? WHERE id = ?').run(status, id);
+    if (action === 'approve') {
+      bumpStateSeq();
+    }
+
+    sendJson(res, 200, { id, status });
+  }
+
   const WRITE_ROUTES = new Map([
     ['POST /api/town/join', { mode: 'join', handler: handleJoin }],
     ['PUT /api/town/plot', { mode: 'resident', handler: handlePutPlot }],
@@ -1097,6 +1221,7 @@ export function createTownServer(opts = {}) {
     ['POST /api/town/inn/extend', { mode: 'resident', handler: handleInnExtend }],
     ['POST /api/town/inn/vacate', { mode: 'resident', handler: handleInnVacate }],
     ['POST /api/town/key/rotate', { mode: 'resident', handler: handleKeyRotate }],
+    ['POST /api/town/guestbook', { mode: 'public', handler: handlePostGuestbook }],
     ['POST /api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }],
     ['POST /api/town/ghostlight/say', { mode: 'resident', handler: handleSay }],
     ['POST /api/town/ghostlight/leave', { mode: 'resident', handler: handleLeave }],
@@ -1104,6 +1229,7 @@ export function createTownServer(opts = {}) {
     ['POST /api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }],
     ['POST /api/town/admin/invite', { mode: 'admin', handler: handleAdminInvite }],
     ['POST /api/town/admin/delete-line', { mode: 'admin', handler: handleAdminDeleteLine }],
+    ['POST /api/town/admin/guestbook', { mode: 'admin', handler: handleAdminGuestbook }],
   ]);
 
   const server = http.createServer(async (req, res) => {
@@ -1118,6 +1244,11 @@ export function createTownServer(opts = {}) {
 
       if (req.method === 'GET' && pathname === '/api/town/plot') {
         handleGetPlot(req, res, url);
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/town/guestbook') {
+        handleGetGuestbook(req, res, url);
         return;
       }
 
