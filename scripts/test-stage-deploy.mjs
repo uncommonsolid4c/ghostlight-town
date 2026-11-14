@@ -46,6 +46,8 @@ async function createFixtureTree(rootDir) {
     const dest = path.join(town3d, relPath);
     await fs.writeFile(dest, content);
   }
+  // Build tools directly under gazette/ must be excluded from staging.
+  await fs.writeFile(path.join(town3d, 'gazette/build-feed.mjs'), '// build tool\n');
 
   return files;
 }
@@ -110,6 +112,23 @@ test('happy path stages fixture tree, writes deterministic MANIFEST.json, and pr
     }
     assert.equal(manifest.total_bytes, computedTotal);
     assert.equal(summary.total_bytes, computedTotal);
+
+    assert.ok(
+      manifest.excluded.some(
+        (e) => e.path === 'gazette/build-feed.mjs' && e.reason === 'build tool, not served content'
+      ),
+      'gazette/build-feed.mjs must be recorded in manifest.excluded'
+    );
+    assert.equal(
+      manifest.files.some((f) => f.path === 'gazette/build-feed.mjs'),
+      false,
+      'gazette/build-feed.mjs must not be in manifest.files'
+    );
+    assert.equal(
+      await pathExists(path.join(outDir, 'ghostlight-town', 'gazette/build-feed.mjs')),
+      false,
+      'gazette/build-feed.mjs must not be copied to staged dir'
+    );
 
     // Determinism check: second run produces identical manifest except staged_at.
     const res2 = runStage(['--root', fixtureRoot, '--out', outDir]);
@@ -259,6 +278,10 @@ test('excludes models/pine.glb from staging and records it in manifest.excluded'
       'models/pine.glb must not appear in manifest.files'
     );
     assert.deepEqual(manifest.excluded, [
+      {
+        path: 'gazette/build-feed.mjs',
+        reason: 'build tool, not served content',
+      },
       {
         path: 'models/pine.glb',
         reason: 'deliberately uncommitted, 2.2 MB — procedural trees stay',
