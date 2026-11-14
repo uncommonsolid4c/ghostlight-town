@@ -35,6 +35,11 @@ import {
   getPlotTargetPosition,
   pickBandstandSpot,
 } from './avatar.mjs';
+import {
+  openPlotOverlay,
+  openGazetteOverlay,
+  closePlotOverlay,
+} from './plot-overlay.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -65,6 +70,7 @@ const TERRAIN_PARAMS = {
     })),
     { x: -192, z: 411, w: 11, d: 10 }, // gatehouse (0, 27)
     { x: -186, z: 392, w: 4, d: 4 },   // well (6, 8)
+    { x: -186, z: 398, w: 4, d: 4 },   // newsstand (6, 14)
     { x: -214, z: 364, w: 8, d: 8 },   // windmill (-22, -20)
     { x: -192, z: 384, w: 8, d: 8 },   // bandstand spot (0, 0)
   ],
@@ -113,9 +119,35 @@ window.addEventListener('resize', () => {
 
 // WASD / arrow keys pan the orbit target across the ground.
 const keys = new Set();
-window.addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); });
+const plotOverlayEl = document.getElementById('plot-overlay');
+const plotOverlayTitleEl = document.getElementById('plot-overlay-title');
+const plotOverlayCloseEl = document.getElementById('plot-overlay-close');
+const plotIframeEl = document.getElementById('plot-iframe');
+
+function handleClosePlotOverlay() {
+  closePlotOverlay({
+    overlayEl: plotOverlayEl,
+    iframeEl: plotIframeEl,
+    onAfterClose: () => {
+      keys.clear();
+      controls.enabled = true;
+      renderer.domElement.focus?.();
+    },
+  });
+}
+
+plotOverlayCloseEl?.addEventListener('click', handleClosePlotOverlay);
+
+window.addEventListener('keydown', (e) => {
+  if (plotOverlayEl && !plotOverlayEl.hidden) {
+    if (e.code === 'Escape' || e.key === 'Escape') handleClosePlotOverlay();
+    return;
+  }
+  keys.add(e.key.toLowerCase());
+});
 window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 function walkView(dt) {
+  if (plotOverlayEl && !plotOverlayEl.hidden) return;
   const fwd = new THREE.Vector3();
   camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
@@ -210,6 +242,87 @@ function buildStagingSignpost(text) {
   return group;
 }
 
+// Gazette newsstand ported from town-3d/town.js (makeAwningTexture + buildNewsstand).
+function makeAwningTexture(THREE) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const stripes = 8;
+  const sw = 256 / stripes;
+  for (let i = 0; i < stripes; i++) {
+    ctx.fillStyle = i % 2 === 0 ? '#b84a39' : '#f2e6d0';
+    ctx.fillRect(i * sw, 0, sw, 128);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function buildNewsstand(THREE) {
+  const group = new THREE.Group();
+  group.name = 'gazette_newsstand';
+  group.position.set(TOWN_LAYOUT.newsstand.x, 0, TOWN_LAYOUT.newsstand.z);
+  group.rotation.y = Math.atan2(-TOWN_LAYOUT.newsstand.x, -TOWN_LAYOUT.newsstand.z);
+  group.userData = {
+    clickable: true,
+    kind: 'newsstand',
+    label: 'The Ghostlight Gazette Newsstand',
+  };
+
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const booth = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.1, 1.4), woodMat);
+  booth.position.set(0, 1.05, 0);
+  group.add(booth);
+
+  const awning = new THREE.Mesh(
+    new THREE.BoxGeometry(2.5, 0.16, 1.9),
+    new THREE.MeshStandardMaterial({ map: makeAwningTexture(THREE), roughness: 0.8 })
+  );
+  awning.position.set(0, 2.08, 0.15);
+  awning.rotation.x = 0.15;
+  group.add(awning);
+
+  const papers = new THREE.Mesh(
+    new THREE.BoxGeometry(0.65, 0.25, 0.45),
+    new THREE.MeshStandardMaterial({ color: '#ebe4d1', roughness: 0.95 })
+  );
+  papers.position.set(-0.5, 1.15, 0.78);
+  group.add(papers);
+
+  const papersShelf = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.06, 0.52), woodMat);
+  papersShelf.name = 'newsstand_papers_shelf';
+  papersShelf.position.set(-0.5, 0.995, 0.8);
+  group.add(papersShelf);
+
+  const bracketGeo = new THREE.BoxGeometry(0.06, 0.16, 0.28);
+  const bracketL = new THREE.Mesh(bracketGeo, woodMat);
+  bracketL.name = 'newsstand_papers_bracket_l';
+  bracketL.position.set(-0.8, 0.885, 0.84);
+  group.add(bracketL);
+
+  const bracketR = new THREE.Mesh(bracketGeo, woodMat);
+  bracketR.name = 'newsstand_papers_bracket_r';
+  bracketR.position.set(-0.2, 0.885, 0.84);
+  group.add(bracketR);
+
+  const signTex = makeBandstandTextTexture(THREE, ['THE GHOSTLIGHT GAZETTE'], {
+    width: 512,
+    height: 128,
+    titleSize: 28,
+    bg: '#231b14',
+    border: '#c7a463',
+  });
+  const sign = new THREE.Mesh(
+    new THREE.BoxGeometry(2.0, 0.45, 0.08),
+    new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.8 })
+  );
+  sign.position.set(0, 2.55, 0.4);
+  group.add(sign);
+
+  return group;
+}
+
 // --- live state layer (footlights + Prompt Book + presence avatars + plots) ---
 const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
 
@@ -266,6 +379,8 @@ function applyStagingPlotManifest(liveStore, handle, manifest) {
     { rotY: assignment.layout.rotY }
   );
   cottage.name = `cottage_${handle}`;
+  cottage.userData.clickable = true;
+  cottage.userData.kind = 'cottage';
   cottage.userData.handle = handle;
   cottage.userData.plotNumber = assignment.plotNumber;
 
@@ -712,6 +827,16 @@ async function init() {
   place(Well, {}, 6, 8);
   counts.buildings++;
 
+  // Gazette Newsstand.
+  const newsstand = buildNewsstand(THREE);
+  newsstand.position.set(
+    TOWN_LAYOUT.newsstand.x,
+    camp.groundAt(TOWN_LAYOUT.newsstand.x, TOWN_LAYOUT.newsstand.z),
+    TOWN_LAYOUT.newsstand.z
+  );
+  scene.add(newsstand);
+  counts.buildings++;
+
   // Lamp posts: a pair flanking the gate, one by the tavern door, one by the well.
   for (const [x, z, s] of [[-3.2, 26.2, 1.8], [3.2, 26.2, 1.8], [-8.5, 17.5, 1.4], [8.5, 6.5, 1.4]]) {
     place(LampPost, { scale: s }, x, z, { rotY: 0 });
@@ -733,7 +858,7 @@ async function init() {
     [-11, 20, 10],
     [17.92, 4.60, 9],
     ...TOWN_LAYOUT.plots.slice(1).map((p) => [p.x, p.z, 9]),
-    [0, 27, 8], [6, 8, 7], [-22, -20, 11],
+    [0, 27, 8], [6, 8, 7], [TOWN_LAYOUT.newsstand.x, TOWN_LAYOUT.newsstand.z, 5], [-22, -20, 11],
   ];
   let attempts = 0;
   while (counts.pines < 30 && attempts++ < 120) {
@@ -858,6 +983,79 @@ async function init() {
   });
   window.__staging.live = live;
   live.start();
+
+  // Raycast click handling for cottages (desk note) and the Gazette newsstand.
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
+  let pointerDownPos = null;
+
+  function findClickableAncestor(obj) {
+    let cur = obj;
+    while (cur) {
+      if (cur.userData && cur.userData.clickable) return cur;
+      cur = cur.parent;
+    }
+    return null;
+  }
+
+  function onBeforeOverlayOpen() {
+    keys.clear();
+    controls.enabled = false;
+  }
+
+  function handleCanvasClick(e) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+
+    const fetchFn = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+    const hits = raycaster.intersectObjects(scene.children, true);
+    for (const hit of hits) {
+      const target = findClickableAncestor(hit.object);
+      if (target) {
+        const kind = target.userData.kind;
+        if (kind === 'cottage' && target.userData.handle) {
+          openPlotOverlay(target.userData.handle, {
+            overlayEl: plotOverlayEl,
+            titleEl: plotOverlayTitleEl,
+            iframeEl: plotIframeEl,
+            fetchFn,
+            onBeforeOpen: onBeforeOverlayOpen,
+          });
+          return true;
+        }
+        if (kind === 'newsstand') {
+          openGazetteOverlay({
+            overlayEl: plotOverlayEl,
+            titleEl: plotOverlayTitleEl,
+            iframeEl: plotIframeEl,
+            fetchFn,
+            onBeforeOpen: onBeforeOverlayOpen,
+          });
+          return true;
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (plotOverlayEl && !plotOverlayEl.hidden) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pointerDownPos = { x: e.clientX, y: e.clientY };
+  });
+
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (!pointerDownPos) return;
+    const down = pointerDownPos;
+    pointerDownPos = null;
+    if (plotOverlayEl && !plotOverlayEl.hidden) return;
+    if (Math.abs(e.clientX - down.x) <= 4 && Math.abs(e.clientY - down.y) <= 4) {
+      handleCanvasClick(e);
+    }
+  });
 
   const clock = new THREE.Clock();
   (function loop() {
