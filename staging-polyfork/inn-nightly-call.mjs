@@ -74,27 +74,43 @@ export function updateStagingInnOccupancy(tavernGroup, innState) {
 }
 
 /**
- * Wrap a Nightly Call topic onto at most two lines near the middle when longer
- * than `maxLineLen` (mirrors `splitNightlyCallLines` in `town-3d/town.js`).
+ * Greedy word-wrap a Nightly Call topic into lines of at most `maxLineLen`
+ * characters. Deliberately NOT the `town-3d/town.js` split: that one only
+ * splits topics longer than 60 chars, and a 51-char topic at 20px monospace
+ * on the 512px card texture overflows both edges (found by the 2026-11-14
+ * go-live check). At 20px bold monospace a char is ~12px wide, so 30 chars
+ * (~360px) fits the card with margin; every curated topic (longest 53 chars)
+ * wraps to two lines. Words longer than `maxLineLen` are hard-chunked.
  */
-export function splitNightlyCallLines(topic, maxLineLen = 60) {
+export function splitNightlyCallLines(topic, maxLineLen = 30) {
   if (topic.length <= maxLineLen) return [topic];
-  const mid = Math.floor(topic.length / 2);
-  let splitIdx = -1;
-  for (let offset = 0; offset < topic.length; offset++) {
-    if (mid - offset > 0 && topic[mid - offset] === ' ') {
-      splitIdx = mid - offset;
-      break;
+  const lines = [];
+  let current = '';
+  const pushWord = (word) => {
+    if (word.length <= maxLineLen) {
+      if (current.length === 0) {
+        current = word;
+      } else if (current.length + 1 + word.length <= maxLineLen) {
+        current += ' ' + word;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+      return;
     }
-    if (mid + offset < topic.length && topic[mid + offset] === ' ') {
-      splitIdx = mid + offset;
-      break;
+    if (current.length > 0) {
+      lines.push(current);
+      current = '';
     }
+    for (let i = 0; i < word.length; i += maxLineLen) {
+      lines.push(word.slice(i, i + maxLineLen));
+    }
+  };
+  for (const word of topic.split(' ')) {
+    if (word.length > 0) pushWord(word);
   }
-  if (splitIdx === -1) {
-    return [topic.slice(0, mid), topic.slice(mid)];
-  }
-  return [topic.slice(0, splitIdx).trim(), topic.slice(splitIdx + 1).trim()];
+  if (current.length > 0) lines.push(current);
+  return lines;
 }
 
 /**
