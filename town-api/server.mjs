@@ -214,6 +214,7 @@ function atomicWriteFile(targetPath, content) {
  * @param {string} [opts.dbPath]
  * @param {string} [opts.plotsDir]
  * @param {string} [opts.operatorPubkey]
+ * @param {string} [opts.topicsPath]
  * @param {() => number} [opts.nowFn] - returns unix seconds (for deterministic tests)
  */
 export function createTownServer(opts = {}) {
@@ -222,6 +223,19 @@ export function createTownServer(opts = {}) {
   const getOperatorPubkey = () =>
     opts.operatorPubkey !== undefined ? opts.operatorPubkey : process.env.TOWN_OPERATOR_PUBKEY || '';
   const nowSec = opts.nowFn || (() => Math.floor(Date.now() / 1000));
+  const topicsPath = opts.topicsPath !== undefined ? opts.topicsPath : path.join(__dirname, 'nightly-topics.json');
+
+  let nightlyTopics = null;
+  if (typeof topicsPath === 'string' && topicsPath.length > 0) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(topicsPath, 'utf8'));
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((t) => typeof t === 'string')) {
+        nightlyTopics = parsed;
+      }
+    } catch {
+      nightlyTopics = null;
+    }
+  }
 
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL;');
@@ -399,6 +413,9 @@ export function createTownServer(opts = {}) {
     return { ok: true, handle, resident, now };
   }
 
+  // Known edge, accepted: the Nightly Call topic rolls at midnight UTC but only
+  // reaches polling clients on the next state change after midnight, because
+  // `state?since=` returns 304 while state_seq is unchanged.
   function handleGetState(req, res, url) {
     const now = nowSec();
     pruneExpiredFootlights(now);
@@ -465,14 +482,27 @@ export function createTownServer(opts = {}) {
       };
     }
 
-    sendJson(res, 200, {
+    const stateBody = {
       state_seq: stateSeq,
       footlights,
       prompt_book: promptBook,
       presence,
       plots,
       inn,
-    });
+    };
+
+    if (nightlyTopics) {
+      const d = new Date(now * 1000);
+      const utcMidnightMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      const dayNumber = Math.floor(utcMidnightMs / 86400000);
+      const idx = ((dayNumber % nightlyTopics.length) + nightlyTopics.length) % nightlyTopics.length;
+      stateBody.nightly_call = {
+        date: d.toISOString().slice(0, 10),
+        topic: nightlyTopics[idx],
+      };
+    }
+
+    sendJson(res, 200, stateBody);
   }
 
   function handleJoin(req, res, body, auth) {
