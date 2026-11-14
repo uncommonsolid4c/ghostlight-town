@@ -22,6 +22,38 @@
   #status { bottom: 12px; font-size: 12px; }
   #status.error { color: #ff9a8a; border-color: #7a2a20; }
   #counts { color: #b8b09a; }
+  #prompt-book-toggle {
+    position: fixed; top: 12px; right: 12px; z-index: 11;
+    font-family: "Courier New", Courier, monospace; font-size: 12px;
+    color: #e8e0cc; background: rgba(10, 12, 26, 0.78);
+    border: 1px solid #4a3a28; padding: 5px 10px; cursor: pointer;
+  }
+  #prompt-book-toggle:hover { border-color: #b59449; color: #ffbe5c; }
+  #prompt-book {
+    left: auto; right: 12px; top: 44px;
+    width: min(320px, calc(100vw - 24px));
+    max-height: 50vh;
+    display: flex; flex-direction: column;
+    font-size: 12px; line-height: 1.45;
+  }
+  #prompt-book[hidden] { display: none; }
+  #prompt-book h2 {
+    margin: 0 0 6px; padding-bottom: 4px;
+    font-size: 12px; color: #ffbe5c;
+    border-bottom: 1px solid #4a3a28;
+  }
+  #prompt-book-lines { overflow-y: auto; flex: 1 1 auto; user-select: text; }
+  .pb-line, .pb-empty { margin: 0 0 4px; color: #e8e0cc; word-break: break-word; }
+  .pb-empty { color: #b8b09a; }
+  .pb-npc-pill {
+    display: inline-block; background: #b87333; color: #0a0c1a;
+    font-weight: bold; font-size: 10px; padding: 0 4px; margin-right: 4px;
+    border-radius: 2px;
+  }
+  .pb-reply-to { color: #b8b09a; margin-right: 4px; }
+  .pb-handle { color: #a8d8ea; font-weight: bold; }
+  .pb-kind-emote .pb-body { font-style: italic; color: #e6dcc6; }
+  .pb-kind-system { opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -29,10 +61,16 @@
 
 <div id="hud" class="panel">
   <h1>Ghostlight Town &mdash; Polyfork staging trial</h1>
-  <p><span class="warm">Look-only staging.</span> Bandstand, Milo&rsquo;s cottage and blue ghost are now in; no live town wiring yet &mdash; judged on look against CONCEPT.md.</p>
+  <p><span class="warm">Live read-only staging.</span> Polls the town API for bandstand footlights and the Prompt Book; avatars and plots are not yet wired.</p>
   <p id="counts">Building&hellip;</p>
   <p class="hint">Drag to orbit &middot; scroll / pinch to zoom &middot; WASD or arrow keys to walk the view. The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck.</p>
 </div>
+
+<button id="prompt-book-toggle" type="button" aria-expanded="true" aria-controls="prompt-book">Prompt Book</button>
+<aside id="prompt-book" class="panel">
+  <h2>The Prompt Book &mdash; last 24h</h2>
+  <div id="prompt-book-lines"><p class="pb-empty">Waiting for the town API&hellip;</p></div>
+</aside>
 
 <div id="status" class="panel">Loading&hellip;</div>
 
@@ -55,6 +93,6 @@ window.addEventListener('error', function (e) {
   }
 }
 </script>
-<script type="module" src="./staging.js?v=5"></script>
+<script type="module" src="./staging.js?v=7"></script>
 </body>
 </html>
