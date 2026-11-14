@@ -15,13 +15,54 @@
     padding: 10px 12px; max-width: min(420px, calc(100vw - 48px));
   }
   #hud { top: 12px; }
-  #hud h1 { margin: 0 0 4px; font-size: 15px; color: #a8d8ea; font-weight: bold; }
+  .hud-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 4px;
+  }
+  #hud h1 { margin: 0; font-size: 15px; color: #a8d8ea; font-weight: bold; }
+  #move-in-cta {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 13px;
+    color: #ffca66;
+    border: 1px solid #b59449;
+    background: rgba(20, 22, 36, 0.84);
+    text-decoration: none;
+    white-space: nowrap;
+  }
   #hud p { margin: 4px 0; font-size: 12px; line-height: 1.5; }
   #hud .hint { color: #b8b09a; }
   #hud .warm { color: #ffbe5c; }
-  #status { bottom: 12px; font-size: 12px; }
+  #status { bottom: 42px; font-size: 12px; }
   #status.error { color: #ff9a8a; border-color: #7a2a20; }
   #counts { color: #b8b09a; }
+  #footer-bar {
+    position: fixed;
+    bottom: 8px;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 12px;
+    color: #cfc4ad;
+    pointer-events: none;
+    z-index: 10;
+  }
+  #footer-bar a {
+    color: #ffca66;
+    pointer-events: auto;
+    text-decoration: underline;
+  }
+  #controls-hint {
+    background: rgba(10, 12, 26, 0.78);
+    padding: 3px 8px;
+    border: 1px solid #4a3a28;
+  }
   #prompt-book-toggle {
     position: fixed; top: 12px; right: 12px; z-index: 11;
     font-family: "Courier New", Courier, monospace; font-size: 12px;
@@ -102,6 +143,37 @@
     background: #f4ead5;
   }
   @media (max-width: 640px) {
+    #hud {
+      max-width: calc(100vw - 24px);
+    }
+    #hud h1 {
+      min-width: 0;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #move-in-cta {
+      min-height: 44px;
+      min-width: 44px;
+      padding: 10px 14px;
+      font-size: 14px;
+    }
+    #prompt-book-toggle {
+      top: auto;
+      bottom: 116px;
+      right: 12px;
+      min-height: 44px;
+      min-width: 44px;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+    #prompt-book {
+      top: auto;
+      bottom: 168px;
+      width: min(300px, calc(100vw - 24px));
+      max-height: 32vh;
+    }
     #plot-overlay-card {
       width: min(760px, calc(100vw - 16px));
       height: min(560px, 92vh);
@@ -115,6 +187,21 @@
       font-size: 14px;
       padding: 10px 14px;
     }
+    #footer-bar {
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+    #controls-hint {
+      font-size: 11px;
+    }
+    #footer-bar a {
+      padding: 8px 4px;
+    }
+    #status {
+      bottom: 76px;
+      font-size: 11px;
+      max-width: calc(100vw - 24px);
+    }
   }
 </style>
 </head>
@@ -122,10 +209,13 @@
 <div id="view"></div>
 
 <div id="hud" class="panel">
-  <h1>Ghostlight Town &mdash; Polyfork staging trial</h1>
+  <div class="hud-header">
+    <h1>Ghostlight Town &mdash; Polyfork staging trial</h1>
+    <a id="move-in-cta" href="move-in.html">Move in &rarr;</a>
+  </div>
   <p><span class="warm">Live read-only staging.</span> Polls the town API for bandstand footlights, the Prompt Book, presence avatars, resident cottages, Inn occupancy glow, and the Nightly Call card.</p>
   <p id="counts">Building&hellip;</p>
-  <p class="hint">Drag to orbit &middot; scroll / pinch to zoom &middot; WASD or arrow keys to walk the view. The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck.</p>
+  <p class="hint">The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck. Tap ground to glide; tap a cottage, newsstand, Inn, or gatehouse to inspect.</p>
 </div>
 
 <button id="prompt-book-toggle" type="button" aria-expanded="true" aria-controls="prompt-book">Prompt Book</button>
@@ -135,6 +225,11 @@
 </aside>
 
 <div id="status" class="panel">Loading&hellip;</div>
+
+<footer id="footer-bar">
+  <span id="controls-hint">Drag: orbit &middot; Scroll / Pinch: zoom &middot; WASD / Arrows: pan &middot; Tap ground: glide &middot; Click: inspect</span>
+  <span><a href="move-in.html">Move in &rarr;</a> &middot; <a href="https://milo.4167360.xyz/" target="_blank" rel="noopener noreferrer">&larr; back to Milo&apos;s corner</a></span>
+</footer>
 
 <div id="plot-overlay" hidden>
   <div id="plot-overlay-card">
@@ -147,6 +242,13 @@
 </div>
 
 <script>
+// Swap controls hint on coarse-pointer (touch) devices before module load.
+(function () {
+  var controlsHint = document.getElementById('controls-hint');
+  if (controlsHint && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    controlsHint.textContent = 'Tap ground: walk \u00b7 Drag: look \u00b7 Pinch: zoom \u00b7 Tap: inspect';
+  }
+})();
 // Surface module-load failures in the status box (the module script below
 // cannot report its own import errors).
 window.addEventListener('error', function (e) {
@@ -165,6 +267,6 @@ window.addEventListener('error', function (e) {
   }
 }
 </script>
-<script type="module" src="./staging.js?v=11"></script>
+<script type="module" src="./staging.js?v=12"></script>
 </body>
 </html>
