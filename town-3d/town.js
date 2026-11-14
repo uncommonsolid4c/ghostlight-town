@@ -457,6 +457,17 @@ function buildProp(THREE, prop) {
     return null;
   }
 
+  // Cottages are solid boxes/shells, so interior z props would be invisible inside them.
+  // Unfold interior z onto a front porch band [PORCH_NEAR, PORCH_FAR]; props already >= PORCH_NEAR pass through.
+  const PORCH_NEAR = 2.05;
+  const PORCH_FAR = 3.45;
+  const INTERIOR_HALF = 2.0;
+  let propZ = prop.z;
+  if (propZ < PORCH_NEAR) {
+    const clampedZ = Math.max(-INTERIOR_HALF, Math.min(INTERIOR_HALF, propZ));
+    propZ = PORCH_NEAR + ((INTERIOR_HALF - clampedZ) / (2 * INTERIOR_HALF)) * (PORCH_FAR - PORCH_NEAR);
+  }
+
   const color = safeColor(prop.color, '#8a6240');
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
   let mesh;
@@ -464,31 +475,31 @@ function buildProp(THREE, prop) {
   switch (prop.kind) {
     case 'desk':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.72, 0.6), mat);
-      mesh.position.set(prop.x, prop.y + 0.36, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.36, propZ);
       break;
     case 'bookshelf':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.4, 0.35), mat);
-      mesh.position.set(prop.x, prop.y + 0.7, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.7, propZ);
       break;
     case 'rug':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.04, 1.1), mat);
-      mesh.position.set(prop.x, prop.y + 0.02, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.02, propZ);
       break;
     case 'tea_kettle':
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.24, 8), mat);
-      mesh.position.set(prop.x, prop.y + 0.12, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.12, propZ);
       break;
     case 'typewriter':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.18, 0.3), mat);
-      mesh.position.set(prop.x, prop.y + 0.09, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.09, propZ);
       break;
     case 'cat':
       mesh = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.36, 6), mat);
-      mesh.position.set(prop.x, prop.y + 0.18, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.18, propZ);
       break;
     case 'poster_frame':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.06), mat);
-      mesh.position.set(prop.x, prop.y + 0.9, prop.z);
+      mesh.position.set(prop.x, prop.y + 0.9, propZ);
       break;
     default:
       return null;
