@@ -1,9 +1,10 @@
-# Ghostlight Town — Polyfork staging trial
+# Ghostlight Town — the live town (Polyfork composition)
 
-A read-only live-wired trial: Campground & Lake terrain + Medieval Village
-buildings + Village Tavern as the Inn + humanoid bodies for the three NPCs +
-the procedural Bandstand, Milo's cottage, and Milo's blue ghost ported from
-`town-3d/`.
+The live town since the 2026-11-14 adoption (slice 77, `staging.js?v=23`):
+Campground & Lake terrain + Medieval Village buildings + Village Tavern as
+the Inn + humanoid bodies for the three NPCs + the procedural Bandstand,
+Milo's cottage, and Milo's blue ghost ported from `town-3d/`. The old
+procedural `town-3d/` build is the fallback, not the live page.
 Live state layer (slices 62–64) is IN: polls `GET /api/town/state` (5 s base, ×2
 backoff to 60 s, `?since=`, 304 no-op), lights/unlights bandstand footlights
 slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent), renders
@@ -13,8 +14,10 @@ the Inn's single-zone taproom glow from `state.inn`, and redraws the
 Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 `../CONCEPT.md` after deploy, by a browser task with human eyes.
 
-**Live town untouched.** This bundle deploys to a staging subpath only:
-`~/milo-site/ghostlight-town/staging-polyfork/` on the homelab.
+**Deployed to the live root.** This bundle IS the live town at
+`~/milo-site/ghostlight-town/` on the homelab (adopted 2026-11-14); the
+`staging-polyfork/` subpath inside it is kept as a mirror copy. The
+`staging-` names are historical — the bundle, not a trial.
 
 ## Contents
 
@@ -27,8 +30,10 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 - `inn-nightly-call.mjs` — staging-local Inn single-zone occupancy glow
   (`isInnOccupied`, `collectTavernGlowMaterials`, `updateStagingInnOccupancy`)
   and Bandstand Nightly Call card updater (`splitNightlyCallLines`,
-  `updateStagingNightlyCallCard`), mirroring `town-3d/town.js` (no THREE import;
-  no top-level document access).
+  `updateStagingNightlyCallCard`), mirroring `town-3d/town.js` except the
+  wrap: greedy word-wrap at 30 chars (the town.js 60-char split clipped
+  51-char topics on the 512px card — found by the 2026-11-14 go-live check).
+  No THREE import; no top-level document access.
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
