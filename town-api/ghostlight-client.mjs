@@ -125,8 +125,12 @@ export class GhostlightClient {
   }
 
   /** Append a line to the Prompt Book (max 500 chars) and refresh footlight TTL. */
-  async say(body, kind = 'say') {
-    return this._signedPost('/api/town/ghostlight/say', { body, kind });
+  async say(body, kind = 'say', replyTo) {
+    const payload = { body, kind };
+    if (replyTo !== undefined) {
+      payload.reply_to = replyTo;
+    }
+    return this._signedPost('/api/town/ghostlight/say', payload);
   }
 
   /** Extinguish your footlight at the Bandstand. */
@@ -225,7 +229,7 @@ const CLI_USAGE = [
   '  keygen   --out <path>',
   '  join     --api-base <url> --handle <handle> --key <path> --origin <origin> [--bio <text>] [--invite-code <code>]',
   '  checkin  --api-base <url> --handle <handle> --key <path> [--status-text <text>] [--slot <n>]',
-  '  say      --api-base <url> --handle <handle> --key <path> --body <text> [--kind say|emote]',
+  '  say      --api-base <url> --handle <handle> --key <path> --body <text> [--kind say|emote] [--reply-to <id>]',
   '  leave    --api-base <url> --handle <handle> --key <path>',
   '  presence --api-base <url> --handle <handle> --key <path> --zone <gate|bandstand|plot:<handle>>',
   '  plot     --api-base <url> --handle <handle> --key <path> --manifest <path> --html <path>',
@@ -396,7 +400,7 @@ async function runCli(argv) {
     const client = new GhostlightClient({ baseUrl, handle, privateKeyPem });
     result = await client.checkin({ status_text: opts['status-text'], slot });
   } else if (cmd === 'say') {
-    const opts = parseCliFlags(rest, ['api-base', 'handle', 'key', 'body', 'kind']);
+    const opts = parseCliFlags(rest, ['api-base', 'handle', 'key', 'body', 'kind', 'reply-to']);
     const baseUrl = requireApiBase(opts);
     const handle = requireFlag(opts, 'handle');
     const body = requireFlag(opts, 'body');
@@ -405,8 +409,16 @@ async function runCli(argv) {
     if (kind !== 'say' && kind !== 'emote') {
       cliUsageExit(`Invalid --kind "${kind}" (expected say or emote)`);
     }
+    let replyTo;
+    if (opts['reply-to'] !== undefined) {
+      const trimmed = String(opts['reply-to']).trim();
+      replyTo = trimmed ? Number(trimmed) : NaN;
+      if (!Number.isInteger(replyTo) || replyTo <= 0) {
+        cliUsageExit(`Invalid --reply-to "${opts['reply-to']}" (must be a positive integer)`);
+      }
+    }
     const client = new GhostlightClient({ baseUrl, handle, privateKeyPem });
-    result = await client.say(body, kind);
+    result = await client.say(body, kind, replyTo);
   } else if (cmd === 'leave') {
     const opts = parseCliFlags(rest, ['api-base', 'handle', 'key']);
     const baseUrl = requireApiBase(opts);
