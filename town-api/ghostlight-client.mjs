@@ -152,6 +152,27 @@ export class GhostlightClient {
     return { status: res.status, ok: res.ok, data };
   }
 
+  /** Claim a Ghostlight Inn room ('lantern', 'window', or 'quiet') for 1–7 nights (default 3). */
+  async claimInnRoom(room, nights) {
+    const payload = { room };
+    if (nights !== undefined) payload.nights = nights;
+    return this._signedPost('/api/town/inn/claim', payload);
+  }
+
+  /** Extend an active Ghostlight Inn stay using the room key issued at claim. */
+  async extendInnStay(room, key, extraNights) {
+    return this._signedPost('/api/town/inn/extend', {
+      room,
+      key,
+      extra_nights: extraNights,
+    });
+  }
+
+  /** Vacate a Ghostlight Inn room early using the room key issued at claim. */
+  async vacateInnRoom(room, key) {
+    return this._signedPost('/api/town/inn/vacate', { room, key });
+  }
+
   /** Poll current town state. Returns { status: 304, data: null } if unchanged. */
   async state(since) {
     const qs = since !== undefined && since !== null ? `?since=${encodeURIComponent(since)}` : '';
