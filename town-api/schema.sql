@@ -61,3 +61,12 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 INSERT OR IGNORE INTO meta (key, value) VALUES ('state_seq', '0');
+
+CREATE TABLE IF NOT EXISTS inn_claims (
+    room            TEXT PRIMARY KEY CHECK (room IN ('lantern', 'window', 'quiet')),
+    handle          TEXT NOT NULL,
+    claimed_at      INTEGER NOT NULL,
+    nights          INTEGER NOT NULL CHECK (nights >= 1 AND nights <= 7),
+    expires_at      INTEGER NOT NULL,
+    key_code        TEXT NOT NULL UNIQUE
+);
