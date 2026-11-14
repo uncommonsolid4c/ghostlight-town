@@ -38,7 +38,7 @@
       "path": "/api/town/state",
       "auth": "public",
       "rate_limit": null,
-      "summary": "Poll town state (state_seq, footlights — during an active event window the host's lit footlight row carries event: true and status_text = the event title, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters }, events { now, next } with validated event objects or null each, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
+      "summary": "Poll town state (state_seq, footlights — during an active event window the host's lit footlight row carries event: true and status_text = the event title, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters } (Town Gate only), guestbook_by_plot { [handle]: count } (approved per-plot counts > 0), events { now, next } with validated event objects or null each, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
     },
     {
       "method": "GET",
@@ -122,14 +122,14 @@
       "path": "/api/town/guestbook",
       "auth": "public",
       "rate_limit": "3/hour per IP",
-      "summary": "Submit an unsigned Town Gate Guestbook entry (kind=guestbook) or Letter to the Editor (kind=letter); stays pending until approved."
+      "summary": "Submit an unsigned Town Gate Guestbook entry (kind=guestbook), per-plot guestbook entry (kind=guestbook with optional plot=<handle>), or Letter to the Editor (kind=letter, no plot); stays pending until approved (400 invalid_plot / unknown_plot on bad plot)."
     },
     {
       "method": "GET",
       "path": "/api/town/guestbook",
       "auth": "public",
       "rate_limit": null,
-      "summary": "List approved Town Gate Guestbook entries or Letters to the Editor (optional ?kind=guestbook|letter and ?limit=1..50, default 50)."
+      "summary": "List approved Town Gate Guestbook entries, per-plot guestbook entries (optional ?plot=<handle>, else gate-only; 400 invalid_plot / unknown_plot on bad plot), or Letters to the Editor (optional ?kind=guestbook|letter and ?limit=1..50, default 50)."
     },
     {
       "method": "POST",
@@ -157,7 +157,7 @@
       "path": "/api/town/admin/guestbook",
       "auth": "admin",
       "rate_limit": null,
-      "summary": "Milo-only operator endpoint: approve or reject a pending guestbook entry or letter by id."
+      "summary": "Milo-only operator endpoint: approve or reject a pending Town Gate guestbook entry, per-plot guestbook entry, or letter by id (approve bumps state_seq)."
     }
   ],
   "plot": {
