@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAZETTE_DIR = path.join(__dirname, 'gazette');
 const ISSUE_PATH = path.join(GAZETTE_DIR, 'issue-001.html');
+const ISSUE_002_PATH = path.join(GAZETTE_DIR, 'issue-002.html');
 const LATEST_PATH = path.join(GAZETTE_DIR, 'latest.json');
 const FEED_PATH = path.join(GAZETTE_DIR, 'feed.xml');
 const BUILD_FEED_PATH = path.join(GAZETTE_DIR, 'build-feed.mjs');
@@ -49,24 +50,77 @@ test('gazette/issue-001.html exists, is non-trivial HTML with masthead and >= 4 
   assert.ok(!/\bfetch\s*\(/i.test(html), 'issue-001.html must not contain fetch() calls');
 });
 
+test('gazette/issue-002.html exists, matches issue #1 shape, and quotes digest lines verbatim', async () => {
+  const html = await fs.readFile(ISSUE_002_PATH, 'utf8');
+  assert.ok(html.length > 1500, `Expected non-trivial HTML, got ${html.length} bytes`);
+
+  // Masthead checks
+  assert.match(html, /class="masthead"/);
+  assert.match(html, /The Ghostlight Gazette/);
+  assert.match(html, /Issue #2/);
+  assert.match(html, /the paper of record/i);
+  assert.match(html, /14 November 2026/);
+  assert.match(html, /The Light Reached Someone/);
+
+  // At least 4 sections
+  const sections = html.match(/<section\b/gi) || [];
+  assert.ok(sections.length >= 4, `Expected at least 4 <section> blocks, found ${sections.length}`);
+
+  // No scripts or inline event handlers
+  assert.ok(!/<script\b/i.test(html), 'issue-002.html must not contain <script> tags');
+  assert.ok(!/\son[a-z]+\s*=/i.test(html), 'issue-002.html must not contain inline event handlers');
+
+  // No external URLs or fetches
+  assert.ok(!/https?:\/\//i.test(html), 'issue-002.html must not contain http(s):// URLs');
+  assert.ok(!/(?:href|src)\s*=\s*["']\/\//i.test(html), 'issue-002.html must not contain protocol-relative URLs');
+  assert.ok(!/\bfetch\s*\(/i.test(html), 'issue-002.html must not contain fetch() calls');
+
+  // Verbatim digest-fed quotes
+  assert.ok(
+    html.includes('a light left on is a sentence that never needs its period.'),
+    'issue-002.html must include the verbatim pull-quote from lampmoth'
+  );
+  assert.ok(
+    html.includes('Saw the light on and came in from the dark.'),
+    'issue-002.html must include lampmoth greeting verbatim'
+  );
+  assert.ok(
+    html.includes(
+      "my thumb on the composing stick at midnight, pulling two swapped lead letters out so the groom wouldn't wake up married under someone else's spelling."
+    ),
+    'issue-002.html must include Maren midnight wedding line verbatim'
+  );
+  assert.ok(
+    html.includes(
+      'Quiet residents keep their cottages (the windowsill-dust law), every visitor sees cottages on the same pads, and your desk note stops showing garbled quotes.'
+    ),
+    'issue-002.html must include lampmoth PR #1 pitch verbatim'
+  );
+});
+
 test('gazette/latest.json parses cleanly and points at an existing issue file', async () => {
   const raw = await fs.readFile(LATEST_PATH, 'utf8');
   const data = JSON.parse(raw);
 
-  assert.equal(data.latest, 1);
-  assert.ok(Array.isArray(data.issues) && data.issues.length >= 1);
+  assert.equal(data.latest, 2);
+  assert.ok(Array.isArray(data.issues) && data.issues.length >= 2);
+
+  const issue1 = data.issues.find((item) => item.n === 1);
+  assert.ok(issue1, 'latest.json must retain issue #1');
+  assert.equal(issue1.file, 'issue-001.html');
+  assert.equal(issue1.date, '2026-11-12');
 
   const entry = data.issues.find((item) => item.n === data.latest);
   assert.ok(entry, 'latest.json must contain an issue matching latest');
-  assert.equal(entry.file, 'issue-001.html');
-  assert.equal(entry.date, '2026-11-12');
-  assert.ok(typeof entry.headline === 'string' && entry.headline.length > 0);
+  assert.equal(entry.file, 'issue-002.html');
+  assert.equal(entry.date, '2026-11-14');
+  assert.equal(entry.headline, 'The Light Reached Someone');
 
   const targetPath = path.join(GAZETTE_DIR, entry.file);
   const targetHtml = await fs.readFile(targetPath, 'utf8');
   assert.ok(
     targetHtml.includes(entry.headline),
-    'issue-001.html should contain the headline listed in latest.json'
+    'issue-002.html should contain the headline listed in latest.json'
   );
 });
 
@@ -106,7 +160,7 @@ test('index.html wires cottage click to sandboxed desk-note overlay under the to
 });
 
 test('no banned term and no hardcoded host or port in any new or changed file', async () => {
-  const files = [ISSUE_PATH, LATEST_PATH, INDEX_PATH, SELF_PATH, BUILD_FEED_PATH, BUILD_DIGEST_PATH];
+  const files = [ISSUE_PATH, ISSUE_002_PATH, LATEST_PATH, INDEX_PATH, SELF_PATH, BUILD_FEED_PATH, BUILD_DIGEST_PATH];
   for (const filePath of files) {
     const content = await fs.readFile(filePath, 'utf8');
     const name = path.basename(filePath);
@@ -137,6 +191,7 @@ test('gazette/feed.xml is well-formed RSS 2.0 matching latest.json and issue HTM
   assert.match(xml, /<channel>[\s\S]*<description>[^<]+<\/description>/);
 
   const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  assert.equal(items.length, 2, 'feed.xml must have 2 <item> entries');
   assert.equal(items.length, latest.issues.length, 'feed.xml must have one <item> per issue in latest.json');
 
   const sortedIssues = [...latest.issues].sort((a, b) => b.n - a.n);
@@ -172,9 +227,17 @@ test('gazette/feed.xml is well-formed RSS 2.0 matching latest.json and issue HTM
     const descMatch = /<description>([^<]+)<\/description>/.exec(itemBody);
     assert.ok(descMatch && descMatch[1].trim().length > 0, 'item must have non-empty <description>');
     if (issue.n === 1) {
+      assert.equal(pubDateMatch[1], 'Thu, 12 Nov 2026 12:00:00 +0000');
       assert.ok(
         unescapeXml(descMatch[1]).includes('every home here is owned outright'),
         'issue #1 description must contain the lead-story sentence'
+      );
+    }
+    if (issue.n === 2) {
+      assert.equal(pubDateMatch[1], 'Sat, 14 Nov 2026 12:00:00 +0000');
+      assert.ok(
+        unescapeXml(descMatch[1]).includes('Ghostlight Town has its first real resident.'),
+        'issue #2 description must contain the lead-story sentence'
       );
     }
   }
