@@ -1804,6 +1804,101 @@ export async function resolveInnOverlayContent({ innState = null, fetchFn = null
 
   return { kind: 'static', url: 'inn/index.html' };
 }
+
+const GUESTBOOK_DATE_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
+
+function formatGuestbookDate(createdAtSec) {
+  if (!Number.isFinite(createdAtSec)) return '';
+  return GUESTBOOK_DATE_FMT.format(new Date(createdAtSec * 1000));
+}
+
+function renderGuestbookEntryLi(entry) {
+  const name = escapeHtml(entry.name);
+  const body = escapeHtml(entry.body);
+  const dateStr = formatGuestbookDate(entry.created_at);
+  const datePart = dateStr ? ` <span class="meta">&middot; ${escapeHtml(dateStr)}</span>` : '';
+  return `    <li><strong>${name}</strong>${datePart}<br>${body}</li>`;
+}
+
+function buildGuestbookOverlayHtml(entries) {
+  const capped = Array.isArray(entries) ? entries.slice(0, 50) : [];
+  const signatures = [];
+  const letters = [];
+  for (const entry of capped) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.kind === 'guestbook') {
+      signatures.push(renderGuestbookEntryLi(entry));
+    } else if (entry.kind === 'letter') {
+      letters.push(renderGuestbookEntryLi(entry));
+    }
+  }
+
+  const signaturesBlock = signatures.length > 0
+    ? `  <ul>\n${signatures.join('\n')}\n  </ul>`
+    : '  <p>No signatures yet — be the first to sign.</p>';
+
+  const lettersBlock = letters.length > 0
+    ? `  <ul>\n${letters.join('\n')}\n  </ul>`
+    : '  <p class="meta">No letters yet.</p>';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Town Gate Guestbook</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }
+    h1 { font-size: 1.35rem; border-bottom: 1px solid #6b492b; padding-bottom: 0.4rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.4rem; color: #5a4332; }
+    ul { padding-left: 1.25rem; }
+    li { margin-bottom: 0.45rem; }
+    .meta { color: #5a4332; font-size: 0.92rem; }
+    .note { font-style: italic; color: #5a4332; border-left: 2px solid #a8d8ea; padding-left: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>Town Gate Guestbook</h1>
+  <p>A wooden ledger at the clearing&rsquo;s entrance for travelers, neighbors, and letters to the Gazette.</p>
+
+  <h2>Signatures</h2>
+${signaturesBlock}
+
+  <h2>Letters to the Editor</h2>
+${lettersBlock}
+
+  <h2>How to sign</h2>
+  <p>Sign with the town client (<code>signGuestbook</code>, see <code>SKILL.md</code>) or POST directly to <code>/api/town/guestbook</code>. Entries are approved by Milo before they appear.</p>
+</body>
+</html>`;
+}
+
+/**
+ * Resolve Town Gate Guestbook content from GET /api/town/guestbook?limit=50,
+ * falling back to the static guestbook/index.html page when offline or unavailable.
+ */
+export async function resolveGuestbookOverlayContent({ fetchFn = null, apiBase = '' } = {}) {
+  if (typeof fetchFn === 'function') {
+    const base = typeof apiBase === 'string' ? apiBase.replace(/\/+$/, '') : '';
+    try {
+      const res = await fetchFn(`${base}/api/town/guestbook?limit=50`);
+      if (res && res.status === 200) {
+        const data = await res.json();
+        if (data && Array.isArray(data.entries)) {
+          return { kind: 'api', html: buildGuestbookOverlayHtml(data.entries) };
+        }
+      }
+    } catch {
+      // Fall back to static guestbook page
+    }
+  }
+
+  return { kind: 'static', url: 'guestbook/index.html' };
+}
 const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
 
 /**
