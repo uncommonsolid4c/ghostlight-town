@@ -60,12 +60,13 @@ const TEST_SUITES = [
   'town-npc/test-real-brain.mjs',
   'town-npc/test-register.mjs',
   'town-npc/test-run-all.mjs',
-  // staging-polyfork (5)
+  // staging-polyfork (6)
   'staging-polyfork/test-staging.mjs',
   'staging-polyfork/test-prompt-book.mjs',
   'staging-polyfork/test-avatar.mjs',
   'staging-polyfork/test-plot-overlay.mjs',
   'staging-polyfork/test-inn-guestbook-overlay.mjs',
+  'staging-polyfork/test-tap-glide.mjs',
 ];
 
 function printHelp() {
