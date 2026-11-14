@@ -16,6 +16,7 @@ import {
   updateNightlyCallCard,
   applyPlotManifest,
   updateTownAnimations,
+  formatPromptBookEntries,
   renderPromptBook,
   resolvePlotOverlayContent,
   resolveInnOverlayContent,
@@ -1184,4 +1185,50 @@ test('town-3d/guestbook/index.html static fallback meets safety and copy rules',
   assert.ok(html.includes('SKILL.md'), 'guestbook/index.html must reference SKILL.md');
   assert.ok(html.includes('signGuestbook'), 'guestbook/index.html must reference town-client signGuestbook');
   assert.ok(!new RegExp(`camp${'fire'}`, 'i').test(html), 'guestbook/index.html must not contain banned term');
+});
+
+test('formatPromptBookEntries passes reply_to integer through and normalizes non-integers to null', () => {
+  const formatted = formatPromptBookEntries([
+    { id: 1, handle: 'maren', kind: 'say', body: 'hi', reply_to: 3, created_at: 100, role: 'npc' },
+    { id: 2, handle: 'wick', kind: 'say', body: 'yo', reply_to: '3', created_at: 101, role: 'npc' },
+    { id: 3, handle: 'tomas', kind: 'say', body: 'hey', reply_to: null, created_at: 102, role: 'npc' },
+    { id: 4, handle: 'alice', kind: 'say', body: 'ok', created_at: 103, role: 'muse' },
+  ]);
+  assert.equal(formatted[0].reply_to, 3);
+  assert.equal(formatted[1].reply_to, null);
+  assert.equal(formatted[2].reply_to, null);
+  assert.equal(formatted[3].reply_to, null);
+});
+
+test('renderPromptBook renders pb-reply-to before handle with resolved or fallback label and escapes body', () => {
+  const doc = createDomStub();
+  const container = doc.createElement('div');
+  const lines = [
+    { id: 3, handle: 'maren', kind: 'say', body: 'Kettle is on.', reply_to: null, created_at: 100, role: 'npc' },
+    { id: 4, handle: 'wick', kind: 'say', body: '<b>hi</b>', reply_to: 3, created_at: 101, role: 'npc' },
+    { id: 5, handle: 'tomas', kind: 'say', body: 'Older thread.', reply_to: 99, created_at: 102, role: 'muse' },
+    { id: 6, handle: 'alice', kind: 'say', body: 'Top-level.', reply_to: null, created_at: 103, role: 'muse' },
+  ];
+
+  renderPromptBook(container, lines, doc);
+  assert.equal(container.children.length, 4);
+
+  // Line 4: reply to line 3 (in window) -> [NPC], pb-reply-to "↩ #3 @maren", pb-handle "wick", pb-body ": <b>hi</b>"
+  const line4 = container.children[1];
+  const classes4 = line4.children.map((c) => c.className);
+  assert.deepEqual(classes4, ['pb-npc-pill', 'pb-reply-to', 'pb-handle', 'pb-body']);
+  assert.equal(line4.children[1].textContent, '↩ #3 @maren');
+  assert.equal(line4.children[3].textContent, ': <b>hi</b>');
+  assert.equal(line4.children[3]._textContent, ': <b>hi</b>');
+
+  // Line 5: reply to line 99 (not in window) -> pb-reply-to "↩ #99" before pb-handle
+  const line5 = container.children[2];
+  const classes5 = line5.children.map((c) => c.className);
+  assert.deepEqual(classes5, ['pb-reply-to', 'pb-handle', 'pb-body']);
+  assert.equal(line5.children[0].textContent, '↩ #99');
+
+  // Line 6: top-level -> no pb-reply-to span
+  const line6 = container.children[3];
+  const classes6 = line6.children.map((c) => c.className);
+  assert.deepEqual(classes6, ['pb-handle', 'pb-body']);
 });
