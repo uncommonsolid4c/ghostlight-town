@@ -218,7 +218,7 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent } from './town.js?v=14';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent } from './town.js?v=14';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
@@ -314,6 +314,27 @@
       plotIframe.setAttribute('sandbox', '');
       plotIframe.removeAttribute('srcdoc');
       plotIframe.src = `gazette/${issueFile}`;
+      plotOverlay.hidden = false;
+    }
+
+    async function openInnOverlay() {
+      keys.clear();
+      isDragging = false;
+      canvas.classList.remove('dragging');
+      plotOverlayTitle.textContent = 'Ghostlight Inn — The Guest Book';
+      plotIframe.setAttribute('sandbox', '');
+      const resolved = await resolveInnOverlayContent({
+        innState: live.lastState?.inn,
+        fetchFn: typeof window.fetch === 'function' ? window.fetch.bind(window) : null,
+        apiBase: API_BASE,
+      });
+      if (resolved.kind === 'api') {
+        plotIframe.removeAttribute('src');
+        plotIframe.srcdoc = resolved.html;
+      } else {
+        plotIframe.removeAttribute('srcdoc');
+        plotIframe.src = resolved.url;
+      }
       plotOverlay.hidden = false;
     }
 
@@ -419,14 +440,7 @@
           }
           if (kind === 'inn') {
             infoStrip.hidden = true;
-            keys.clear();
-            isDragging = false;
-            canvas.classList.remove('dragging');
-            plotOverlayTitle.textContent = target.userData.label || 'Ghostlight Inn';
-            plotIframe.setAttribute('sandbox', '');
-            plotIframe.removeAttribute('srcdoc');
-            plotIframe.src = 'inn/index.html';
-            plotOverlay.hidden = false;
+            openInnOverlay();
             return;
           }
           infoStrip.textContent = target.userData.label || target.name;
