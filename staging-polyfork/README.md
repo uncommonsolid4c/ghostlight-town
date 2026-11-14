@@ -215,11 +215,11 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
   town's lanterns are the same).
 - The two-story house from the kit was NOT placed (brief said 2–3
   cottages); it is available in the zip if the ring wants a fourth building.
-- **Resident plot props & Tomas's teapot GLB are follow-ups**: Milo's three
-  procedural props (desk, tea kettle, cat) are now in staging (`cottage-props.mjs`);
+- **Tomas's teapot GLB is a follow-up**: Milo's three procedural props
+  (desk, tea kettle, cat) and Wick/Maren/Tomas manifest props are now attached
+  in staging via `attachPlotProps` on `manifest.props` (`cottage-props.mjs`);
   `models/teapot.glb` is a page-relative GLB that would 404 from the staging
-  subpath and still waits on a prop-path decision, and Wick/Maren/Tomas
-  manifest props remain a follow-up.
+  subpath and still waits on a prop-path decision.
 - **One kit cottage shape for all resident styles**: `kit-medieval/cottage-small.mjs`
   has one cottage silhouette (so Tomas's `tower` style reads as a cottage;
   his signpost + manifest colors carry the identity).
