@@ -841,6 +841,17 @@ function buildNewsstand(THREE) {
   return group;
 }
 
+export const INN_ROOM_WINDOWS = {
+  lantern: 4,
+  window: 5,
+  quiet: 6,
+};
+
+export const INN_WINDOW_COLORS = {
+  claimed: { color: '#ffbe5c', emissive: '#ffbe5c', emissiveIntensity: 1.4 },
+  vacant: { color: '#3d2814', emissive: '#4a2e10', emissiveIntensity: 0.15 },
+};
+
 /**
  * Build the Ghostlight Inn (two-story cedar-and-cream building with gable roof,
  * chimney, warm lit windows on both floors, signpost, and hanging door lantern).
@@ -906,13 +917,32 @@ export function buildInn(THREE) {
     [-2.21, 3.0, 0, Math.PI / 2],
     [2.21, 3.0, 0, Math.PI / 2],
   ];
+  const roomWindowByIndex = new Map(
+    Object.entries(INN_ROOM_WINDOWS).map(([room, idx]) => [idx, room])
+  );
+  const roomWindows = {};
   windowSpecs.forEach(([wx, wy, wz, rotY], idx) => {
-    const win = new THREE.Mesh(windowGeo, windowMat);
+    const roomName = roomWindowByIndex.get(idx);
+    const mat = roomName
+      ? (typeof windowMat.clone === 'function'
+          ? windowMat.clone()
+          : new THREE.MeshStandardMaterial({
+              color: windowMat.color,
+              emissive: windowMat.emissive,
+              emissiveIntensity: windowMat.emissiveIntensity,
+              roughness: windowMat.roughness,
+            }))
+      : windowMat;
+    const win = new THREE.Mesh(windowGeo, mat);
     win.name = `inn_window_${idx}`;
     win.position.set(wx, wy, wz);
     win.rotation.y = rotY;
     group.add(win);
+    if (roomName) {
+      roomWindows[roomName] = win;
+    }
   });
+  group.userData.roomWindows = roomWindows;
 
   const sign = buildSignpost(THREE, 'GHOSTLIGHT INN', 'inn_signpost');
   sign.position.set(2.6, 0, 2.5);
@@ -1750,7 +1780,28 @@ function pickBandstandSpot(avatarSpots, usedSpots, preferredSlot = null) {
 }
 
 /**
- * Pure state application: updates footlights, avatars, optional plots, and Prompt Book model.
+ * Update Ghostlight Inn upper-floor room window glow from state.inn occupancy.
+ * Missing/non-object innState leaves all windows untouched (all lit as built).
+ */
+export function updateInnOccupancy(town, innState) {
+  if (!innState || typeof innState !== 'object' || Array.isArray(innState)) return;
+  const roomWindows = town?.parts?.inn?.userData?.roomWindows;
+  if (!roomWindows || typeof roomWindows !== 'object') return;
+
+  for (const room of Object.keys(INN_ROOM_WINDOWS)) {
+    const win = roomWindows[room];
+    if (!win || !win.material) continue;
+    const claim = Object.prototype.hasOwnProperty.call(innState, room) ? innState[room] : null;
+    const isClaimed = Boolean(claim && typeof claim === 'object' && !Array.isArray(claim));
+    const palette = isClaimed ? INN_WINDOW_COLORS.claimed : INN_WINDOW_COLORS.vacant;
+    setMaterialColor(win.material, 'color', palette.color);
+    setMaterialColor(win.material, 'emissive', palette.emissive);
+    win.material.emissiveIntensity = palette.emissiveIntensity;
+  }
+}
+
+/**
+ * Pure state application: updates footlights, inn occupancy, avatars, optional plots, and Prompt Book model.
  */
 export function applyState(town, state = {}, options = {}) {
   const THREE = options.THREE || town.THREE;
@@ -1820,6 +1871,9 @@ export function applyState(town, state = {}, options = {}) {
       flGroup.userData.role = null;
     }
   }
+
+  // 1b. Ghostlight Inn room occupancy
+  updateInnOccupancy(town, state?.inn);
 
   // 2. Optional inline plots in state/options
   const inlinePlots = options.plots || state?.plots;
