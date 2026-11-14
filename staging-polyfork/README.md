@@ -80,11 +80,9 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 
 Self-contained: every Polyfork import is relative to the bundle. The only
 network dependency is three.js from jsdelivr, same as the live town.
-`clips.mjs` (animation) is never loaded: buildKit imports it only when it
-places a human (`people: 'idle'` + a skeleton in the placed set), and this
-trial's scatter is roots and reeds only — the hand-placed NPCs bypass
-buildKit entirely. The clips themselves would be fetched from
-polyfork.dev/cdn at runtime, which is why the NPCs stand still in this trial.
+`clips.mjs` (animation) is loaded via `npc-animation.mjs` with `base: './anim/'`
+against the vendored `anim/anim-idle.json` clip so the three NPC stand-ins
+play Idle without any external CDN fetch.
 
 ## Terrain (as built — no fallbacks needed)
 
@@ -210,9 +208,9 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - **Tavern scale**: ~3× the procedural Inn's footprint even at width 10 —
   it becomes the town's biggest building. Deliberate (an inn should read),
   but judge it at the render.
-- **NPCs stand still**: `clips.mjs` animation is a runtime CDN fetch, so it
-  is out of this self-contained bundle. If the trial is adopted, either
-  vendor the clips or keep NPCs still.
+- **NPC stand-ins play vendored Idle**: `npc-animation.mjs` attaches
+  `anim/anim-idle.json` via `clips.mjs` with `base: './anim/'` (Idle only;
+  no Walk/Run, no wander loop).
 - **Lamp posts have emissive glow only**, no real point lights (the live
   town's lanterns are the same).
 - The two-story house from the kit was NOT placed (brief said 2–3
