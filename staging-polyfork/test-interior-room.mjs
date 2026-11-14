@@ -296,12 +296,21 @@ test('setInteriorPalette recolors back wall only and is null-safe', () => {
   const leftWall = room.children.find((m) => m.name === 'interior_wall_left');
 
   assert.equal(backWall.material.color, '#f5efe0');
-  assert.equal(setInteriorPalette(room, 'milo'), true);
-  assert.equal(backWall.material.color, '#a8d8ea');
-  assert.equal(leftWall.material.color, '#f5efe0');
 
-  assert.equal(setInteriorPalette(room, 'default'), true);
-  assert.equal(backWall.material.color, '#f5efe0');
+  const expectedByHandle = [
+    ['milo', '#a8d8ea'],
+    ['wick', '#c8922e'],
+    ['maren', '#43505c'],
+    ['tomas', '#b5633a'],
+    ['default', '#f5efe0'],
+    ['raul', '#f5efe0'],
+    [undefined, '#f5efe0'],
+  ];
+  for (const [handle, expectedHex] of expectedByHandle) {
+    assert.equal(setInteriorPalette(room, handle), true);
+    assert.equal(backWall.material.color, expectedHex, `handle ${String(handle)} -> ${expectedHex}`);
+    assert.equal(leftWall.material.color, '#f5efe0', `left wall unchanged for handle ${String(handle)}`);
+  }
 
   assert.doesNotThrow(() => setInteriorPalette(null, 'milo'));
   assert.doesNotThrow(() => setInteriorPalette(undefined, 'default'));
