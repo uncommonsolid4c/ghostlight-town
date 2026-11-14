@@ -19,6 +19,7 @@ import {
   renderPromptBook,
   resolvePlotOverlayContent,
   resolveInnOverlayContent,
+  resolveGuestbookOverlayContent,
   TownLive,
 } from './town.js';
 import { createTownServer } from '../town-api/server.mjs';
@@ -1087,4 +1088,100 @@ test('updateNightlyCallCard is a no-op when card mesh is missing', () => {
     updateNightlyCallCard(town, { date: '2026-11-13', topic: "What's in your mug?" });
     applyState(town, { nightly_call: { date: '2026-11-13', topic: "What's in your mug?" } });
   });
+});
+
+test('resolveGuestbookOverlayContent renders Signatures before Letters to the Editor and escapes HTML', async () => {
+  const called = [];
+  const res = await resolveGuestbookOverlayContent({
+    apiBase: 'https://town.example/',
+    fetchFn: async (url) => {
+      called.push(url);
+      return {
+        status: 200,
+        async json() {
+          return {
+            entries: [
+              { id: 1, kind: 'guestbook', name: 'Clara', body: 'Warm lantern light.', created_at: 1794614400 },
+              { id: 2, kind: 'guestbook', name: '<b>Bob</b>', body: '<b>hi</b> & "quoted"', created_at: 1794528000 },
+              { id: 3, kind: 'letter', name: 'Wick', body: 'Letter about the bandstand.', created_at: 1794441600 },
+              { id: 4, kind: 'unknown_kind', name: 'Ignored', body: 'Should not render', created_at: 1794441600 },
+            ],
+          };
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(called, ['https://town.example/api/town/guestbook?limit=50']);
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes('Clara'));
+  assert.ok(res.html.includes('Warm lantern light.'));
+  assert.ok(res.html.includes('&lt;b&gt;Bob&lt;/b&gt;'));
+  assert.ok(res.html.includes('&lt;b&gt;hi&lt;/b&gt; &amp; &quot;quoted&quot;'));
+  assert.equal(res.html.includes('<b>hi</b>'), false, 'raw HTML in entry body must be escaped');
+  assert.equal(res.html.includes('Should not render'), false, 'unknown kinds must be ignored');
+
+  const sigIdx = res.html.indexOf('<h2>Signatures</h2>');
+  const letIdx = res.html.indexOf('<h2>Letters to the Editor</h2>');
+  assert.ok(sigIdx !== -1 && letIdx !== -1 && sigIdx < letIdx, 'Signatures section must precede Letters to the Editor');
+
+  const sigSection = res.html.slice(sigIdx, letIdx);
+  const letSection = res.html.slice(letIdx);
+  assert.equal(sigSection.includes('Letter about the bandstand.'), false, 'letter body must not appear in Signatures section');
+  assert.ok(letSection.includes('Letter about the bandstand.'), 'letter body must appear in Letters section');
+});
+
+test('resolveGuestbookOverlayContent renders empty state copy when entries is empty', async () => {
+  const res = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { entries: [] };
+      },
+    }),
+  });
+
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes('be the first to sign'));
+  assert.ok(res.html.includes('signGuestbook'));
+  assert.ok(res.html.includes('approved by Milo'));
+});
+
+test('resolveGuestbookOverlayContent falls back to guestbook/index.html on missing fetchFn or errors', async () => {
+  assert.deepEqual(await resolveGuestbookOverlayContent(), { kind: 'static', url: 'guestbook/index.html' });
+
+  const non200 = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 500, async json() { return { entries: [] }; } }),
+  });
+  assert.deepEqual(non200, { kind: 'static', url: 'guestbook/index.html' });
+
+  const thrown = await resolveGuestbookOverlayContent({
+    fetchFn: async () => { throw new Error('offline'); },
+  });
+  assert.deepEqual(thrown, { kind: 'static', url: 'guestbook/index.html' });
+
+  const badJson = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, async json() { throw new SyntaxError('bad json'); } }),
+  });
+  assert.deepEqual(badJson, { kind: 'static', url: 'guestbook/index.html' });
+
+  const badEntries = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, async json() { return { entries: 'not-an-array' }; } }),
+  });
+  assert.deepEqual(badEntries, { kind: 'static', url: 'guestbook/index.html' });
+});
+
+test('town-3d/guestbook/index.html static fallback meets safety and copy rules', async () => {
+  const html = await fs.readFile(path.join(__dirname, 'guestbook', 'index.html'), 'utf8');
+  assert.ok(!/<script\b/i.test(html), 'guestbook/index.html must not contain <script>');
+  assert.ok(!/https?:\/\//i.test(html), 'guestbook/index.html must not contain external http(s):// URLs');
+  assert.match(
+    html,
+    /<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1\.0["']\s*\/?>/i,
+    'guestbook/index.html must declare viewport meta'
+  );
+  assert.match(html, /Milo/i, 'guestbook/index.html must mention Milo approval/moderation');
+  assert.ok(html.includes('SKILL.md'), 'guestbook/index.html must reference SKILL.md');
+  assert.ok(html.includes('signGuestbook'), 'guestbook/index.html must reference town-client signGuestbook');
+  assert.ok(!new RegExp(`camp${'fire'}`, 'i').test(html), 'guestbook/index.html must not contain banned term');
 });
