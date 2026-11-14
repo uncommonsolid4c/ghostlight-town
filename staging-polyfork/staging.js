@@ -51,7 +51,12 @@ import {
   createPointerTracker,
 } from './tap-glide.mjs';
 import { animate } from './kit-medieval/clips.mjs';
-import { attachIdleAnimation, updateNpcAnimations } from './npc-animation.mjs';
+import { attachNpcAnimation, updateNpcAnimations } from './npc-animation.mjs';
+import {
+  buildStagingWanderFigures,
+  updateStagingWander,
+  getStagingNewsstandFrontPosition,
+} from './npc-wander.mjs';
 import { attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
 
 // CONCEPT.md palette.
@@ -568,18 +573,6 @@ function applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightS
       avatar.userData.nametagSprite.position.y = 1.8 + lift;
     }
   }
-
-  // NPC stand-in yield: hide static humanoid while live presence avatar exists,
-  // and restore at their home spot when presence clears.
-  for (const [handle, standIn] of npcStandIns.entries()) {
-    if (liveStore.avatars.has(handle)) {
-      standIn.group.visible = false;
-    } else {
-      standIn.group.visible = true;
-      standIn.group.position.set(standIn.home.x, camp.groundAt(standIn.home.x, standIn.home.z), standIn.home.z);
-      standIn.group.rotation.y = faceCenter(standIn.home.x, standIn.home.z);
-    }
-  }
 }
 
 function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null, tavernGroup = null) {
@@ -936,10 +929,20 @@ async function init() {
   ]);
   counts.npcs = npcStandIns.size;
   for (const standIn of npcStandIns.values()) {
-    attachIdleAnimation(THREE, standIn.group, { animateFn: animate }).then((anim) => {
+    attachNpcAnimation(THREE, standIn.group, { animateFn: animate }).then((anim) => {
       standIn.anim = anim;
     });
   }
+  const wanderFigures = buildStagingWanderFigures({
+    standIns: npcStandIns,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots: bandstandBuilt.avatarSpots,
+    bandstandGroundY: camp.groundAt(0, 0),
+    newsstandFront: getStagingNewsstandFrontPosition(TOWN_LAYOUT),
+    groundAt: (x, z) => camp.groundAt(x, z),
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
 
   look.shadows(scene);
   // Apply night glow once before live polling starts so `camp.group.userData.nightSet`
@@ -1181,6 +1184,7 @@ async function init() {
       }
     }
     if (sails) sails.rotation.z -= dt * 0.12; // slow windmill turn
+    updateStagingWander(wanderFigures, dt, liveStore.avatars);
     updateNpcAnimations(npcStandIns, dt);
     controls.update();
     look.update(); // drives the night glow
