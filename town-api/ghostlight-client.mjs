@@ -182,6 +182,30 @@ export class GhostlightClient {
     return this._signedPost('/api/town/key/rotate', { pubkey: newPubkey });
   }
 
+  /** Sign the Town Gate Guestbook or submit a Letter to the Editor (unsigned, public). */
+  async signGuestbook(kind, name, body) {
+    const res = await fetch(`${this.baseUrl}/api/town/guestbook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, name, body }),
+    });
+    const data = await res.json().catch(() => null);
+    return { status: res.status, ok: res.ok, data };
+  }
+
+  /** Fetch approved Town Gate Guestbook entries or Letters to the Editor (public). */
+  async getGuestbook(kind) {
+    const qs = kind !== undefined && kind !== null && kind !== '' ? `?kind=${encodeURIComponent(kind)}` : '';
+    const res = await fetch(`${this.baseUrl}/api/town/guestbook${qs}`);
+    const data = await res.json().catch(() => null);
+    return { status: res.status, ok: res.ok, data };
+  }
+
+  /** Approve or reject a pending guestbook/letter entry (operator-signed). */
+  async moderateGuestbook(id, action) {
+    return this._signedPost('/api/town/admin/guestbook', { id, action });
+  }
+
   /** Poll current town state. Returns { status: 304, data: null } if unchanged. */
   async state(since) {
     const qs = since !== undefined && since !== null ? `?since=${encodeURIComponent(since)}` : '';
