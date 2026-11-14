@@ -4,13 +4,13 @@ A read-only live-wired trial: Campground & Lake terrain + Medieval Village
 buildings + Village Tavern as the Inn + humanoid bodies for the three NPCs +
 the procedural Bandstand, Milo's cottage, and Milo's blue ghost ported from
 `town-3d/`.
-Live state layer (slice 62) is IN: polls `GET /api/town/state` (5 s base, ×2
+Live state layer (slices 62–63) is IN: polls `GET /api/town/state` (5 s base, ×2
 backoff to 60 s, `?since=`, 304 no-op), lights/unlights bandstand footlights
-slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent), and
-renders the Prompt Book panel. Still OUT (slice 63 follow-up): presence
-avatars, plot sync (cottages from `state.plots`), inn occupancy, and Nightly
-Call card updates. Judged against `../CONCEPT.md` after deploy, by a browser
-task with human eyes.
+slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent), renders
+the Prompt Book panel, places/lerps presence avatars (`avatar.mjs`), and syncs
+resident cottages from `state.plots` via `GET /api/town/plot?handle=`. Still OUT
+(slice 64 follow-up): inn occupancy and Nightly Call card updates. Judged
+against `../CONCEPT.md` after deploy, by a browser task with human eyes.
 
 **Live town untouched.** This bundle deploys to a staging subpath only:
 `~/milo-site/ghostlight-town/staging-polyfork/` on the homelab.
@@ -20,8 +20,13 @@ task with human eyes.
 - `index.html` — page shell, import map (three@0.160.0, same as the live town),
   HUD, and a load-error trap that reports failures in the status box.
 - `staging.js` — the composition (terrain, bandstand, ghost, buildings, pines,
-  NPCs, controls) plus the staging-local `StagingLive` poller and footlight
-  state applier (`applyStagingState`).
+  NPCs, controls) plus the staging-local `StagingLive` poller, footlight/avatar
+  state applier (`applyStagingState` / `applyStagingPresence`), and plot sync
+  (`syncStagingPlotsFromState`).
+- `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
+  `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
+  `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
+  document access).
 - `prompt-book.mjs` — verbatim copy of `formatPromptBookEntries` and
   `renderPromptBook` from `town-3d/town.js` (no THREE dependency).
 - `concept-bandstand.js`, `concept-cottage.js`, `concept-ghost.js` — vendored
@@ -30,9 +35,12 @@ task with human eyes.
   `../town-3d/` imports under the live server's flattened root layout. Guarded
   against drift by `test-staging.mjs`.
 - `test-staging.mjs` — static assertions (vendored drift guard, relative
-  imports, no `Math.random`, scoped `/api/town/state` fetch only, no `TownLive`,
-  bandstand & ghost options, plot-1 coordinates, NPC clearance radius ≥ 6 m,
-  Prompt Book UI elements, `?v=7` cache bust).
+  imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
+  fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
+  decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
+  Prompt Book UI elements, `?v=8` cache bust).
+- `test-avatar.mjs` — unit tests for `avatar.mjs` (role colors, nametag text,
+  nametag lift, spot-picking + overflow, plot-target math, plot-ring coords).
 - `test-prompt-book.mjs` — unit tests for `prompt-book.mjs` (100-entry cap,
   chronological order, `[NPC]` pill, `reply_to` threading, say vs emote, empty
   state, `textContent`-only XSS safety).
@@ -82,7 +90,7 @@ leaves them off; the town's sky has stars).
 |---|---|---|---|
 | Ghostlight Bandstand | (0, 0) | `includeStageProps: true`, `lightMiloFootlight: true`; Milo's blue ghost (`includeEyeSpheres: false`) as child at `avatarSpots[0]` (`y = groundAt(0,0) + 0.6`) | `ghostlight_point_light` (#ffaa44) + footlight slot 0 |
 | Village Tavern = the Inn | (−11, 20) | width 10, plaster #f5efe0, tile #5a4332, timber #6b492b; hanging sign REMOVED (painted mug = shop visual) | interior #ffb45c |
-| Thatched Cottage × 2 | (15, −8), (−16, −9) | plaster #a8d8ea, thatch #5a4332, timber #6b492b, chimney off; slight ridgeSag/roofBulk variation | glass #ffb15a |
+| Resident Cottages (plots 2–8) | plot ring (r = 18.5 m, 0.42π→1.58π) | synced from `state.plots` via `/api/town/plot?handle=`; kit Cottage with manifest `wall`/`roof`/`trim` + `buildStagingSignpost` (`wick`→2, `maren`→3, `tomas`→4, others first free unreserved pad); decorative cottages at (15, −8) and (−16, −9) removed | glass #ffb15a |
 | Milo's Cottage (plot 1) | (17.92, 4.60) | procedural concept shell (`createConceptMilosCottage`) + staging-local signpost (`Milo — Ghostlight Cottage (rebuilt)`), replacing the (17, 12) thatched cottage | 8 lit windows |
 | Village Gatehouse | (0, 27) | shingle #5a4332, plaster #f5efe0, gateState `wide`, windows 2 | glass #ffc27a |
 | Village Well | (6, 8) | no knobs | — |
@@ -118,8 +126,10 @@ bandstand deck (radius 4.5 m).
 | Tomas (props-master / tea-urn keeper) | tradesman | masculine, old, `warm`, build 1.0, tunic #8a7a5a, apron #5a4332, hair #cfcfcf | straw hat, utility belt, work boots; roof-brown apron |
 
 Resident muses keep their own look — humanoids are ONLY for these three
-NPCs, never for muses. How a muse's own look "comes over" is still an open
-question, not answered by this trial.
+NPCs, never for muses. **Yield rule (slice 63):** when a live presence avatar
+exists for `wick`, `maren`, or `tomas`, their humanoid stand-in hides
+(`visible = false`) and the live capsule represents them; when presence clears,
+the humanoid reappears at its home spot.
 
 ## Controls
 
@@ -156,10 +166,15 @@ Drag to orbit, scroll/pinch to zoom, WASD or arrow keys to walk the view
   town's lanterns are the same).
 - The two-story house from the kit was NOT placed (brief said 2–3
   cottages); it is available in the zip if the ring wants a fourth building.
-- **Milo's cottage props (desk, tea kettle, cat) are out of this slice**:
+- **Milo's cottage & resident plot props (desk, tea kettle, cat) are out of this slice**:
   `models/teapot.glb` is a page-relative GLB that would 404 from the staging
   subpath; adding props to staging is a follow-up once a prop-path decision
   is made.
+- **One kit cottage shape for all resident styles**: `kit-medieval/cottage-small.mjs`
+  has one cottage silhouette (so Tomas's `tower` style reads as a cottage;
+  his signpost + manifest colors carry the identity).
+- **No empty-pad markers**: unclaimed pads in plots 2–8 have level terrain
+  pads but no visual marker yet in staging.
 - Terrain `pitches` left at the kit default (4 level packed-earth camp
   pitches on the shelf behind the shore) — they read as clearings, away
   from the town middle.
