@@ -203,6 +203,19 @@ test('manifest validation rejects invalid fields, unknown keys, and oversized pa
       assert.ok(res.data.error, `Expected named error for ${tc.name}`);
     }
 
+    // Slice 93: lantern and planter are accepted in the starter prop catalog
+    const slice93Res = await client.plot(
+      {
+        ...VALID_MANIFEST,
+        props: [
+          { kind: 'lantern', x: -1.8, y: 0, z: 2.2, rot_y: 0, color: '#6b492b' },
+          { kind: 'planter', x: 1.8, y: 0, z: 2.2, rot_y: 180, color: '#6b492b' },
+        ],
+      },
+      VALID_HTML
+    );
+    assert.equal(slice93Res.status, 200, 'lantern and planter props must validate');
+
     // Manifest > 16 KB (while keeping total request body under 64 KB)
     const hugeManifest = {
       ...VALID_MANIFEST,
