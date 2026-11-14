@@ -48,17 +48,25 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/concept-cottage\.js['"]/, 'staging.js must import ./concept-cottage.js');
   assert.match(codeOnly, /from\s+['"]\.\/concept-ghost\.js['"]/, 'staging.js must import ./concept-ghost.js');
   assert.match(codeOnly, /from\s+['"]\.\/prompt-book\.mjs['"]/, 'staging.js must import ./prompt-book.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs['"]/, 'staging.js must import ./avatar.mjs');
 
   assert.ok(!/\.\.\/town-3d\//.test(codeOnly), 'staging.js must not import from ../town-3d/');
   assert.ok(!/\bMath\.random\b/.test(codeOnly), 'staging.js must not use Math.random');
   assert.ok(!/\bTownLive\b/.test(codeOnly), 'staging.js must not reference TownLive');
 
   const fetchCalls = [...codeOnly.matchAll(/\bfetch\s*\(([^)]+)\)/g)];
-  assert.equal(fetchCalls.length, 1, 'staging.js must have exactly one fetch() call');
-  assert.match(fetchCalls[0][1], /['"`]\/api\/town\/state/, 'fetch() may only target /api/town/state');
+  assert.equal(fetchCalls.length, 2, 'staging.js must have exactly two fetch() calls (/api/town/state and /api/town/plot)');
   assert.ok(
-    !/\/api\/town\/(?!state\b)/.test(codeOnly),
-    'staging.js must not reference any /api/town/ endpoint other than /api/town/state'
+    fetchCalls.some((m) => /['"`]\/api\/town\/state/.test(m[1])),
+    'staging.js must fetch /api/town/state'
+  );
+  assert.ok(
+    fetchCalls.some((m) => /['"`]\/api\/town\/plot\?handle=/.test(m[1])),
+    'staging.js must fetch /api/town/plot?handle='
+  );
+  assert.ok(
+    !/\/api\/town\/(?!(?:state|plot)\b)/.test(codeOnly),
+    'staging.js must not reference any /api/town/ endpoint other than /api/town/state and /api/town/plot'
   );
 });
 
@@ -93,16 +101,33 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('index.html references staging.js?v=7, includes Prompt Book UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=8, includes Prompt Book UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=7["']/, 'index.html must reference ./staging.js?v=7');
+  assert.match(html, /src=["']\.\/staging\.js\?v=8["']/, 'index.html must reference ./staging.js?v=8');
   assert.match(html, /id=["']prompt-book["']/, 'index.html must include #prompt-book');
   assert.match(html, /id=["']prompt-book-lines["']/, 'index.html must include #prompt-book-lines');
   assert.match(html, /id=["']prompt-book-toggle["']/, 'index.html must include #prompt-book-toggle');
   assert.ok(!/no live town wiring yet/i.test(html), 'index.html HUD must not still say "no live town wiring yet"');
   assert.ok(!BANNED_TERM_RE.test(html), 'index.html must not contain the banned term');
   assert.ok(!BANNED_TERM_RE.test(self), 'test-staging.mjs must not contain the banned term');
+});
+
+test('staging.js removes decorative cottages, keeps pads for plots 2-8, and retains NPC stand-in references for yield', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  assert.ok(!/15\s*,\s*-8/.test(codeOnly), 'decorative cottage at (15, -8) must be removed');
+  assert.ok(!/-16\s*,\s*-9/.test(codeOnly), 'decorative cottage at (-16, -9) must be removed');
+  assert.ok(!/-177\s*,\s*z:\s*376/.test(codeOnly), 'decorative cottage pad (-177, 376) must be removed');
+  assert.ok(!/-208\s*,\s*z:\s*375/.test(codeOnly), 'decorative cottage pad (-208, 375) must be removed');
+
+  assert.match(codeOnly, /TOWN_LAYOUT\.plots\.slice\(1\)\.map/, 'staging.js must generate pads/keepClear for plots 2-8');
+  assert.match(codeOnly, /p\.x\s*-\s*192/, 'pad x must use sceneX - 192 (matching Milo precedent 17.92 - 192 = -174.08)');
+  assert.match(codeOnly, /p\.z\s*\+\s*384/, 'pad z must use sceneZ + 384 (matching Milo precedent 4.60 + 384 = 388.6)');
+
+  assert.match(codeOnly, /\bnpcStandIns\b/, 'staging.js must keep named references to NPC stand-ins for the yield rule');
+  assert.match(codeOnly, /standIn\.group\.visible\s*=\s*false/, 'NPC stand-ins must hide when live presence avatar exists');
 });
