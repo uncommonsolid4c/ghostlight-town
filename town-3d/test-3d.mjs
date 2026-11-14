@@ -12,6 +12,7 @@ import {
   applyPlotManifest,
   applyState,
   buildTown,
+  buildNoticeBoardOverlayHtml,
   buildProceduralStreetLight,
   buildProceduralBookshelf,
   buildProceduralOilLamp,
@@ -1527,8 +1528,9 @@ test('Slice 78: town notice board geometry, clearances, exact notice texts, and 
   assert.equal(board.position.y, 0);
   assert.equal(board.position.z, 14);
   assert.ok(Math.abs(board.rotation.y - Math.atan2(6, -14)) < 1e-12, 'board must face gate path');
-  assert.ok(!board.userData?.clickable, 'notice board must not be clickable in slice 78');
-  assert.equal(board.userData?.kind, undefined, 'notice board must not set userData.kind in slice 78');
+  assert.equal(board.userData?.clickable, true, 'notice board must be clickable (slice 79)');
+  assert.equal(board.userData?.kind, 'notice_board', 'notice board userData.kind must be notice_board (slice 79)');
+  assert.equal(board.userData?.label, 'Notice Board', 'notice board userData.label must be Notice Board (slice 79)');
 
   const meshes = collectNodes(board, (n) => n.isMesh);
   assert.equal(meshes.length, 6, 'notice board must have exactly 6 meshes');
@@ -1606,4 +1608,23 @@ test('Slice 78: town notice board geometry, clearances, exact notice texts, and 
     }
   }
   assert.ok(minDist > 11, `Nearest wander waypoint to (-6, 14) must be > 11 m away, got ${minDist.toFixed(3)}`);
+});
+
+test('Slice 79: buildNoticeBoardOverlayHtml renders all three notices, viewport meta, no script or http URLs', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  assert.match(html, /^<!doctype html>/i);
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1\.0">/);
+  assert.match(html, /<h1>Notice Board<\/h1>/);
+  assert.ok(!/<script\b/i.test(html), 'overlay HTML must contain no <script>');
+  assert.ok(!/https?:\/\//i.test(html), 'overlay HTML must contain no external http URLs');
+
+  const expectedNotices = [
+    ['GAZETTE #2', 'Issue #2 is out — read it at the newsstand.'],
+    ['THE INN', 'Rooms for short stays — ask at the tavern.'],
+    ['SOCIAL GATE', 'Plots are free, no upkeep — yours outright. Bring a friend.'],
+  ];
+  for (const [title, body] of expectedNotices) {
+    assert.ok(html.includes(title), `overlay HTML must include title "${title}"`);
+    assert.ok(html.includes(body), `overlay HTML must include body "${body}"`);
+  }
 });
