@@ -18,6 +18,7 @@ import {
   buildProceduralOilLamp,
   buildProceduralTypewriter,
   buildProceduralTeapot,
+  buildProp,
   createCottage,
   createAvatarCapsule,
   getPlotTargetPosition,
@@ -1627,4 +1628,134 @@ test('Slice 79: buildNoticeBoardOverlayHtml renders all three notices, viewport 
     assert.ok(html.includes(title), `overlay HTML must include title "${title}"`);
     assert.ok(html.includes(body), `overlay HTML must include body "${body}"`);
   }
+});
+
+test('Slice 93: buildProp supports lantern and planter with worked child geometry, porch remap, tinting, and fallback', () => {
+  const THREE = createThreeStub();
+
+  const lantern = buildProp(THREE, {
+    kind: 'lantern',
+    x: -1.8,
+    y: 0,
+    z: 0,
+    rot_y: 90,
+    color: '#6b492b',
+  });
+  assert.ok(lantern);
+  assert.equal(lantern.name, 'prop_lantern');
+  assert.equal(lantern.position.x, -1.8);
+  assert.ok(Math.abs(lantern.position.y - 0.18) < 1e-12, 'interior z must lift lantern by PORCH_FLOOR_Y 0.18');
+  assert.ok(lantern.position.z >= 2.05 && lantern.position.z <= 3.45, 'interior z must remap into [2.05, 3.45]');
+  assert.ok(Math.abs(lantern.position.z - 2.75) < 1e-12, 'z=0 remaps to midpoint 2.75');
+  assert.ok(Math.abs(lantern.rotation.y - Math.PI / 2) < 1e-12);
+  assert.equal(lantern.children.length, 3);
+
+  const post = lantern.children.find((c) => c.name === 'prop_lantern_post');
+  assert.ok(post);
+  assert.equal(post.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [post.geometry.parameters.width, post.geometry.parameters.height, post.geometry.parameters.depth],
+    [0.08, 0.9, 0.08]
+  );
+  assert.equal(post.material.color, '#6b492b');
+  assert.equal(post.position.x, 0);
+  assert.equal(post.position.y, 0.45);
+  assert.equal(post.position.z, 0);
+
+  const glass = lantern.children.find((c) => c.name === 'prop_lantern_glass');
+  assert.ok(glass);
+  assert.equal(glass.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [glass.geometry.parameters.width, glass.geometry.parameters.height, glass.geometry.parameters.depth],
+    [0.16, 0.24, 0.16]
+  );
+  assert.equal(glass.material.color, '#ffbe5c');
+  assert.equal(glass.material.emissive, '#ffbe5c');
+  assert.equal(glass.material.emissiveIntensity, 1.4);
+  assert.equal(glass.position.x, 0);
+  assert.equal(glass.position.y, 0.78);
+  assert.equal(glass.position.z, 0);
+
+  const cap = lantern.children.find((c) => c.name === 'prop_lantern_cap');
+  assert.ok(cap);
+  assert.equal(cap.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [cap.geometry.parameters.width, cap.geometry.parameters.height, cap.geometry.parameters.depth],
+    [0.2, 0.05, 0.2]
+  );
+  assert.equal(cap.material.color, '#6b492b');
+  assert.equal(cap.position.x, 0);
+  assert.equal(cap.position.y, 0.93);
+  assert.equal(cap.position.z, 0);
+
+  const planter = buildProp(THREE, {
+    kind: 'planter',
+    x: 1.5,
+    y: 0,
+    z: 2.5,
+    rot_y: 180,
+    color: '#7a5230',
+  });
+  assert.ok(planter);
+  assert.equal(planter.name, 'prop_planter');
+  assert.equal(planter.position.x, 1.5);
+  assert.ok(Math.abs(planter.position.y - 0.18) < 1e-12);
+  assert.equal(planter.position.z, 2.5);
+  assert.ok(Math.abs(planter.rotation.y - Math.PI) < 1e-12);
+  assert.equal(planter.children.length, 5);
+
+  const box = planter.children.find((c) => c.name === 'prop_planter_box');
+  assert.ok(box);
+  assert.equal(box.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [box.geometry.parameters.width, box.geometry.parameters.height, box.geometry.parameters.depth],
+    [0.6, 0.3, 0.4]
+  );
+  assert.equal(box.material.color, '#7a5230');
+  assert.equal(box.position.x, 0);
+  assert.equal(box.position.y, 0.15);
+  assert.equal(box.position.z, 0);
+
+  const soil = planter.children.find((c) => c.name === 'prop_planter_soil');
+  assert.ok(soil);
+  assert.equal(soil.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [soil.geometry.parameters.width, soil.geometry.parameters.height, soil.geometry.parameters.depth],
+    [0.54, 0.04, 0.34]
+  );
+  assert.equal(soil.material.color, '#4d3522');
+  assert.equal(soil.position.x, 0);
+  assert.equal(soil.position.y, 0.30);
+  assert.equal(soil.position.z, 0);
+
+  const foliages = planter.children
+    .filter((c) => c.name === 'prop_planter_foliage')
+    .sort((a, b) => a.position.x - b.position.x);
+  assert.equal(foliages.length, 3);
+  for (const [idx, expectedX] of [[0, -0.18], [1, 0], [2, 0.18]]) {
+    const f = foliages[idx];
+    assert.equal(f.geometry.type, 'ConeGeometry');
+    assert.deepEqual(
+      [f.geometry.parameters.radius, f.geometry.parameters.height, f.geometry.parameters.radialSegments],
+      [0.12, 0.35, 6]
+    );
+    assert.equal(f.material.color, '#1f3f26');
+    assert.equal(f.position.x, expectedX);
+    assert.equal(f.position.y, 0.48);
+    assert.equal(f.position.z, 0);
+  }
+
+  // Invalid color falls back to #8a6240 on wood parts while fixed colors stay fixed
+  const fallbackLantern = buildProp(THREE, { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 0, color: 'bad' });
+  assert.equal(fallbackLantern.children.find((c) => c.name === 'prop_lantern_post').material.color, '#8a6240');
+  assert.equal(fallbackLantern.children.find((c) => c.name === 'prop_lantern_cap').material.color, '#8a6240');
+  assert.equal(fallbackLantern.children.find((c) => c.name === 'prop_lantern_glass').material.color, '#ffbe5c');
+
+  const fallbackPlanter = buildProp(THREE, { kind: 'planter', x: 0, y: 0, z: 2.2, rot_y: 0, color: 'bad' });
+  assert.equal(fallbackPlanter.children.find((c) => c.name === 'prop_planter_box').material.color, '#8a6240');
+  assert.equal(fallbackPlanter.children.find((c) => c.name === 'prop_planter_soil').material.color, '#4d3522');
+  assert.equal(fallbackPlanter.children.find((c) => c.name === 'prop_planter_foliage').material.color, '#1f3f26');
+
+  // Unknown kind still returns null
+  assert.equal(buildProp(THREE, { kind: 'fountain', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }), null);
 });
