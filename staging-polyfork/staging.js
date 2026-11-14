@@ -58,7 +58,7 @@ import {
   updateStagingWander,
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
-import { attachPorchDeck, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
+import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -413,6 +413,7 @@ function applyStagingPlotManifest(liveStore, handle, manifest) {
   }
 
   attachPorchDeck(THREE, cottage);
+  attachPorchTrim(THREE, cottage);
   attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);
 
   assignment.cottage = cottage;
@@ -831,6 +832,7 @@ async function init() {
   milosCottage.add(sign);
   attachPlotProps(THREE, milosCottage, MILO_PLOT_PROPS);
   attachPorchDeck(THREE, milosCottage);
+  attachPorchTrim(THREE, milosCottage);
   milosCottage.position.set(MILO_PLOT.x, camp.groundAt(MILO_PLOT.x, MILO_PLOT.z), MILO_PLOT.z);
   milosCottage.rotation.y = faceCenter(MILO_PLOT.x, MILO_PLOT.z);
   scene.add(milosCottage);
