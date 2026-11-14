@@ -2536,3 +2536,73 @@ export class TownLive {
     }
   }
 }
+
+/**
+ * Step an {x, z} position toward a target by at most speed * dt, clamping
+ * inside maxRadius and snapping to the target once within arriveDist.
+ */
+export function stepGlide(
+  position,
+  target,
+  dt,
+  { speed = 7.5, maxRadius = 28.5, arriveDist = 0.3 } = {}
+) {
+  if (!Number.isFinite(dt) || dt <= 0) {
+    return { x: position.x, z: position.z, arrived: false };
+  }
+
+  let tx = target.x;
+  let tz = target.z;
+  const targetDist = Math.hypot(tx, tz);
+  if (targetDist > maxRadius && targetDist > 0) {
+    const scale = maxRadius / targetDist;
+    tx *= scale;
+    tz *= scale;
+  }
+
+  const dx = tx - position.x;
+  const dz = tz - position.z;
+  const dist = Math.hypot(dx, dz);
+  const maxStep = speed * dt;
+
+  let nextX;
+  let nextZ;
+  if (dist <= maxStep || dist === 0) {
+    nextX = tx;
+    nextZ = tz;
+  } else {
+    const ratio = maxStep / dist;
+    nextX = position.x + dx * ratio;
+    nextZ = position.z + dz * ratio;
+  }
+
+  const nextDist = Math.hypot(nextX, nextZ);
+  if (nextDist > maxRadius && nextDist > 0) {
+    const clampScale = maxRadius / nextDist;
+    nextX *= clampScale;
+    nextZ *= clampScale;
+  }
+
+  const rem = Math.hypot(tx - nextX, tz - nextZ);
+  if (rem <= arriveDist) {
+    return { x: tx, z: tz, arrived: true };
+  }
+  return { x: nextX, z: nextZ, arrived: false };
+}
+
+/**
+ * Compute clamped camera FOV for a two-finger pinch gesture.
+ */
+export function pinchFov(startFov, startDist, currentDist) {
+  if (
+    !Number.isFinite(startFov) ||
+    !Number.isFinite(startDist) ||
+    !Number.isFinite(currentDist) ||
+    startDist <= 0 ||
+    currentDist <= 0
+  ) {
+    return startFov;
+  }
+  const raw = startFov * (startDist / currentDist);
+  return Math.max(40, Math.min(85, raw));
+}
