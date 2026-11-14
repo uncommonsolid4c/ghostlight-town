@@ -187,6 +187,8 @@ const VALID_PROP_KINDS = new Set([
   'typewriter',
   'cat',
   'poster_frame',
+  'lantern',
+  'planter',
 ]);
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -508,6 +510,49 @@ function buildProp(THREE, prop) {
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.06), mat);
       mesh.position.set(prop.x, baseY + 0.9, propZ);
       break;
+    case 'lantern': {
+      mesh = new THREE.Group();
+      mesh.position.set(prop.x, baseY, propZ);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.9, 0.08), mat);
+      post.name = 'prop_lantern_post';
+      post.position.set(0, 0.45, 0);
+      mesh.add(post);
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: '#ffbe5c',
+        emissive: '#ffbe5c',
+        emissiveIntensity: 1.4,
+      });
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.24, 0.16), glassMat);
+      glass.name = 'prop_lantern_glass';
+      glass.position.set(0, 0.78, 0);
+      mesh.add(glass);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.05, 0.2), mat);
+      cap.name = 'prop_lantern_cap';
+      cap.position.set(0, 0.93, 0);
+      mesh.add(cap);
+      break;
+    }
+    case 'planter': {
+      mesh = new THREE.Group();
+      mesh.position.set(prop.x, baseY, propZ);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.4), mat);
+      box.name = 'prop_planter_box';
+      box.position.set(0, 0.15, 0);
+      mesh.add(box);
+      const soilMat = new THREE.MeshStandardMaterial({ color: '#4d3522', roughness: 0.95 });
+      const soil = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.04, 0.34), soilMat);
+      soil.name = 'prop_planter_soil';
+      soil.position.set(0, 0.30, 0);
+      mesh.add(soil);
+      const foliageMat = new THREE.MeshStandardMaterial({ color: '#1f3f26', roughness: 0.9 });
+      for (const fx of [-0.18, 0, 0.18]) {
+        const foliage = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.35, 6), foliageMat);
+        foliage.name = 'prop_planter_foliage';
+        foliage.position.set(fx, 0.48, 0);
+        mesh.add(foliage);
+      }
+      break;
+    }
     default:
       return null;
   }
@@ -2992,3 +3037,5 @@ export function pinchFov(startFov, startDist, currentDist) {
   const raw = startFov * (startDist / currentDist);
   return Math.max(40, Math.min(85, raw));
 }
+
+export { buildProp };
