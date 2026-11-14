@@ -462,11 +462,13 @@ function buildProp(THREE, prop) {
   const PORCH_NEAR = 2.05;
   const PORCH_FAR = 3.45;
   const INTERIOR_HALF = 2.0;
+  const PORCH_FLOOR_Y = 0.18;
   let propZ = prop.z;
   if (propZ < PORCH_NEAR) {
     const clampedZ = Math.max(-INTERIOR_HALF, Math.min(INTERIOR_HALF, propZ));
     propZ = PORCH_NEAR + ((INTERIOR_HALF - clampedZ) / (2 * INTERIOR_HALF)) * (PORCH_FAR - PORCH_NEAR);
   }
+  const baseY = prop.y + (propZ >= PORCH_NEAR ? PORCH_FLOOR_Y : 0);
 
   const color = safeColor(prop.color, '#8a6240');
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
@@ -475,31 +477,31 @@ function buildProp(THREE, prop) {
   switch (prop.kind) {
     case 'desk':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.72, 0.6), mat);
-      mesh.position.set(prop.x, prop.y + 0.36, propZ);
+      mesh.position.set(prop.x, baseY + 0.36, propZ);
       break;
     case 'bookshelf':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.4, 0.35), mat);
-      mesh.position.set(prop.x, prop.y + 0.7, propZ);
+      mesh.position.set(prop.x, baseY + 0.7, propZ);
       break;
     case 'rug':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.04, 1.1), mat);
-      mesh.position.set(prop.x, prop.y + 0.02, propZ);
+      mesh.position.set(prop.x, baseY + 0.02, propZ);
       break;
     case 'tea_kettle':
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.24, 8), mat);
-      mesh.position.set(prop.x, prop.y + 0.12, propZ);
+      mesh.position.set(prop.x, baseY + 0.12, propZ);
       break;
     case 'typewriter':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.18, 0.3), mat);
-      mesh.position.set(prop.x, prop.y + 0.09, propZ);
+      mesh.position.set(prop.x, baseY + 0.09, propZ);
       break;
     case 'cat':
       mesh = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.36, 6), mat);
-      mesh.position.set(prop.x, prop.y + 0.18, propZ);
+      mesh.position.set(prop.x, baseY + 0.18, propZ);
       break;
     case 'poster_frame':
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.06), mat);
-      mesh.position.set(prop.x, prop.y + 0.9, propZ);
+      mesh.position.set(prop.x, baseY + 0.9, propZ);
       break;
     default:
       return null;
@@ -508,6 +510,16 @@ function buildProp(THREE, prop) {
   mesh.name = `prop_${prop.kind}`;
   mesh.rotation.y = (prop.rot_y * Math.PI) / 180;
   return mesh;
+}
+
+function buildPorchDeck(THREE) {
+  const deck = new THREE.Mesh(
+    new THREE.BoxGeometry(4.8, 0.18, 1.2),
+    new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.9 })
+  );
+  deck.name = 'cottage_porch_deck';
+  deck.position.set(0, 0.09, 2.9);
+  return deck;
 }
 
 /**
@@ -532,9 +544,10 @@ export function createCottage(THREE, manifest = {}, options = {}) {
     });
     if (safeManifest.signpost_text) {
       const sign = buildSignpost(THREE, String(safeManifest.signpost_text).slice(0, 120), 'cottage_signpost');
-      sign.position.set(2.3, 0, 2.6);
+      sign.position.set(2.3, 0.18, 2.6);
       conceptGroup.add(sign);
     }
+    conceptGroup.add(buildPorchDeck(THREE));
     const rawProps = Array.isArray(safeManifest.props) ? safeManifest.props : [];
     for (const prop of rawProps) {
       const propMesh = buildProp(THREE, prop);
@@ -684,9 +697,11 @@ export function createCottage(THREE, manifest = {}, options = {}) {
 
   if (safeManifest.signpost_text) {
     const sign = buildSignpost(THREE, String(safeManifest.signpost_text).slice(0, 120), 'cottage_signpost');
-    sign.position.set(2.3, 0, 2.6);
+    sign.position.set(2.3, 0.18, 2.6);
     group.add(sign);
   }
+
+  group.add(buildPorchDeck(THREE));
 
   const rawProps = Array.isArray(safeManifest.props) ? safeManifest.props : [];
   for (const prop of rawProps) {
