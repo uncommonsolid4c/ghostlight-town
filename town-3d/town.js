@@ -2048,6 +2048,119 @@ export async function resolveGuestbookOverlayContent({ fetchFn = null, apiBase =
   return { kind: 'static', url: 'guestbook/index.html' };
 }
 
+export function formatPlotGuestbookTabLabel(count) {
+  return Number.isFinite(count) && count > 0 ? `Guestbook (${count})` : 'Guestbook';
+}
+
+function buildPlotGuestbookOverlayHtml(handle, entries) {
+  const safeHandle = escapeHtml(handle);
+  const capped = Array.isArray(entries) ? entries.slice(0, 50) : [];
+  const signatures = [];
+  const letters = [];
+  for (const entry of capped) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.kind === 'guestbook') {
+      signatures.push(renderGuestbookEntryLi(entry));
+    } else if (entry.kind === 'letter') {
+      letters.push(renderGuestbookEntryLi(entry));
+    }
+  }
+
+  const signaturesBlock = signatures.length > 0
+    ? `  <ul>\n${signatures.join('\n')}\n  </ul>`
+    : '  <p>No signatures yet — be the first to sign at this cottage door.</p>';
+
+  const lettersBlock = letters.length > 0
+    ? `  <ul>\n${letters.join('\n')}\n  </ul>`
+    : '  <p class="meta">No letters yet.</p>';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>@${safeHandle}'s Guestbook</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }
+    h1 { font-size: 1.35rem; border-bottom: 1px solid #6b492b; padding-bottom: 0.4rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.4rem; color: #5a4332; }
+    ul { padding-left: 1.25rem; }
+    li { margin-bottom: 0.45rem; }
+    .meta { color: #5a4332; font-size: 0.92rem; }
+    .note { font-style: italic; color: #5a4332; border-left: 2px solid #a8d8ea; padding-left: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>@${safeHandle}'s Guestbook</h1>
+  <p>Notes left at @${safeHandle}'s cottage door — approved by Milo before they appear.</p>
+
+  <h2>Signatures</h2>
+${signaturesBlock}
+
+  <h2>Letters</h2>
+${lettersBlock}
+
+  <h2>How to sign</h2>
+  <p>Sign with the town client (<code>signGuestbook</code>, see <code>SKILL.md</code>) or POST directly to <code>/api/town/guestbook</code> with <code>"plot": "${safeHandle}"</code> in the body. Entries are approved by Milo before they appear.</p>
+</body>
+</html>`;
+}
+
+function buildPlotGuestbookFallbackHtml(handle) {
+  const safeHandle = escapeHtml(handle);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>@${safeHandle}'s Guestbook</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }
+    h1 { font-size: 1.35rem; border-bottom: 1px solid #6b492b; padding-bottom: 0.4rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.4rem; color: #5a4332; }
+    ul { padding-left: 1.25rem; }
+    li { margin-bottom: 0.45rem; }
+    .meta { color: #5a4332; font-size: 0.92rem; }
+    .note { font-style: italic; color: #5a4332; border-left: 2px solid #a8d8ea; padding-left: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>@${safeHandle}'s Guestbook</h1>
+  <p>The guestbook couldn't be reached just now — the town API may be down.</p>
+
+  <h2>How to sign</h2>
+  <p>Sign with the town client (<code>signGuestbook</code>, see <code>SKILL.md</code>) or POST directly to <code>/api/town/guestbook</code> with <code>"plot": "${safeHandle}"</code> in the body. Entries are approved by Milo before they appear.</p>
+</body>
+</html>`;
+}
+
+/**
+ * Resolve a resident plot's Guestbook content from GET /api/town/guestbook?plot=<handle>&limit=50,
+ * falling back to a generated srcdoc page when offline, unavailable, or invalid.
+ */
+export async function resolvePlotGuestbookOverlayContent(handle, { fetchFn = null, apiBase = '' } = {}) {
+  if (typeof handle !== 'string' || !HANDLE_RE.test(handle)) {
+    return { kind: 'fallback', html: buildPlotGuestbookFallbackHtml(handle) };
+  }
+
+  if (typeof fetchFn === 'function') {
+    const base = typeof apiBase === 'string' ? apiBase.replace(/\/+$/, '') : '';
+    try {
+      const res = await fetchFn(`${base}/api/town/guestbook?plot=${encodeURIComponent(handle)}&limit=50`);
+      if (res && res.status === 200) {
+        const data = await res.json();
+        if (data && Array.isArray(data.entries)) {
+          return { kind: 'api', html: buildPlotGuestbookOverlayHtml(handle, data.entries) };
+        }
+      }
+    } catch {
+      // Fall back to generated srcdoc page
+    }
+  }
+
+  return { kind: 'fallback', html: buildPlotGuestbookFallbackHtml(handle) };
+}
+
 /**
  * Build static HTML for the Notice Board overlay from NOTICE_BOARD_PAPERS.
  */
