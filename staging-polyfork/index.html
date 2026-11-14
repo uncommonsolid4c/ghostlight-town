@@ -152,6 +152,29 @@
     font-size: 12px;
     cursor: pointer;
   }
+  #plot-overlay-tabs {
+    display: inline-flex;
+    gap: 6px;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+  #plot-overlay-tabs[hidden] {
+    display: none;
+  }
+  #plot-overlay-tabs button {
+    background: #25283d;
+    color: #cfc4ad;
+    border: 1px solid #6b492b;
+    padding: 3px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #plot-overlay-tabs button[aria-pressed="true"] {
+    background: #3b2b1d;
+    color: #ffca66;
+    border-color: #b59449;
+  }
   #plot-iframe {
     flex: 1 1 auto;
     width: 100%;
@@ -204,6 +227,12 @@
       padding: 6px 12px;
     }
     #plot-overlay-close {
+      min-height: 44px;
+      min-width: 44px;
+      font-size: 14px;
+      padding: 10px 14px;
+    }
+    #plot-overlay-tabs button {
       min-height: 44px;
       min-width: 44px;
       font-size: 14px;
@@ -262,6 +291,7 @@
   <div id="plot-overlay-card">
     <div id="plot-overlay-header">
       <span id="plot-overlay-title"></span>
+      <span id="plot-overlay-tabs" hidden><button id="plot-overlay-tab-note" type="button" aria-pressed="true">Desk Note</button><button id="plot-overlay-tab-guestbook" type="button" aria-pressed="false">Guestbook</button></span>
       <button id="plot-overlay-close" type="button">Close</button>
     </div>
     <iframe id="plot-iframe" sandbox="" title="Resident desk note"></iframe>
@@ -312,6 +342,6 @@ window.addEventListener('error', function (e) {
   }
 }
 </script>
-<script type="module" src="./staging.js?v=32"></script>
+<script type="module" src="./staging.js?v=33"></script>
 </body>
 </html>
