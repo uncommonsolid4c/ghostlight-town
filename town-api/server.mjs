@@ -279,6 +279,11 @@ export function createTownServer(opts = {}) {
     db.exec('ALTER TABLE prompt_book ADD COLUMN reply_to INTEGER');
   }
 
+  const guestbookCols = db.prepare('PRAGMA table_info(guestbook)').all();
+  if (!guestbookCols.some((c) => c.name === 'plot')) {
+    db.exec('ALTER TABLE guestbook ADD COLUMN plot TEXT');
+  }
+
   const residentsMaster = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'residents'")
     .get();
@@ -547,7 +552,7 @@ export function createTownServer(opts = {}) {
       inn,
       guestbook: (() => {
         const rows = db
-          .prepare("SELECT kind, COUNT(*) AS cnt FROM guestbook WHERE status = 'approved' GROUP BY kind")
+          .prepare("SELECT kind, COUNT(*) AS cnt FROM guestbook WHERE status = 'approved' AND plot IS NULL GROUP BY kind")
           .all();
         const counts = { signed: 0, letters: 0 };
         for (const r of rows) {
@@ -555,6 +560,16 @@ export function createTownServer(opts = {}) {
           else if (r.kind === 'letter') counts.letters = r.cnt;
         }
         return counts;
+      })(),
+      guestbook_by_plot: (() => {
+        const rows = db
+          .prepare("SELECT plot, COUNT(*) AS cnt FROM guestbook WHERE status = 'approved' AND kind = 'guestbook' AND plot IS NOT NULL GROUP BY plot")
+          .all();
+        const byPlot = {};
+        for (const r of rows) {
+          if (r.cnt > 0) byPlot[r.plot] = r.cnt;
+        }
+        return byPlot;
       })(),
       events: { now: nowEvent, next: nextEvent },
     };
@@ -1197,6 +1212,29 @@ export function createTownServer(opts = {}) {
       return;
     }
 
+    let plot = null;
+    if (body.plot !== undefined && body.plot !== null) {
+      if (typeof body.plot !== 'string') {
+        sendJson(res, 400, { error: 'invalid_plot' });
+        return;
+      }
+      const trimmedPlot = body.plot.trim();
+      if (trimmedPlot.length === 0) {
+        sendJson(res, 400, { error: 'invalid_plot' });
+        return;
+      }
+      const plotResident = db.prepare('SELECT handle FROM residents WHERE handle = ?').get(trimmedPlot);
+      if (!plotResident) {
+        sendJson(res, 400, { error: 'unknown_plot' });
+        return;
+      }
+      if (kind === 'letter') {
+        sendJson(res, 400, { error: 'invalid_plot' });
+        return;
+      }
+      plot = trimmedPlot;
+    }
+
     const now = auth.now;
     const ip = getClientIp(req);
     const rl = rateLimiter.consume(`guestbook:${ip}`, RATE_LIMITS.guestbook.max, RATE_LIMITS.guestbook.windowSec, now);
@@ -1206,8 +1244,8 @@ export function createTownServer(opts = {}) {
     }
 
     const inserted = db
-      .prepare("INSERT INTO guestbook (kind, name, body, status, created_at) VALUES (?, ?, ?, 'pending', ?) RETURNING id")
-      .get(kind, name, text, now);
+      .prepare("INSERT INTO guestbook (kind, name, body, plot, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?) RETURNING id")
+      .get(kind, name, text, plot, now);
 
     sendJson(res, 201, { id: inserted.id, status: 'pending' });
   }
@@ -1218,6 +1256,22 @@ export function createTownServer(opts = {}) {
     if (kind !== null && kind !== 'guestbook' && kind !== 'letter') {
       sendJson(res, 400, { error: 'invalid_kind' });
       return;
+    }
+
+    const plotParam = url.searchParams.get('plot');
+    let plot = null;
+    if (plotParam !== null) {
+      const trimmedPlot = plotParam.trim();
+      if (trimmedPlot === '') {
+        sendJson(res, 400, { error: 'invalid_plot' });
+        return;
+      }
+      const plotResident = db.prepare('SELECT handle FROM residents WHERE handle = ?').get(trimmedPlot);
+      if (!plotResident) {
+        sendJson(res, 400, { error: 'unknown_plot' });
+        return;
+      }
+      plot = trimmedPlot;
     }
 
     const limitParam = url.searchParams.get('limit');
@@ -1231,17 +1285,23 @@ export function createTownServer(opts = {}) {
       limit = Math.min(parsed, 50);
     }
 
-    const entries = kind !== null
-      ? db
-          .prepare(
-            "SELECT id, kind, name, body, created_at FROM guestbook WHERE status = 'approved' AND kind = ? ORDER BY created_at DESC, id DESC LIMIT ?"
-          )
-          .all(kind, limit)
-      : db
-          .prepare(
-            "SELECT id, kind, name, body, created_at FROM guestbook WHERE status = 'approved' ORDER BY created_at DESC, id DESC LIMIT ?"
-          )
-          .all(limit);
+    const where = ["status = 'approved'"];
+    const params = [];
+    if (kind !== null) {
+      where.push('kind = ?');
+      params.push(kind);
+    }
+    if (plot === null) {
+      where.push('plot IS NULL');
+    } else {
+      where.push('plot = ?');
+      params.push(plot);
+    }
+    params.push(limit);
+
+    const entries = db
+      .prepare(`SELECT id, kind, name, body, created_at FROM guestbook WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT ?`)
+      .all(...params);
 
     sendJson(res, 200, { entries });
   }
