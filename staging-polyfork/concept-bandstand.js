@@ -1001,15 +1001,19 @@ export function createConceptBandstand(THREE, options = {}) {
     standPost.position.set(-1.3, 0.55, 4.9);
     group.add(standPost);
 
-    const callTex = makeBandstandTextTexture(THREE, ['THE NIGHTLY CALL', "tonight's prompt appears here"], {
-      width: 512,
-      height: 256,
-      titleSize: 30,
-      subSize: 20,
-      bg: '#f2e6cf',
-      border: '#b59449',
-      fg: '#2b1e14',
-    });
+    const callTex = makeBandstandTextTexture(
+      THREE,
+      ['THE NIGHTLY CALL', ...splitNightlyCallLines("tonight's prompt appears here", 22)],
+      {
+        width: 512,
+        height: 256,
+        titleSize: 40,
+        subSize: 34,
+        bg: '#f2e6cf',
+        border: '#b59449',
+        fg: '#2b1e14',
+      }
+    );
     const callBoard = new THREE.Mesh(
       new THREE.BoxGeometry(0.85, 0.55, 0.05),
       new THREE.MeshStandardMaterial({ map: callTex, roughness: 0.7 })
