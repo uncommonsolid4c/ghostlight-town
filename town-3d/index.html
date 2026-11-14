@@ -292,7 +292,7 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, resolveGuestbookOverlayContent, stepGlide, pinchFov } from './town.js?v=14';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, resolveGuestbookOverlayContent, buildNoticeBoardOverlayHtml, stepGlide, pinchFov } from './town.js?v=14';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
@@ -441,6 +441,20 @@
         plotIframe.removeAttribute('srcdoc');
         plotIframe.src = resolved.url;
       }
+      plotOverlay.hidden = false;
+    }
+
+    function openNoticeBoardOverlay() {
+      keys.clear();
+      glideTarget = null;
+      activePointers.clear();
+      isDragging = false;
+      canvas.classList.remove('dragging');
+      infoStrip.hidden = true;
+      plotOverlayTitle.textContent = 'Notice Board';
+      plotIframe.setAttribute('sandbox', '');
+      plotIframe.removeAttribute('src');
+      plotIframe.srcdoc = buildNoticeBoardOverlayHtml();
       plotOverlay.hidden = false;
     }
 
@@ -602,6 +616,11 @@
           if (kind === 'newsstand') {
             infoStrip.hidden = true;
             openGazetteOverlay();
+            return true;
+          }
+          if (kind === 'notice_board') {
+            infoStrip.hidden = true;
+            openNoticeBoardOverlay();
             return true;
           }
           if (kind === 'inn') {
