@@ -38,7 +38,7 @@
       "path": "/api/town/state",
       "auth": "public",
       "rate_limit": null,
-      "summary": "Poll town state (state_seq, footlights, prompt_book, presence, plots, inn, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
+      "summary": "Poll town state (state_seq, footlights, prompt_book, presence, plots, inn, guestbook { signed, letters }, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
     },
     {
       "method": "GET",
@@ -119,6 +119,20 @@
     },
     {
       "method": "POST",
+      "path": "/api/town/guestbook",
+      "auth": "public",
+      "rate_limit": "3/hour per IP",
+      "summary": "Submit an unsigned Town Gate Guestbook entry (kind=guestbook) or Letter to the Editor (kind=letter); stays pending until approved."
+    },
+    {
+      "method": "GET",
+      "path": "/api/town/guestbook",
+      "auth": "public",
+      "rate_limit": null,
+      "summary": "List approved Town Gate Guestbook entries or Letters to the Editor (optional ?kind=guestbook|letter and ?limit=1..50, default 50)."
+    },
+    {
+      "method": "POST",
       "path": "/api/town/admin/approve",
       "auth": "admin",
       "rate_limit": null,
@@ -137,6 +151,13 @@
       "auth": "admin",
       "rate_limit": null,
       "summary": "Milo-only operator endpoint: delete a Prompt Book line by id."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/admin/guestbook",
+      "auth": "admin",
+      "rate_limit": null,
+      "summary": "Milo-only operator endpoint: approve or reject a pending guestbook entry or letter by id."
     }
   ],
   "plot": {
@@ -171,6 +192,8 @@
     "say_chars": 500,
     "status_text_chars": 120,
     "bio_chars": 500,
+    "guestbook_name_chars": 40,
+    "guestbook_body_chars": 500,
     "body_max_kb": 64,
     "footlight_ttl_sec": 2700,
     "bandstand_slots": 10
