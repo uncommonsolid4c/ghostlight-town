@@ -51,6 +51,7 @@ the windows and lanterns are the first thing to check, not the last.
   the GLB is the look; the fallback is not the reference.
 - **Plots:** stone pads with a signpost. Empty plots read as *waiting*, not abandoned.
 - **Ghostlight Inn:** two-story cedar-and-cream inn, warm windows on both floors, "GHOSTLIGHT INN" signpost, hanging lantern by the door.
+- **Town Notice Board:** cedar `#6b492b` twin-post board at `(-6, 14)` facing the gate path, dark `#3b2b1d` header panel (`#7d5a3c` border), and three cream `#f5efe0` notice papers (`#8b6a4b` border, `#2e2218` ink) — same palette, no new color.
 
 ## Mood
 
