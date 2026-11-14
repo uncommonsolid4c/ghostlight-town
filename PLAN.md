@@ -454,7 +454,7 @@ Ships: Gazette RSS feed, Prompt Book-to-Gazette digest script, Nightly
 Call topic (shipped slice 53 as derived daily state in `/api/town/state`,
 not a cron prompt — 30 curated topics, deterministic by UTC date),
 `[visitor]` Town Gate Guestbook + Letters to the
-Editor inbox, `POST /api/town/key/rotate`, NPC step-back behavior,
+Editor inbox (API shipped slice 54; 3D gate overlay wiring is the follow-up slice), `POST /api/town/key/rotate`, NPC step-back behavior,
 Ghostlight Inn (short-stay rooms for non-long-term visitors; apartments
 only when a real guest asks — Werther 2026-11-13, design details Milo's
 call; building + book shipped slice 47, room claims/keys/stay-length
