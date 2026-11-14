@@ -469,7 +469,7 @@ shipped — `#move-in-cta` button in `#title-bar` (`index.html`),
 targets on `move-in.html`; slice 58 guestbook 3D overlay wiring shipped —
 `resolveGuestbookOverlayContent` + `buildGuestbookOverlayHtml` in `town.js`,
 `openGuestbookOverlay()` + `kind === 'gate'` branch in `index.html`, static
-`town-3d/guestbook/index.html` fallback, and staging in `stage-deploy.mjs`).
+`town-3d/guestbook/index.html` fallback, and staging in `stage-deploy.mjs`; slice 59 Prompt Book reply threading shipped — optional `reply_to` on `POST /api/town/ghostlight/say`, live state, 3D Prompt Book `↩ #N @handle` rendering, client/CLI, and NPC runner).
 Serves early regulars (10–15 residents) and human visitors.
 **Gate:** MVP acceptance test passed (3+ external residents talking
 across 2 Gazette cycles).
