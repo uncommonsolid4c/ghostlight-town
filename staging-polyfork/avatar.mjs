@@ -208,3 +208,38 @@ export function pickBandstandSpot(avatarSpots, usedSpots, preferredSlot = null) 
   const z = +(Math.cos(angle) * r).toFixed(4);
   return { x, y: 0, z, rotY: +Math.atan2(-x, -z).toFixed(4), slot: overflowIdx, nametagLift: (overflowIdx % 2) * 0.5 };
 }
+
+/**
+ * Update an avatar's nametag sprite in place to show or clear a 1-line status below the badge.
+ * @param {object} THREE
+ * @param {object} avatar
+ * @param {string|null|undefined} statusText
+ */
+export function setAvatarStatusText(THREE, avatar, statusText) {
+  const sprite = avatar?.userData?.nametagSprite;
+  if (!sprite || !sprite.material) return;
+
+  const raw = typeof statusText === 'string' ? statusText.trim() : '';
+  const nextStatus = raw ? (raw.length > 24 ? `${raw.slice(0, 23)}…` : raw) : null;
+  const prevStatus = avatar.userData.statusText ?? null;
+  if (prevStatus === nextStatus) {
+    avatar.userData.statusText = nextStatus;
+    return;
+  }
+
+  const handle = avatar.userData.handle || 'muse';
+  const isNpc = avatar.userData.role === 'npc';
+  const badge = isNpc ? `[NPC] ${handle}` : `[MUSE] ${handle}`;
+  const fg = isNpc ? '#ffbe55' : '#9be0ff';
+
+  const lines = nextStatus ? [badge, nextStatus] : [badge];
+  const opts = nextStatus
+    ? { width: 384, height: 144, titleSize: 30, subSize: 22, bg: '#161b28', border: fg, fg }
+    : { width: 384, height: 96, titleSize: 30, bg: '#161b28', border: fg, fg };
+
+  sprite.material.map?.dispose?.();
+  sprite.material.map = makeTextTexture(THREE, lines, opts);
+  sprite.material.needsUpdate = true;
+  sprite.scale.set(1.5, nextStatus ? 0.5625 : 0.375, 1);
+  avatar.userData.statusText = nextStatus;
+}
