@@ -1,11 +1,16 @@
 # Ghostlight Town — Polyfork staging trial
 
-A look-only trial: Campground & Lake terrain + Medieval Village buildings +
-Village Tavern as the Inn + humanoid bodies for the three NPCs + the procedural
-Bandstand, Milo's cottage, and Milo's blue ghost ported from `town-3d/`.
-No live town API wiring yet (no `TownLive`, no `fetch`, no presence, no Prompt
-Book). Judged against `../CONCEPT.md` after deploy, by a browser task with
-human eyes.
+A read-only live-wired trial: Campground & Lake terrain + Medieval Village
+buildings + Village Tavern as the Inn + humanoid bodies for the three NPCs +
+the procedural Bandstand, Milo's cottage, and Milo's blue ghost ported from
+`town-3d/`.
+Live state layer (slice 62) is IN: polls `GET /api/town/state` (5 s base, ×2
+backoff to 60 s, `?since=`, 304 no-op), lights/unlights bandstand footlights
+slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent), and
+renders the Prompt Book panel. Still OUT (slice 63 follow-up): presence
+avatars, plot sync (cottages from `state.plots`), inn occupancy, and Nightly
+Call card updates. Judged against `../CONCEPT.md` after deploy, by a browser
+task with human eyes.
 
 **Live town untouched.** This bundle deploys to a staging subpath only:
 `~/milo-site/ghostlight-town/staging-polyfork/` on the homelab.
@@ -15,15 +20,22 @@ human eyes.
 - `index.html` — page shell, import map (three@0.160.0, same as the live town),
   HUD, and a load-error trap that reports failures in the status box.
 - `staging.js` — the composition (terrain, bandstand, ghost, buildings, pines,
-  NPCs, controls).
+  NPCs, controls) plus the staging-local `StagingLive` poller and footlight
+  state applier (`applyStagingState`).
+- `prompt-book.mjs` — verbatim copy of `formatPromptBookEntries` and
+  `renderPromptBook` from `town-3d/town.js` (no THREE dependency).
 - `concept-bandstand.js`, `concept-cottage.js`, `concept-ghost.js` — vendored
   byte-identical copies of `town-3d/concept-*.js` (with a 1-line vendored-source
   header) so the self-contained staging bundle does not 404 on relative
   `../town-3d/` imports under the live server's flattened root layout. Guarded
   against drift by `test-staging.mjs`.
 - `test-staging.mjs` — static assertions (vendored drift guard, relative
-  imports, no `Math.random` / API wiring, bandstand & ghost options, plot-1
-  coordinates, NPC clearance radius ≥ 6 m, `?v=5` cache bust).
+  imports, no `Math.random`, scoped `/api/town/state` fetch only, no `TownLive`,
+  bandstand & ghost options, plot-1 coordinates, NPC clearance radius ≥ 6 m,
+  Prompt Book UI elements, `?v=7` cache bust).
+- `test-prompt-book.mjs` — unit tests for `prompt-book.mjs` (100-entry cap,
+  chronological order, `[NPC]` pill, `reply_to` threading, say vs emote, empty
+  state, `textContent`-only XSS safety).
 - `kit-campground/` — Campground & Lake kit zip, extracted (`.glb` files
   stripped — no code references them; originals in `/tmp/kit-camp.zip`).
 - `kit-medieval/` — Medieval Village kit zip, extracted (`.glb` stripped;
