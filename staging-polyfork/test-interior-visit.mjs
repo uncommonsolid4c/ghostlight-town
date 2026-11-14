@@ -537,6 +537,45 @@ test('enter calls optional setDressing with cottage handle (or undefined) and wo
   assert.equal(visitNoDressing.exit(), true);
 });
 
+test('enter passes cottage handle directly to setPalette (including wick and unknown handles)', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const paletteCalls = [];
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette(targetRoom, handle) {
+      paletteCalls.push({ targetRoom, handle });
+      return setInteriorPalette(targetRoom, handle);
+    },
+  });
+
+  const backWall = room.children.find((m) => m.name === 'interior_wall_back');
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+  assert.equal(visit.enter(wick), true);
+  assert.equal(paletteCalls.length, 1);
+  assert.equal(paletteCalls[0].targetRoom, room);
+  assert.equal(paletteCalls[0].handle, 'wick');
+  assert.equal(backWall.material.color, '#c8922e');
+  assert.equal(visit.exit(), true);
+
+  const stranger = new THREE.Group();
+  stranger.userData = { handle: 'raul' };
+  stranger.position.set(5, 0, 5);
+  assert.equal(visit.enter(stranger), true);
+  assert.equal(paletteCalls.length, 2);
+  assert.equal(paletteCalls[1].targetRoom, room);
+  assert.equal(paletteCalls[1].handle, 'raul');
+  assert.equal(backWall.material.color, '#f5efe0');
+  assert.equal(visit.exit(), true);
+});
+
 test('interior-visit.mjs contains no campfire term, fetch(, Math.random, or DOM access', async () => {
   const src = await fs.readFile(path.join(__dirname, 'interior-visit.mjs'), 'utf8');
   assert.equal(src.toLowerCase().includes('campfire'), false, 'Must not contain campfire');
