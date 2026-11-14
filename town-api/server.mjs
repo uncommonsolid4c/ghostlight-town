@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { validateManifest, validateHtml } from './plot-validation.mjs';
+import { loadEventsFile, selectNowNext, eventStateKey } from './events.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -218,6 +219,7 @@ function atomicWriteFile(targetPath, content) {
  * @param {string} [opts.plotsDir]
  * @param {string} [opts.operatorPubkey]
  * @param {string} [opts.topicsPath]
+ * @param {string} [opts.eventsPath]
  * @param {() => number} [opts.nowFn] - returns unix seconds (for deterministic tests)
  */
 export function createTownServer(opts = {}) {
@@ -227,6 +229,28 @@ export function createTownServer(opts = {}) {
     opts.operatorPubkey !== undefined ? opts.operatorPubkey : process.env.TOWN_OPERATOR_PUBKEY || '';
   const nowSec = opts.nowFn || (() => Math.floor(Date.now() / 1000));
   const topicsPath = opts.topicsPath !== undefined ? opts.topicsPath : path.join(__dirname, 'nightly-topics.json');
+  const eventsPath = opts.eventsPath || process.env.TOWN_EVENTS_PATH || path.join(__dirname, 'events.json');
+
+  let cachedEvents = { mtimeMs: null, events: [] };
+  function getCachedEvents() {
+    if (typeof eventsPath !== 'string' || !eventsPath) {
+      cachedEvents = { mtimeMs: null, events: [] };
+      return cachedEvents.events;
+    }
+    try {
+      const stat = fs.statSync(eventsPath);
+      if (stat.mtimeMs !== cachedEvents.mtimeMs) {
+        cachedEvents = {
+          mtimeMs: stat.mtimeMs,
+          events: loadEventsFile(eventsPath).events,
+        };
+      }
+      return cachedEvents.events;
+    } catch {
+      cachedEvents = { mtimeMs: null, events: [] };
+      return cachedEvents.events;
+    }
+  }
 
   let nightlyTopics = null;
   if (typeof topicsPath === 'string' && topicsPath.length > 0) {
@@ -433,6 +457,18 @@ export function createTownServer(opts = {}) {
     pruneExpiredFootlights(now);
     pruneOldPromptBook(now);
     pruneExpiredInnClaims(now);
+
+    const { now: nowEvent, next: nextEvent } = selectNowNext(getCachedEvents(), now * 1000);
+    const eventKey = eventStateKey(nowEvent, nextEvent);
+    const storedEventRow = db.prepare("SELECT value FROM meta WHERE key = 'event_key'").get();
+    const storedEventKey = storedEventRow ? storedEventRow.value : '';
+    if (eventKey !== storedEventKey) {
+      db.prepare(
+        "INSERT INTO meta (key, value) VALUES ('event_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).run(eventKey);
+      bumpStateSeq();
+    }
+
     const stateSeq = getStateSeq();
 
     const sinceParam = url.searchParams.get('since');
@@ -453,6 +489,14 @@ export function createTownServer(opts = {}) {
          ORDER BY f.slot ASC`
       )
       .all(now);
+
+    if (nowEvent) {
+      const hostRow = footlights.find((r) => r.handle === nowEvent.host_handle);
+      if (hostRow) {
+        hostRow.status_text = nowEvent.title;
+        hostRow.event = true;
+      }
+    }
 
     const cutoff24h = now - 24 * 60 * 60;
     const promptBook = db
@@ -512,6 +556,7 @@ export function createTownServer(opts = {}) {
         }
         return counts;
       })(),
+      events: { now: nowEvent, next: nextEvent },
     };
 
     if (nightlyTopics) {
