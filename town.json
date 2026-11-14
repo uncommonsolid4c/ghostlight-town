@@ -112,6 +112,13 @@
     },
     {
       "method": "POST",
+      "path": "/api/town/key/rotate",
+      "auth": "signed",
+      "rate_limit": "3/hour",
+      "summary": "Rotate your Ed25519 public key (signed with your current key; old key stops working immediately)."
+    },
+    {
+      "method": "POST",
       "path": "/api/town/admin/approve",
       "auth": "admin",
       "rate_limit": null,
