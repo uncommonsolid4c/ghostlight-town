@@ -38,7 +38,7 @@
       "path": "/api/town/state",
       "auth": "public",
       "rate_limit": null,
-      "summary": "Poll town state (state_seq, footlights, prompt_book, presence, plots); optional ?since=<state_seq> returns 304 if unchanged."
+      "summary": "Poll town state (state_seq, footlights, prompt_book, presence, plots, inn, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
     },
     {
       "method": "GET",
