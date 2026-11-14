@@ -21,6 +21,8 @@ import {
   resolvePlotOverlayContent,
   resolveInnOverlayContent,
   resolveGuestbookOverlayContent,
+  resolvePlotGuestbookOverlayContent,
+  formatPlotGuestbookTabLabel,
   TownLive,
 } from './town.js';
 import { createTownServer } from '../town-api/server.mjs';
@@ -1231,4 +1233,78 @@ test('renderPromptBook renders pb-reply-to before handle with resolved or fallba
   const line6 = container.children[3];
   const classes6 = line6.children.map((c) => c.className);
   assert.deepEqual(classes6, ['pb-handle', 'pb-body']);
+});
+
+test('resolvePlotGuestbookOverlayContent renders Signatures and Letters with escaping, town-time dates, and 50-cap', async () => {
+  const calls = [];
+  const entries = [
+    { id: 1, kind: 'guestbook', name: '<script>milo</script>', body: 'Warm <b>porch</b>.', created_at: 1744500000 },
+    { id: 2, kind: 'letter', name: 'maren', body: 'Left tea by the door.', created_at: 1744586400 },
+    ...Array.from({ length: 55 }, (_, i) => ({
+      id: 10 + i,
+      kind: 'guestbook',
+      name: `sig-${i + 1}`,
+      body: `note-${i + 1}`,
+      created_at: 1744600000 + i,
+    })),
+  ];
+  const res = await resolvePlotGuestbookOverlayContent('lampmoth', {
+    fetchFn: async (url) => {
+      calls.push(url);
+      return { status: 200, async json() { return { entries }; } };
+    },
+  });
+  assert.deepEqual(calls, ['/api/town/guestbook?plot=lampmoth&limit=50']);
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes("<h1>@lampmoth's Guestbook</h1>"));
+  assert.ok(res.html.includes('&lt;script&gt;milo&lt;/script&gt;'));
+  assert.ok(res.html.includes('Warm &lt;b&gt;porch&lt;/b&gt;.'));
+  assert.ok(!res.html.includes('<script>'));
+  assert.ok(res.html.includes('Apr 12, 2025'));
+  assert.ok(res.html.includes('<h2>Signatures</h2>'));
+  assert.ok(res.html.includes('<h2>Letters</h2>'));
+  assert.ok(res.html.includes('sig-48'));
+  assert.ok(!res.html.includes('sig-49'), 'must cap at 50 entries');
+  assert.ok(res.html.includes('"plot": "lampmoth"'));
+});
+
+test('resolvePlotGuestbookOverlayContent falls back to srcdoc on errors or invalid handles without static URL', async () => {
+  let fetchCalled = false;
+  const invalid = await resolvePlotGuestbookOverlayContent('../bad', {
+    fetchFn: async () => {
+      fetchCalled = true;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(fetchCalled, false, 'invalid handle must not call fetch');
+  assert.equal(invalid.kind, 'fallback');
+  assert.ok(invalid.html.includes('&lt;h1&gt;') === false);
+  assert.ok(invalid.html.includes('../bad'));
+  assert.ok(invalid.html.includes('How to sign'));
+
+  const missingFetch = await resolvePlotGuestbookOverlayContent('lampmoth');
+  assert.equal(missingFetch.kind, 'fallback');
+  assert.ok(missingFetch.html.includes("@lampmoth's Guestbook"));
+  assert.ok(missingFetch.html.includes('"plot": "lampmoth"'));
+
+  const non200 = await resolvePlotGuestbookOverlayContent('lampmoth', {
+    fetchFn: async () => ({ status: 500, async json() { return { entries: [] }; } }),
+  });
+  assert.equal(non200.kind, 'fallback');
+
+  const thrown = await resolvePlotGuestbookOverlayContent('lampmoth', {
+    fetchFn: async () => { throw new Error('offline'); },
+  });
+  assert.equal(thrown.kind, 'fallback');
+
+  const badEntries = await resolvePlotGuestbookOverlayContent('lampmoth', {
+    fetchFn: async () => ({ status: 200, async json() { return { entries: 'not-an-array' }; } }),
+  });
+  assert.equal(badEntries.kind, 'fallback');
+});
+
+test('formatPlotGuestbookTabLabel formats count only for finite numbers > 0', () => {
+  assert.equal(formatPlotGuestbookTabLabel(undefined), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(0), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(3), 'Guestbook (3)');
 });
