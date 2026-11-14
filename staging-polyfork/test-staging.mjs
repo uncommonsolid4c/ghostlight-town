@@ -65,7 +65,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs(\?v=\d+)?['"]/, 'staging.js must import ./avatar.mjs (optional ?v= cache-buster)');
   assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs(\?v=\d+)?['"]/, 'staging.js must import ./inn-nightly-call.mjs (optional ?v= cache-buster)');
   assert.match(codeOnly, /from\s+['"]\.\/plot-overlay\.mjs['"]/, 'staging.js must import ./plot-overlay.mjs');
-  assert.match(codeOnly, /from\s+['"]\.\/inn-guestbook-overlay\.mjs['"]/, 'staging.js must import ./inn-guestbook-overlay.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/inn-guestbook-overlay\.mjs\?v=33['"]/, 'staging.js must import ./inn-guestbook-overlay.mjs?v=33');
   assert.match(codeOnly, /from\s+['"]\.\/tap-glide\.mjs['"]/, 'staging.js must import ./tap-glide.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/interior-room\.mjs\?v=31['"]/, 'staging.js must import ./interior-room.mjs?v=31');
   assert.match(codeOnly, /from\s+['"]\.\/interior-visit\.mjs\?v=32['"]/, 'staging.js must import ./interior-visit.mjs?v=32');
@@ -121,12 +121,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=32, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=33, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=32["']/, 'index.html must reference ./staging.js?v=32');
+  assert.match(html, /src=["']\.\/staging\.js\?v=33["']/, 'index.html must reference ./staging.js?v=33');
   assert.match(html, /id=["']interior-exit["'][^>]*\bhidden\b/, 'index.html must include #interior-exit hidden');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
@@ -796,4 +796,28 @@ test('Slice 88: staging.js wires setDressing: setInteriorDressing into createInt
     /createInteriorVisit\s*\(\s*\{[\s\S]*?setDressing\s*:\s*setInteriorDressing\b/,
     'staging.js must pass setDressing: setInteriorDressing to createInteriorVisit'
   );
+});
+
+test('Slice 90: index.html has plot-overlay tabs with 44px mobile tap targets and staging.js wires guestbook tab + hides tabs in non-plot openers', async () => {
+  const [html, src] = await Promise.all([
+    fs.readFile(INDEX_HTML_PATH, 'utf8'),
+    fs.readFile(STAGING_JS_PATH, 'utf8'),
+  ]);
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  assert.match(html, /id=["']plot-overlay-tabs["'][^>]*\bhidden\b/, 'index.html must include hidden #plot-overlay-tabs');
+  assert.match(html, /id=["']plot-overlay-tab-note["']/, 'index.html must include #plot-overlay-tab-note');
+  assert.match(html, /id=["']plot-overlay-tab-guestbook["']/, 'index.html must include #plot-overlay-tab-guestbook');
+  const mediaMatch = html.match(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?#plot-overlay-tabs\s+button\s*\{[\s\S]*?min-height:\s*44px/);
+  assert.ok(mediaMatch, 'index.html @media (max-width: 640px) must set min-height: 44px on #plot-overlay-tabs button');
+
+  assert.match(
+    codeOnly,
+    /plotOverlayTabGuestbookEl\?\.\s*addEventListener\s*\(\s*['"]click['"][\s\S]*?openPlotGuestbookOverlay\s*\(/,
+    'staging.js must wire guestbook tab click to openPlotGuestbookOverlay'
+  );
+  for (const kind of ['newsstand', 'notice_board', 'inn', 'gate']) {
+    const branchRe = new RegExp(`kind === '${kind}'\\)[\\s\\S]*?setPlotTabs\\(null\\)`);
+    assert.match(codeOnly, branchRe, `staging.js ${kind} opener must call setPlotTabs(null)`);
+  }
 });
