@@ -71,6 +71,7 @@ import {
 import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=23';
 import { buildInteriorRoom, setInteriorVisible, setInteriorPalette, setInteriorDressing } from './interior-room.mjs?v=34';
 import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=34';
+import { syncEmptyPadMarkers } from './empty-pad.mjs?v=35';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -159,6 +160,7 @@ const plotOverlayTabNoteEl = document.getElementById('plot-overlay-tab-note');
 const plotOverlayTabGuestbookEl = document.getElementById('plot-overlay-tab-guestbook');
 const plotOverlayCloseEl = document.getElementById('plot-overlay-close');
 const plotIframeEl = document.getElementById('plot-iframe');
+const infoStripEl = document.getElementById('info-strip');
 let currentPlotHandle = null;
 
 function setPlotTabs(active) {
@@ -527,6 +529,7 @@ function createStagingLiveStore() {
     avatars: new Map(),
     plotAssignments: new Map(),
     plotCache: new Map(),
+    emptyPadMarkers: new Map(),
     lastState: null,
     nightlyCallTopic: null,
     events: [],
@@ -1181,6 +1184,11 @@ async function init() {
   if (stars) stars.visible = true;
 
   const liveStore = createStagingLiveStore();
+  syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: makeBandstandTextTexture,
+    groundAt: (x, z) => camp.groundAt(x, z),
+  });
   function updateCountsLine() {
     document.getElementById('counts').textContent =
       `${counts.bandstand} bandstand · ${counts.ghost} ghost · ${counts.buildings + liveStore.plotAssignments.size} buildings (incl. Milo's cottage + ${liveStore.plotAssignments.size} resident) · ${counts.lamps} lamp posts · ${counts.pines} pines · ${counts.npcs} NPC stand-ins · ${liveStore.avatars.size} live avatars · terrain span 2 (128 m)`;
@@ -1255,6 +1263,11 @@ async function init() {
           );
           updateCountsLine();
         }
+        syncEmptyPadMarkers(scene, liveStore, {
+          THREE,
+          makeTextTexture: makeBandstandTextTexture,
+          groundAt: (x, z) => camp.groundAt(x, z),
+        });
       });
     },
     onStatus: ({ connected, stateSeq, error }) => {
@@ -1307,6 +1320,7 @@ async function init() {
       if (target) {
         const kind = target.userData.kind;
         if (kind === 'cottage' && target.userData.handle) {
+          if (infoStripEl) infoStripEl.hidden = true;
           if (isDoorHit(target, hit)) {
             return enterCottageInterior(target);
           }
@@ -1327,6 +1341,7 @@ async function init() {
           return true;
         }
         if (kind === 'newsstand') {
+          if (infoStripEl) infoStripEl.hidden = true;
           currentPlotHandle = null;
           setPlotTabs(null);
           openGazetteOverlay({
@@ -1339,6 +1354,7 @@ async function init() {
           return true;
         }
         if (kind === 'notice_board') {
+          if (infoStripEl) infoStripEl.hidden = true;
           currentPlotHandle = null;
           setPlotTabs(null);
           openNoticeBoardOverlay({
@@ -1350,6 +1366,7 @@ async function init() {
           return true;
         }
         if (kind === 'inn') {
+          if (infoStripEl) infoStripEl.hidden = true;
           currentPlotHandle = null;
           setPlotTabs(null);
           openInnOverlay({
@@ -1363,6 +1380,7 @@ async function init() {
           return true;
         }
         if (kind === 'gate') {
+          if (infoStripEl) infoStripEl.hidden = true;
           currentPlotHandle = null;
           setPlotTabs(null);
           openGuestbookOverlay({
@@ -1372,6 +1390,13 @@ async function init() {
             fetchFn,
             onBeforeOpen: onBeforeOverlayOpen,
           });
+          return true;
+        }
+        if (kind === 'open_plot') {
+          if (infoStripEl) {
+            infoStripEl.textContent = `OPEN PLOT #${target.userData.plotNumber} — no resident yet`;
+            infoStripEl.hidden = false;
+          }
           return true;
         }
         return false;
