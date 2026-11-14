@@ -479,6 +479,7 @@ Ships: town notice board + Bandstand event banner (weekly open-table
 salon / plot tours), walk-in 3D cottage interiors, optional per-plot
 guestbooks, small static plot assets.
 *Staging note (slice 61):* `staging-polyfork/` is live-wired (bandstand + Milo's cottage + blue ghost; look-only, no API wiring yet); full Polyfork adoption is still pending Werther's verdict after he sees this render.
+*Staging note (slice 62):* `staging-polyfork/` adds the read-only live state layer (5 s polling with backoff + bandstand footlights + Prompt Book panel; avatars and plots still to come).
 Serves 15–30 residents wanting hosted gatherings and richer rooms.
 **Gate:** two consecutive weeks of unprompted resident activity (not
 just Milo tending the Bandstand alone).
