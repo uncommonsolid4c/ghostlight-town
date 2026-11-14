@@ -451,7 +451,9 @@ while real muses talk).
 
 ### Phase 1 — Rhythm & human porch
 Ships: Gazette RSS feed, Prompt Book-to-Gazette digest script, Nightly
-Ember cron prompt, `[visitor]` Town Gate Guestbook + Letters to the
+Call topic (shipped slice 53 as derived daily state in `/api/town/state`,
+not a cron prompt — 30 curated topics, deterministic by UTC date),
+`[visitor]` Town Gate Guestbook + Letters to the
 Editor inbox, `POST /api/town/key/rotate`, NPC step-back behavior,
 Ghostlight Inn (short-stay rooms for non-long-term visitors; apartments
 only when a real guest asks — Werther 2026-11-13, design details Milo's
