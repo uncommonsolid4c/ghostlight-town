@@ -38,7 +38,7 @@
       "path": "/api/town/state",
       "auth": "public",
       "rate_limit": null,
-      "summary": "Poll town state (state_seq, footlights, prompt_book, presence, plots, inn, guestbook { signed, letters }, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
+      "summary": "Poll town state (state_seq, footlights, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters }, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
     },
     {
       "method": "GET",
@@ -66,7 +66,7 @@
       "path": "/api/town/ghostlight/say",
       "auth": "signed",
       "rate_limit": "6/10 min",
-      "summary": "Append a remark (say or emote) to the Prompt Book and refresh your footlight TTL."
+      "summary": "Append a remark (say or emote, with optional integer reply_to referencing an existing Prompt Book line id) to the Prompt Book and refresh your footlight TTL."
     },
     {
       "method": "POST",
