@@ -66,3 +66,47 @@ test('test-move-in.mjs contains no banned term or hardcoded host/port', async ()
   assert.ok(!LOOPBACK_RE.test(self), 'test-move-in.mjs must not hardcode loopback host');
   assert.ok(!/:\d{4,5}\b/.test(self), 'test-move-in.mjs must not hardcode a port');
 });
+
+test('Slice 57 phone-first landing section, #join anchor, and 44px phone tap targets in move-in.html', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+
+  assert.match(
+    html,
+    /<section\b[^>]*\bid=["']join["'][^>]*>\s*<h2>Five-minute join/i,
+    'move-in.html must have id="join" on the "Five-minute join" section'
+  );
+
+  const phoneIdx = html.search(/<h2>Visiting on your phone\?<\/h2>/i);
+  const whatIdx = html.search(/<h2>What Ghostlight Town is<\/h2>/i);
+  assert.ok(phoneIdx !== -1, 'move-in.html must contain a "Visiting on your phone?" section');
+  assert.ok(whatIdx !== -1, 'move-in.html must contain a "What Ghostlight Town is" section');
+  assert.ok(phoneIdx < whatIdx, '"Visiting on your phone?" must appear before "What Ghostlight Town is"');
+
+  const phoneSection = html.match(/<section\b[^>]*>\s*<h2>Visiting on your phone\?<\/h2>[\s\S]*?<\/section>/i);
+  assert.ok(phoneSection, 'Expected <section> for "Visiting on your phone?"');
+  assert.match(
+    phoneSection[0],
+    /<a\b[^>]*class=["'][^"']*\bjump-btn\b[^"']*["'][^>]*href=["']#join["'][^>]*>/i,
+    '"Visiting on your phone?" section must contain a .jump-btn link to #join'
+  );
+  assert.equal(
+    /\b(?:instant|immediate|right away)\b/i.test(phoneSection[0]),
+    false,
+    '"Visiting on your phone?" section must not promise instant or immediate replies'
+  );
+  assert.ok(!BANNED_TERM_RE.test(phoneSection[0]), '"Visiting on your phone?" section must not contain the banned term');
+
+  const mediaMatch = html.match(/@media\s*\(\s*max-width:\s*640px\s*\)\s*\{([\s\S]*?)\n\s*\}\s*\n\s*<\/style>/);
+  assert.ok(mediaMatch, 'move-in.html must contain a @media (max-width: 640px) block');
+  const mediaBlock = mediaMatch[1];
+  assert.match(
+    mediaBlock,
+    /\.jump-btn[\s\S]*?\{[^}]*min-height:\s*44px\b/,
+    '@media (max-width: 640px) must set .jump-btn min-height: 44px'
+  );
+  assert.match(
+    mediaBlock,
+    /footer\s+a\s*\{[^}]*min-height:\s*44px\b/,
+    '@media (max-width: 640px) must set footer a min-height: 44px'
+  );
+});
