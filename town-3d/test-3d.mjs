@@ -568,11 +568,17 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // (26 meshes + 4 stage props vs the old 31) — and 112 is under the
 // 120fps/2015-iGPU reference point. 125 keeps the guardrail meaningful so
 // any future prop addition requires a deliberate revisit.
-test('Draw-call budget: total mesh count in built town is < 125', () => {
+// Budget raised 125 -> 140 (owner decision, 2026-11-13): baseline measured 121
+// meshes in this session; the Ghostlight Inn building adds ~15–17 meshes
+// (two-story timber/cream structure, roof, chimney, door, warm windows,
+// signpost, and door lantern) for an expected total of ~136–138. The inn is a
+// major town building, not prop creep; 140 keeps the guardrail meaningful and
+// future buildings will need another deliberate revisit.
+test('Draw-call budget: total mesh count in built town is < 140', () => {
   const THREE = createThreeStub();
   const { scene } = buildTown(THREE);
   const meshes = collectNodes(scene, (n) => n.isMesh);
-  assert.ok(meshes.length < 125, `Expected < 125 meshes, got ${meshes.length}`);
+  assert.ok(meshes.length < 140, `Expected < 140 meshes, got ${meshes.length}`);
 });
 
 test('No campfire terminology and no fetch() in town.js; .glb allowed only for props (not pine.glb)', async () => {
@@ -1113,4 +1119,93 @@ test('Perimeter trees stand on the clearing ground: trunks inside clearingRadius
     const baseY = e[13] - trunkHalfHeight * e[5];
     assert.ok(Math.abs(baseY) < 1e-9, `tree ${i} trunk base must sit at y=0, got ${baseY}`);
   }
+});
+
+test('Ghostlight Inn group has sign, door, chimney, and >= 6 emissive warm windows', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const inn = town.parts.inn;
+  assert.ok(inn, 'town.parts.inn must exist');
+  assert.equal(inn.name, 'ghostlight_inn');
+  assert.equal(inn.userData.clickable, true);
+  assert.equal(inn.userData.kind, 'inn');
+  assert.equal(inn.userData.label, 'Ghostlight Inn');
+
+  const sign = collectNodes(inn, (n) => n.name === 'inn_signpost')[0];
+  const door = collectNodes(inn, (n) => n.name === 'inn_door')[0];
+  const chimney = collectNodes(inn, (n) => n.name === 'inn_chimney')[0];
+  assert.ok(sign, 'inn_signpost must exist');
+  assert.ok(door && door.isMesh, 'inn_door mesh must exist');
+  assert.ok(chimney && chimney.isMesh, 'inn_chimney mesh must exist');
+
+  const windows = collectNodes(inn, (n) => n.isMesh && /^inn_window_\d+$/.test(n.name));
+  assert.ok(windows.length >= 6, `Expected >= 6 inn windows, got ${windows.length}`);
+  for (const win of windows) {
+    assert.equal(win.material.emissive, '#ffbe5c', `${win.name} must have warm emissive #ffbe5c`);
+    assert.ok(win.material.emissiveIntensity > 0, `${win.name} must have emissiveIntensity > 0`);
+  }
+});
+
+test('Ghostlight Inn placement is inside clearingRadius with clear separation from plots, bandstand, newsstand, and gate', () => {
+  const inn = TOWN_LAYOUT.inn;
+  const innFootprintRadius = Math.hypot(4.6 / 2, 3.6 / 2); // half-diagonal of 4.6 x 3.6m footprint (~2.92m)
+  const distFromOrigin = Math.hypot(inn.x, inn.z);
+  assert.ok(
+    distFromOrigin + innFootprintRadius < TOWN_LAYOUT.clearingRadius,
+    `Inn outer radius (${(distFromOrigin + innFootprintRadius).toFixed(2)}) must be inside clearingRadius (${TOWN_LAYOUT.clearingRadius})`
+  );
+
+  // Clearance from bandstand (radius 4.5 + inn footprint)
+  const bandstandDist = Math.hypot(inn.x - TOWN_LAYOUT.bandstand.x, inn.z - TOWN_LAYOUT.bandstand.z);
+  assert.ok(
+    bandstandDist > TOWN_LAYOUT.bandstand.radius + innFootprintRadius + 2,
+    `Inn too close to bandstand: ${bandstandDist.toFixed(2)}m`
+  );
+
+  // Clearance from every resident plot (plot pad radius ~3 + inn footprint)
+  for (const plot of TOWN_LAYOUT.plots) {
+    const plotDist = Math.hypot(inn.x - plot.x, inn.z - plot.z);
+    assert.ok(
+      plotDist > 3.0 + innFootprintRadius + 2,
+      `Inn too close to plot ${plot.plotNumber}: ${plotDist.toFixed(2)}m`
+    );
+  }
+
+  // Clearance from newsstand and gate
+  const newsstandDist = Math.hypot(inn.x - TOWN_LAYOUT.newsstand.x, inn.z - TOWN_LAYOUT.newsstand.z);
+  assert.ok(newsstandDist > 2.0 + innFootprintRadius + 2, `Inn too close to newsstand: ${newsstandDist.toFixed(2)}m`);
+
+  const gateDist = Math.hypot(inn.x - TOWN_LAYOUT.gate.x, inn.z - TOWN_LAYOUT.gate.z);
+  assert.ok(gateDist > 2.5 + innFootprintRadius + 2, `Inn too close to gate: ${gateDist.toFixed(2)}m`);
+});
+
+test('Ghostlight Inn signpost text is GHOSTLIGHT INN and wraps via shared wrapper', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const inn = town.parts.inn;
+  assert.equal(inn.userData.signpostText, 'GHOSTLIGHT INN');
+  const sign = collectNodes(inn, (n) => n.name === 'inn_signpost')[0];
+  assert.ok(sign, 'inn_signpost must exist');
+  assert.equal(sign.userData.signpostText, 'GHOSTLIGHT INN');
+  assert.ok(Array.isArray(sign.userData.signpostLines) && sign.userData.signpostLines.length >= 1);
+  assert.equal(sign.userData.signpostLines.join(' '), 'GHOSTLIGHT INN');
+});
+
+test('Ghostlight Inn book page exists, is static/safe, and index.html overlay URL resolves', async () => {
+  const innHtmlPath = path.join(__dirname, 'inn', 'index.html');
+  const [innHtml, indexHtml] = await Promise.all([
+    fs.readFile(innHtmlPath, 'utf8'),
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+  ]);
+
+  assert.match(innHtml, /<meta\s+charset=["']?utf-8["']?\s*>/i, 'inn/index.html must declare utf-8 charset');
+  assert.ok(!/<script\b/i.test(innHtml), 'inn/index.html must not contain <script> tags');
+  assert.ok(!/https?:\/\//i.test(innHtml), 'inn/index.html must not contain external http(s):// URLs');
+  assert.ok(!new RegExp(`camp${'fire'}`, 'i').test(innHtml), 'inn/index.html must not contain banned term');
+
+  assert.match(indexHtml, /kind\s*===\s*['"]inn['"]/, 'index.html handleCanvasClick must handle kind === "inn"');
+  const urlMatch = indexHtml.match(/plotIframe\.src\s*=\s*['"](inn\/index\.html)['"]/);
+  assert.ok(urlMatch, 'index.html must point plotIframe.src to inn/index.html');
+  const stat = await fs.stat(path.join(__dirname, urlMatch[1]));
+  assert.ok(stat.isFile(), 'inn/index.html overlay target must resolve to a file on disk');
 });
