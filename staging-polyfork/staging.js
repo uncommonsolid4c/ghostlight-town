@@ -33,6 +33,26 @@ const CEDAR = '#6b492b';  // cedar — timber, Wick's apron
 const TERRAIN_PARAMS = {
   span: 2, clearing: 30, flatten: 0.5, lake: 0.3,
   colorway: 'golden-evening', edges: 'island',
+  // Level pads under each building. The kit's baked camp pads (tent pitches
+  // at assorted heights, y 3.4–8, with 3 m blend ramps) stamped steps and
+  // ramps across the clearing, so the tavern sat half-buried and the
+  // cottages half-floated (Werther, 2026-11-13). Passing pads here REPLACES
+  // the baked array (buildKit merges terrainParams over the kit row); the
+  // terrain's own auto pitches survive — they are generated inside, before
+  // o.pads, and our pads come last so they win any overlap.
+  // World coords: worldX = sceneX - 192, worldZ = sceneZ + 384
+  // (cx -4, cz 5, CHUNK 64, mid 64). No y: each pad levels itself from the
+  // flattened height at its centre, snapped to 0.25 m.
+  pads: [
+    { x: -203, z: 404, w: 17, d: 15 }, // tavern / Inn (-11, 20)
+    { x: -177, z: 376, w: 8, d: 8 },   // cottage (15, -8)
+    { x: -208, z: 375, w: 8, d: 8 },   // cottage (-16, -9)
+    { x: -174.08, z: 388.6, w: 10, d: 9 }, // Milo's cottage (17.92, 4.60)
+    { x: -192, z: 411, w: 11, d: 10 }, // gatehouse (0, 27)
+    { x: -186, z: 392, w: 4, d: 4 },   // well (6, 8)
+    { x: -214, z: 364, w: 8, d: 8 },   // windmill (-22, -20)
+    { x: -192, z: 384, w: 8, d: 8 },   // bandstand spot (0, 0) — for slice 61
+  ],
 };
 
 const statusEl = document.getElementById('status');
@@ -193,6 +213,22 @@ async function init() {
   // buildKit has no counts object; placed.length is the scatter count.
   status(`Ground done — ${camp.placed.length} scatter pieces placed` +
     (camp.missing.length ? `, ${camp.missing.length} missing (tolerated in folder mode).` : '.'));
+
+  // Prune water floaters (Werther, 2026-11-13): the kit's own scatter puts
+  // reed beds, roots, lily pads and pebbles in the open sea beyond the
+  // island edge, where no view reaches. Anything off the island goes; the
+  // on-shore and in-lake ones stay. Saves objects as well as looking right.
+  const FLOATER_KEYS = ['reed-bed', 'exposed-tree-roots', 'lily-pads', 'lake-pebbles'];
+  let pruned = 0;
+  for (const p of camp.placed) {
+    if (!FLOATER_KEYS.includes(p.key)) continue;
+    const { x, z } = p.object.position;
+    if (camp.groundAt(x, z) <= camp.groundY + 0.01) {
+      p.object.removeFromParent();
+      pruned++;
+    }
+  }
+  if (pruned) console.log(`[staging] pruned ${pruned} off-island scatter pieces`);
 
   status('Raising the bandstand and buildings…');
 
