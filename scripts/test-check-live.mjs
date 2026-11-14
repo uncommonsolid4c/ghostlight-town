@@ -47,12 +47,14 @@ async function createFixtureTree(rootDir) {
   await fs.mkdir(path.join(rootDir, 'models'), { recursive: true });
   await fs.mkdir(path.join(rootDir, 'gazette'), { recursive: true });
   await fs.mkdir(path.join(rootDir, 'inn'), { recursive: true });
+  await fs.mkdir(path.join(rootDir, 'guestbook'), { recursive: true });
   await fs.mkdir(path.join(rootDir, 'plots', 'milo'), { recursive: true });
 
   const files = {
     'index.html': '<!doctype html><script type="module">import "./town.js?v=13";</script>\n',
     'move-in.html': '<!doctype html><h1>Move in</h1>\n',
     'inn/index.html': '<!doctype html><h1>Ghostlight Inn</h1>\n',
+    'guestbook/index.html': '<!doctype html><h1>Town Gate Guestbook</h1>\n',
     'town.js': [
       'export const PROP_PLACEMENTS = [];',
       'export function buildConceptBandstand() {}',
