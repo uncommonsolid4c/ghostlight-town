@@ -26,6 +26,11 @@ export const TOWN_LAYOUT = {
     y: 0,
     z: 14,
   },
+  noticeBoard: {
+    x: -6,
+    y: 0,
+    z: 14,
+  },
   inn: {
     x: -11,
     y: 0,
@@ -901,6 +906,66 @@ function buildNewsstand(THREE) {
   return group;
 }
 
+const NOTICE_BOARD_PAPERS = [
+  ['notice_board_paper_gazette', -0.60, ['GAZETTE #2', 'Issue #2 is out —', 'read it at the', 'newsstand.']],
+  ['notice_board_paper_inn', 0, ['THE INN', 'Rooms for short', 'stays — ask at', 'the tavern.']],
+  ['notice_board_paper_gate', 0.60, ['SOCIAL GATE', 'Plots are free,', 'no upkeep — yours', 'outright. Bring a', 'friend.']],
+];
+
+function buildNoticeBoard(THREE) {
+  const { x, z } = TOWN_LAYOUT.noticeBoard;
+  const group = new THREE.Group();
+  group.name = 'town_notice_board';
+  group.position.set(x, 0, z);
+  group.rotation.y = Math.atan2(-x, -z);
+
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const postGeo = new THREE.BoxGeometry(0.12, 2.2, 0.12);
+  for (const postX of [-0.95, 0.95]) {
+    const post = new THREE.Mesh(postGeo, woodMat);
+    post.name = 'notice_board_post';
+    post.position.set(postX, 1.1, 0);
+    group.add(post);
+  }
+
+  const panelTex = makeTextTexture(THREE, ['NOTICE BOARD'], {
+    width: 512,
+    height: 304,
+    titleSize: 44,
+    bg: '#3b2b1d',
+    border: '#7d5a3c',
+  });
+  const panel = new THREE.Mesh(
+    new THREE.BoxGeometry(2.2, 1.3, 0.08),
+    new THREE.MeshStandardMaterial({ map: panelTex, roughness: 0.85 })
+  );
+  panel.name = 'notice_board_panel';
+  panel.position.set(0, 1.35, 0);
+  group.add(panel);
+
+  const paperGeo = new THREE.BoxGeometry(0.5, 0.7, 0.02);
+  for (const [name, paperX, lines] of NOTICE_BOARD_PAPERS) {
+    const paperTex = makeTextTexture(THREE, lines, {
+      width: 256,
+      height: 358,
+      titleSize: 30,
+      subSize: 20,
+      bg: '#f5efe0',
+      fg: '#2e2218',
+      border: '#8b6a4b',
+    });
+    const paper = new THREE.Mesh(
+      paperGeo,
+      new THREE.MeshStandardMaterial({ map: paperTex, roughness: 0.9 })
+    );
+    paper.name = name;
+    paper.position.set(paperX, 1.35, 0.06);
+    group.add(paper);
+  }
+
+  return group;
+}
+
 export const INN_ROOM_WINDOWS = {
   lantern: 4,
   window: 5,
@@ -1485,6 +1550,10 @@ export function buildTown(THREE, opts = {}) {
   // Gazette Newsstand
   const newsstand = buildNewsstand(THREE);
   scene.add(newsstand);
+
+  // Town Notice Board
+  const noticeBoard = buildNoticeBoard(THREE);
+  scene.add(noticeBoard);
 
   // Ghostlight Inn (southwest clearing near the gate)
   const inn = buildInn(THREE);
