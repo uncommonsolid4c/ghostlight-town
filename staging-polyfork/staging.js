@@ -1,4 +1,4 @@
-// Ghostlight Town — Polyfork staging trial (look-only, no API wiring).
+// Ghostlight Town — Polyfork staging trial (read-only live state layer: polling + footlights + Prompt Book).
 // Bandstand, Milo's cottage, and Milo's blue ghost ported from town-3d/ onto
 // the Polyfork ground + Medieval Village buildings. Never deployed to live.
 //
@@ -20,9 +20,10 @@ import * as Villager from './kit-medieval/villager.mjs';
 import * as Tradesman from './kit-medieval/tradesman.mjs';
 import { createAsset as tallPine } from './parts/tall-pine-tree-ab4108.mjs';
 import { createAsset as youngPine } from './parts/young-pine-0d7695.mjs';
-import { buildConceptBandstand } from './concept-bandstand.js';
+import { buildConceptBandstand, lightFootlightSlot } from './concept-bandstand.js';
 import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js';
+import { renderPromptBook } from './prompt-book.mjs';
 
 // CONCEPT.md palette.
 const ICE = '#a8d8ea';    // ice blue — cottage plaster
@@ -195,6 +196,159 @@ function buildStagingSignpost(text) {
   return group;
 }
 
+// --- live state layer (read-only: footlights + Prompt Book) -----------------
+function applyStagingState(bandstandBuilt, state = {}, promptBookLinesEl = null) {
+  const footlights = bandstandBuilt?.footlights || [];
+  // Slot 0 / 'milo' is permanent and must never be lit, unlit, or relabeled from state.
+  const footlightRows = (Array.isArray(state?.footlights) ? state.footlights : [])
+    .filter((r) => r?.handle !== 'milo');
+  const litBySlot = new Map();
+  for (const row of footlightRows) {
+    if (row && Number.isInteger(row.slot) && row.slot >= 1 && row.slot < footlights.length) {
+      litBySlot.set(row.slot, row);
+    }
+  }
+
+  for (const flGroup of footlights) {
+    const slot = flGroup.userData?.slot;
+    if (slot === 0 || flGroup.userData?.permanent) continue;
+    const row = litBySlot.get(slot);
+    if (row) {
+      const role = row.role === 'npc' ? 'npc' : 'muse';
+      const handle = typeof row.handle === 'string' ? row.handle : '';
+      if (!flGroup.userData.lit || flGroup.userData.handle !== handle || flGroup.userData.role !== role) {
+        lightFootlightSlot(THREE, flGroup, { handle, role });
+      }
+    } else {
+      const { shell, placard } = flGroup.userData;
+      shell.material.color.set('#7a6230');
+      shell.material.emissive.set('#000000');
+      shell.material.emissiveIntensity = 0;
+
+      placard.rotation.x = 0;
+      placard.position.y = 0.06;
+      placard.material.map = null;
+      placard.material.color.set('#4d301c');
+      placard.material.needsUpdate = true;
+
+      flGroup.userData.lit = false;
+      flGroup.userData.handle = null;
+      flGroup.userData.role = null;
+    }
+  }
+
+  if (promptBookLinesEl) {
+    renderPromptBook(promptBookLinesEl, state?.prompt_book, document);
+    promptBookLinesEl.scrollTop = promptBookLinesEl.scrollHeight;
+  }
+}
+
+class StagingLive {
+  constructor({ onState = null, onStatus = null, pollIntervalMs = 5000, maxBackoffMs = 60000 } = {}) {
+    this.baseIntervalMs = pollIntervalMs;
+    this.currentIntervalMs = this.baseIntervalMs;
+    this.maxBackoffMs = maxBackoffMs;
+    this.onState = typeof onState === 'function' ? onState : null;
+    this.onStatus = typeof onStatus === 'function' ? onStatus : null;
+    this.lastSeq = null;
+    this.connected = false;
+    this._intervalId = null;
+    this._scheduledIntervalMs = null;
+    this._running = false;
+  }
+
+  _rescheduleIfNeeded() {
+    if (!this._running) return;
+    if (this._scheduledIntervalMs === this.currentIntervalMs && this._intervalId !== null) return;
+    if (this._intervalId !== null) {
+      clearInterval(this._intervalId);
+    }
+    this._scheduledIntervalMs = this.currentIntervalMs;
+    this._intervalId = setInterval(() => {
+      this.pollOnce();
+    }, this.currentIntervalMs);
+  }
+
+  _emitStatus(extra = {}) {
+    if (this.onStatus) {
+      this.onStatus({
+        connected: this.connected,
+        intervalMs: this.currentIntervalMs,
+        stateSeq: this.lastSeq,
+        ...extra,
+      });
+    }
+  }
+
+  _backoff(error) {
+    this.connected = false;
+    this.currentIntervalMs = Math.min(this.maxBackoffMs, this.currentIntervalMs * 2);
+    this._rescheduleIfNeeded();
+    this._emitStatus({ error });
+  }
+
+  async pollOnce() {
+    const qs = this.lastSeq !== null ? `?since=${encodeURIComponent(this.lastSeq)}` : '';
+
+    let res;
+    try {
+      res = await fetch(`/api/town/state${qs}`);
+    } catch (err) {
+      this._backoff(err?.message || 'network_error');
+      return;
+    }
+
+    if (res.status === 304) {
+      this.connected = true;
+      this.currentIntervalMs = this.baseIntervalMs;
+      this._rescheduleIfNeeded();
+      this._emitStatus();
+      return;
+    }
+
+    if (res.status !== 200) {
+      this._backoff(`HTTP ${res.status}`);
+      return;
+    }
+
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      this._backoff('invalid_json');
+      return;
+    }
+
+    if (!data || typeof data !== 'object' || typeof data.state_seq !== 'number') {
+      this._backoff('invalid_state');
+      return;
+    }
+
+    this.connected = true;
+    this.currentIntervalMs = this.baseIntervalMs;
+    this.lastSeq = data.state_seq;
+    if (this.onState) this.onState(data);
+    this._rescheduleIfNeeded();
+    this._emitStatus();
+  }
+
+  start() {
+    if (this._running) return;
+    this._running = true;
+    this._rescheduleIfNeeded();
+    this.pollOnce();
+  }
+
+  stop() {
+    this._running = false;
+    if (this._intervalId !== null) {
+      clearInterval(this._intervalId);
+      this._intervalId = null;
+      this._scheduledIntervalMs = null;
+    }
+  }
+}
+
 // --- build ------------------------------------------------------------------
 async function init() {
   status('Lighting the night…');
@@ -207,6 +361,11 @@ async function init() {
     // The campfire is in the scatter pool and CONCEPT.md forbids it; the
     // swing tree reads wrong in a town centre. Both are skipped.
     skip: ['stone-ring-campfire', 'lakeside-swing-tree'],
+    // The four water-scatter keys stay UNMERGED so the prune below can
+    // remove the off-island ones individually: buildKit merges everything
+    // else into one 'scenery' mesh, and a merged piece can't be pruned
+    // (the first prune attempt removed the originals, not the visible mesh).
+    keep: ['reed-bed', 'exposed-tree-roots', 'lily-pads', 'lake-pebbles'],
     terrainParams: TERRAIN_PARAMS,
   });
   scene.add(camp.group);
@@ -218,6 +377,8 @@ async function init() {
   // reed beds, roots, lily pads and pebbles in the open sea beyond the
   // island edge, where no view reaches. Anything off the island goes; the
   // on-shore and in-lake ones stay. Saves objects as well as looking right.
+  // Works because the four keys are in buildKit's `keep` above — merged
+  // scenery can't be pruned per piece.
   const FLOATER_KEYS = ['reed-bed', 'exposed-tree-roots', 'lily-pads', 'lake-pebbles'];
   let pruned = 0;
   for (const p of camp.placed) {
@@ -233,7 +394,7 @@ async function init() {
   status('Raising the bandstand and buildings…');
 
   // The Ghostlight Bandstand at the clearing centre (0, 0), with stage props
-  // and Milo's permanent footlight pre-lit (no live TownLive wiring in staging).
+  // and Milo's permanent footlight pre-lit at slot 0.
   const bandstandBuilt = buildConceptBandstand(THREE, {
     includeStageProps: true,
     lightMiloFootlight: true,
@@ -355,9 +516,40 @@ async function init() {
 
   document.getElementById('counts').textContent =
     `${counts.bandstand} bandstand · ${counts.ghost} ghost · ${counts.buildings} buildings (incl. Milo's cottage) · ${counts.lamps} lamp posts · ${counts.pines} pines · ${counts.npcs} NPC stand-ins · terrain span 2 (128 m)`;
-  status('Ready — drag to orbit, scroll to zoom, WASD/arrows to walk the view.');
+  status('Ready — connecting to town API…');
   window.__stagingReady = true;
   window.__staging = { counts: { ...counts }, terrain: { ...TERRAIN_PARAMS } };
+
+  const promptBookEl = document.getElementById('prompt-book');
+  const promptBookToggleEl = document.getElementById('prompt-book-toggle');
+  const promptBookLinesEl = document.getElementById('prompt-book-lines');
+  function setPromptBookVisible(visible) {
+    if (!promptBookEl || !promptBookToggleEl) return;
+    promptBookEl.hidden = !visible;
+    promptBookToggleEl.setAttribute('aria-expanded', String(visible));
+    promptBookToggleEl.textContent = visible ? 'Hide Prompt Book' : 'Prompt Book';
+  }
+  setPromptBookVisible(window.innerWidth >= 640);
+  promptBookToggleEl?.addEventListener('click', () => {
+    setPromptBookVisible(Boolean(promptBookEl?.hidden));
+  });
+
+  const live = new StagingLive({
+    onState: (state) => {
+      applyStagingState(bandstandBuilt, state, promptBookLinesEl);
+    },
+    onStatus: ({ connected, stateSeq, error }) => {
+      if (connected && stateSeq !== null) {
+        status(`Live — seq ${stateSeq}`);
+      } else if (error && error.startsWith('HTTP ')) {
+        status(`Live API error (${error}) — retrying…`, true);
+      } else if (!connected) {
+        status('Live API unreachable — retrying…', true);
+      }
+    },
+  });
+  window.__staging.live = live;
+  live.start();
 
   const clock = new THREE.Clock();
   (function loop() {
