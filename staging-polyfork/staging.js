@@ -29,6 +29,12 @@ import {
   updateStagingNightlyCallCard,
 } from './inn-nightly-call.mjs?v=23';
 import {
+  loadEvents,
+  selectCurrentEvent,
+  updateEventBanner,
+  renderEventBannerHeader,
+} from './event-banner.mjs';
+import {
   TOWN_LAYOUT,
   SEED_HOME_PADS,
   createAvatarCapsule,
@@ -418,6 +424,8 @@ function createStagingLiveStore() {
     plotCache: new Map(),
     lastState: null,
     nightlyCallTopic: null,
+    events: [],
+    eventBannerKey: null,
   };
 }
 
@@ -641,7 +649,7 @@ function applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightS
   }
 }
 
-function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null, tavernGroup = null) {
+function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null, tavernGroup = null, eventBannerEl = null) {
   const footlights = bandstandBuilt?.footlights || [];
   // Slot 0 / 'milo' is permanent and must never be lit, unlit, or relabeled from state.
   const footlightRows = (Array.isArray(state?.footlights) ? state.footlights : [])
@@ -696,6 +704,23 @@ function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, p
       makeTextTexture: makeBandstandTextTexture,
     },
     state?.nightly_call
+  );
+
+  const selectedEvent = selectCurrentEvent(liveStore.events, Date.now());
+  updateEventBanner(
+    {
+      THREE,
+      bandstandBuilt,
+      liveStore,
+      makeTextTexture: makeBandstandTextTexture,
+    },
+    selectedEvent?.event || null,
+    selectedEvent?.status || null
+  );
+  renderEventBannerHeader(
+    eventBannerEl,
+    selectedEvent?.event || null,
+    selectedEvent?.status || null
   );
 
   if (promptBookLinesEl) {
@@ -1045,6 +1070,7 @@ async function init() {
   const promptBookEl = document.getElementById('prompt-book');
   const promptBookToggleEl = document.getElementById('prompt-book-toggle');
   const promptBookLinesEl = document.getElementById('prompt-book-lines');
+  const eventBannerEl = document.getElementById('prompt-book-event');
   function setPromptBookVisible(visible) {
     if (!promptBookEl || !promptBookToggleEl) return;
     promptBookEl.hidden = !visible;
@@ -1056,6 +1082,32 @@ async function init() {
     setPromptBookVisible(Boolean(promptBookEl?.hidden));
   });
 
+  loadEvents()
+    .then(({ events }) => {
+      liveStore.events = Array.isArray(events) ? events : [];
+      if (liveStore.lastState) {
+        const selectedEvent = selectCurrentEvent(liveStore.events, Date.now());
+        updateEventBanner(
+          {
+            THREE,
+            bandstandBuilt,
+            liveStore,
+            makeTextTexture: makeBandstandTextTexture,
+          },
+          selectedEvent?.event || null,
+          selectedEvent?.status || null
+        );
+        renderEventBannerHeader(
+          eventBannerEl,
+          selectedEvent?.event || null,
+          selectedEvent?.status || null
+        );
+      }
+    })
+    .catch(() => {
+      liveStore.events = [];
+    });
+
   const live = new StagingLive({
     onState: (state) => {
       liveStore.lastState = state;
@@ -1065,7 +1117,8 @@ async function init() {
         npcStandIns,
         state,
         promptBookLinesEl,
-        tavernGroup
+        tavernGroup,
+        eventBannerEl
       );
       updateCountsLine();
       syncStagingPlotsFromState(liveStore, state).then((placedAny) => {
