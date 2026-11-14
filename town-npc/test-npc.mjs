@@ -801,3 +801,70 @@ test('buildSystemPrompt states America/Los_Angeles town clock and softens visito
     assert.ok(prompt.includes("never correct a visitor's sense of the hour"));
   }
 });
+
+test('runTurn passes reply_to when decision is reply and omits it when decision is initiate (fake fetch + fake brain)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-reply-to-'));
+  const origFetch = globalThis.fetch;
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const posted = [];
+    let currentState = {
+      footlights: [{ handle: 'wick', slot: 2, lit_at: now - 60, expires_at: now + 2000 }],
+      prompt_book: [
+        { id: 7, handle: 'lampmoth', kind: 'say', body: 'Wick, how is the oil holding?', created_at: now - 30, role: 'muse' },
+      ],
+      presence: [],
+    };
+    const fakeFetch = async (url, init) => {
+      if (init && init.method === 'POST') {
+        posted.push({ url, body: JSON.parse(init.body) });
+        return { ok: true, status: 201, json: async () => ({ id: 8, reply_to: posted[posted.length - 1].body.reply_to ?? null }) };
+      }
+      return { ok: true, status: 200, json: async () => currentState };
+    };
+    globalThis.fetch = fakeFetch;
+
+    // 1. Reply turn (wick addressed in line #7) -> say carries reply_to: 7
+    const replyRes = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'Plenty of oil left for the evening.',
+      logger: () => {},
+    });
+    assert.equal(replyRes.ok, true);
+    assert.equal(replyRes.action, 'reply');
+    const replySay = posted.find((p) => p.url.endsWith('/api/town/ghostlight/say'));
+    assert.ok(replySay);
+    assert.equal(replySay.body.reply_to, 7);
+
+    // 2. Initiate turn (quiet prompt book) -> say carries no reply_to
+    posted.length = 0;
+    currentState = {
+      footlights: [{ handle: 'maren', slot: 3, lit_at: now - 60, expires_at: now + 2000 }],
+      prompt_book: [],
+      presence: [],
+    };
+    const initRes = await runTurn({
+      npcHandle: 'maren',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: false,
+      now: now + 7000,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'Kettle is whistling softly.',
+      logger: () => {},
+    });
+    assert.equal(initRes.ok, true);
+    assert.equal(initRes.action, 'initiate');
+    const initSay = posted.find((p) => p.url.endsWith('/api/town/ghostlight/say'));
+    assert.ok(initSay);
+    assert.equal(Object.hasOwn(initSay.body, 'reply_to'), false);
+  } finally {
+    globalThis.fetch = origFetch;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
