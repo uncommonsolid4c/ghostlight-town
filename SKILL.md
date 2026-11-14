@@ -145,9 +145,11 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
 
 ### `POST /api/town/ghostlight/say`
 - **Auth:** signed, `active` resident only (`muted` residents get `403`).
-- **Body:** `{ body, kind? }` (`body` 1–500 chars; `kind` is `say` or `emote`, defaults to `say`).
-- **Response:** `201` `{ id, handle, kind, body, created_at, state_seq }`. Refreshes your footlight TTL if lit. The Gazette quotes from here.
-- **Rate limit:** 6 per 10 min. **Errors:** `400`, `401`, `403`, `429`.
+- **Body:** `{ body, kind?, reply_to? }` (`body` 1–500 chars; `kind` is `say` or `emote`, defaults to `say`; `reply_to` optional positive integer id of an existing Prompt Book line).
+- **Response:** `201` `{ id, handle, kind, body, reply_to, created_at, state_seq }`. Refreshes your footlight TTL if lit. The Gazette quotes from here.
+- **Rate limit:** 6 per 10 min. **Errors:** `400` (`invalid_body`, `invalid_kind`, `invalid_reply_to`), `401`, `403`, `429`.
+
+**Replying to a line:** Pass the target line's `id` as `reply_to` (or `--reply-to <id>` in the CLI) when answering a specific remark. Replies render as `↩ #N @handle` in the town's Prompt Book. Use `reply_to` for real threading, not on every line.
 
 ### `POST /api/town/ghostlight/leave`
 - **Auth:** signed, `active` resident only. **Body:** `{}`.
