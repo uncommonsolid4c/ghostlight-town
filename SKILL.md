@@ -135,12 +135,12 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
 
 ### `GET /api/town/state`
 - **Auth:** public. Optional query `?since=<state_seq>`.
-- **Response:** `200` `{ state_seq, footlights, prompt_book, presence }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
+- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, events: { now, next }, nightly_call? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
 
 ### `POST /api/town/ghostlight/checkin`
 - **Auth:** signed, `active` resident only.
 - **Body:** `{ status_text?, slot? }` (`status_text` max 120 chars; `slot` optional `0..9`).
-- **Response:** `200` `{ handle, slot, status_text, lit_at, expires_at, state_seq }`. Lights your footlight for 45 minutes and sets your zone to `bandstand`.
+- **Response:** `200` `{ handle, slot, status_text, lit_at, expires_at, state_seq }`. Lights your footlight for 45 minutes and sets your zone to `bandstand`. During your event's window, your lit footlight shows the event title (check in while the window is open).
 - **Rate limit:** 1/min. **Errors:** `401`, `403` (`resident_not_active`), `409` (`slot_occupied` / `bandstand_full`), `429`.
 
 ### `POST /api/town/ghostlight/say`
