@@ -7,8 +7,11 @@ import { fileURLToPath } from 'node:url';
 import {
   resolveInnOverlayContent,
   resolveGuestbookOverlayContent,
+  resolvePlotGuestbookOverlayContent,
+  formatPlotGuestbookTabLabel,
   openInnOverlay,
   openGuestbookOverlay,
+  openPlotGuestbookOverlay,
 } from './inn-guestbook-overlay.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -189,6 +192,75 @@ test('openInnOverlay and openGuestbookOverlay manage sandboxed iframe, title, sr
 
   assert.equal(await openInnOverlay({}), null);
   assert.equal(await openGuestbookOverlay({}), null);
+  assert.equal(await openPlotGuestbookOverlay('lampmoth', {}), null);
+});
+
+test('resolvePlotGuestbookOverlayContent and openPlotGuestbookOverlay render srcdoc for api and fallback', async () => {
+  assert.equal(formatPlotGuestbookTabLabel(undefined), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(0), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(3), 'Guestbook (3)');
+
+  let invalidFetched = false;
+  const invalid = await resolvePlotGuestbookOverlayContent('../bad', {
+    fetchFn: async () => {
+      invalidFetched = true;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(invalidFetched, false);
+  assert.equal(invalid.kind, 'fallback');
+
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+  let beforeCount = 0;
+  const calls = [];
+  const apiRes = await openPlotGuestbookOverlay('lampmoth', {
+    overlayEl,
+    titleEl,
+    iframeEl,
+    fetchFn: async (url) => {
+      calls.push(url);
+      return {
+        status: 200,
+        async json() {
+          return {
+            entries: [
+              { id: 1, kind: 'guestbook', name: '<script>milo</script>', body: 'Hi <b>there</b>.', created_at: 1744500000 },
+              { id: 2, kind: 'letter', name: 'maren', body: 'Door letter.', created_at: 1744586400 },
+            ],
+          };
+        },
+      };
+    },
+    onBeforeOpen: () => { beforeCount++; },
+  });
+  assert.deepEqual(calls, ['/api/town/guestbook?plot=lampmoth&limit=50']);
+  assert.equal(beforeCount, 1);
+  assert.equal(apiRes.kind, 'api');
+  assert.equal(overlayEl.hidden, false);
+  assert.equal(titleEl.textContent, '@lampmoth — Guestbook');
+  assert.equal(iframeEl.getAttribute('sandbox'), '');
+  assert.equal(iframeEl.getAttribute('src'), null);
+  assert.ok(iframeEl.srcdoc.includes("<h1>@lampmoth's Guestbook</h1>"));
+  assert.ok(iframeEl.srcdoc.includes('&lt;script&gt;milo&lt;/script&gt;'));
+  assert.ok(iframeEl.srcdoc.includes('Apr 12, 2025'));
+  assert.ok(iframeEl.srcdoc.includes('<h2>Signatures</h2>'));
+  assert.ok(iframeEl.srcdoc.includes('<h2>Letters</h2>'));
+
+  const fbRes = await openPlotGuestbookOverlay('lampmoth', {
+    overlayEl,
+    titleEl,
+    iframeEl,
+    fetchFn: async () => ({ status: 500 }),
+    onBeforeOpen: () => { beforeCount++; },
+  });
+  assert.equal(beforeCount, 2);
+  assert.equal(fbRes.kind, 'fallback');
+  assert.equal(overlayEl.hidden, false);
+  assert.equal(titleEl.textContent, '@lampmoth — Guestbook');
+  assert.equal(iframeEl.getAttribute('sandbox'), '');
+  assert.equal(iframeEl.getAttribute('src'), null);
+  assert.ok(iframeEl.srcdoc.includes("<h1>@lampmoth's Guestbook</h1>"));
+  assert.ok(iframeEl.srcdoc.includes('How to sign'));
 });
 
 test('inn-guestbook-overlay.mjs pure resolvers and helpers stay verbatim in sync with town-3d/town.js', async () => {
@@ -197,9 +269,9 @@ test('inn-guestbook-overlay.mjs pure resolvers and helpers stay verbatim in sync
     fs.readFile(path.join(__dirname, 'inn-guestbook-overlay.mjs'), 'utf8'),
   ]);
 
-  const townBlock = townSrc.match(/const INN_ROOM_DETAILS = \[[\s\S]*?return \{ kind: 'static', url: 'guestbook\/index\.html' \};\n\}/);
-  const stagingBlock = stagingSrc.match(/const INN_ROOM_DETAILS = \[[\s\S]*?return \{ kind: 'static', url: 'guestbook\/index\.html' \};\n\}/);
-  assert.ok(townBlock, 'town-3d/town.js must contain INN_ROOM_DETAILS through resolveGuestbookOverlayContent');
-  assert.ok(stagingBlock, 'staging-polyfork/inn-guestbook-overlay.mjs must contain INN_ROOM_DETAILS through resolveGuestbookOverlayContent');
+  const townBlock = townSrc.match(/const INN_ROOM_DETAILS = \[[\s\S]*?return \{ kind: 'fallback', html: buildPlotGuestbookFallbackHtml\(handle\) \};\n\}/);
+  const stagingBlock = stagingSrc.match(/const INN_ROOM_DETAILS = \[[\s\S]*?return \{ kind: 'fallback', html: buildPlotGuestbookFallbackHtml\(handle\) \};\n\}/);
+  assert.ok(townBlock, 'town-3d/town.js must contain INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent');
+  assert.ok(stagingBlock, 'staging-polyfork/inn-guestbook-overlay.mjs must contain INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent');
   assert.equal(stagingBlock[0], townBlock[0], 'inn-guestbook-overlay.mjs drifted from town-3d/town.js');
 });
