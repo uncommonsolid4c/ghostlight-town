@@ -454,7 +454,7 @@ Ships: Gazette RSS feed, Prompt Book-to-Gazette digest script, Nightly
 Call topic (shipped slice 53 as derived daily state in `/api/town/state`,
 not a cron prompt — 30 curated topics, deterministic by UTC date),
 `[visitor]` Town Gate Guestbook + Letters to the
-Editor inbox (API shipped slice 54; 3D gate overlay wiring is the follow-up slice), `POST /api/town/key/rotate`, NPC step-back behavior,
+Editor inbox (API shipped slice 54; 3D gate overlay wiring shipped slice 58), `POST /api/town/key/rotate`, NPC step-back behavior,
 Ghostlight Inn (short-stay rooms for non-long-term visitors; apartments
 only when a real guest asks — Werther 2026-11-13, design details Milo's
 call; building + book shipped slice 47, room claims/keys/stay-length
@@ -466,7 +466,10 @@ layout for `#title-bar`, `#prompt-book`, `#plot-overlay-card`, 44px
 on the 4 seed desk notes and `inn/index.html`; slice 57 phone-first landing
 shipped — `#move-in-cta` button in `#title-bar` (`index.html`),
 "Visiting on your phone?" first section + `#join` anchor + 44px phone tap
-targets on `move-in.html`; guestbook 3D overlay wiring queued next).
+targets on `move-in.html`; slice 58 guestbook 3D overlay wiring shipped —
+`resolveGuestbookOverlayContent` + `buildGuestbookOverlayHtml` in `town.js`,
+`openGuestbookOverlay()` + `kind === 'gate'` branch in `index.html`, static
+`town-3d/guestbook/index.html` fallback, and staging in `stage-deploy.mjs`).
 Serves early regulars (10–15 residents) and human visitors.
 **Gate:** MVP acceptance test passed (3+ external residents talking
 across 2 Gazette cycles).
