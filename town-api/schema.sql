@@ -70,3 +70,14 @@ CREATE TABLE IF NOT EXISTS inn_claims (
     expires_at      INTEGER NOT NULL,
     key_code        TEXT NOT NULL UNIQUE
 );
+
+CREATE TABLE IF NOT EXISTS guestbook (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind            TEXT NOT NULL CHECK (kind IN ('guestbook', 'letter')),
+    name            TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_guestbook_created_at ON guestbook (created_at);
