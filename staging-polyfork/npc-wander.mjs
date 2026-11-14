@@ -9,6 +9,42 @@ export const SEED_WANDER_CONFIG = [
   { handle: 'tomas', bandstandSlot: 3, speed: 0.6, lingers: { home: 9, bandstand: 12, newsstand: 15 } },
 ];
 
+export const GHOST_DRIFT_CONFIG = {
+  handle: 'milo',
+  speed: 0.35,
+  lingers: { spot0: 25, deck1: 8, deck2: 10, deck3: 8 },
+  deckPoints: [
+    { x: -2.2, z: 1.6, label: 'deck1' },
+    { x: 0.4, z: -2.4, label: 'deck2' },
+    { x: 2.3, z: 1.4, label: 'deck3' },
+  ],
+};
+
+export function buildStagingGhostDrift({ ghost, bandstandSpots } = {}) {
+  const spot0 = Array.isArray(bandstandSpots) ? bandstandSpots[0] : null;
+  if (!ghost || !spot0) return null;
+  const deckY = spot0.y;
+  return {
+    handle: GHOST_DRIFT_CONFIG.handle,
+    group: ghost,
+    speed: GHOST_DRIFT_CONFIG.speed,
+    waypoints: [
+      { x: spot0.x, y: spot0.y, z: spot0.z, linger: GHOST_DRIFT_CONFIG.lingers.spot0, label: 'spot0' },
+      ...GHOST_DRIFT_CONFIG.deckPoints.map((pt) => ({
+        x: pt.x,
+        y: deckY,
+        z: pt.z,
+        linger: GHOST_DRIFT_CONFIG.lingers[pt.label],
+        label: pt.label,
+      })),
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+}
+
 export function getStagingNewsstandFrontPosition(layout) {
   const { newsstand, bandstand } = layout;
   const dx = bandstand.x - newsstand.x;
