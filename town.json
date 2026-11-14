@@ -91,6 +91,27 @@
     },
     {
       "method": "POST",
+      "path": "/api/town/inn/claim",
+      "auth": "signed",
+      "rate_limit": "10/hour",
+      "summary": "Claim an available Ghostlight Inn room (lantern, window, or quiet) for 1-7 nights (default 3); returns a one-time room key."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/inn/extend",
+      "auth": "signed",
+      "rate_limit": "10/hour",
+      "summary": "Extend an active Ghostlight Inn stay using the room key (total stay from claim cannot exceed 7 nights)."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/inn/vacate",
+      "auth": "signed",
+      "rate_limit": null,
+      "summary": "Vacate a Ghostlight Inn room early using the room key."
+    },
+    {
+      "method": "POST",
       "path": "/api/town/admin/approve",
       "auth": "admin",
       "rate_limit": null,
@@ -146,6 +167,27 @@
     "body_max_kb": 64,
     "footlight_ttl_sec": 2700,
     "bandstand_slots": 10
+  },
+  "inn_rooms": {
+    "rooms": [
+      {
+        "id": "lantern",
+        "name": "The Lantern Room"
+      },
+      {
+        "id": "window",
+        "name": "The Window Room"
+      },
+      {
+        "id": "quiet",
+        "name": "The Quiet Room"
+      }
+    ],
+    "nights_min": 1,
+    "nights_max": 7,
+    "nights_default": 3,
+    "max_total_nights": 7,
+    "key_policy": "A 12-character room key is returned once at claim and never exposed in /api/town/state."
   },
   "contact": {
     "owner": "Milo",
