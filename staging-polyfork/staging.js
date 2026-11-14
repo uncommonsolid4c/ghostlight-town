@@ -67,6 +67,8 @@ import {
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
 import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=23';
+import { buildInteriorRoom, setInteriorVisible, setInteriorPalette } from './interior-room.mjs?v=30';
+import { isDoorHit, createInteriorVisit } from './interior-visit.mjs?v=30';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -152,6 +154,38 @@ const plotOverlayEl = document.getElementById('plot-overlay');
 const plotOverlayTitleEl = document.getElementById('plot-overlay-title');
 const plotOverlayCloseEl = document.getElementById('plot-overlay-close');
 const plotIframeEl = document.getElementById('plot-iframe');
+const interiorExitEl = document.getElementById('interior-exit');
+
+const interiorRoom = buildInteriorRoom(THREE);
+scene.add(interiorRoom);
+const interiorVisit = createInteriorVisit({
+  room: interiorRoom,
+  camera,
+  controls,
+  setVisible: setInteriorVisible,
+  setPalette: setInteriorPalette,
+});
+
+function enterCottageInterior(cottage) {
+  if (!interiorVisit.enter(cottage)) return false;
+  glideTarget = null;
+  keys.clear();
+  if (interiorExitEl) interiorExitEl.hidden = false;
+  const handle = cottage.userData?.handle || 'resident';
+  status(`Inside ${handle}'s cottage — Esc or Step outside to leave`);
+  return true;
+}
+
+function exitCottageInterior() {
+  if (!interiorVisit.exit()) return false;
+  keys.clear();
+  if (interiorExitEl) interiorExitEl.hidden = true;
+  status('Stepped outside.');
+  renderer.domElement.focus?.();
+  return true;
+}
+
+interiorExitEl?.addEventListener('click', exitCottageInterior);
 
 function handleClosePlotOverlay() {
   closePlotOverlay({
@@ -159,7 +193,9 @@ function handleClosePlotOverlay() {
     iframeEl: plotIframeEl,
     onAfterClose: () => {
       keys.clear();
-      controls.enabled = true;
+      if (!interiorVisit.isInside()) {
+        controls.enabled = true;
+      }
       renderer.domElement.focus?.();
     },
   });
@@ -172,12 +208,16 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape' || e.key === 'Escape') handleClosePlotOverlay();
     return;
   }
+  if (interiorVisit.isInside()) {
+    if (e.code === 'Escape' || e.key === 'Escape') exitCottageInterior();
+    return;
+  }
   glideTarget = null;
   keys.add(e.key.toLowerCase());
 });
 window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 function walkView(dt) {
-  if (plotOverlayEl && !plotOverlayEl.hidden) return;
+  if ((plotOverlayEl && !plotOverlayEl.hidden) || interiorVisit.isInside()) return;
   const fwd = new THREE.Vector3();
   camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
@@ -1189,6 +1229,7 @@ async function init() {
   }
 
   function handleCanvasClick(e) {
+    if (interiorVisit.isInside()) return false;
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1201,6 +1242,9 @@ async function init() {
       if (target) {
         const kind = target.userData.kind;
         if (kind === 'cottage' && target.userData.handle) {
+          if (isDoorHit(target, hit)) {
+            return enterCottageInterior(target);
+          }
           openPlotOverlay(target.userData.handle, {
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
@@ -1295,6 +1339,7 @@ async function init() {
   });
 
   function finishPointer(e, allowTap) {
+    if (interiorVisit.isInside()) return;
     const overlayHidden = !plotOverlayEl || plotOverlayEl.hidden;
     const res = pointerTracker.onPointerUp(e.pointerId, e.clientX, e.clientY, {
       overlayHidden,
@@ -1316,7 +1361,7 @@ async function init() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock.getDelta(), 0.1);
     walkView(dt);
-    if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden)) {
+    if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden) && !interiorVisit.isInside()) {
       const next = stepOrbitGlide(
         controls.target,
         camera.position,
