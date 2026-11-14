@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  VALID_PROP_KINDS,
   buildProp,
   MILO_PLOT_PROPS,
   attachPlotProps,
@@ -193,4 +194,45 @@ test('cottage-props.mjs contains no fetch( literal and no .glb reference', async
   const propsSrc = await fs.readFile(path.join(__dirname, 'cottage-props.mjs'), 'utf8');
   assert.equal(propsSrc.includes('fetch('), false, 'cottage-props.mjs must not contain fetch(');
   assert.equal(propsSrc.includes('.glb'), false, 'cottage-props.mjs must not contain .glb');
+});
+
+test('attachPlotProps attaches wick/maren/tomas manifest props with expected counts, names, colors, and valid kinds', async () => {
+  const THREE = makeFakeThree();
+  const expectedCounts = { wick: 3, maren: 4, tomas: 4 };
+
+  for (const [handle, expectedCount] of Object.entries(expectedCounts)) {
+    const raw = await fs.readFile(path.join(REPO_ROOT, 'town-npc', 'plots', handle, 'manifest.json'), 'utf8');
+    const manifest = JSON.parse(raw);
+    assert.equal(manifest.props.length, expectedCount, `${handle} manifest props length`);
+
+    for (const prop of manifest.props) {
+      assert.ok(VALID_PROP_KINDS.has(prop.kind), `${handle} prop kind ${prop.kind} must be in VALID_PROP_KINDS`);
+    }
+
+    const cottage = new THREE.Group();
+    const attached = attachPlotProps(THREE, cottage, manifest.props);
+    assert.equal(attached, expectedCount, `${handle} attached count`);
+    assert.equal(cottage.children.length, expectedCount, `${handle} children count`);
+
+    for (let i = 0; i < manifest.props.length; i++) {
+      assert.equal(cottage.children[i].name, `prop_${manifest.props[i].kind}`);
+      assert.equal(cottage.children[i].material.color, manifest.props[i].color);
+    }
+  }
+});
+
+test('attachPlotProps skips an invalid prop mixed into Maren manifest props', async () => {
+  const THREE = makeFakeThree();
+  const raw = await fs.readFile(path.join(REPO_ROOT, 'town-npc', 'plots', 'maren', 'manifest.json'), 'utf8');
+  const manifest = JSON.parse(raw);
+
+  const cottage = new THREE.Group();
+  const mixedProps = [
+    manifest.props[0],
+    { kind: 'invalid_prop', x: 0, y: 0, z: 0, rot_y: 0, color: '#000000' },
+    ...manifest.props.slice(1),
+  ];
+  const attached = attachPlotProps(THREE, cottage, mixedProps);
+  assert.equal(attached, 4);
+  assert.equal(cottage.children.length, 4);
 });
