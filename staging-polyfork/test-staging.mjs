@@ -111,12 +111,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=15, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=16, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=15["']/, 'index.html must reference ./staging.js?v=15');
+  assert.match(html, /src=["']\.\/staging\.js\?v=16["']/, 'index.html must reference ./staging.js?v=16');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -347,4 +347,19 @@ test('staging.js wires tap-to-glide, multi-pointer suppression, ground raycast, 
   assert.match(src, /stepOrbitGlide\s*\(/);
   assert.match(src, /window\.addEventListener\s*\(\s*['"]pointercancel['"]/);
   assert.match(src, /function onBeforeOverlayOpen\s*\(\)\s*\{[\s\S]*?glideTarget\s*=\s*null;/);
+});
+
+test('applyStagingPlotManifest wires attachPlotProps with manifest.props after signpost add', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingPlotManifest(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingPlotManifest in staging.js');
+  const fnEnd = src.indexOf('\n  assignment.cottage = cottage;', fnStart);
+  assert.ok(fnEnd !== -1, 'Expected assignment.cottage = cottage; in applyStagingPlotManifest');
+  const fnBody = src.slice(fnStart, fnEnd);
+
+  const signAddIdx = fnBody.indexOf('cottage.add(sign);');
+  const propsCallIdx = fnBody.indexOf('attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);');
+  assert.ok(signAddIdx !== -1, 'Expected cottage.add(sign); in applyStagingPlotManifest');
+  assert.ok(propsCallIdx !== -1, 'Expected attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []); in applyStagingPlotManifest');
+  assert.ok(propsCallIdx > signAddIdx, 'attachPlotProps must be called after cottage.add(sign)');
 });
