@@ -33,6 +33,11 @@
  *     `town.js` (reducing worst-case town mesh count from 113 to 108, well under < 125).
  */
 
+import { splitNightlyCallLines } from './inn-nightly-call.mjs';
+
+const FOOTLIGHT_STATUS_MAX_LINES = 2;
+const FOOTLIGHT_STATUS_LINE_CHARS = 20;
+
 export const BANDSTAND_PALETTE = {
   cedar: '#6b492b',
   warmTimber: '#7a4b2a',
@@ -818,10 +823,28 @@ function setMaterialColor(mat, prop, hex) {
 }
 
 /**
+ * Wrap footlight status text into at most `FOOTLIGHT_STATUS_MAX_LINES` lines of
+ * at most `FOOTLIGHT_STATUS_LINE_CHARS` characters, truncating overflow with `…`.
+ */
+function formatFootlightStatusLines(statusText) {
+  const trimmed = typeof statusText === 'string' ? statusText.trim() : '';
+  if (!trimmed) return [];
+  const wrapped = splitNightlyCallLines(trimmed, FOOTLIGHT_STATUS_LINE_CHARS);
+  if (wrapped.length <= FOOTLIGHT_STATUS_MAX_LINES) return wrapped;
+  const lines = wrapped.slice(0, FOOTLIGHT_STATUS_MAX_LINES);
+  const lastIdx = FOOTLIGHT_STATUS_MAX_LINES - 1;
+  const last = lines[lastIdx];
+  lines[lastIdx] = (last.length >= FOOTLIGHT_STATUS_LINE_CHARS
+    ? last.slice(0, FOOTLIGHT_STATUS_LINE_CHARS - 1)
+    : last).trimEnd() + '…';
+  return lines;
+}
+
+/**
  * Helper to light a footlight slot and flip its placard up with a headless-safe
  * CanvasTexture (mirroring `buildMilosGhost` and `applyState` in `town-3d/town.js`).
  */
-export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'muse', permanent = false } = {}) {
+export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'muse', permanent = false, statusText } = {}) {
   if (!flGroup || !flGroup.userData) return flGroup;
   const { shell, placard } = flGroup.userData;
   const palette = BANDSTAND_FOOTLIGHT_COLORS[role === 'npc' ? 'npc' : 'muse'];
@@ -831,20 +854,35 @@ export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'mu
 
   placard.rotation.x = -0.55;
   placard.position.y = 0.14;
-  placard.material.map = makeBandstandTextTexture(THREE, [handle], {
-    width: 256,
-    height: 96,
-    titleSize: 28,
-    bg: BANDSTAND_PALETTE.placardBg,
-    border: BANDSTAND_PALETTE.placardBorder,
-    fg: BANDSTAND_PALETTE.placardFg,
-  });
+  const normalizedStatus = typeof statusText === 'string' ? statusText.trim() : '';
+  const statusLines = formatFootlightStatusLines(normalizedStatus);
+  const textureLines = statusLines.length > 0 ? [handle, ...statusLines] : [handle];
+  const textureOpts = statusLines.length > 0
+    ? {
+        width: 256,
+        height: 96,
+        titleSize: 22,
+        subSize: 16,
+        bg: BANDSTAND_PALETTE.placardBg,
+        border: BANDSTAND_PALETTE.placardBorder,
+        fg: BANDSTAND_PALETTE.placardFg,
+      }
+    : {
+        width: 256,
+        height: 96,
+        titleSize: 28,
+        bg: BANDSTAND_PALETTE.placardBg,
+        border: BANDSTAND_PALETTE.placardBorder,
+        fg: BANDSTAND_PALETTE.placardFg,
+      };
+  placard.material.map = makeBandstandTextTexture(THREE, textureLines, textureOpts);
   setMaterialColor(placard.material, 'color', '#ffffff');
   placard.material.needsUpdate = true;
 
   flGroup.userData.lit = true;
   flGroup.userData.handle = handle;
   flGroup.userData.role = role === 'npc' ? 'npc' : 'muse';
+  flGroup.userData.statusText = statusLines.length > 0 ? normalizedStatus : null;
   if (permanent) flGroup.userData.permanent = true;
   return flGroup;
 }
@@ -1087,6 +1125,7 @@ export function createConceptBandstand(THREE, options = {}) {
       lit: false,
       handle: null,
       role: null,
+      statusText: null,
     };
 
     group.add(flGroup);
