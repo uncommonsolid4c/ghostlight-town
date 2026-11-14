@@ -35,6 +35,15 @@ const PROMPT_BOOK_RETENTION_SEC = 7 * 24 * 60 * 60;
 const INVITE_TTL_SEC = 7 * 24 * 60 * 60;
 const MAX_BODY_BYTES = 64 * 1024;
 
+const INN_ROOMS = ['lantern', 'window', 'quiet'];
+const INN_ROOM_SET = new Set(INN_ROOMS);
+const INN_MAX_NIGHTS = 7;
+const INN_DEFAULT_NIGHTS = 3;
+const NIGHT_SEC = 86400;
+// Unambiguous alphabet: no 0/O, no 1/l/I.
+const INN_KEY_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const INN_KEY_LEN = 12;
+
 const CAPS = {
   say: 500,
   statusText: 120,
@@ -46,7 +55,30 @@ const RATE_LIMITS = {
   checkin: { max: 1, windowSec: 60 },
   joinIp: { max: 5, windowSec: 60 * 60 },
   plot: { max: 10, windowSec: 60 * 60 },
+  innClaim: { max: 10, windowSec: 60 * 60 },
 };
+
+function generateInnKey() {
+  const maxValid = Math.floor(256 / INN_KEY_ALPHABET.length) * INN_KEY_ALPHABET.length;
+  let out = '';
+  while (out.length < INN_KEY_LEN) {
+    const bytes = crypto.randomBytes(INN_KEY_LEN * 2);
+    for (const b of bytes) {
+      if (b < maxValid) {
+        out += INN_KEY_ALPHABET[b % INN_KEY_ALPHABET.length];
+        if (out.length === INN_KEY_LEN) break;
+      }
+    }
+  }
+  return out;
+}
+
+function innKeysEqual(a, b) {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 /**
  * Convert a base64-encoded raw 32-byte Ed25519 public key into a Node KeyObject.
@@ -258,6 +290,10 @@ export function createTownServer(opts = {}) {
     db.prepare('DELETE FROM prompt_book WHERE created_at < ?').run(now - PROMPT_BOOK_RETENTION_SEC);
   }
 
+  function pruneExpiredInnClaims(now) {
+    db.prepare('DELETE FROM inn_claims WHERE expires_at <= ?').run(now);
+  }
+
   /**
    * Verify Ed25519 request headers in the exact order required by Argon fix #2:
    * (1) reject if |now - timestamp| > 120
@@ -366,6 +402,7 @@ export function createTownServer(opts = {}) {
     const now = nowSec();
     pruneExpiredFootlights(now);
     pruneOldPromptBook(now);
+    pruneExpiredInnClaims(now);
     const stateSeq = getStateSeq();
 
     const sinceParam = url.searchParams.get('since');
@@ -415,12 +452,25 @@ export function createTownServer(opts = {}) {
       plots[row.handle] = row.plot_updated_at;
     }
 
+    const innRows = db
+      .prepare('SELECT room, handle, nights, expires_at FROM inn_claims WHERE expires_at > ?')
+      .all(now);
+    const inn = { lantern: null, window: null, quiet: null };
+    for (const row of innRows) {
+      inn[row.room] = {
+        handle: row.handle,
+        nights: row.nights,
+        expires_at: row.expires_at,
+      };
+    }
+
     sendJson(res, 200, {
       state_seq: stateSeq,
       footlights,
       prompt_book: promptBook,
       presence,
       plots,
+      inn,
     });
   }
 
@@ -802,9 +852,170 @@ export function createTownServer(opts = {}) {
     });
   }
 
+  function handleInnClaim(req, res, body, auth) {
+    const room = body.room;
+    if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
+      sendJson(res, 400, { error: 'invalid_room' });
+      return;
+    }
+
+    let nights = INN_DEFAULT_NIGHTS;
+    if (Object.hasOwn(body, 'nights') && body.nights !== undefined) {
+      if (!Number.isInteger(body.nights) || body.nights < 1 || body.nights > INN_MAX_NIGHTS) {
+        sendJson(res, 400, { error: 'invalid_nights' });
+        return;
+      }
+      nights = body.nights;
+    }
+
+    const now = auth.now;
+    const handle = auth.handle;
+
+    const rl = rateLimiter.consume(`inn-claim:${handle}`, RATE_LIMITS.innClaim.max, RATE_LIMITS.innClaim.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    pruneExpiredInnClaims(now);
+
+    const existingRoom = db.prepare('SELECT room FROM inn_claims WHERE room = ?').get(room);
+    if (existingRoom) {
+      sendJson(res, 409, { error: 'room_already_claimed' });
+      return;
+    }
+
+    const existingResident = db.prepare('SELECT room FROM inn_claims WHERE handle = ?').get(handle);
+    if (existingResident) {
+      sendJson(res, 409, { error: 'resident_already_claimed' });
+      return;
+    }
+
+    const claimedAt = now;
+    const expiresAt = claimedAt + nights * NIGHT_SEC;
+    const key = generateInnKey();
+
+    db.prepare(
+      'INSERT INTO inn_claims (room, handle, claimed_at, nights, expires_at, key_code) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(room, handle, claimedAt, nights, expiresAt, key);
+
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 201, {
+      room,
+      handle,
+      claimed_at: claimedAt,
+      nights,
+      expires_at: expiresAt,
+      key,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleInnExtend(req, res, body, auth) {
+    const room = body.room;
+    if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
+      sendJson(res, 400, { error: 'invalid_room' });
+      return;
+    }
+
+    const key = body.key;
+    if (typeof key !== 'string' || !key) {
+      sendJson(res, 400, { error: 'missing_key' });
+      return;
+    }
+
+    const extraNights = body.extra_nights;
+    if (!Number.isInteger(extraNights) || extraNights < 1 || extraNights > INN_MAX_NIGHTS) {
+      sendJson(res, 400, { error: 'invalid_extra_nights' });
+      return;
+    }
+
+    const now = auth.now;
+    const handle = auth.handle;
+
+    const rl = rateLimiter.consume(`inn-claim:${handle}`, RATE_LIMITS.innClaim.max, RATE_LIMITS.innClaim.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    pruneExpiredInnClaims(now);
+
+    const claim = db
+      .prepare('SELECT room, handle, claimed_at, nights, expires_at, key_code FROM inn_claims WHERE room = ?')
+      .get(room);
+    if (!claim) {
+      sendJson(res, 404, { error: 'claim_not_found' });
+      return;
+    }
+
+    if (!innKeysEqual(key, claim.key_code)) {
+      sendJson(res, 403, { error: 'invalid_key' });
+      return;
+    }
+
+    const newNights = claim.nights + extraNights;
+    if (newNights > INN_MAX_NIGHTS) {
+      sendJson(res, 400, { error: 'max_stay_exceeded' });
+      return;
+    }
+
+    const newExpiresAt = claim.claimed_at + newNights * NIGHT_SEC;
+    db.prepare('UPDATE inn_claims SET nights = ?, expires_at = ? WHERE room = ?').run(newNights, newExpiresAt, room);
+
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 200, {
+      room,
+      handle: claim.handle,
+      claimed_at: claim.claimed_at,
+      nights: newNights,
+      expires_at: newExpiresAt,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleInnVacate(req, res, body, auth) {
+    const room = body.room;
+    if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
+      sendJson(res, 400, { error: 'invalid_room' });
+      return;
+    }
+
+    const key = body.key;
+    if (typeof key !== 'string' || !key) {
+      sendJson(res, 400, { error: 'missing_key' });
+      return;
+    }
+
+    pruneExpiredInnClaims(auth.now);
+
+    const claim = db.prepare('SELECT room, handle, key_code FROM inn_claims WHERE room = ?').get(room);
+    if (!claim) {
+      sendJson(res, 404, { error: 'claim_not_found' });
+      return;
+    }
+
+    if (!innKeysEqual(key, claim.key_code)) {
+      sendJson(res, 403, { error: 'invalid_key' });
+      return;
+    }
+
+    db.prepare('DELETE FROM inn_claims WHERE room = ?').run(room);
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 200, {
+      room,
+      handle: claim.handle,
+      vacated: true,
+      state_seq: stateSeq,
+    });
+  }
+
   const WRITE_ROUTES = new Map([
     ['POST /api/town/join', { mode: 'join', handler: handleJoin }],
     ['PUT /api/town/plot', { mode: 'resident', handler: handlePutPlot }],
+    ['POST /api/town/inn/claim', { mode: 'resident', handler: handleInnClaim }],
+    ['POST /api/town/inn/extend', { mode: 'resident', handler: handleInnExtend }],
+    ['POST /api/town/inn/vacate', { mode: 'resident', handler: handleInnVacate }],
     ['POST /api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }],
     ['POST /api/town/ghostlight/say', { mode: 'resident', handler: handleSay }],
     ['POST /api/town/ghostlight/leave', { mode: 'resident', handler: handleLeave }],
