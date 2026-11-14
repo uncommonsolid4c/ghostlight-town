@@ -159,6 +159,29 @@
       font-size: 12px;
       cursor: pointer;
     }
+    #plot-overlay-tabs {
+      display: inline-flex;
+      gap: 6px;
+      margin-left: auto;
+      margin-right: 8px;
+    }
+    #plot-overlay-tabs[hidden] {
+      display: none;
+    }
+    #plot-overlay-tabs button {
+      background: #25283d;
+      color: #cfc4ad;
+      border: 1px solid #6b492b;
+      padding: 3px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #plot-overlay-tabs button[aria-pressed="true"] {
+      background: #3b2b1d;
+      color: #ffca66;
+      border-color: #b59449;
+    }
     #plot-iframe {
       flex: 1 1 auto;
       width: 100%;
@@ -240,6 +263,12 @@
         font-size: 14px;
         padding: 10px 14px;
       }
+      #plot-overlay-tabs button {
+        min-height: 44px;
+        min-width: 44px;
+        font-size: 14px;
+        padding: 10px 14px;
+      }
       #footer-bar {
         flex-wrap: wrap;
         row-gap: 4px;
@@ -279,6 +308,7 @@
     <div id="plot-overlay-card">
       <div id="plot-overlay-header">
         <span id="plot-overlay-title"></span>
+        <span id="plot-overlay-tabs" hidden><button id="plot-overlay-tab-note" type="button" aria-pressed="true">Desk Note</button><button id="plot-overlay-tab-guestbook" type="button" aria-pressed="false">Guestbook</button></span>
         <button id="plot-overlay-close" type="button">Close</button>
       </div>
       <iframe id="plot-iframe" sandbox="" title="Resident desk note"></iframe>
@@ -292,7 +322,7 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, resolveGuestbookOverlayContent, buildNoticeBoardOverlayHtml, stepGlide, pinchFov } from './town.js?v=14';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, resolveGuestbookOverlayContent, resolvePlotGuestbookOverlayContent, formatPlotGuestbookTabLabel, buildNoticeBoardOverlayHtml, stepGlide, pinchFov } from './town.js?v=14';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
@@ -306,8 +336,23 @@
     const promptBookLines = document.getElementById('prompt-book-lines');
     const plotOverlay = document.getElementById('plot-overlay');
     const plotOverlayTitle = document.getElementById('plot-overlay-title');
+    const plotOverlayTabs = document.getElementById('plot-overlay-tabs');
+    const plotOverlayTabNote = document.getElementById('plot-overlay-tab-note');
+    const plotOverlayTabGuestbook = document.getElementById('plot-overlay-tab-guestbook');
     const plotOverlayClose = document.getElementById('plot-overlay-close');
     const plotIframe = document.getElementById('plot-iframe');
+    let currentPlotHandle = null;
+
+    function setPlotTabs(active) {
+      if (!plotOverlayTabs) return;
+      if (active === 'note' || active === 'guestbook') {
+        plotOverlayTabs.hidden = false;
+        plotOverlayTabNote?.setAttribute('aria-pressed', active === 'note' ? 'true' : 'false');
+        plotOverlayTabGuestbook?.setAttribute('aria-pressed', active === 'guestbook' ? 'true' : 'false');
+      } else {
+        plotOverlayTabs.hidden = true;
+      }
+    }
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -353,6 +398,11 @@
       activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
+      currentPlotHandle = handle;
+      if (plotOverlayTabGuestbook) {
+        plotOverlayTabGuestbook.textContent = formatPlotGuestbookTabLabel(live.lastState?.guestbook_by_plot?.[handle]);
+      }
+      setPlotTabs('note');
       plotOverlayTitle.textContent = `@${handle} — Desk Note`;
       plotIframe.setAttribute('sandbox', '');
       const resolved = await resolvePlotOverlayContent(handle, {
@@ -369,12 +419,36 @@
       plotOverlay.hidden = false;
     }
 
+    async function openPlotGuestbookOverlay(handle) {
+      keys.clear();
+      glideTarget = null;
+      activePointers.clear();
+      isDragging = false;
+      canvas.classList.remove('dragging');
+      currentPlotHandle = handle;
+      if (plotOverlayTabGuestbook) {
+        plotOverlayTabGuestbook.textContent = formatPlotGuestbookTabLabel(live.lastState?.guestbook_by_plot?.[handle]);
+      }
+      setPlotTabs('guestbook');
+      plotOverlayTitle.textContent = `@${handle} — Guestbook`;
+      plotIframe.setAttribute('sandbox', '');
+      const resolved = await resolvePlotGuestbookOverlayContent(handle, {
+        fetchFn: typeof window.fetch === 'function' ? window.fetch.bind(window) : null,
+        apiBase: API_BASE,
+      });
+      plotIframe.removeAttribute('src');
+      plotIframe.srcdoc = resolved.html;
+      plotOverlay.hidden = false;
+    }
+
     async function openGazetteOverlay() {
       keys.clear();
       glideTarget = null;
       activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
+      currentPlotHandle = null;
+      setPlotTabs(null);
       let issueNum = 1;
       let issueFile = 'issue-001.html';
       try {
@@ -405,6 +479,8 @@
       activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
+      currentPlotHandle = null;
+      setPlotTabs(null);
       plotOverlayTitle.textContent = 'Ghostlight Inn — The Guest Book';
       plotIframe.setAttribute('sandbox', '');
       const resolved = await resolveInnOverlayContent({
@@ -428,6 +504,8 @@
       activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
+      currentPlotHandle = null;
+      setPlotTabs(null);
       plotOverlayTitle.textContent = 'Town Gate Guestbook';
       plotIframe.setAttribute('sandbox', '');
       const resolved = await resolveGuestbookOverlayContent({
@@ -450,6 +528,8 @@
       activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
+      currentPlotHandle = null;
+      setPlotTabs(null);
       infoStrip.hidden = true;
       plotOverlayTitle.textContent = 'Notice Board';
       plotIframe.setAttribute('sandbox', '');
@@ -459,6 +539,8 @@
     }
 
     function closePlotOverlay() {
+      currentPlotHandle = null;
+      setPlotTabs(null);
       plotOverlay.hidden = true;
       plotIframe.removeAttribute('srcdoc');
       plotIframe.src = 'about:blank';
@@ -467,6 +549,14 @@
     }
 
     plotOverlayClose.addEventListener('click', closePlotOverlay);
+    plotOverlayTabNote?.addEventListener('click', () => {
+      if (!currentPlotHandle) return;
+      openPlotOverlay(currentPlotHandle);
+    });
+    plotOverlayTabGuestbook?.addEventListener('click', () => {
+      if (!currentPlotHandle) return;
+      openPlotGuestbookOverlay(currentPlotHandle);
+    });
 
     window.addEventListener('keydown', (e) => {
       if (!plotOverlay.hidden) {
