@@ -611,7 +611,7 @@ test('default staging (no --bundle) sets bundle: "town-3d" and staging_js_v: nul
   }
 });
 
-test('real tree --bundle staging-polyfork stages 188 files with expected manifest and exclusions', async () => {
+test('real tree --bundle staging-polyfork stages 189 files with expected manifest and exclusions', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-polyfork-real-'));
   try {
     const outDir = path.join(tmpDir, 'out');
@@ -622,21 +622,21 @@ test('real tree --bundle staging-polyfork stages 188 files with expected manifes
     const summary = JSON.parse(res.stdout.trim());
     assert.equal(summary.ok, true);
     assert.equal(summary.bundle, 'staging-polyfork');
-    assert.equal(summary.staging_js_v, '29');
+    assert.equal(summary.staging_js_v, '30');
     assert.equal(summary.town_js_v, null);
-    assert.equal(summary.file_count, 188);
+    assert.equal(summary.file_count, 189);
     assert.ok(summary.total_bytes > 0);
 
     const stagedDir = path.join(outDir, 'ghostlight-town');
     const manifest = JSON.parse(await fs.readFile(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
     assert.equal(manifest.bundle, 'staging-polyfork');
-    assert.equal(manifest.staging_js_v, '29');
+    assert.equal(manifest.staging_js_v, '30');
     assert.equal(manifest.town_js_v, null);
-    assert.equal(manifest.file_count, 188);
+    assert.equal(manifest.file_count, 189);
     assert.ok(manifest.total_bytes > 0);
 
     const pathSet = new Set(manifest.files.map((f) => f.path));
-    assert.equal(pathSet.size, 188);
+    assert.equal(pathSet.size, 189);
 
     const requiredPaths = [
       'index.html',
@@ -677,7 +677,7 @@ test('real tree --bundle staging-polyfork stages 188 files with expected manifes
   }
 });
 
-test('--verify on real staged staging-polyfork bundle succeeds with checked 188', async () => {
+test('--verify on real staged staging-polyfork bundle succeeds with checked 189', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-polyfork-real-'));
   try {
     const outDir = path.join(tmpDir, 'out');
@@ -692,12 +692,12 @@ test('--verify on real staged staging-polyfork bundle succeeds with checked 188'
     const report = JSON.parse(verifyRes.stdout.trim());
     assert.equal(report.status, 'ok');
     assert.equal(report.bundle, 'staging-polyfork');
-    assert.equal(report.checked, 188);
-    assert.equal(report.ok, 188);
+    assert.equal(report.checked, 189);
+    assert.equal(report.ok, 189);
     assert.deepEqual(report.mismatch, []);
     assert.deepEqual(report.missing, []);
     assert.deepEqual(report.extra, []);
-    assert.equal(report.staging_js_v, '29');
+    assert.equal(report.staging_js_v, '30');
     assert.equal(report.town_js_v, null);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
@@ -736,7 +736,7 @@ test('--verify fails when staging.js?v= in staged index.html disagrees with mani
 
     const stagedDir = path.join(outDir, 'ghostlight-town');
     const indexPath = path.join(stagedDir, 'index.html');
-    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=29', 'staging.js?v=999');
+    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=30', 'staging.js?v=999');
     await fs.writeFile(indexPath, updatedHtml, 'utf8');
 
     const manifestPath = path.join(stagedDir, 'MANIFEST.json');
@@ -750,7 +750,7 @@ test('--verify fails when staging.js?v= in staged index.html disagrees with mani
     const report = JSON.parse(verifyRes.stdout.trim());
     assert.equal(report.status, 'fail');
     assert.equal(report.bundle, 'staging-polyfork');
-    assert.equal(report.staging_js_v, '29');
+    assert.equal(report.staging_js_v, '30');
     assert.equal(report.staged_staging_js_v, '999');
     assert.deepEqual(report.mismatch, []);
     assert.deepEqual(report.missing, []);
