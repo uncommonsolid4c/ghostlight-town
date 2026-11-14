@@ -4,13 +4,14 @@ A read-only live-wired trial: Campground & Lake terrain + Medieval Village
 buildings + Village Tavern as the Inn + humanoid bodies for the three NPCs +
 the procedural Bandstand, Milo's cottage, and Milo's blue ghost ported from
 `town-3d/`.
-Live state layer (slices 62–63) is IN: polls `GET /api/town/state` (5 s base, ×2
+Live state layer (slices 62–64) is IN: polls `GET /api/town/state` (5 s base, ×2
 backoff to 60 s, `?since=`, 304 no-op), lights/unlights bandstand footlights
 slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent), renders
-the Prompt Book panel, places/lerps presence avatars (`avatar.mjs`), and syncs
-resident cottages from `state.plots` via `GET /api/town/plot?handle=`. Still OUT
-(slice 64 follow-up): inn occupancy and Nightly Call card updates. Judged
-against `../CONCEPT.md` after deploy, by a browser task with human eyes.
+the Prompt Book panel, places/lerps presence avatars (`avatar.mjs`), syncs
+resident cottages from `state.plots` via `GET /api/town/plot?handle=`, drives
+the Inn's single-zone taproom glow from `state.inn`, and redraws the
+Bandstand's Nightly Call card from `state.nightly_call`. Judged against
+`../CONCEPT.md` after deploy, by a browser task with human eyes.
 
 **Live town untouched.** This bundle deploys to a staging subpath only:
 `~/milo-site/ghostlight-town/staging-polyfork/` on the homelab.
@@ -21,8 +22,13 @@ against `../CONCEPT.md` after deploy, by a browser task with human eyes.
   HUD, and a load-error trap that reports failures in the status box.
 - `staging.js` — the composition (terrain, bandstand, ghost, buildings, pines,
   NPCs, controls) plus the staging-local `StagingLive` poller, footlight/avatar
-  state applier (`applyStagingState` / `applyStagingPresence`), and plot sync
-  (`syncStagingPlotsFromState`).
+  state applier (`applyStagingState` / `applyStagingPresence`), plot sync
+  (`syncStagingPlotsFromState`), and Inn / Nightly Call card wiring.
+- `inn-nightly-call.mjs` — staging-local Inn single-zone occupancy glow
+  (`isInnOccupied`, `collectTavernGlowMaterials`, `updateStagingInnOccupancy`)
+  and Bandstand Nightly Call card updater (`splitNightlyCallLines`,
+  `updateStagingNightlyCallCard`), mirroring `town-3d/town.js` (no THREE import;
+  no top-level document access).
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
@@ -38,7 +44,9 @@ against `../CONCEPT.md` after deploy, by a browser task with human eyes.
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=8` cache bust).
+  Prompt Book UI elements, `?v=9` cache bust) plus unit tests for
+  `inn-nightly-call.mjs` (occupancy decision, single-zone glow toggle,
+  Nightly Call card redraw/cache/split).
 - `test-avatar.mjs` — unit tests for `avatar.mjs` (role colors, nametag text,
   nametag lift, spot-picking + overflow, plot-target math, plot-ring coords).
 - `test-prompt-book.mjs` — unit tests for `prompt-book.mjs` (100-entry cap,
@@ -148,11 +156,14 @@ Drag to orbit, scroll/pinch to zoom, WASD or arrow keys to walk the view
 
 ## Known limits / follow-ups
 
-- **Per-room Inn glow does not survive the swap**: the tavern has ONE night
-  zone (the whole interior), so the procedural Inn's claimed-room window
-  feature has no equivalent here. If the trial is adopted, the occupancy
-  glow becomes one warm taproom, or the tavern module's windows need
-  separating (unchecked).
+- **Per-room Inn glow is a single-zone occupancy glow**: the tavern has ONE
+  night zone (the whole interior), so `updateStagingInnOccupancy` lights the
+  whole taproom when any room (`lantern`, `window`, `quiet`) is claimed and dims
+  it to dark slate glass when all three are vacant (no-op when `state.inn` is
+  absent/malformed).
+- **Nightly Call card is live from state**: `updateStagingNightlyCallCard`
+  redraws `nightly_call_card` from `state.nightly_call` (no-op until the live
+  server ships `nightly_call`).
 - **Inn gable watch carries over**: the procedural Inn's roof-brown prism
   triangles are gone with the tavern, but the tavern's own silhouette
   (balcony, chimney, tile roof) needs human eyes at the render.
