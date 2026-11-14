@@ -622,7 +622,7 @@ test('real tree --bundle staging-polyfork stages 189 files with expected manifes
     const summary = JSON.parse(res.stdout.trim());
     assert.equal(summary.ok, true);
     assert.equal(summary.bundle, 'staging-polyfork');
-    assert.equal(summary.staging_js_v, '33');
+    assert.equal(summary.staging_js_v, '34');
     assert.equal(summary.town_js_v, null);
     assert.equal(summary.file_count, 189);
     assert.ok(summary.total_bytes > 0);
@@ -630,7 +630,7 @@ test('real tree --bundle staging-polyfork stages 189 files with expected manifes
     const stagedDir = path.join(outDir, 'ghostlight-town');
     const manifest = JSON.parse(await fs.readFile(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
     assert.equal(manifest.bundle, 'staging-polyfork');
-    assert.equal(manifest.staging_js_v, '33');
+    assert.equal(manifest.staging_js_v, '34');
     assert.equal(manifest.town_js_v, null);
     assert.equal(manifest.file_count, 189);
     assert.ok(manifest.total_bytes > 0);
@@ -697,7 +697,7 @@ test('--verify on real staged staging-polyfork bundle succeeds with checked 189'
     assert.deepEqual(report.mismatch, []);
     assert.deepEqual(report.missing, []);
     assert.deepEqual(report.extra, []);
-    assert.equal(report.staging_js_v, '33');
+    assert.equal(report.staging_js_v, '34');
     assert.equal(report.town_js_v, null);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
@@ -736,7 +736,7 @@ test('--verify fails when staging.js?v= in staged index.html disagrees with mani
 
     const stagedDir = path.join(outDir, 'ghostlight-town');
     const indexPath = path.join(stagedDir, 'index.html');
-    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=33', 'staging.js?v=999');
+    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=34', 'staging.js?v=999');
     await fs.writeFile(indexPath, updatedHtml, 'utf8');
 
     const manifestPath = path.join(stagedDir, 'MANIFEST.json');
@@ -750,7 +750,7 @@ test('--verify fails when staging.js?v= in staged index.html disagrees with mani
     const report = JSON.parse(verifyRes.stdout.trim());
     assert.equal(report.status, 'fail');
     assert.equal(report.bundle, 'staging-polyfork');
-    assert.equal(report.staging_js_v, '33');
+    assert.equal(report.staging_js_v, '34');
     assert.equal(report.staged_staging_js_v, '999');
     assert.deepEqual(report.mismatch, []);
     assert.deepEqual(report.missing, []);
