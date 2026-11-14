@@ -8,6 +8,7 @@ import {
   buildInteriorRoom,
   setInteriorVisible,
   setInteriorPalette,
+  setInteriorDressing,
 } from './interior-room.mjs';
 import {
   isDoorHit,
@@ -53,6 +54,12 @@ function makeFakeThree() {
     constructor(rt, rb, h, seg) {
       this.type = 'CylinderGeometry';
       this.args = [rt, rb, h, seg];
+    }
+  }
+  class ConeGeometry {
+    constructor(r, h, seg) {
+      this.type = 'ConeGeometry';
+      this.args = [r, h, seg];
     }
   }
   class MeshStandardMaterial {
@@ -118,7 +125,7 @@ function makeFakeThree() {
       return vec;
     }
   }
-  return { BoxGeometry, CylinderGeometry, MeshStandardMaterial, Mesh, Group };
+  return { BoxGeometry, CylinderGeometry, ConeGeometry, MeshStandardMaterial, Mesh, Group };
 }
 
 function makeFakeCameraAndControls() {
@@ -469,6 +476,65 @@ test('lookBy turns view inside, clamps pitch, leaves camera position fixed, and 
   const expectedDownZ = 0.9 - Math.cos(-0.6) * Math.sqrt(5);
   assert.ok(Math.abs(localTarget.y - expectedDownY) < 1e-6, `expected y ~ ${expectedDownY}, got ${localTarget.y}`);
   assert.ok(Math.abs(localTarget.z - expectedDownZ) < 1e-6, `expected z ~ ${expectedDownZ}, got ${localTarget.z}`);
+});
+
+test('enter calls optional setDressing with cottage handle (or undefined) and works when omitted', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const dressingCalls = [];
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+    setDressing(targetRoom, handle) {
+      dressingCalls.push({ targetRoom, handle });
+      return setInteriorDressing(targetRoom, handle);
+    },
+  });
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+  assert.equal(visit.enter(wick), true);
+  assert.equal(dressingCalls.length, 1);
+  assert.equal(dressingCalls[0].targetRoom, room);
+  assert.equal(dressingCalls[0].handle, 'wick');
+  assert.equal(room.children.find((c) => c.name === 'interior_dressing_wick').visible, true);
+  assert.equal(room.children.find((c) => c.name === 'interior_dressing_milo').visible, false);
+  assert.equal(visit.exit(), true);
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  assert.equal(visit.enter(milo), true);
+  assert.equal(dressingCalls.length, 2);
+  assert.equal(dressingCalls[1].handle, 'milo');
+  assert.equal(room.children.find((c) => c.name === 'interior_dressing_milo').visible, true);
+  assert.equal(room.children.find((c) => c.name === 'interior_dressing_wick').visible, false);
+  assert.equal(visit.exit(), true);
+
+  // Cottage with no handle still calls setDressing with undefined (falls back to milo)
+  const stranger = new THREE.Group();
+  stranger.position.set(5, 0, 5);
+  assert.equal(visit.enter(stranger), true);
+  assert.equal(dressingCalls.length, 3);
+  assert.equal(dressingCalls[2].handle, undefined);
+  assert.equal(room.children.find((c) => c.name === 'interior_dressing_milo').visible, true);
+  assert.equal(visit.exit(), true);
+
+  // Omitting setDressing dep altogether still enters cleanly
+  const visitNoDressing = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+  assert.equal(visitNoDressing.enter(wick), true);
+  assert.equal(visitNoDressing.exit(), true);
 });
 
 test('interior-visit.mjs contains no campfire term, fetch(, Math.random, or DOM access', async () => {
