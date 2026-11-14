@@ -9,6 +9,7 @@ import {
   buildProp,
   MILO_PLOT_PROPS,
   attachPlotProps,
+  attachPorchDeck,
 } from './cottage-props.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,7 +86,7 @@ test('buildProp builds desk, tea_kettle, and cat with expected geometry, positio
   assert.equal(desk.geometry.type, 'BoxGeometry');
   assert.deepEqual(desk.geometry.args, [1.1, 0.72, 0.6]);
   assert.equal(desk.position.x, -1.2);
-  assert.equal(desk.position.y, 0.36);
+  assert.ok(Math.abs(desk.position.y - (0.18 + 0.36)) < 1e-12);
   assert.equal(desk.position.z, 2.2);
   assert.ok(Math.abs(desk.rotation.y - Math.PI) < 1e-12);
   assert.equal(desk.material.color, '#7a5230');
@@ -96,7 +97,7 @@ test('buildProp builds desk, tea_kettle, and cat with expected geometry, positio
   assert.equal(kettle.geometry.type, 'CylinderGeometry');
   assert.deepEqual(kettle.geometry.args, [0.14, 0.18, 0.24, 8]);
   assert.equal(kettle.position.x, -1.0);
-  assert.ok(Math.abs(kettle.position.y - (0.78 + 0.12)) < 1e-12);
+  assert.ok(Math.abs(kettle.position.y - (0.78 + 0.18 + 0.12)) < 1e-12);
   assert.equal(kettle.position.z, 2.2);
   assert.ok(Math.abs(kettle.rotation.y - (45 * Math.PI) / 180) < 1e-12);
   assert.equal(kettle.material.color, '#b87333');
@@ -107,7 +108,7 @@ test('buildProp builds desk, tea_kettle, and cat with expected geometry, positio
   assert.equal(cat.geometry.type, 'ConeGeometry');
   assert.deepEqual(cat.geometry.args, [0.16, 0.36, 6]);
   assert.equal(cat.position.x, 1.3);
-  assert.equal(cat.position.y, 0.18);
+  assert.ok(Math.abs(cat.position.y - (0.18 + 0.18)) < 1e-12);
   assert.equal(cat.position.z, 2.1);
   assert.ok(Math.abs(cat.rotation.y - (210 * Math.PI) / 180) < 1e-12);
   assert.equal(cat.material.color, '#2b2b2b');
@@ -237,32 +238,51 @@ test('attachPlotProps skips an invalid prop mixed into Maren manifest props', as
   assert.equal(cottage.children.length, 4);
 });
 
-test('buildProp remaps interior z onto porch band [2.05, 3.45] while preserving x, y, rot_y, and >= 2.05 pass-through', () => {
+test('buildProp remaps interior z onto porch band [2.05, 3.45] and lifts porch props by PORCH_FLOOR_Y=0.18 while preserving x, rot_y, and stacking', () => {
   const THREE = makeFakeThree();
   const cases = [
-    { label: 'interior door boundary z=2.0', prop: { kind: 'desk', x: -0.5, y: 0, z: 2.0, rot_y: 90 }, expectedZ: 2.05, expectedY: 0.36 },
-    { label: 'back wall boundary z=-2.0', prop: { kind: 'desk', x: 0.5, y: 0, z: -2.0, rot_y: 0 }, expectedZ: 3.45, expectedY: 0.36 },
-    { label: 'center z=0', prop: { kind: 'bookshelf', x: 0, y: 0, z: 0, rot_y: 90 }, expectedZ: 2.75, expectedY: 0.7 },
-    { label: 'Wick desk z=-0.6', prop: { kind: 'desk', x: -1.0, y: 0, z: -0.6, rot_y: 0 }, expectedZ: 2.96, expectedY: 0.36 },
-    { label: 'Maren desk z=-0.5', prop: { kind: 'desk', x: -0.9, y: 0, z: -0.5, rot_y: 0 }, expectedZ: 2.925, expectedY: 0.36 },
-    { label: 'Maren typewriter z=-0.5', prop: { kind: 'typewriter', x: -0.9, y: 0.72, z: -0.5, rot_y: 0 }, expectedZ: 2.925, expectedY: 0.81 },
-    { label: 'Wick rug z=0.9', prop: { kind: 'rug', x: 0, y: 0, z: 0.9, rot_y: 0 }, expectedZ: 2.435, expectedY: 0.02 },
-    { label: 'clamped z=-12', prop: { kind: 'cat', x: 1.1, y: 0, z: -12, rot_y: 45 }, expectedZ: 3.45, expectedY: 0.18 },
-    { label: 'pass-through boundary z=2.05', prop: { kind: 'tea_kettle', x: 0.4, y: 0.5, z: 2.05, rot_y: 180 }, expectedZ: 2.05, expectedY: 0.62 },
+    { label: 'interior door boundary z=2.0', prop: { kind: 'desk', x: -0.5, y: 0, z: 2.0, rot_y: 90 }, expectedZ: 2.05, expectedY: 0.54 },
+    { label: 'back wall boundary z=-2.0', prop: { kind: 'desk', x: 0.5, y: 0, z: -2.0, rot_y: 0 }, expectedZ: 3.45, expectedY: 0.54 },
+    { label: 'center z=0', prop: { kind: 'bookshelf', x: 0, y: 0, z: 0, rot_y: 90 }, expectedZ: 2.75, expectedY: 0.88 },
+    { label: 'Wick desk z=-0.6', prop: { kind: 'desk', x: -1.0, y: 0, z: -0.6, rot_y: 0 }, expectedZ: 2.96, expectedY: 0.54 },
+    { label: 'Maren desk z=-0.5', prop: { kind: 'desk', x: -0.9, y: 0, z: -0.5, rot_y: 0 }, expectedZ: 2.925, expectedY: 0.54 },
+    { label: 'Maren typewriter z=-0.5', prop: { kind: 'typewriter', x: -0.9, y: 0.72, z: -0.5, rot_y: 0 }, expectedZ: 2.925, expectedY: 0.99 },
+    { label: 'Wick rug z=0.9', prop: { kind: 'rug', x: 0, y: 0, z: 0.9, rot_y: 0 }, expectedZ: 2.435, expectedY: 0.20 },
+    { label: 'Tomas rug z=0.3', prop: { kind: 'rug', x: 0, y: 0, z: 0.3, rot_y: 0 }, expectedZ: 2.645, expectedY: 0.20 },
+    { label: 'poster_frame y=0.3', prop: { kind: 'poster_frame', x: 1.1, y: 0.3, z: -1.4, rot_y: 0 }, expectedZ: 3.24, expectedY: 1.38 },
+    { label: 'clamped z=-12', prop: { kind: 'cat', x: 1.1, y: 0, z: -12, rot_y: 45 }, expectedZ: 3.45, expectedY: 0.36 },
+    { label: 'pass-through boundary z=2.05', prop: { kind: 'tea_kettle', x: 0.4, y: 0.5, z: 2.05, rot_y: 180 }, expectedZ: 2.05, expectedY: 0.80 },
   ];
 
   for (const c of cases) {
     const mesh = buildProp(THREE, c.prop);
     assert.ok(mesh, c.label);
     assert.equal(mesh.position.x, c.prop.x, `${c.label} x unchanged`);
-    assert.ok(Math.abs(mesh.position.y - c.expectedY) < 1e-12, `${c.label} y unchanged`);
+    assert.ok(Math.abs(mesh.position.y - c.expectedY) < 1e-12, `${c.label} y=${mesh.position.y} expected ${c.expectedY}`);
     assert.ok(Math.abs(mesh.position.z - c.expectedZ) < 1e-12, `${c.label} z=${mesh.position.z} expected ${c.expectedZ}`);
     assert.ok(Math.abs(mesh.rotation.y - (c.prop.rot_y * Math.PI) / 180) < 1e-12, `${c.label} rot_y unchanged`);
   }
 
-  // Maren's desk + typewriter share z=-0.5 and stay stacked on the porch
+  // Maren's desk + typewriter share z=-0.5 and stay stacked flush on the porch (typewriter bottom = 0.90 = desk top)
   const marenDesk = buildProp(THREE, cases[4].prop);
   const marenTypewriter = buildProp(THREE, cases[5].prop);
   assert.equal(marenDesk.position.z, marenTypewriter.position.z);
   assert.equal(marenDesk.position.x, marenTypewriter.position.x);
+  assert.ok(Math.abs((marenDesk.position.y + 0.36) - (marenTypewriter.position.y - 0.09)) < 1e-12);
+});
+
+test('attachPorchDeck attaches wooden porch deck slab at top y=0.18, z in [2.3, 3.5], width 4.8, #6b492b', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const deck = attachPorchDeck(THREE, cottage);
+  assert.ok(deck);
+  assert.equal(cottage.children.length, 1);
+  assert.equal(deck.name, 'cottage_porch_deck');
+  assert.equal(deck.geometry.type, 'BoxGeometry');
+  assert.deepEqual(deck.geometry.args, [4.8, 0.18, 1.2]);
+  assert.ok(Math.abs(deck.position.x) < 1e-12);
+  assert.ok(Math.abs(deck.position.y + 0.09 - 0.18) < 1e-12, 'deck top y = 0.18');
+  assert.ok(Math.abs(deck.position.z - 0.6 - 2.3) < 1e-12, 'deck z starts at 2.3');
+  assert.ok(Math.abs(deck.position.z + 0.6 - 3.5) < 1e-12, 'deck z ends at 3.5');
+  assert.equal(deck.material.color, '#6b492b');
 });
