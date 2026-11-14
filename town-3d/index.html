@@ -417,6 +417,18 @@
             openGazetteOverlay();
             return;
           }
+          if (kind === 'inn') {
+            infoStrip.hidden = true;
+            keys.clear();
+            isDragging = false;
+            canvas.classList.remove('dragging');
+            plotOverlayTitle.textContent = target.userData.label || 'Ghostlight Inn';
+            plotIframe.setAttribute('sandbox', '');
+            plotIframe.removeAttribute('srcdoc');
+            plotIframe.src = 'inn/index.html';
+            plotOverlay.hidden = false;
+            return;
+          }
           infoStrip.textContent = target.userData.label || target.name;
           infoStrip.hidden = false;
           return;
