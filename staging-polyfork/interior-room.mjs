@@ -1,16 +1,21 @@
 /**
- * Walk-in Cottage Interior Room — Part 1 Feasibility Proof (Slice 85)
+ * Walk-in Cottage Interior Room — Part 1 & 2 (Slices 85–86)
  *
  * Purpose:
- *   Standalone procedural interior room module proving that a walk-in cottage
- *   interior can be built as a separate THREE.Group toggled on entry, rather
- *   than walking through the Polyfork kit cottage's closed shell.
+ *   Standalone procedural interior room module built as a separate THREE.Group
+ *   toggled on entry, rather than walking through the Polyfork kit cottage's
+ *   closed shell. Part 2 (interior-visit.mjs + staging.js) wires the door-tap
+ *   trigger and camera cut.
  *
- * Kit envelope fit:
- *   The Polyfork kit cottage (kit-medieval/cottage-small.mjs) is a 6 x 5.06 x 3.97 m
- *   single-material closed shell with no real interior geometry. This room fits
- *   comfortably inside it: 5.4 m (X) x 4.4 m (Z) floor plan, 2.6 m wall height,
- *   and open rafters peaking at 2.72 m (overall bounds: 5.4 x 2.72 x 4.4 m).
+ * Envelope fit (corrected in Slice 86):
+ *   Slice 85's 5.4 x 4.4 m room did NOT fit: the kit cottage's 6 x 5.06 x 3.97 m
+ *   spec bbox is width x height x depth, not a floor plan. The real wall boxes
+ *   are 4.8 x 3.2 m for the kit cottage (HX = 2.40, HZ = 1.60 in
+ *   kit-medieval/cottage-small.mjs) and 4.0 x 3.4 m for Milo's cottage
+ *   (widthX = 4.0, halfSpanZ = 1.7 in concept-cottage.js). Shrunk to
+ *   3.7 m (X) x 3.0 m (Z) floor plan, 2.6 m wall height, and open rafters
+ *   peaking at 2.72 m (overall bounds: 3.7 x 2.72 x 3.0 m), this room fits
+ *   inside both shells with margin.
  *
  * Open rafters choice:
  *   There is no solid ceiling; 4 open rafters span the top of the walls so the
@@ -18,12 +23,6 @@
  *
  * Mesh count: 16 meshes total (1 floor, 5 wall segments + 1 lintel, 2 window glows,
  *   4 open rafters, 3 furnishings: desk, rug, tea kettle).
- *
- * Verdict demonstrated:
- *   A separate interior_room group (hidden by default, toggled via
- *   setInteriorVisible) builds cleanly, stays deterministic, fits inside the
- *   kit shell with wall thickness to spare, and avoids modifying the closed kit
- *   mesh. Part 2 will wire the door-tap trigger and camera cut into staging.js.
  */
 
 // Palette ledger colors from CONCEPT.md (no unledgered hexes).
@@ -36,8 +35,8 @@ const PALETTE = {
   kettle: '#b59449',
 };
 
-const ROOM_WIDTH = 5.4;
-const ROOM_DEPTH = 4.4;
+const ROOM_WIDTH = 3.7;
+const ROOM_DEPTH = 3.0;
 const WALL_HEIGHT = 2.6;
 const WALL_THICKNESS = 0.12;
 const FLOOR_THICKNESS = 0.08;
@@ -80,7 +79,7 @@ export function buildInteriorRoom(THREE, opts = {}) {
   const rugMat = new THREE.MeshStandardMaterial({ color: PALETTE.rug, roughness: 0.95 });
   const kettleMat = new THREE.MeshStandardMaterial({ color: PALETTE.kettle, roughness: 0.5 });
 
-  // Floor (5.4 x 0.08 x 4.4, y in [0, 0.08])
+  // Floor (3.7 x 0.08 x 3.0, y in [0, 0.08])
   group.add(
     makeMesh(
       THREE,
@@ -202,7 +201,7 @@ export function buildInteriorRoom(THREE, opts = {}) {
   );
 
   // Open rafters above (no solid ceiling, so the thatch roofline reads from inside)
-  const rafterZPositions = [-1.5, -0.5, 0.5, 1.5];
+  const rafterZPositions = [-1.05, -0.35, 0.35, 1.05];
   const rafterHeight = 0.12;
   for (let i = 0; i < rafterZPositions.length; i++) {
     group.add(
@@ -219,6 +218,7 @@ export function buildInteriorRoom(THREE, opts = {}) {
   }
 
   // Procedural furnishings (reusing manifest prop kinds: desk, rug, tea_kettle)
+  // Positioned to clear all inner walls (x in [-1.73, 1.73], z in [-1.38, 1.38]) by >= 0.1 m.
   const deskHeight = 0.72;
   group.add(
     makeMesh(
@@ -226,9 +226,9 @@ export function buildInteriorRoom(THREE, opts = {}) {
       'interior_desk',
       new THREE.BoxGeometry(1.1, deskHeight, 0.6),
       woodMat,
-      -1.4,
+      -0.95,
       FLOOR_THICKNESS + deskHeight / 2,
-      -1.2
+      -0.85
     )
   );
 
@@ -239,9 +239,9 @@ export function buildInteriorRoom(THREE, opts = {}) {
       'interior_rug',
       new THREE.BoxGeometry(1.6, rugHeight, 1.1),
       rugMat,
-      0.2,
+      0.25,
       FLOOR_THICKNESS + rugHeight / 2,
-      0.1
+      0.15
     )
   );
 
@@ -252,9 +252,9 @@ export function buildInteriorRoom(THREE, opts = {}) {
       'interior_tea_kettle',
       new THREE.CylinderGeometry(0.14, 0.18, kettleHeight, 8),
       kettleMat,
-      -1.2,
+      -0.8,
       FLOOR_THICKNESS + deskHeight + kettleHeight / 2,
-      -1.2
+      -0.85
     )
   );
 
@@ -271,4 +271,24 @@ export function setInteriorVisible(room, visible) {
   if (!room || typeof room !== 'object') return false;
   room.visible = Boolean(visible);
   return room.visible;
+}
+
+/**
+ * Recolor the back accent wall for Milo ('#a8d8ea') or default cream plaster ('#f5efe0').
+ * Null-safe: returns false if room or interior_wall_back is missing.
+ * @param {THREE.Group|null|undefined} room
+ * @param {string} [palette]
+ * @returns {boolean}
+ */
+export function setInteriorPalette(room, palette) {
+  if (!room || !Array.isArray(room.children)) return false;
+  const backWall = room.children.find((m) => m && m.name === 'interior_wall_back');
+  if (!backWall || !backWall.material) return false;
+  const hex = palette === 'milo' ? PALETTE.miloAccent : PALETTE.plaster;
+  if (backWall.material.color && typeof backWall.material.color.set === 'function') {
+    backWall.material.color.set(hex);
+  } else {
+    backWall.material.color = hex;
+  }
+  return true;
 }
