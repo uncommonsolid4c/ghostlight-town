@@ -67,8 +67,8 @@ import {
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
 import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=23';
-import { buildInteriorRoom, setInteriorVisible, setInteriorPalette } from './interior-room.mjs?v=30';
-import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=31';
+import { buildInteriorRoom, setInteriorVisible, setInteriorPalette, setInteriorDressing } from './interior-room.mjs?v=31';
+import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=32';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -164,6 +164,7 @@ const interiorVisit = createInteriorVisit({
   controls,
   setVisible: setInteriorVisible,
   setPalette: setInteriorPalette,
+  setDressing: setInteriorDressing,
 });
 
 function enterCottageInterior(cottage) {
