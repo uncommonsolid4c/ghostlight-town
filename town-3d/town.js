@@ -918,6 +918,7 @@ function buildNoticeBoard(THREE) {
   group.name = 'town_notice_board';
   group.position.set(x, 0, z);
   group.rotation.y = Math.atan2(-x, -z);
+  group.userData = { clickable: true, kind: 'notice_board', label: 'Notice Board' };
 
   const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
   const postGeo = new THREE.BoxGeometry(0.12, 2.2, 0.12);
@@ -2045,6 +2046,36 @@ export async function resolveGuestbookOverlayContent({ fetchFn = null, apiBase =
   }
 
   return { kind: 'static', url: 'guestbook/index.html' };
+}
+
+/**
+ * Build static HTML for the Notice Board overlay from NOTICE_BOARD_PAPERS.
+ */
+export function buildNoticeBoardOverlayHtml() {
+  const noticesHtml = NOTICE_BOARD_PAPERS.map(([, , lines]) => {
+    const title = escapeHtml(lines[0] ?? '');
+    const body = escapeHtml(lines.slice(1).join(' '));
+    return `  <section class="notice">\n    <h2>${title}</h2>\n    <p>${body}</p>\n  </section>`;
+  }).join('\n');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Notice Board</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }
+    h1 { font-size: 1.35rem; border-bottom: 1px solid #6b492b; padding-bottom: 0.4rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.4rem; margin-bottom: 0.3rem; color: #5a4332; }
+    .notice p { margin: 0; }
+  </style>
+</head>
+<body>
+  <h1>Notice Board</h1>
+${noticesHtml}
+</body>
+</html>`;
 }
 const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
 
