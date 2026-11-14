@@ -126,4 +126,35 @@ export function attachPorchDeck(THREE, cottage) {
   return deck;
 }
 
+function buildPorchTrim(THREE) {
+  const group = new THREE.Group();
+  group.name = 'cottage_porch_trim';
+  const mat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.9 });
+
+  for (const x of [-2.3, 2.3]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.82, 0.12), mat);
+    post.name = 'cottage_porch_post';
+    post.position.set(x, 1.09, 3.44);
+    group.add(post);
+  }
+
+  const step = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.09, 0.3), mat);
+  step.name = 'cottage_porch_step';
+  step.position.set(0, 0.045, 3.65);
+  group.add(step);
+
+  return group;
+}
+
+/**
+ * Attach porch trim (two posts + front step) to a cottage group in
+ * cottage-local coordinates.
+ */
+export function attachPorchTrim(THREE, cottage) {
+  if (!cottage) return null;
+  const trim = buildPorchTrim(THREE);
+  cottage.add(trim);
+  return trim;
+}
+
 export { VALID_PROP_KINDS, HEX_COLOR_RE, safeColor, buildProp };
