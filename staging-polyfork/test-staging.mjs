@@ -57,6 +57,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs['"]/, 'staging.js must import ./avatar.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs['"]/, 'staging.js must import ./inn-nightly-call.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/plot-overlay\.mjs['"]/, 'staging.js must import ./plot-overlay.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/inn-guestbook-overlay\.mjs['"]/, 'staging.js must import ./inn-guestbook-overlay.mjs');
 
   assert.ok(!/\.\.\/town-3d\//.test(codeOnly), 'staging.js must not import from ../town-3d/');
   assert.ok(!/\bMath\.random\b/.test(codeOnly), 'staging.js must not use Math.random');
@@ -109,12 +110,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=10, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=11, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=10["']/, 'index.html must reference ./staging.js?v=10');
+  assert.match(html, /src=["']\.\/staging\.js\?v=11["']/, 'index.html must reference ./staging.js?v=11');
   assert.match(html, /id=["']prompt-book["']/, 'index.html must include #prompt-book');
   assert.match(html, /id=["']prompt-book-lines["']/, 'index.html must include #prompt-book-lines');
   assert.match(html, /id=["']prompt-book-toggle["']/, 'index.html must include #prompt-book-toggle');
@@ -138,6 +139,13 @@ test('staging.js wires plot overlay, Gazette newsstand overlay, close handlers, 
   assert.match(codeOnly, /function\s+buildNewsstand\s*\(/, 'staging.js must build the Gazette newsstand');
   assert.match(codeOnly, /kind\s*===\s*['"]cottage['"]\s*&&\s*target\.userData\.handle[\s\S]*?openPlotOverlay\(/, 'cottage click must call openPlotOverlay');
   assert.match(codeOnly, /kind\s*===\s*['"]newsstand['"][\s\S]*?openGazetteOverlay\(/, 'newsstand click must call openGazetteOverlay');
+  assert.match(codeOnly, /tavernGroup\.userData\.clickable\s*=\s*true/, 'tavernGroup must set userData.clickable = true');
+  assert.match(codeOnly, /tavernGroup\.userData\.kind\s*=\s*['"]inn['"]/, 'tavernGroup must set userData.kind = "inn"');
+  assert.match(codeOnly, /gatehouseGroup\s*=\s*place\s*\(\s*Gatehouse\b/, 'staging.js must capture gatehouseGroup from place(Gatehouse, ...)');
+  assert.match(codeOnly, /gatehouseGroup\.userData\.clickable\s*=\s*true/, 'gatehouseGroup must set userData.clickable = true');
+  assert.match(codeOnly, /gatehouseGroup\.userData\.kind\s*=\s*['"]gate['"]/, 'gatehouseGroup must set userData.kind = "gate"');
+  assert.match(codeOnly, /kind\s*===\s*['"]inn['"][\s\S]*?openInnOverlay\([\s\S]*?innState\s*:\s*liveStore\.lastState\?\.inn/, 'inn click must call openInnOverlay with liveStore.lastState?.inn');
+  assert.match(codeOnly, /kind\s*===\s*['"]gate['"][\s\S]*?openGuestbookOverlay\(/, 'gate click must call openGuestbookOverlay');
   assert.match(codeOnly, /plotOverlayCloseEl\?\.addEventListener\(\s*['"]click['"]\s*,\s*handleClosePlotOverlay\s*\)/, 'Close button must call handleClosePlotOverlay');
   assert.match(codeOnly, /Escape[\s\S]*?handleClosePlotOverlay\s*\(/, 'Escape key must call handleClosePlotOverlay');
 });
