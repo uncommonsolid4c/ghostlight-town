@@ -236,3 +236,33 @@ test('attachPlotProps skips an invalid prop mixed into Maren manifest props', as
   assert.equal(attached, 4);
   assert.equal(cottage.children.length, 4);
 });
+
+test('buildProp remaps interior z onto porch band [2.05, 3.45] while preserving x, y, rot_y, and >= 2.05 pass-through', () => {
+  const THREE = makeFakeThree();
+  const cases = [
+    { label: 'interior door boundary z=2.0', prop: { kind: 'desk', x: -0.5, y: 0, z: 2.0, rot_y: 90 }, expectedZ: 2.05, expectedY: 0.36 },
+    { label: 'back wall boundary z=-2.0', prop: { kind: 'desk', x: 0.5, y: 0, z: -2.0, rot_y: 0 }, expectedZ: 3.45, expectedY: 0.36 },
+    { label: 'center z=0', prop: { kind: 'bookshelf', x: 0, y: 0, z: 0, rot_y: 90 }, expectedZ: 2.75, expectedY: 0.7 },
+    { label: 'Wick desk z=-0.6', prop: { kind: 'desk', x: -1.0, y: 0, z: -0.6, rot_y: 0 }, expectedZ: 2.96, expectedY: 0.36 },
+    { label: 'Maren desk z=-0.5', prop: { kind: 'desk', x: -0.9, y: 0, z: -0.5, rot_y: 0 }, expectedZ: 2.925, expectedY: 0.36 },
+    { label: 'Maren typewriter z=-0.5', prop: { kind: 'typewriter', x: -0.9, y: 0.72, z: -0.5, rot_y: 0 }, expectedZ: 2.925, expectedY: 0.81 },
+    { label: 'Wick rug z=0.9', prop: { kind: 'rug', x: 0, y: 0, z: 0.9, rot_y: 0 }, expectedZ: 2.435, expectedY: 0.02 },
+    { label: 'clamped z=-12', prop: { kind: 'cat', x: 1.1, y: 0, z: -12, rot_y: 45 }, expectedZ: 3.45, expectedY: 0.18 },
+    { label: 'pass-through boundary z=2.05', prop: { kind: 'tea_kettle', x: 0.4, y: 0.5, z: 2.05, rot_y: 180 }, expectedZ: 2.05, expectedY: 0.62 },
+  ];
+
+  for (const c of cases) {
+    const mesh = buildProp(THREE, c.prop);
+    assert.ok(mesh, c.label);
+    assert.equal(mesh.position.x, c.prop.x, `${c.label} x unchanged`);
+    assert.ok(Math.abs(mesh.position.y - c.expectedY) < 1e-12, `${c.label} y unchanged`);
+    assert.ok(Math.abs(mesh.position.z - c.expectedZ) < 1e-12, `${c.label} z=${mesh.position.z} expected ${c.expectedZ}`);
+    assert.ok(Math.abs(mesh.rotation.y - (c.prop.rot_y * Math.PI) / 180) < 1e-12, `${c.label} rot_y unchanged`);
+  }
+
+  // Maren's desk + typewriter share z=-0.5 and stay stacked on the porch
+  const marenDesk = buildProp(THREE, cases[4].prop);
+  const marenTypewriter = buildProp(THREE, cases[5].prop);
+  assert.equal(marenDesk.position.z, marenTypewriter.position.z);
+  assert.equal(marenDesk.position.x, marenTypewriter.position.x);
+});
