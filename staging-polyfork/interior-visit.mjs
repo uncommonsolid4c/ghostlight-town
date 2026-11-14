@@ -259,7 +259,7 @@ export function createInteriorVisit({ room, camera, controls, setVisible, setPal
 
     const handle = cottage.userData?.handle;
     if (typeof setPalette === 'function') {
-      setPalette(room, handle === 'milo' ? 'milo' : 'default');
+      setPalette(room, handle);
     }
     if (typeof setDressing === 'function') {
       setDressing(room, handle);
