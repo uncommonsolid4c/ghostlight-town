@@ -173,6 +173,15 @@ export class GhostlightClient {
     return this._signedPost('/api/town/inn/vacate', { room, key });
   }
 
+  /**
+   * Rotate this resident's Ed25519 public key (signed with the current/old keypair).
+   * The caller must already hold the new private key: after this call succeeds,
+   * the old keypair is dead and the client must be rebuilt with the new one.
+   */
+  async rotateKey(newPubkey) {
+    return this._signedPost('/api/town/key/rotate', { pubkey: newPubkey });
+  }
+
   /** Poll current town state. Returns { status: 304, data: null } if unchanged. */
   async state(since) {
     const qs = since !== undefined && since !== null ? `?since=${encodeURIComponent(since)}` : '';
