@@ -9,6 +9,7 @@ import {
   splitNightlyCallLines,
   updateStagingNightlyCallCard,
 } from './inn-nightly-call.mjs';
+import { lightFootlightSlot } from './concept-bandstand.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -50,7 +51,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
   const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-  assert.match(codeOnly, /from\s+['"]\.\/concept-bandstand\.js['"]/, 'staging.js must import ./concept-bandstand.js');
+  assert.match(codeOnly, /from\s+['"]\.\/concept-bandstand\.js(\?v=\d+)?['"]/, 'staging.js must import ./concept-bandstand.js (optional ?v= cache-buster)');
   assert.match(codeOnly, /from\s+['"]\.\/concept-cottage\.js['"]/, 'staging.js must import ./concept-cottage.js');
   assert.match(codeOnly, /from\s+['"]\.\/concept-ghost\.js['"]/, 'staging.js must import ./concept-ghost.js');
   assert.match(codeOnly, /from\s+['"]\.\/prompt-book\.mjs['"]/, 'staging.js must import ./prompt-book.mjs');
@@ -111,12 +112,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=26, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=27, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=26["']/, 'index.html must reference ./staging.js?v=26');
+  assert.match(html, /src=["']\.\/staging\.js\?v=27["']/, 'index.html must reference ./staging.js?v=27');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -445,4 +446,168 @@ test('Slice 80: staging.js wires event banner, index.html has #prompt-book-event
   assert.match(html, /id=["']prompt-book-event["']\s+hidden/, 'index.html must include #prompt-book-event hidden');
   assert.match(bandstandSrc, /eventBanner\.name\s*=\s*['"]event_banner['"]/, 'concept-bandstand.js must name event_banner');
   assert.match(bandstandSrc, /eventBanner\.visible\s*=\s*false/, 'concept-bandstand.js must start event_banner hidden');
+});
+
+function makeFakeFootlightSlot(slot = 1) {
+  return {
+    userData: {
+      slot,
+      shell: {
+        material: {
+          color: '#7a6230',
+          emissive: '#000000',
+          emissiveIntensity: 0,
+        },
+      },
+      placard: {
+        rotation: { x: 0 },
+        position: { y: 0.06 },
+        material: {
+          map: null,
+          color: '#4d301c',
+          needsUpdate: false,
+        },
+      },
+      lit: false,
+      handle: null,
+      role: null,
+      statusText: null,
+    },
+  };
+}
+
+function withRecordingCanvas(fn) {
+  const prevDoc = globalThis.document;
+  const draws = [];
+  const fakeTHREE = {
+    CanvasTexture: function FakeCanvasTexture(canvas) {
+      this.image = canvas;
+    },
+  };
+  globalThis.document = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      const ctx = {
+        font: '',
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        textAlign: 'left',
+        textBaseline: 'alphabetic',
+        fillRect() {},
+        strokeRect() {},
+        fillText(text, x, y) {
+          draws.push({ text, x, y, font: ctx.font, width: canvas.width, height: canvas.height });
+        },
+      };
+      const canvas = { width: 0, height: 0, getContext: () => ctx };
+      return canvas;
+    },
+  };
+  try {
+    return fn({ fakeTHREE, draws });
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+}
+
+test('Slice 82: lightFootlightSlot renders handle-only placard unchanged when statusText is absent or empty', () => {
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    const fl = makeFakeFootlightSlot(1);
+    lightFootlightSlot(fakeTHREE, fl, { handle: 'wick', role: 'npc' });
+
+    assert.equal(fl.userData.lit, true);
+    assert.equal(fl.userData.handle, 'wick');
+    assert.equal(fl.userData.role, 'npc');
+    assert.equal(fl.userData.statusText, null);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, 'wick');
+    assert.equal(draws[0].font, 'bold 28px monospace');
+    assert.equal(draws[0].width, 256);
+    assert.equal(draws[0].height, 96);
+
+    draws.length = 0;
+    lightFootlightSlot(fakeTHREE, fl, { handle: 'wick', role: 'npc', statusText: '' });
+    assert.equal(fl.userData.statusText, null);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, 'wick');
+    assert.equal(draws[0].font, 'bold 28px monospace');
+
+    draws.length = 0;
+    lightFootlightSlot(fakeTHREE, fl, { handle: 'wick', role: 'npc', statusText: '   ' });
+    assert.equal(fl.userData.statusText, null);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].font, 'bold 28px monospace');
+  });
+});
+
+test('Slice 82: lightFootlightSlot wraps statusText with smaller subSize, updates on change, and truncates 120-char status with ellipsis', () => {
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    const fl = makeFakeFootlightSlot(2);
+    lightFootlightSlot(fakeTHREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: 'Listening by the gatehouse',
+    });
+
+    assert.equal(fl.userData.statusText, 'Listening by the gatehouse');
+    assert.equal(draws.length, 3);
+    assert.equal(draws[0].text, 'maren');
+    assert.equal(draws[0].font, 'bold 22px monospace');
+    assert.equal(draws[1].font, 'bold 16px monospace');
+    assert.equal(draws[2].font, 'bold 16px monospace');
+    assert.ok(draws[1].text.length <= 20);
+    assert.ok(draws[2].text.length <= 20);
+    assert.equal(`${draws[1].text} ${draws[2].text}`, 'Listening by the gatehouse');
+
+    // Changing statusText updates an already-lit slot.
+    draws.length = 0;
+    lightFootlightSlot(fakeTHREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: 'Quiet tea',
+    });
+    assert.equal(fl.userData.statusText, 'Quiet tea');
+    assert.equal(draws.length, 2);
+    assert.equal(draws[0].text, 'maren');
+    assert.equal(draws[1].text, 'Quiet tea');
+    assert.equal(draws[1].font, 'bold 16px monospace');
+
+    // 120-char status wraps to at most 2 status lines (3 total) and truncates with ellipsis.
+    draws.length = 0;
+    const longStatus = 'Reading old letters beside the warm lantern while the night wind moves across the quiet town square and cobbles';
+    assert.ok(longStatus.length <= 120 && longStatus.length > 80);
+    lightFootlightSlot(fakeTHREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: longStatus,
+    });
+    assert.equal(draws.length, 3, '120-char status must cap at 1 handle + 2 status lines');
+    assert.equal(draws[0].text, 'maren');
+    assert.ok(draws[1].text.length <= 20);
+    assert.ok(draws[2].text.length <= 20);
+    assert.ok(draws[2].text.endsWith('…'), 'truncated status must end with ellipsis');
+  });
+});
+
+test('Slice 82: staging.js passes row.status_text, re-lights on status change, and clears statusText on unlight', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingState(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingState in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  assert.match(fnBody, /row\.status_text/, 'applyStagingState must read row.status_text');
+  assert.match(fnBody, /flGroup\.userData\.statusText/, 'applyStagingState must check/clear flGroup.userData.statusText');
+  assert.match(
+    fnBody,
+    /lightFootlightSlot\s*\(\s*THREE\s*,\s*flGroup\s*,\s*\{\s*handle\s*,\s*role\s*,\s*statusText:/,
+    'applyStagingState must pass statusText to lightFootlightSlot'
+  );
+  assert.match(
+    fnBody,
+    /flGroup\.userData\.statusText\s*=\s*null\s*;/,
+    'applyStagingState unlit branch must clear flGroup.userData.statusText = null'
+  );
 });
