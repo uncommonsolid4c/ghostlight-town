@@ -16,8 +16,8 @@ const STAGING_JS_PATH = path.join(__dirname, 'staging.js');
 const INDEX_HTML_PATH = path.join(__dirname, 'index.html');
 const SELF_PATH = fileURLToPath(import.meta.url);
 
+// concept-bandstand.js intentionally diverged in Slice 80 (event_banner in staging only).
 const VENDORED_MODULES = [
-  'concept-bandstand.js',
   'concept-cottage.js',
   'concept-ghost.js',
 ];
@@ -111,12 +111,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=25, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=26, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=25["']/, 'index.html must reference ./staging.js?v=25');
+  assert.match(html, /src=["']\.\/staging\.js\?v=26["']/, 'index.html must reference ./staging.js?v=26');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -422,4 +422,27 @@ test('Slice 79: staging.js makes town notice board clickable and wires openNotic
     /group\.userData\s*=\s*\{\s*clickable:\s*true\s*,\s*kind:\s*['"]notice_board['"]\s*,\s*label:\s*['"]Notice Board['"]\s*\}/,
     'buildNoticeBoard in staging.js must set clickable notice_board userData'
   );
+});
+
+test('Slice 80: staging.js wires event banner, index.html has #prompt-book-event, and concept-bandstand.js builds hidden event_banner', async () => {
+  const [stagingSrc, html, bandstandSrc] = await Promise.all([
+    fs.readFile(STAGING_JS_PATH, 'utf8'),
+    fs.readFile(INDEX_HTML_PATH, 'utf8'),
+    fs.readFile(path.join(__dirname, 'concept-bandstand.js'), 'utf8'),
+  ]);
+
+  assert.match(
+    stagingSrc,
+    /import\s*\{[\s\S]*?\bloadEvents\b[\s\S]*?\bupdateEventBanner\b[\s\S]*?\}\s*from\s*['"]\.\/event-banner\.mjs['"]\s*;/,
+    'staging.js must import loadEvents and updateEventBanner from ./event-banner.mjs'
+  );
+  assert.match(stagingSrc, /\bloadEvents\s*\(/, 'staging.js must call loadEvents()');
+  assert.match(
+    stagingSrc,
+    /function\s+applyStagingState\s*\([\s\S]*?\bupdateEventBanner\s*\(/,
+    'staging.js applyStagingState must call updateEventBanner()'
+  );
+  assert.match(html, /id=["']prompt-book-event["']\s+hidden/, 'index.html must include #prompt-book-event hidden');
+  assert.match(bandstandSrc, /eventBanner\.name\s*=\s*['"]event_banner['"]/, 'concept-bandstand.js must name event_banner');
+  assert.match(bandstandSrc, /eventBanner\.visible\s*=\s*false/, 'concept-bandstand.js must start event_banner hidden');
 });
