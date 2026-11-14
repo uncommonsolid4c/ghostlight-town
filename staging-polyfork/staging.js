@@ -1,11 +1,11 @@
-// Ghostlight Town — Polyfork staging trial (read-only live state layer: polling + footlights + Prompt Book).
+// Ghostlight Town — Polyfork staging trial (live state layer: polling + footlights + Prompt Book + presence avatars + plot sync).
 // Bandstand, Milo's cottage, and Milo's blue ghost ported from town-3d/ onto
 // the Polyfork ground + Medieval Village buildings. Never deployed to live.
 //
 // Composition: Campground & Lake terrain (span 2, 128 m) + procedural Bandstand,
 // Milo's cottage + blue ghost + Medieval Village buildings, recolored to the
-// town palette + Village Tavern as the Inn + humanoid stand-ins for Wick,
-// Maren and Tomas. Pines from Nature & Forest.
+// town palette + Village Tavern as the Inn + resident cottages from live state +
+// humanoid stand-ins for Wick, Maren and Tomas. Pines from Nature & Forest.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildKit } from './kit-campground/kit.mjs';
@@ -24,9 +24,15 @@ import { buildConceptBandstand, lightFootlightSlot } from './concept-bandstand.j
 import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js';
 import { renderPromptBook } from './prompt-book.mjs';
+import {
+  TOWN_LAYOUT,
+  SEED_HOME_PADS,
+  createAvatarCapsule,
+  getPlotTargetPosition,
+  pickBandstandSpot,
+} from './avatar.mjs';
 
 // CONCEPT.md palette.
-const ICE = '#a8d8ea';    // ice blue — cottage plaster
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
 const ROOF = '#5a4332';   // roof brown — thatch, tile, shingle
 const CEDAR = '#6b492b';  // cedar — timber, Wick's apron
@@ -41,18 +47,22 @@ const TERRAIN_PARAMS = {
   // the baked array (buildKit merges terrainParams over the kit row); the
   // terrain's own auto pitches survive — they are generated inside, before
   // o.pads, and our pads come last so they win any overlap.
-  // World coords: worldX = sceneX - 192, worldZ = sceneZ + 384
+  // Terrain pad coords from town/scene coords: padX = sceneX - 192, padZ = sceneZ + 384
   // (cx -4, cz 5, CHUNK 64, mid 64). No y: each pad levels itself from the
   // flattened height at its centre, snapped to 0.25 m.
   pads: [
     { x: -203, z: 404, w: 17, d: 15 }, // tavern / Inn (-11, 20)
-    { x: -177, z: 376, w: 8, d: 8 },   // cottage (15, -8)
-    { x: -208, z: 375, w: 8, d: 8 },   // cottage (-16, -9)
-    { x: -174.08, z: 388.6, w: 10, d: 9 }, // Milo's cottage (17.92, 4.60)
+    { x: -174.08, z: 388.6, w: 10, d: 9 }, // Milo's cottage / plot 1 (17.92, 4.60)
+    ...TOWN_LAYOUT.plots.slice(1).map((p) => ({
+      x: +(p.x - 192).toFixed(3),
+      z: +(p.z + 384).toFixed(3),
+      w: 10,
+      d: 9,
+    })),
     { x: -192, z: 411, w: 11, d: 10 }, // gatehouse (0, 27)
     { x: -186, z: 392, w: 4, d: 4 },   // well (6, 8)
     { x: -214, z: 364, w: 8, d: 8 },   // windmill (-22, -20)
-    { x: -192, z: 384, w: 8, d: 8 },   // bandstand spot (0, 0) — for slice 61
+    { x: -192, z: 384, w: 8, d: 8 },   // bandstand spot (0, 0)
   ],
 };
 
@@ -196,16 +206,257 @@ function buildStagingSignpost(text) {
   return group;
 }
 
-// --- live state layer (read-only: footlights + Prompt Book) -----------------
-function applyStagingState(bandstandBuilt, state = {}, promptBookLinesEl = null) {
+// --- live state layer (footlights + Prompt Book + presence avatars + plots) ---
+const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
+
+function createStagingLiveStore() {
+  return {
+    avatars: new Map(),
+    plotAssignments: new Map(),
+    plotCache: new Map(),
+    lastState: null,
+  };
+}
+
+function applyStagingPlotManifest(liveStore, handle, manifest) {
+  if (!handle || handle === 'milo' || !manifest || typeof manifest !== 'object') {
+    return null;
+  }
+
+  let assignment = liveStore.plotAssignments.get(handle);
+  if (!assignment) {
+    const usedNumbers = new Set([...liveStore.plotAssignments.values()].map((a) => a.plotNumber));
+    const pinnedNumber = Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, handle)
+      ? SEED_HOME_PADS[handle]
+      : null;
+    const candidateLayouts = TOWN_LAYOUT.plots.slice(1); // Plot 1 is Milo's, never reassigned.
+    let layout = null;
+    if (pinnedNumber !== null && !usedNumbers.has(pinnedNumber)) {
+      layout = candidateLayouts.find((pl) => pl.plotNumber === pinnedNumber) || null;
+    }
+    if (!layout) {
+      layout = candidateLayouts.find(
+        (pl) => !usedNumbers.has(pl.plotNumber) && !RESERVED_SEED_PADS.has(pl.plotNumber)
+      ) || null;
+    }
+    if (!layout) return null;
+    assignment = { plotNumber: layout.plotNumber, layout, cottage: null };
+    liveStore.plotAssignments.set(handle, assignment);
+  }
+
+  if (assignment.cottage) {
+    assignment.cottage.removeFromParent();
+  }
+
+  const cottage = place(
+    Cottage,
+    {
+      plaster: manifest.wall || '#e8dcc0',
+      thatch: manifest.roof || '#b89b72',
+      timber: manifest.trim || '#6f4e37',
+      chimney: false,
+    },
+    assignment.layout.x,
+    assignment.layout.z,
+    { rotY: assignment.layout.rotY }
+  );
+  cottage.name = `cottage_${handle}`;
+  cottage.userData.handle = handle;
+  cottage.userData.plotNumber = assignment.plotNumber;
+
+  if (manifest.signpost_text) {
+    const sign = buildStagingSignpost(String(manifest.signpost_text).slice(0, 120));
+    sign.position.set(2.3, 0, 2.6);
+    cottage.add(sign);
+  }
+
+  assignment.cottage = cottage;
+  return cottage;
+}
+
+async function syncStagingPlotsFromState(liveStore, state) {
+  const statePlots = state?.plots && typeof state.plots === 'object' ? state.plots : null;
+  const found = new Set();
+  for (const handle of Object.keys(statePlots || {})) found.add(handle);
+  for (const row of state?.footlights || []) if (row?.handle) found.add(row.handle);
+  for (const row of state?.presence || []) if (row?.handle) found.add(row.handle);
+  for (const row of state?.prompt_book || []) if (row?.handle) found.add(row.handle);
+  found.delete('milo');
+
+  const handles = [...found].sort((a, b) => {
+    const aSeed = Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, a);
+    const bSeed = Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, b);
+    if (aSeed !== bSeed) return aSeed ? -1 : 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  let placedAny = false;
+  for (const handle of handles) {
+    const cached = liveStore.plotCache.get(handle);
+    const stateUpdatedAt =
+      statePlots && Object.prototype.hasOwnProperty.call(statePlots, handle)
+        ? statePlots[handle]
+        : undefined;
+    const hasPlotTimestamp = stateUpdatedAt !== undefined && stateUpdatedAt !== null;
+
+    if (cached) {
+      if (cached.found) {
+        if (!hasPlotTimestamp || stateUpdatedAt === cached.plotUpdatedAt) {
+          continue;
+        }
+      } else if (
+        cached.fetchedAtSeq === state.state_seq &&
+        cached.plotUpdatedAt === (hasPlotTimestamp ? stateUpdatedAt : null)
+      ) {
+        continue;
+      }
+    }
+
+    try {
+      const res = await fetch(`/api/town/plot?handle=${encodeURIComponent(handle)}`);
+      if (res && res.status === 200) {
+        const data = await res.json();
+        if (data && data.manifest) {
+          liveStore.plotCache.set(handle, {
+            found: true,
+            fetchedAtSeq: state.state_seq,
+            plotUpdatedAt: data.plot_updated_at ?? (hasPlotTimestamp ? stateUpdatedAt : null),
+            manifest: data.manifest,
+          });
+          if (applyStagingPlotManifest(liveStore, handle, data.manifest)) {
+            placedAny = true;
+          }
+          continue;
+        }
+      }
+      liveStore.plotCache.set(handle, {
+        found: false,
+        fetchedAtSeq: state.state_seq,
+        plotUpdatedAt: hasPlotTimestamp ? stateUpdatedAt : null,
+      });
+    } catch {
+      liveStore.plotCache.set(handle, {
+        found: false,
+        fetchedAtSeq: state.state_seq,
+        plotUpdatedAt: hasPlotTimestamp ? stateUpdatedAt : null,
+      });
+    }
+  }
+  return placedAny;
+}
+
+function applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightSlotByHandle, state = {}) {
+  const presenceRows = (Array.isArray(state?.presence) ? state.presence : [])
+    .filter((p) => p?.handle !== 'milo');
+  const activeHandles = new Set(presenceRows.map((p) => p?.handle).filter(Boolean));
+  for (const [handle, avatar] of liveStore.avatars.entries()) {
+    if (!activeHandles.has(handle)) {
+      avatar.removeFromParent();
+      liveStore.avatars.delete(handle);
+    }
+  }
+
+  const usedSpots = new Set();
+  const targets = new Map();
+  const avatarSpots = bandstandBuilt?.avatarSpots || [];
+  const bandstandGroundY = camp.groundAt(0, 0);
+  const toStagingBandstandTarget = (spot) => ({
+    ...spot,
+    y: spot.slot < avatarSpots.length ? bandstandGroundY + spot.y : camp.groundAt(spot.x, spot.z),
+  });
+
+  // Pass 1: reserve deterministic footlight spots for bandstand avatars with lit footlights.
+  for (const row of presenceRows) {
+    if (!row?.handle || row.zone !== 'bandstand') continue;
+    const preferred = footlightSlotByHandle.get(row.handle);
+    if (Number.isInteger(preferred) && !usedSpots.has(preferred)) {
+      targets.set(row.handle, toStagingBandstandTarget(pickBandstandSpot(avatarSpots, usedSpots, preferred)));
+    }
+  }
+
+  // Pass 2: assign remaining avatars (bandstand without footlight, gate, plot:<handle>).
+  let gateCount = 0;
+  const plotCounts = new Map();
+  for (const row of presenceRows) {
+    if (!row?.handle || targets.has(row.handle)) continue;
+    const zone = typeof row.zone === 'string' ? row.zone : 'bandstand';
+
+    if (zone === 'gate') {
+      const x = ((gateCount % 5) - 2) * 1.1;
+      const z = TOWN_LAYOUT.gate.z - 2.2 - Math.floor(gateCount / 5) * 1.0;
+      const nametagLift = (gateCount % 2) * 0.5;
+      gateCount += 1;
+      targets.set(row.handle, { x, y: camp.groundAt(x, z), z, rotY: Math.PI, nametagLift });
+    } else if (zone.startsWith('plot:')) {
+      const plotHandle = zone.slice(5);
+      const layout =
+        plotHandle === 'milo'
+          ? TOWN_LAYOUT.plots[0]
+          : liveStore.plotAssignments.get(plotHandle)?.layout;
+      if (layout) {
+        const count = plotCounts.get(plotHandle) || 0;
+        plotCounts.set(plotHandle, count + 1);
+        const pos = getPlotTargetPosition(layout, count);
+        targets.set(row.handle, { ...pos, y: camp.groundAt(pos.x, pos.z), nametagLift: (count % 2) * 0.5 });
+      } else {
+        targets.set(row.handle, toStagingBandstandTarget(pickBandstandSpot(avatarSpots, usedSpots, null)));
+      }
+    } else {
+      targets.set(row.handle, toStagingBandstandTarget(pickBandstandSpot(avatarSpots, usedSpots, null)));
+    }
+  }
+
+  for (const row of presenceRows) {
+    if (!row?.handle) continue;
+    const role = row.role === 'npc' ? 'npc' : 'muse';
+    const target = targets.get(row.handle);
+    const existing = liveStore.avatars.get(row.handle);
+    let avatar;
+
+    if (existing && existing.userData.role === role) {
+      avatar = existing;
+    } else {
+      if (existing) existing.removeFromParent();
+      avatar = createAvatarCapsule(THREE, { handle: row.handle, role });
+      avatar.position.set(target.x, target.y, target.z);
+      avatar.rotation.y = target.rotY;
+      scene.add(avatar);
+      liveStore.avatars.set(row.handle, avatar);
+    }
+    avatar.userData.target = target;
+    const lift = target.nametagLift || 0;
+    avatar.userData.nametagLift = lift;
+    if (avatar.userData.nametagSprite) {
+      avatar.userData.nametagSprite.position.y = 1.8 + lift;
+    }
+  }
+
+  // NPC stand-in yield: hide static humanoid while live presence avatar exists,
+  // and restore at their home spot when presence clears.
+  for (const [handle, standIn] of npcStandIns.entries()) {
+    if (liveStore.avatars.has(handle)) {
+      standIn.group.visible = false;
+    } else {
+      standIn.group.visible = true;
+      standIn.group.position.set(standIn.home.x, camp.groundAt(standIn.home.x, standIn.home.z), standIn.home.z);
+      standIn.group.rotation.y = faceCenter(standIn.home.x, standIn.home.z);
+    }
+  }
+}
+
+function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null) {
   const footlights = bandstandBuilt?.footlights || [];
   // Slot 0 / 'milo' is permanent and must never be lit, unlit, or relabeled from state.
   const footlightRows = (Array.isArray(state?.footlights) ? state.footlights : [])
     .filter((r) => r?.handle !== 'milo');
   const litBySlot = new Map();
+  const footlightSlotByHandle = new Map();
   for (const row of footlightRows) {
     if (row && Number.isInteger(row.slot) && row.slot >= 1 && row.slot < footlights.length) {
       litBySlot.set(row.slot, row);
+      if (typeof row.handle === 'string') {
+        footlightSlotByHandle.set(row.handle, row.slot);
+      }
     }
   }
 
@@ -237,10 +488,14 @@ function applyStagingState(bandstandBuilt, state = {}, promptBookLinesEl = null)
     }
   }
 
+  applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightSlotByHandle, state);
+
   if (promptBookLinesEl) {
     renderPromptBook(promptBookLinesEl, state?.prompt_book, document);
     promptBookLinesEl.scrollTop = promptBookLinesEl.scrollHeight;
   }
+
+  return footlightSlotByHandle;
 }
 
 class StagingLive {
@@ -417,13 +672,9 @@ async function init() {
   place(Tavern, { width: 10, plaster: CREAM, tile: ROOF, timber: CEDAR }, -11, 20, { remove: 'sign' });
   counts.buildings++;
 
-  // Two thatched cottages, ice-blue plaster, roof-brown thatch.
-  place(Cottage, { plaster: ICE, thatch: ROOF, timber: CEDAR, chimney: false }, 15, -8);
-  place(Cottage, { plaster: ICE, thatch: ROOF, timber: CEDAR, chimney: false, ridgeSag: 0.8, roofBulk: 1.1 }, -16, -9);
-  counts.buildings += 2;
-
   // Plot 1: Milo's cottage (procedural concept shell + staging-local signpost),
-  // replacing the third thatched cottage at live plot-1 coordinates (17.92, 4.60).
+  // at live plot-1 coordinates (17.92, 4.60). Resident plots 2–8 are synced
+  // from live state after polling.
   const MILO_PLOT = { x: 17.92, z: 4.60 };
   const milosCottage = createConceptMilosCottage(THREE, {
     name: 'milos_cottage',
@@ -463,7 +714,9 @@ async function init() {
   // Water plane in scene coordinates, from the terrain module's own data.
   const waterY = camp.terrain?.userData?.terrain?.waterY ?? -Infinity;
   const keepClear = [
-    [-11, 20, 10], [15, -8, 9], [-16, -9, 9], [17.92, 4.60, 9],
+    [-11, 20, 10],
+    [17.92, 4.60, 9],
+    ...TOWN_LAYOUT.plots.slice(1).map((p) => [p.x, p.z, 9]),
     [0, 27, 8], [6, 8, 7], [-22, -20, 11],
   ];
   let attempts = 0;
@@ -494,19 +747,30 @@ async function init() {
   // Wick: villager (bearded stagehand), alert. Maren: tradesman, feminine,
   // old, warm — the villager module hard-codes a full beard, so it cannot
   // play her. Tomas: tradesman, old, warm, straw hat, roof-brown apron.
-  place(Villager, {
-    figure: 'masculine', age: 'adult', expression: 'alert', build: 0.9,
-    tunic: '#7a6a55', apron: CEDAR, hair: '#5a4632',
-  }, 4.16, 4.99);
-  place(Tradesman, {
-    figure: 'feminine', age: 'old', expression: 'warm', build: 0.9,
-    tunic: '#6a7a8a', apron: CREAM, hair: '#e8e8e8',
-  }, -3.53, 5.46);
-  place(Tradesman, {
-    figure: 'masculine', age: 'old', expression: 'warm', build: 1.0,
-    tunic: '#8a7a5a', apron: ROOF, hair: '#cfcfcf',
-  }, 0.76, -6.46);
-  counts.npcs = 3;
+  const npcStandIns = new Map([
+    ['wick', {
+      group: place(Villager, {
+        figure: 'masculine', age: 'adult', expression: 'alert', build: 0.9,
+        tunic: '#7a6a55', apron: CEDAR, hair: '#5a4632',
+      }, 4.16, 4.99),
+      home: { x: 4.16, z: 4.99 },
+    }],
+    ['maren', {
+      group: place(Tradesman, {
+        figure: 'feminine', age: 'old', expression: 'warm', build: 0.9,
+        tunic: '#6a7a8a', apron: CREAM, hair: '#e8e8e8',
+      }, -3.53, 5.46),
+      home: { x: -3.53, z: 5.46 },
+    }],
+    ['tomas', {
+      group: place(Tradesman, {
+        figure: 'masculine', age: 'old', expression: 'warm', build: 1.0,
+        tunic: '#8a7a5a', apron: ROOF, hair: '#cfcfcf',
+      }, 0.76, -6.46),
+      home: { x: 0.76, z: -6.46 },
+    }],
+  ]);
+  counts.npcs = npcStandIns.size;
 
   look.shadows(scene);
 
@@ -514,11 +778,15 @@ async function init() {
   const stars = scene.getObjectByName('sky')?.getObjectByName('stars');
   if (stars) stars.visible = true;
 
-  document.getElementById('counts').textContent =
-    `${counts.bandstand} bandstand · ${counts.ghost} ghost · ${counts.buildings} buildings (incl. Milo's cottage) · ${counts.lamps} lamp posts · ${counts.pines} pines · ${counts.npcs} NPC stand-ins · terrain span 2 (128 m)`;
+  const liveStore = createStagingLiveStore();
+  function updateCountsLine() {
+    document.getElementById('counts').textContent =
+      `${counts.bandstand} bandstand · ${counts.ghost} ghost · ${counts.buildings + liveStore.plotAssignments.size} buildings (incl. Milo's cottage + ${liveStore.plotAssignments.size} resident) · ${counts.lamps} lamp posts · ${counts.pines} pines · ${counts.npcs} NPC stand-ins · ${liveStore.avatars.size} live avatars · terrain span 2 (128 m)`;
+  }
+  updateCountsLine();
   status('Ready — connecting to town API…');
   window.__stagingReady = true;
-  window.__staging = { counts: { ...counts }, terrain: { ...TERRAIN_PARAMS } };
+  window.__staging = { counts: { ...counts }, terrain: { ...TERRAIN_PARAMS }, liveStore };
 
   const promptBookEl = document.getElementById('prompt-book');
   const promptBookToggleEl = document.getElementById('prompt-book-toggle');
@@ -536,7 +804,27 @@ async function init() {
 
   const live = new StagingLive({
     onState: (state) => {
-      applyStagingState(bandstandBuilt, state, promptBookLinesEl);
+      liveStore.lastState = state;
+      const footlightSlotByHandle = applyStagingState(
+        liveStore,
+        bandstandBuilt,
+        npcStandIns,
+        state,
+        promptBookLinesEl
+      );
+      updateCountsLine();
+      syncStagingPlotsFromState(liveStore, state).then((placedAny) => {
+        if (placedAny && liveStore.lastState) {
+          applyStagingPresence(
+            liveStore,
+            bandstandBuilt,
+            npcStandIns,
+            footlightSlotByHandle,
+            liveStore.lastState
+          );
+          updateCountsLine();
+        }
+      });
     },
     onStatus: ({ connected, stateSeq, error }) => {
       if (connected && stateSeq !== null) {
@@ -556,6 +844,17 @@ async function init() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock.getDelta(), 0.1);
     walkView(dt);
+    const alpha = dt >= 0.5 ? 1 : 1 - Math.exp(-6 * dt);
+    for (const avatar of liveStore.avatars.values()) {
+      const t = avatar.userData?.target;
+      if (!t) continue;
+      avatar.position.x += (t.x - avatar.position.x) * alpha;
+      avatar.position.y += (t.y - avatar.position.y) * alpha;
+      avatar.position.z += (t.z - avatar.position.z) * alpha;
+      if (typeof t.rotY === 'number') {
+        avatar.rotation.y += (t.rotY - avatar.rotation.y) * alpha;
+      }
+    }
     if (sails) sails.rotation.z -= dt * 0.12; // slow windmill turn
     controls.update();
     look.update(); // drives the night glow
