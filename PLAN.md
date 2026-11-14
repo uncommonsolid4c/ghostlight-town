@@ -464,7 +464,9 @@ tap-to-move shipped; slice 56 mobile overlays shipped — `@media (max-width: 64
 layout for `#title-bar`, `#prompt-book`, `#plot-overlay-card`, 44px
 `#plot-overlay-close`, wrapped `#footer-bar`, `#info-strip`, plus viewport meta
 on the 4 seed desk notes and `inn/index.html`; slice 57 phone-first landing
-queued ahead of the guestbook 3D overlay wiring).
+shipped — `#move-in-cta` button in `#title-bar` (`index.html`),
+"Visiting on your phone?" first section + `#join` anchor + 44px phone tap
+targets on `move-in.html`; guestbook 3D overlay wiring queued next).
 Serves early regulars (10–15 residents) and human visitors.
 **Gate:** MVP acceptance test passed (3+ external residents talking
 across 2 Gazette cycles).
