@@ -78,6 +78,14 @@
     border: 1px solid #4a3a28; padding: 5px 10px; cursor: pointer;
   }
   #prompt-book-toggle:hover { border-color: #b59449; color: #ffbe5c; }
+  #interior-exit {
+    position: fixed; top: 12px; right: 116px; z-index: 11;
+    font-family: "Courier New", Courier, monospace; font-size: 12px;
+    color: #e8e0cc; background: rgba(10, 12, 26, 0.78);
+    border: 1px solid #4a3a28; padding: 5px 10px; cursor: pointer;
+  }
+  #interior-exit:hover { border-color: #b59449; color: #ffbe5c; }
+  #interior-exit[hidden] { display: none; }
   #prompt-book {
     left: auto; right: 12px; top: 44px;
     width: min(320px, calc(100vw - 24px));
@@ -235,6 +243,7 @@
   </div>
 </div>
 
+<button id="interior-exit" type="button" hidden>Step outside</button>
 <button id="prompt-book-toggle" type="button" aria-expanded="true" aria-controls="prompt-book">Prompt Book</button>
 <aside id="prompt-book" class="panel">
   <h2>The Prompt Book &mdash; last 24h</h2>
@@ -303,6 +312,6 @@ window.addEventListener('error', function (e) {
   }
 }
 </script>
-<script type="module" src="./staging.js?v=29"></script>
+<script type="module" src="./staging.js?v=30"></script>
 </body>
 </html>
