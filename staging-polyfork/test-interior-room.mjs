@@ -8,9 +8,11 @@ import {
   buildInteriorRoom,
   setInteriorVisible,
   setInteriorPalette,
+  setInteriorDressing,
 } from './interior-room.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..');
 
 function makeFakeThree() {
   class BoxGeometry {
@@ -23,6 +25,12 @@ function makeFakeThree() {
     constructor(rt, rb, h, seg) {
       this.type = 'CylinderGeometry';
       this.args = [rt, rb, h, seg];
+    }
+  }
+  class ConeGeometry {
+    constructor(r, h, seg) {
+      this.type = 'ConeGeometry';
+      this.args = [r, h, seg];
     }
   }
   class MeshStandardMaterial {
@@ -57,6 +65,16 @@ function makeFakeThree() {
       this.name = '';
       this.visible = true;
       this.children = [];
+      this.position = {
+        x: 0,
+        y: 0,
+        z: 0,
+        set(x, y, z) {
+          this.x = x;
+          this.y = y;
+          this.z = z;
+        },
+      };
     }
     add(child) {
       this.children.push(child);
@@ -65,6 +83,7 @@ function makeFakeThree() {
   return {
     BoxGeometry,
     CylinderGeometry,
+    ConeGeometry,
     MeshStandardMaterial,
     Mesh,
     Group,
@@ -96,6 +115,17 @@ function meshBounds(mesh) {
       maxZ: z + r,
     };
   }
+  if (mesh.geometry.type === 'ConeGeometry') {
+    const [r, h] = mesh.geometry.args;
+    return {
+      minX: x - r,
+      maxX: x + r,
+      minY: y - h / 2,
+      maxY: y + h / 2,
+      minZ: z - r,
+      maxZ: z + r,
+    };
+  }
   throw new Error(`Unsupported geometry type: ${mesh.geometry.type}`);
 }
 
@@ -107,14 +137,18 @@ function computeGroupBounds(group) {
   let minZ = Infinity;
   let maxZ = -Infinity;
 
+  const ox = group.position?.x ?? 0;
+  const oy = group.position?.y ?? 0;
+  const oz = group.position?.z ?? 0;
+
   for (const child of group.children) {
-    const b = meshBounds(child);
-    minX = Math.min(minX, b.minX);
-    maxX = Math.max(maxX, b.maxX);
-    minY = Math.min(minY, b.minY);
-    maxY = Math.max(maxY, b.maxY);
-    minZ = Math.min(minZ, b.minZ);
-    maxZ = Math.max(maxZ, b.maxZ);
+    const b = Array.isArray(child.children) ? computeGroupBounds(child) : meshBounds(child);
+    minX = Math.min(minX, b.minX + ox);
+    maxX = Math.max(maxX, b.maxX + ox);
+    minY = Math.min(minY, b.minY + oy);
+    maxY = Math.max(maxY, b.maxY + oy);
+    minZ = Math.min(minZ, b.minZ + oz);
+    maxZ = Math.max(maxZ, b.maxZ + oz);
   }
 
   return {
@@ -218,13 +252,26 @@ test('window glow meshes (2), open rafters, and furnishings (desk, rug, kettle) 
   assert.ok(byName.has('interior_wall_right'));
   assert.ok(byName.has('interior_desk'));
   assert.ok(byName.has('interior_rug'));
-  assert.ok(byName.has('interior_tea_kettle'));
+  assert.equal(byName.has('interior_tea_kettle'), false, 'tea kettle moved into milo dressing group');
+
+  const miloDressing = byName.get('interior_dressing_milo');
+  assert.ok(miloDressing, 'Expected interior_dressing_milo');
+  const kettle = miloDressing.children.find((m) => m.name === 'interior_tea_kettle');
+  const cat = miloDressing.children.find((m) => m.name === 'interior_cat');
+  assert.ok(kettle, 'Expected interior_tea_kettle inside interior_dressing_milo');
+  assert.ok(cat, 'Expected interior_cat inside interior_dressing_milo');
 
   // Furnishings clear inner walls (x in [-1.73, 1.73], z in [-1.38, 1.38]) by >= 0.1 m
   const innerX = 3.7 / 2 - 0.12;
   const innerZ = 3.0 / 2 - 0.12;
-  for (const name of ['interior_desk', 'interior_rug', 'interior_tea_kettle']) {
-    const b = meshBounds(byName.get(name));
+  const furnishings = [
+    ['interior_desk', byName.get('interior_desk')],
+    ['interior_rug', byName.get('interior_rug')],
+    ['interior_tea_kettle', kettle],
+    ['interior_cat', cat],
+  ];
+  for (const [name, mesh] of furnishings) {
+    const b = meshBounds(mesh);
     assert.ok(b.minX >= -innerX + 0.1 - 1e-9, `${name} too close to left wall`);
     assert.ok(b.maxX <= innerX - 0.1 + 1e-9, `${name} too close to right wall`);
     assert.ok(b.minZ >= -innerZ + 0.1 - 1e-9, `${name} too close to back wall`);
@@ -262,11 +309,80 @@ test('setInteriorPalette recolors back wall only and is null-safe', () => {
   assert.equal(setInteriorPalette({ children: [] }, 'milo'), false);
 });
 
+test('setInteriorDressing toggles per-handle groups, falls back to milo, is null-safe and idempotent', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const handles = ['milo', 'wick', 'maren', 'tomas'];
+  const groups = Object.fromEntries(
+    handles.map((h) => [h, room.children.find((c) => c.name === `interior_dressing_${h}`)])
+  );
+
+  // All 4 dressing groups exist and start hidden
+  for (const h of handles) {
+    assert.ok(groups[h], `Expected interior_dressing_${h}`);
+    assert.equal(groups[h].visible, false, `interior_dressing_${h} must start hidden`);
+  }
+
+  // Each known handle shows only its group and hides the other three
+  for (const h of handles) {
+    assert.equal(setInteriorDressing(room, h), true);
+    for (const other of handles) {
+      assert.equal(groups[other].visible, other === h, `for handle '${h}', ${other}.visible`);
+    }
+  }
+
+  // Unknown, undefined, and empty handles fall back to milo
+  for (const fallbackHandle of ['raul', undefined, '']) {
+    assert.equal(setInteriorDressing(room, 'wick'), true);
+    assert.equal(setInteriorDressing(room, fallbackHandle), true);
+    assert.equal(groups.milo.visible, true);
+    assert.equal(groups.wick.visible, false);
+    assert.equal(groups.maren.visible, false);
+    assert.equal(groups.tomas.visible, false);
+  }
+
+  // Idempotent when called twice with the same handle
+  assert.equal(setInteriorDressing(room, 'tomas'), true);
+  assert.equal(setInteriorDressing(room, 'tomas'), true);
+  assert.equal(groups.tomas.visible, true);
+  assert.equal(groups.milo.visible, false);
+
+  // Null-safe and missing-groups-safe
+  assert.doesNotThrow(() => setInteriorDressing(null, 'milo'));
+  assert.doesNotThrow(() => setInteriorDressing(undefined, 'wick'));
+  assert.equal(setInteriorDressing(null, 'milo'), false);
+  assert.equal(setInteriorDressing(undefined, 'wick'), false);
+  assert.equal(setInteriorDressing({ children: [] }, 'milo'), false);
+
+  // Kettle sits on desk top (minY === 0.8), cat stands on floor (minY === 0.08)
+  const kettle = groups.milo.children.find((m) => m.name === 'interior_tea_kettle');
+  const cat = groups.milo.children.find((m) => m.name === 'interior_cat');
+  const kettleBounds = meshBounds(kettle);
+  const catBounds = meshBounds(cat);
+  assert.ok(Math.abs(kettleBounds.minY - 0.8) < 1e-9, `Expected kettle minY 0.8, got ${kettleBounds.minY}`);
+  assert.ok(Math.abs(catBounds.minY - 0.08) < 1e-9, `Expected cat minY 0.08, got ${catBounds.minY}`);
+});
+
+test('vendored dressing builders in interior-room.mjs stay byte-identical to town-3d/town.js', async () => {
+  const [townSrc, roomSrc] = await Promise.all([
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8'),
+  ]);
+  for (const fnName of ['buildProceduralOilLamp', 'buildProceduralTypewriter', 'buildProceduralTeapot']) {
+    const re = new RegExp(`export function ${fnName}\\(THREE\\)[\\s\\S]*?\\n\\}`);
+    const townMatch = townSrc.match(re);
+    const roomMatch = roomSrc.match(re);
+    assert.ok(townMatch, `town-3d/town.js must export ${fnName}`);
+    assert.ok(roomMatch, `staging-polyfork/interior-room.mjs must export ${fnName}`);
+    assert.equal(roomMatch[0], townMatch[0], `${fnName} drifted from town-3d/town.js`);
+  }
+});
+
 test('mesh count is bounded (<= 25)', () => {
   const THREE = makeFakeThree();
   const room = buildInteriorRoom(THREE);
-  assert.ok(room.children.length <= 25, `Expected <= 25 meshes, got ${room.children.length}`);
-  assert.equal(room.children.length, 16);
+  assert.ok(room.children.length <= 25, `Expected <= 25 direct children, got ${room.children.length}`);
+  assert.equal(room.children.length, 19);
 });
 
 test('interior-room.mjs contains no campfire term, fetch(, or Math.random', async () => {
