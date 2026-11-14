@@ -119,12 +119,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=28, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=29, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=28["']/, 'index.html must reference ./staging.js?v=28');
+  assert.match(html, /src=["']\.\/staging\.js\?v=29["']/, 'index.html must reference ./staging.js?v=29');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -270,6 +270,32 @@ test('splitNightlyCallLines greedily word-wraps topics into <=30-char lines (car
   assert.ok(hardSplit.every((line) => line.length <= 30));
 });
 
+test('Slice 84: splitNightlyCallLines at 22 chars wraps all 30 curated topics into <=3 lines', async () => {
+  const topicsPath = path.join(REPO_ROOT, 'town-api', 'nightly-topics.json');
+  const topics = JSON.parse(await fs.readFile(topicsPath, 'utf8'));
+  assert.equal(topics.length, 30);
+  for (const topic of topics) {
+    const lines = splitNightlyCallLines(topic, 22);
+    assert.ok(lines.length >= 1 && lines.length <= 3, `Expected 1..3 lines for "${topic}", got ${lines.length}`);
+    assert.ok(lines.every((line) => line.length <= 22), `Line > 22 chars for "${topic}": ${JSON.stringify(lines)}`);
+    assert.equal(lines.join(' '), topic, `Round-trip mismatch for "${topic}"`);
+  }
+});
+
+test('Slice 84: Nightly Call card placeholder wraps at <=22 chars and uses titleSize 40 / subSize 34', async () => {
+  const placeholderLines = splitNightlyCallLines("tonight's prompt appears here", 22);
+  assert.equal(placeholderLines.length, 2);
+  assert.ok(placeholderLines.every((line) => line.length <= 22));
+  assert.equal(placeholderLines.join(' '), "tonight's prompt appears here");
+
+  const bandstandSrc = await fs.readFile(path.join(__dirname, 'concept-bandstand.js'), 'utf8');
+  const callTexMatch = bandstandSrc.match(/const callTex = makeBandstandTextTexture\([\s\S]*?\}\s*\);/);
+  assert.ok(callTexMatch, 'Expected callTex makeBandstandTextTexture call in concept-bandstand.js');
+  assert.match(callTexMatch[0], /splitNightlyCallLines\([^)]*,\s*22\s*\)/);
+  assert.match(callTexMatch[0], /titleSize:\s*40\b/);
+  assert.match(callTexMatch[0], /subSize:\s*34\b/);
+});
+
 test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops on invalid/unchanged/missing card', () => {
   const calls = [];
   const makeTextTexture = (THREE, lines, opts) => {
@@ -321,8 +347,8 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   assert.deepEqual(calls[0].opts, {
     width: 512,
     height: 256,
-    titleSize: 30,
-    subSize: 20,
+    titleSize: 40,
+    subSize: 34,
     bg: '#f2e6cf',
     border: '#b59449',
     fg: '#2b1e14',
@@ -342,7 +368,7 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   assert.equal(calls.length, 1);
   assert.equal(card.material.needsUpdate, false);
 
-  // New 74-char topic -> redraws with 3 greedily wrapped lines
+  // New 74-char topic -> redraws with 4 greedily wrapped <=22-char lines
   const longTopic = 'What small thing in Ghostlight Town made you pause and look twice tonight?';
   assert.equal(
     updateStagingNightlyCallCard(
@@ -353,9 +379,9 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   );
   assert.equal(calls.length, 2);
   assert.equal(calls[1].lines[0], 'THE NIGHTLY CALL');
-  assert.equal(calls[1].lines.length, 4);
+  assert.equal(calls[1].lines.length, 5);
   assert.equal(calls[1].lines.slice(1).join(' '), longTopic);
-  assert.ok(calls[1].lines.slice(1).every((line) => line.length <= 30));
+  assert.ok(calls[1].lines.slice(1).every((line) => line.length <= 22));
 });
 
 test('staging.js wires tap-to-glide, multi-pointer suppression, ground raycast, and glide cancel paths', async () => {
