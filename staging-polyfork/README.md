@@ -208,9 +208,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - **Tavern scale**: ~3× the procedural Inn's footprint even at width 10 —
   it becomes the town's biggest building. Deliberate (an inn should read),
   but judge it at the render.
-- **NPC stand-ins play vendored Idle**: `npc-animation.mjs` attaches
-  `anim/anim-idle.json` via `clips.mjs` with `base: './anim/'` (Idle only;
-  no Walk/Run, no wander loop).
+- **NPC stand-ins wander with vendored Idle + Walk**: `npc-animation.mjs` attaches `anim/anim-idle.json` + `anim/anim-walk.json` via `clips.mjs` (`base: './anim/'`), and `npc-wander.mjs` drives the home → bandstand → newsstand wander loop (and yield to live presence).
 - **Lamp posts have emissive glow only**, no real point lights (the live
   town's lanterns are the same).
 - The two-story house from the kit was NOT placed (brief said 2–3
