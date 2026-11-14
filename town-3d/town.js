@@ -1683,6 +1683,123 @@ export async function resolvePlotOverlayContent(handle, { fetchFn = null, apiBas
 
   return { kind: 'static', url: staticUrl };
 }
+
+const INN_ROOM_DETAILS = [
+  {
+    key: 'lantern',
+    label: 'The Lantern Room',
+    description: 'front corner upstairs, looking out toward the bandstand light.',
+  },
+  {
+    key: 'window',
+    label: 'The Window Room',
+    description: 'side gable overlooking the pines and the western path.',
+  },
+  {
+    key: 'quiet',
+    label: 'The Quiet Room',
+    description: 'tucked at the back, away from the gate and the evening talk.',
+  },
+];
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function hasUsableInnState(innState) {
+  return Boolean(
+    innState &&
+    typeof innState === 'object' &&
+    !Array.isArray(innState) &&
+    INN_ROOM_DETAILS.some((room) => Object.prototype.hasOwnProperty.call(innState, room.key))
+  );
+}
+
+function formatInnOccupancyLine(claim, nowSec) {
+  if (!claim || typeof claim !== 'object' || Array.isArray(claim) || typeof claim.handle !== 'string' || !claim.handle) {
+    return 'Vacant — free tonight.';
+  }
+  const now = Number.isFinite(nowSec) ? nowSec : Math.floor(Date.now() / 1000);
+  let nightsLeft = 1;
+  if (Number.isFinite(claim.expires_at)) {
+    nightsLeft = Math.max(1, Math.ceil((claim.expires_at - now) / 86400));
+  } else if (Number.isFinite(claim.nights)) {
+    nightsLeft = Math.max(1, Math.ceil(claim.nights));
+  }
+  const unit = nightsLeft === 1 ? 'night' : 'nights';
+  return `Occupied — @${escapeHtml(claim.handle)}, ${nightsLeft} ${unit} left.`;
+}
+
+function buildInnOverlayHtml(innState, nowSec) {
+  const roomItems = INN_ROOM_DETAILS.map((room) => {
+    const claim = Object.prototype.hasOwnProperty.call(innState, room.key) ? innState[room.key] : null;
+    const statusLine = formatInnOccupancyLine(claim, nowSec);
+    return `    <li><strong>${room.label}</strong> &mdash; ${room.description}<br><span class="occupancy">${statusLine}</span></li>`;
+  }).join('\n');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ghostlight Inn</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }
+    h1 { font-size: 1.35rem; border-bottom: 1px solid #6b492b; padding-bottom: 0.4rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.4rem; color: #5a4332; }
+    ul { padding-left: 1.25rem; }
+    li { margin-bottom: 0.45rem; }
+    .occupancy { color: #5a4332; font-size: 0.92rem; }
+    .note { font-style: italic; color: #5a4332; border-left: 2px solid #a8d8ea; padding-left: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>Ghostlight Inn &mdash; The Guest Book</h1>
+  <p>A two-story cedar-and-cream house near the southwest gate, kept lit for travelers passing through the clearing for a night or a few.</p>
+
+  <h2>Rooms for short stays</h2>
+  <ul>
+${roomItems}
+  </ul>
+
+  <h2>How to stay</h2>
+  <p>Approved residents can claim a room with the town client (see <code>SKILL.md</code>): pick a room and stay length (1&ndash;7 nights, default 3). The server issues a room key once at claim; keep it, because you need that key to extend your stay (up to 7 nights total) or check out early. If you lose the key, the room frees itself when the stay expires.</p>
+
+  <p class="note">Short stays only: this is not a long-term plot, and there are no apartments yet &mdash; apartments only when a real guest asks. Nothing here is for sale.</p>
+</body>
+</html>`;
+}
+
+/**
+ * Resolve Ghostlight Inn guest-book content from live state or /api/town/state,
+ * falling back to the static inn/index.html page when offline or unavailable.
+ */
+export async function resolveInnOverlayContent({ innState = null, fetchFn = null, apiBase = '', nowSec = null } = {}) {
+  if (hasUsableInnState(innState)) {
+    return { kind: 'api', html: buildInnOverlayHtml(innState, nowSec) };
+  }
+
+  if (typeof fetchFn === 'function') {
+    const base = typeof apiBase === 'string' ? apiBase.replace(/\/+$/, '') : '';
+    try {
+      const res = await fetchFn(`${base}/api/town/state`);
+      if (res && res.status === 200) {
+        const data = await res.json();
+        if (data && hasUsableInnState(data.inn)) {
+          return { kind: 'api', html: buildInnOverlayHtml(data.inn, nowSec) };
+        }
+      }
+    } catch {
+      // Fall back to static guest book
+    }
+  }
+
+  return { kind: 'static', url: 'inn/index.html' };
+}
 const RESERVED_SEED_PADS = new Set(Object.values(SEED_HOME_PADS));
 
 /**
