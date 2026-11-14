@@ -1,20 +1,33 @@
-// Staging-local NPC stand-in Idle animation wrapper (Slice 68).
+// Staging-local NPC stand-in animation wrapper (Slices 68, 71).
 // No top-level THREE or document access so unit tests can run headless in Node.
+
+async function attachClips(group, clips, { animateFn, base = './anim/' } = {}, label = 'clips') {
+  if (!group) return null;
+  try {
+    const fn = animateFn ?? (await import('./kit-medieval/clips.mjs')).animate;
+    return await fn(group, { clips, base });
+  } catch (err) {
+    console.warn(`[npc-animation] ${label} failed to attach; stand-in stays still:`, err?.message || err);
+    return null;
+  }
+}
 
 /**
  * Attach the vendored Idle clip to a humanoid stand-in via Polyfork's animate().
  * Never throws or rejects: on any failure (missing bones, bad fetch, etc.) it logs
  * one warning and returns null so the stand-in stays still.
  */
-export async function attachIdleAnimation(THREE, group, { animateFn, base = './anim/' } = {}) {
-  if (!group) return null;
-  try {
-    const fn = animateFn ?? (await import('./kit-medieval/clips.mjs')).animate;
-    return await fn(group, { clips: ['Idle'], base });
-  } catch (err) {
-    console.warn('[npc-animation] Idle clip failed to attach; stand-in stays still:', err?.message || err);
-    return null;
-  }
+export async function attachIdleAnimation(THREE, group, options = {}) {
+  return attachClips(group, ['Idle'], options, 'Idle clip');
+}
+
+/**
+ * Attach the vendored Idle + Walk clips to a humanoid stand-in via Polyfork's animate().
+ * Never throws or rejects: on any failure (missing bones, bad fetch, etc.) it logs
+ * one warning and returns null so the stand-in stays still.
+ */
+export async function attachNpcAnimation(THREE, group, options = {}) {
+  return attachClips(group, ['Idle', 'Walk'], options, 'Idle/Walk clips');
 }
 
 /**
