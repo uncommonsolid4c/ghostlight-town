@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostlight Town — Polyfork staging trial</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #070b1c; }
+  #view { position: fixed; inset: 0; }
+  #view canvas { display: block; }
+  .panel {
+    position: fixed; left: 12px; z-index: 10;
+    font-family: "Courier New", Courier, monospace; color: #e8e0cc;
+    background: rgba(10, 12, 26, 0.78); border: 1px solid #4a3a28;
+    padding: 10px 12px; max-width: min(420px, calc(100vw - 48px));
+  }
+  #hud { top: 12px; }
+  #hud h1 { margin: 0 0 4px; font-size: 15px; color: #a8d8ea; font-weight: bold; }
+  #hud p { margin: 4px 0; font-size: 12px; line-height: 1.5; }
+  #hud .hint { color: #b8b09a; }
+  #hud .warm { color: #ffbe5c; }
+  #status { bottom: 12px; font-size: 12px; }
+  #status.error { color: #ff9a8a; border-color: #7a2a20; }
+  #counts { color: #b8b09a; }
+</style>
+</head>
+<body>
+<div id="view"></div>
+
+<div id="hud" class="panel">
+  <h1>Ghostlight Town &mdash; Polyfork staging trial</h1>
+  <p><span class="warm">Look-only staging.</span> Bandstand, Milo&rsquo;s cottage and blue ghost are now in; no live town wiring yet &mdash; judged on look against CONCEPT.md.</p>
+  <p id="counts">Building&hellip;</p>
+  <p class="hint">Drag to orbit &middot; scroll / pinch to zoom &middot; WASD or arrow keys to walk the view. The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck.</p>
+</div>
+
+<div id="status" class="panel">Loading&hellip;</div>
+
+<script>
+// Surface module-load failures in the status box (the module script below
+// cannot report its own import errors).
+window.addEventListener('error', function (e) {
+  if (window.__stagingReady) return;
+  var s = document.getElementById('status');
+  if (s) { s.textContent = 'Load failed: ' + (e.message || 'script error'); s.classList.add('error'); }
+  window.__stagingError = String(e.message || 'script error');
+}, true);
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="./staging.js?v=5"></script>
+</body>
+</html>
