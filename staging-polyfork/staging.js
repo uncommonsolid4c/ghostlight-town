@@ -54,6 +54,7 @@ import { animate } from './kit-medieval/clips.mjs';
 import { attachNpcAnimation, updateNpcAnimations } from './npc-animation.mjs';
 import {
   buildStagingWanderFigures,
+  buildStagingGhostDrift,
   updateStagingWander,
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
@@ -943,6 +944,8 @@ async function init() {
     getPlotTargetPosition,
     homePads: SEED_HOME_PADS,
   });
+  const ghostDrift = buildStagingGhostDrift({ ghost, bandstandSpots: bandstandBuilt.avatarSpots });
+  if (ghostDrift) wanderFigures.push(ghostDrift);
 
   look.shadows(scene);
   // Apply night glow once before live polling starts so `camp.group.userData.nightSet`
