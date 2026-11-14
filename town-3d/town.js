@@ -539,6 +539,18 @@ function buildPorchTrim(THREE) {
   step.position.set(0, 0.045, 3.65);
   group.add(step);
 
+  for (const x of [-1.5, 1.5]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.08), mat);
+    rail.name = 'cottage_porch_rail';
+    rail.position.set(x, 0.95, 3.44);
+    group.add(rail);
+
+    const baluster = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.73, 0.05), mat);
+    baluster.name = 'cottage_porch_baluster';
+    baluster.position.set(x, 0.545, 3.44);
+    group.add(baluster);
+  }
+
   return group;
 }
 
