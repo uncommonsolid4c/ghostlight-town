@@ -35,14 +35,26 @@
  */
 
 // Palette ledger colors from CONCEPT.md (no unledgered hexes).
+// Per-resident interior accents come from town-npc/plots/<handle>/manifest.json
+// (wick trim, maren roof, tomas roof, milo wall).
 const PALETTE = {
   wood: '#6b492b',
   plaster: '#f5efe0',
   miloAccent: '#a8d8ea',
+  wickAccent: '#c8922e',
+  marenAccent: '#43505c',
+  tomasAccent: '#b5633a',
   windowGlow: '#ffbe5c',
   rug: '#5a4332',
   kettle: '#b59449',
   cat: '#2b2b2b',
+};
+
+const ACCENT_BY_HANDLE = {
+  milo: PALETTE.miloAccent,
+  wick: PALETTE.wickAccent,
+  maren: PALETTE.marenAccent,
+  tomas: PALETTE.tomasAccent,
 };
 
 const DRESSING_HANDLES = ['milo', 'wick', 'maren', 'tomas'];
@@ -388,17 +400,18 @@ export function setInteriorVisible(room, visible) {
 }
 
 /**
- * Recolor the back accent wall for Milo ('#a8d8ea') or default cream plaster ('#f5efe0').
+ * Recolor the back accent wall by resident handle ('milo' | 'wick' | 'maren' | 'tomas'),
+ * falling back to cream plaster ('#f5efe0') for any other handle or undefined.
  * Null-safe: returns false if room or interior_wall_back is missing.
  * @param {THREE.Group|null|undefined} room
- * @param {string} [palette]
+ * @param {string|null|undefined} [palette]
  * @returns {boolean}
  */
 export function setInteriorPalette(room, palette) {
   if (!room || !Array.isArray(room.children)) return false;
   const backWall = room.children.find((m) => m && m.name === 'interior_wall_back');
   if (!backWall || !backWall.material) return false;
-  const hex = palette === 'milo' ? PALETTE.miloAccent : PALETTE.plaster;
+  const hex = Object.hasOwn(ACCENT_BY_HANDLE, palette) ? ACCENT_BY_HANDLE[palette] : PALETTE.plaster;
   if (backWall.material.color && typeof backWall.material.color.set === 'function') {
     backWall.material.color.set(hex);
   } else {
