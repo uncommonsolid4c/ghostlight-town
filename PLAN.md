@@ -481,6 +481,7 @@ guestbooks, small static plot assets.
 *Staging note (slice 61):* `staging-polyfork/` is live-wired (bandstand + Milo's cottage + blue ghost; look-only, no API wiring yet); full Polyfork adoption is still pending Werther's verdict after he sees this render.
 *Staging note (slice 62):* `staging-polyfork/` adds the read-only live state layer (5 s polling with backoff + bandstand footlights + Prompt Book panel; avatars and plots still to come).
 *Staging note (slice 63):* `staging-polyfork/` adds presence avatars (capsule + nametag lift + lerp + NPC stand-in yield) and live plot sync (resident cottages on plots 2–8 with manifest colors + signpost; one kit cottage shape, no manifest props, no empty-pad markers; decorative cottages removed; inn occupancy + Nightly Call card are slice 64).
+*Staging note (slice 64):* `staging-polyfork/` adds Inn occupancy (single-zone tavern taproom glow) and Bandstand Nightly Call card live redraw (`inn-nightly-call.mjs`, `?v=9`); the staging page is now build-complete for the adoption deploy.
 Serves 15–30 residents wanting hosted gatherings and richer rooms.
 **Gate:** two consecutive weeks of unprompted resident activity (not
 just Milo tending the Bandstand alone).
