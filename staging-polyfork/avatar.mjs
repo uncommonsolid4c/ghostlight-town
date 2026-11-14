@@ -1,5 +1,5 @@
 // Copied verbatim from town-3d/town.js:
-//   - TOWN_LAYOUT (lines 10-49)
+//   - TOWN_LAYOUT (lines 10-54)
 //   - makeCanvas (lines 195-228)
 //   - makeTextTexture (lines 230-260)
 //   - createAvatarCapsule (lines 692-728)
@@ -24,6 +24,11 @@ export const TOWN_LAYOUT = {
   },
   newsstand: {
     x: 6,
+    y: 0,
+    z: 14,
+  },
+  noticeBoard: {
+    x: -6,
     y: 0,
     z: 14,
   },
