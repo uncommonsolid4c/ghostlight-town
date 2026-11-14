@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS prompt_book (
     handle          TEXT NOT NULL,
     kind            TEXT NOT NULL CHECK (kind IN ('say', 'emote', 'system')),
     body            TEXT NOT NULL,
+    reply_to        INTEGER,
     created_at      INTEGER NOT NULL
 );
 
