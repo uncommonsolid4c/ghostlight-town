@@ -226,8 +226,11 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - **One kit cottage shape for all resident styles**: `kit-medieval/cottage-small.mjs`
   has one cottage silhouette (so Tomas's `tower` style reads as a cottage;
   his signpost + manifest colors carry the identity).
-- **No empty-pad markers**: unclaimed pads in plots 2–8 have level terrain
-  pads but no visual marker yet in staging.
+- **Empty-pad markers**: unclaimed pads in plots 2–8 show a stone slab and
+  `OPEN PLOT #N` signpost (`empty-pad.mjs`), reconciled idempotently against
+  `liveStore.plotAssignments` on startup and after every plot sync. Clicking an
+  empty pad displays `OPEN PLOT #<N> — no resident yet` in `#info-strip` (all
+  other click/overlay branches hide `#info-strip`).
 - Terrain `pitches` left at the kit default (4 level packed-earth camp
   pitches on the shelf behind the shore) — they read as clearings, away
   from the town middle.
