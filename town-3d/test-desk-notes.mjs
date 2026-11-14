@@ -30,6 +30,10 @@ test('seed desk notes exist under town-3d/plots/<handle>/index.html and are byte
       destBuf.equals(srcBuf),
       `town-3d/plots/${handle}/index.html drifted from town-npc/plots/${handle}/desk-note.html`
     );
+
+    const viewportRe = /<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1\.0["']\s*\/?>/i;
+    assert.match(destBuf.toString('utf8'), viewportRe, `town-3d/plots/${handle}/index.html must include viewport meta`);
+    assert.match(srcBuf.toString('utf8'), viewportRe, `town-npc/plots/${handle}/desk-note.html must include viewport meta`);
   }
 });
 
