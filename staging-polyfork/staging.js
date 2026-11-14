@@ -58,7 +58,7 @@ import {
   updateStagingWander,
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
-import { attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
+import { attachPorchDeck, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -408,10 +408,11 @@ function applyStagingPlotManifest(liveStore, handle, manifest) {
 
   if (manifest.signpost_text) {
     const sign = buildStagingSignpost(String(manifest.signpost_text).slice(0, 120));
-    sign.position.set(2.3, 0, 2.6);
+    sign.position.set(2.3, 0.18, 2.6);
     cottage.add(sign);
   }
 
+  attachPorchDeck(THREE, cottage);
   attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);
 
   assignment.cottage = cottage;
@@ -826,9 +827,10 @@ async function init() {
     label: 'Milo — Ghostlight Cottage (rebuilt)',
   });
   const sign = buildStagingSignpost('Milo — Ghostlight Cottage (rebuilt)');
-  sign.position.set(2.3, 0, 2.6);
+  sign.position.set(2.3, 0.18, 2.6);
   milosCottage.add(sign);
   attachPlotProps(THREE, milosCottage, MILO_PLOT_PROPS);
+  attachPorchDeck(THREE, milosCottage);
   milosCottage.position.set(MILO_PLOT.x, camp.groundAt(MILO_PLOT.x, MILO_PLOT.z), MILO_PLOT.z);
   milosCottage.rotation.y = faceCenter(MILO_PLOT.x, MILO_PLOT.z);
   scene.add(milosCottage);
