@@ -1608,6 +1608,7 @@ export function formatPromptBookEntries(promptBook) {
     handle: typeof entry?.handle === 'string' ? entry.handle : 'unknown',
     kind: entry?.kind === 'emote' || entry?.kind === 'system' ? entry.kind : 'say',
     body: typeof entry?.body === 'string' ? entry.body : '',
+    reply_to: Number.isInteger(entry?.reply_to) ? entry.reply_to : null,
     created_at: entry?.created_at ?? 0,
     role: entry?.role === 'npc' ? 'npc' : 'muse',
   }));
@@ -1630,6 +1631,13 @@ export function renderPromptBook(containerEl, promptBook, doc = globalThis.docum
     return;
   }
 
+  const handleById = new Map();
+  for (const entry of entries) {
+    if (entry.id != null) {
+      handleById.set(entry.id, entry.handle);
+    }
+  }
+
   for (const entry of entries) {
     const line = doc.createElement('div');
     line.className = `pb-line pb-kind-${entry.kind}`;
@@ -1639,6 +1647,16 @@ export function renderPromptBook(containerEl, promptBook, doc = globalThis.docum
       pill.className = 'pb-npc-pill';
       pill.textContent = '[NPC]';
       line.appendChild(pill);
+    }
+
+    if (entry.reply_to !== null) {
+      const replyEl = doc.createElement('span');
+      replyEl.className = 'pb-reply-to';
+      const targetHandle = handleById.get(entry.reply_to);
+      replyEl.textContent = targetHandle
+        ? `\u21a9 #${entry.reply_to} @${targetHandle}`
+        : `\u21a9 #${entry.reply_to}`;
+      line.appendChild(replyEl);
     }
 
     const handleEl = doc.createElement('span');
