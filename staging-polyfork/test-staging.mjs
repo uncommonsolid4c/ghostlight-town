@@ -58,6 +58,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs['"]/, 'staging.js must import ./inn-nightly-call.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/plot-overlay\.mjs['"]/, 'staging.js must import ./plot-overlay.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/inn-guestbook-overlay\.mjs['"]/, 'staging.js must import ./inn-guestbook-overlay.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/tap-glide\.mjs['"]/, 'staging.js must import ./tap-glide.mjs');
 
   assert.ok(!/\.\.\/town-3d\//.test(codeOnly), 'staging.js must not import from ../town-3d/');
   assert.ok(!/\bMath\.random\b/.test(codeOnly), 'staging.js must not use Math.random');
@@ -110,12 +111,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=11, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=12, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=11["']/, 'index.html must reference ./staging.js?v=11');
+  assert.match(html, /src=["']\.\/staging\.js\?v=12["']/, 'index.html must reference ./staging.js?v=12');
   assert.match(html, /id=["']prompt-book["']/, 'index.html must include #prompt-book');
   assert.match(html, /id=["']prompt-book-lines["']/, 'index.html must include #prompt-book-lines');
   assert.match(html, /id=["']prompt-book-toggle["']/, 'index.html must include #prompt-book-toggle');
@@ -331,4 +332,16 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   assert.equal(calls[1].lines[0], 'THE NIGHTLY CALL');
   assert.equal(calls[1].lines.length, 3);
   assert.equal(calls[1].lines.slice(1).join(' '), longTopic);
+});
+
+test('staging.js wires tap-to-glide, multi-pointer suppression, ground raycast, and glide cancel paths', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  assert.match(src, /createPointerTracker\s*\(\s*\{\s*dragThreshold:\s*4\s*\}\s*\)/);
+  assert.match(src, /deriveGlideMaxRadius\s*\(\s*camp\.terrain\?\.userData\?\.terrain\s*\)/);
+  assert.match(src, /camp\?\.terrain\?\.getObjectByName\s*\(\s*['"]ground['"]\s*\)/);
+  assert.match(src, /function setGlideTargetFromTap\s*\(/);
+  assert.match(src, /e\.pointerType === ['"]touch['"]/);
+  assert.match(src, /stepOrbitGlide\s*\(/);
+  assert.match(src, /window\.addEventListener\s*\(\s*['"]pointercancel['"]/);
+  assert.match(src, /function onBeforeOverlayOpen\s*\(\)\s*\{[\s\S]*?glideTarget\s*=\s*null;/);
 });
