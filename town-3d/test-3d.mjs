@@ -1379,3 +1379,50 @@ test('Slice 58 wires gate click to openGuestbookOverlay and resolveGuestbookOver
   );
   assert.equal(townJs.includes('fetch('), false, 'town.js must not call fetch( directly');
 });
+
+test('Slice 74: createCottage attaches porch deck in all 4 styles, lifts porch props by 0.18, and lifts signpost to y=0.18', () => {
+  const THREE = createThreeStub();
+
+  const variants = [
+    { label: 'gable', manifest: { cottage: 'gable', signpost_text: 'Gable Home' }, options: {} },
+    { label: 'cabin', manifest: { cottage: 'cabin', signpost_text: 'Cabin Home' }, options: {} },
+    { label: 'tower', manifest: { cottage: 'tower', signpost_text: 'Tower Home' }, options: {} },
+    {
+      label: 'concept',
+      manifest: {
+        ...MILO_REBUILD_MANIFEST,
+        props: [
+          ...MILO_REBUILD_MANIFEST.props,
+          { kind: 'rug', x: 0, y: 0, z: 0.9, rot_y: 0, color: '#9c5a2c' },
+        ],
+      },
+      options: { conceptCottage: true },
+    },
+  ];
+
+  for (const v of variants) {
+    const cottage = createCottage(THREE, v.manifest, v.options);
+    const deck = collectNodes(cottage, (n) => n.name === 'cottage_porch_deck')[0];
+    assert.ok(deck, `${v.label} cottage must have cottage_porch_deck`);
+    assert.equal(deck.geometry.type, 'BoxGeometry');
+    assert.equal(deck.geometry.parameters.width, 4.8);
+    assert.equal(deck.geometry.parameters.height, 0.18);
+    assert.equal(deck.geometry.parameters.depth, 1.2);
+    assert.ok(Math.abs(deck.position.y + deck.geometry.parameters.height / 2 - 0.18) < 1e-12, `${v.label} deck top y = 0.18`);
+    assert.ok(Math.abs(deck.position.z - deck.geometry.parameters.depth / 2 - 2.3) < 1e-12, `${v.label} deck z starts at 2.3`);
+    assert.ok(Math.abs(deck.position.z + deck.geometry.parameters.depth / 2 - 3.5) < 1e-12, `${v.label} deck z ends at 3.5`);
+    assert.equal(deck.material.color, '#6b492b');
+
+    const sign = collectNodes(cottage, (n) => n.name === 'cottage_signpost')[0];
+    assert.ok(sign, `${v.label} cottage must have cottage_signpost`);
+    assert.ok(Math.abs(sign.position.y - 0.18) < 1e-12, `${v.label} signpost y = 0.18`);
+  }
+
+  const conceptCottage = createCottage(THREE, variants[3].manifest, variants[3].options);
+  const desk = collectNodes(conceptCottage, (n) => n.name === 'prop_desk')[0];
+  const kettle = collectNodes(conceptCottage, (n) => n.name === 'prop_tea_kettle')[0];
+  const rug = collectNodes(conceptCottage, (n) => n.name === 'prop_rug')[0];
+  assert.ok(Math.abs(desk.position.y - 0.36 - 0.18) < 1e-12, 'desk bottom lifted to 0.18');
+  assert.ok(Math.abs(kettle.position.y - 0.12 - 0.96) < 1e-12, 'kettle bottom lifted to 0.96');
+  assert.ok(Math.abs(rug.position.y - 0.02 - 0.18) < 1e-12, 'rug bottom lifted to 0.18');
+});
