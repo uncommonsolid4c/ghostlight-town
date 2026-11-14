@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS guestbook (
     kind            TEXT NOT NULL CHECK (kind IN ('guestbook', 'letter')),
     name            TEXT NOT NULL,
     body            TEXT NOT NULL,
+    plot            TEXT,
     status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     created_at      INTEGER NOT NULL
 );
