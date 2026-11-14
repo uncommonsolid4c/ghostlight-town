@@ -1354,3 +1354,27 @@ test('Slice 57 phone-first landing CTA in #title-bar and footer regression guard
     '#footer-bar must retain the "Move in →" link'
   );
 });
+
+test('Slice 58 wires gate click to openGuestbookOverlay and resolveGuestbookOverlayContent', async () => {
+  const [indexHtml, townJs] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'town.js'), 'utf8'),
+  ]);
+
+  assert.match(
+    indexHtml,
+    /import\s*\{[^}]*\bresolveGuestbookOverlayContent\b[^}]*\}\s*from\s*['"]\.\/town\.js[^'"]*['"]/,
+    'index.html must import resolveGuestbookOverlayContent from town.js'
+  );
+  assert.match(
+    indexHtml,
+    /function\s+openGuestbookOverlay\s*\([\s\S]*?plotOverlayTitle\.textContent\s*=\s*['"]Town Gate Guestbook['"][\s\S]*?plotIframe\.setAttribute\(\s*['"]sandbox['"]\s*,\s*['"]['"]\s*\)/,
+    'index.html must define openGuestbookOverlay() setting title "Town Gate Guestbook" and sandbox="" on plotIframe'
+  );
+  assert.match(
+    indexHtml,
+    /kind\s*===\s*['"]gate['"][\s\S]{0,120}?openGuestbookOverlay\s*\(/,
+    'index.html handleCanvasClick kind === "gate" branch must call openGuestbookOverlay()'
+  );
+  assert.equal(townJs.includes('fetch('), false, 'town.js must not call fetch( directly');
+});
