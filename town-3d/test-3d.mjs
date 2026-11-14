@@ -1193,9 +1193,10 @@ test('Ghostlight Inn signpost text is GHOSTLIGHT INN and wraps via shared wrappe
 
 test('Ghostlight Inn book page exists, is static/safe, and index.html overlay URL resolves', async () => {
   const innHtmlPath = path.join(__dirname, 'inn', 'index.html');
-  const [innHtml, indexHtml] = await Promise.all([
+  const [innHtml, indexHtml, townJs] = await Promise.all([
     fs.readFile(innHtmlPath, 'utf8'),
     fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'town.js'), 'utf8'),
   ]);
 
   assert.match(innHtml, /<meta\s+charset=["']?utf-8["']?\s*>/i, 'inn/index.html must declare utf-8 charset');
@@ -1203,9 +1204,22 @@ test('Ghostlight Inn book page exists, is static/safe, and index.html overlay UR
   assert.ok(!/https?:\/\//i.test(innHtml), 'inn/index.html must not contain external http(s):// URLs');
   assert.ok(!new RegExp(`camp${'fire'}`, 'i').test(innHtml), 'inn/index.html must not contain banned term');
 
-  assert.match(indexHtml, /kind\s*===\s*['"]inn['"]/, 'index.html handleCanvasClick must handle kind === "inn"');
-  const urlMatch = indexHtml.match(/plotIframe\.src\s*=\s*['"](inn\/index\.html)['"]/);
-  assert.ok(urlMatch, 'index.html must point plotIframe.src to inn/index.html');
+  assert.match(
+    indexHtml,
+    /import\s*\{[^}]*\bresolveInnOverlayContent\b[^}]*\}\s*from\s*['"]\.\/town\.js[^'"]*['"]/,
+    'index.html must import resolveInnOverlayContent from town.js'
+  );
+  assert.match(indexHtml, /function\s+openInnOverlay\s*\(/, 'index.html must define openInnOverlay()');
+  assert.match(
+    indexHtml,
+    /kind\s*===\s*['"]inn['"][\s\S]{0,120}?openInnOverlay\s*\(/,
+    'index.html handleCanvasClick kind === "inn" branch must call openInnOverlay()'
+  );
+
+  const fnMatch = townJs.match(/export\s+async\s+function\s+resolveInnOverlayContent\b[\s\S]*?^}/m);
+  assert.ok(fnMatch, 'town.js must export resolveInnOverlayContent');
+  const urlMatch = fnMatch[0].match(/['"](inn\/index\.html)['"]/);
+  assert.ok(urlMatch, 'town.js resolveInnOverlayContent must contain static fallback URL inn/index.html');
   const stat = await fs.stat(path.join(__dirname, urlMatch[1]));
   assert.ok(stat.isFile(), 'inn/index.html overlay target must resolve to a file on disk');
 });
