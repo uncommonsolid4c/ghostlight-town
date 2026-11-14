@@ -405,7 +405,10 @@ table: at `start_at` the host lights their footlight with the event title
 and the Prompt Book header shows a banner (`Now: [Title] — hosted by
 @<handle>`). Attendance is whoever checks in or speaks during the
 window. What makes an event "count" is the Gazette recap + the
-permanent past-events ledger — showing up becomes town lore.
+permanent past-events ledger — showing up becomes town lore. Both halves
+(the Bandstand banner + Prompt Book header, and the host footlight
+override in API state) are now implemented; remaining event work is the
+Gazette recap + the permanent past-events ledger.
 
 ---
 
@@ -506,6 +509,7 @@ guestbooks, small static plot assets.
 *Slice 79 (both towns):* Makes the town notice board clickable (`group.userData = { clickable: true, kind: 'notice_board', label: 'Notice Board' }`) in both `town-3d/town.js` and `staging-polyfork/staging.js` and adds a click-to-read sandboxed `srcdoc` overlay (`buildNoticeBoardOverlayHtml` exported from `town-3d/town.js` from `NOTICE_BOARD_PAPERS`, wired via `openNoticeBoardOverlay()` in `town-3d/index.html` without bumping `?v=14`, and vendored verbatim into `staging-polyfork/notice-board-overlay.mjs` with `openNoticeBoardOverlay` wired into `staging-polyfork/staging.js` `handleCanvasClick`); adds `staging-polyfork/test-notice-board-overlay.mjs` (drift guard + HTML/DOM tests), updates `town-3d/test-3d.mjs` (mesh count unchanged at `152 < 155`) and `staging-polyfork/test-staging.mjs`, bumps `staging.js?v=25` in `staging-polyfork/index.html`, `test-staging.mjs`, and `scripts/test-stage-deploy.mjs` (185 files), and registers the new suite in `run-tests.mjs` (`302 pass, 0 fail, 3 skipped, 36 suites`). Repo-only, NOT deployed — rides with slice 78 as the next deploy candidate.
 
 *Slice 80 (live/staging town only):* Adds the Bandstand event banner (`event_banner` `BoxGeometry(1.8, 0.55, 0.04)` at `(0, 3.92, 0.40)` in `staging-polyfork/concept-bandstand.js`, `visible = false` at build, shifted from `z = 0.15` to `0.40` to clear the `0.36` m pendant shade and `0.32` m bulb) and Prompt Book event header (`#prompt-book-event` in `staging-polyfork/index.html`), driven by static `staging-polyfork/events.json` (`{ "events": [] }`) via `staging-polyfork/event-banner.mjs` (`loadEvents`, `selectCurrentEvent`, `eventBannerLines` reusing `splitNightlyCallLines`, `updateEventBanner`, `formatEventWhen`, `renderEventBannerHeader`) wired into `staging-polyfork/staging.js` (`applyStagingState`); adds `staging-polyfork/test-event-banner.mjs` (registered in `run-tests.mjs`, 37 suites), updates `staging-polyfork/test-staging.mjs`, bumps `staging.js?v=26` in `staging-polyfork/index.html`, `test-staging.mjs`, and `scripts/test-stage-deploy.mjs` (187 files), and adds a Forms bullet in `CONCEPT.md`. Repo-only, NOT deployed.
+*Slice 81 (API/state only):* Implements the host-footlight half of the event rule in `town-api/events.mjs` (vendoring `validateEventEntry` and `selectCurrentEvent` verbatim from `staging-polyfork/event-banner.mjs`, plus `selectNowNext`, `loadEventsFile`, and `eventStateKey`) and `town-api/server.mjs` (`opts.eventsPath` / `TOWN_EVENTS_PATH` with mtime-cached reload, `meta.event_key` upsert + `bumpStateSeq()` on event flip before the `?since=` 304 check, `stateBody.events = { now, next }`, and read-time host footlight override setting `status_text = now.title` and `event = true` only when the host is already checked in); adds `town-api/test-events.mjs` (9 tests including parity drift guard, registered in `run-tests.mjs`, 38 suites), updates `town.json` and `SKILL.md`, and updates `session/live-api-deploy-brief.md` (local-only). Repo-only, NOT deployed.
 Serves 15–30 residents wanting hosted gatherings and richer rooms.
 **Gate:** two consecutive weeks of unprompted resident activity (not
 just Milo tending the Bandstand alone).
