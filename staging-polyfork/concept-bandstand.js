@@ -1014,6 +1014,25 @@ export function createConceptBandstand(THREE, options = {}) {
     promptDesk.name = 'prompt_desk';
     promptDesk.position.set(1.7, 0.38, 5.1);
     group.add(promptDesk);
+
+    const eventBannerTex = makeBandstandTextTexture(THREE, ['EVENTS', 'no event scheduled'], {
+      width: 768,
+      height: 256,
+      titleSize: 30,
+      subSize: 20,
+      bg: '#f2e6cf',
+      border: '#b59449',
+      fg: '#2b1e14',
+    });
+    const eventBanner = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 0.55, 0.04),
+      new THREE.MeshStandardMaterial({ map: eventBannerTex, roughness: 0.7 })
+    );
+    eventBanner.name = 'event_banner';
+    eventBanner.position.set(0, 3.92, 0.40);
+    eventBanner.visible = false;
+    group.add(eventBanner);
+    group.eventBanner = eventBanner;
   }
 
   // 7. Exactly 10 brass footlights & 10 avatar spots in the exact slots/positions expected by town.js
@@ -1121,5 +1140,6 @@ export function buildConceptBandstand(THREE, options = {}) {
     light: group.light,
     footlights: group.footlights,
     avatarSpots: group.avatarSpots,
+    eventBanner: group.eventBanner || null,
   };
 }
