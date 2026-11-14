@@ -522,6 +522,26 @@ function buildPorchDeck(THREE) {
   return deck;
 }
 
+function buildPorchTrim(THREE) {
+  const group = new THREE.Group();
+  group.name = 'cottage_porch_trim';
+  const mat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.9 });
+
+  for (const x of [-2.3, 2.3]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.82, 0.12), mat);
+    post.name = 'cottage_porch_post';
+    post.position.set(x, 1.09, 3.44);
+    group.add(post);
+  }
+
+  const step = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.09, 0.3), mat);
+  step.name = 'cottage_porch_step';
+  step.position.set(0, 0.045, 3.65);
+  group.add(step);
+
+  return group;
+}
+
 /**
  * Build a cottage Group from a plot manifest.
  * Defensive against unknown prop kinds and out-of-range values.
@@ -548,6 +568,7 @@ export function createCottage(THREE, manifest = {}, options = {}) {
       conceptGroup.add(sign);
     }
     conceptGroup.add(buildPorchDeck(THREE));
+    conceptGroup.add(buildPorchTrim(THREE));
     const rawProps = Array.isArray(safeManifest.props) ? safeManifest.props : [];
     for (const prop of rawProps) {
       const propMesh = buildProp(THREE, prop);
@@ -702,6 +723,7 @@ export function createCottage(THREE, manifest = {}, options = {}) {
   }
 
   group.add(buildPorchDeck(THREE));
+  group.add(buildPorchTrim(THREE));
 
   const rawProps = Array.isArray(safeManifest.props) ? safeManifest.props : [];
   for (const prop of rawProps) {
