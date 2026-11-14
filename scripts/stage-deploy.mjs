@@ -9,20 +9,22 @@
  * town-npc/.
  *
  * Usage:
- *   node scripts/stage-deploy.mjs [--out <dir>] [--root <dir>]
+ *   node scripts/stage-deploy.mjs [--bundle <name>] [--out <dir>] [--root <dir>]
  *   node scripts/stage-deploy.mjs --verify <dir> [--root <dir>]
  *
  * Options:
+ *   --bundle <name> Bundle to stage: 'town-3d' (default) or 'staging-polyfork'.
  *   --out <dir>     Target staging directory (default: <root>/staging).
  *                   Refuses to stage into <root> itself or into town-3d/,
- *                   town-api/, or town-npc/.
+ *                   town-api/, town-npc/, or staging-polyfork/.
  *   --verify <dir>  Verify a staged directory against <dir>/MANIFEST.json
  *                   (read-only). Checks sha256 of all manifest files, rejects
- *                   missing/mismatched/extra files, symlinks, and town_js_v
- *                   drift. Refuses <root> itself or town-3d/, town-api/,
- *                   town-npc/.
- *   --root <dir>    Repository root containing town-3d/ (default: repo root
- *                   derived from import.meta.url, one level above scripts/).
+ *                   missing/mismatched/extra files, symlinks, and town_js_v /
+ *                   staging_js_v drift. Refuses <root> itself or town-3d/,
+ *                   town-api/, town-npc/, or staging-polyfork/.
+ *   --root <dir>    Repository root containing town-3d/ and staging-polyfork/
+ *                   (default: repo root derived from import.meta.url, one level
+ *                   above scripts/).
  */
 
 import crypto from 'node:crypto';
@@ -60,18 +62,40 @@ export const EXCLUDED_FILES = [
   },
 ];
 
+const VALID_BUNDLES = ['town-3d', 'staging-polyfork'];
+
+const STAGING_SHARED_TOWN3D_FILES = [
+  'gazette/feed.xml',
+  'gazette/issue-001.html',
+  'gazette/issue-002.html',
+  'gazette/latest.json',
+  'plots/milo/index.html',
+  'plots/wick/index.html',
+  'plots/maren/index.html',
+  'plots/tomas/index.html',
+  'inn/index.html',
+  'guestbook/index.html',
+  'move-in.html',
+];
+
 function findExcludedFile(relPath) {
   return EXCLUDED_FILES.find((entry) => entry.relPath === relPath) ?? null;
 }
 
 function parseArgs(argv) {
+  let bundleArg = null;
   let outArg = null;
   let rootArg = null;
   let verifyArg = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--out') {
+    if (arg === '--bundle') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
+        throw new Error('--bundle requires a bundle name argument');
+      }
+      bundleArg = argv[++i];
+    } else if (arg === '--out') {
       if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
         throw new Error('--out requires a directory argument');
       }
@@ -91,6 +115,11 @@ function parseArgs(argv) {
     }
   }
 
+  const bundle = bundleArg ?? 'town-3d';
+  if (!VALID_BUNDLES.includes(bundle)) {
+    throw new Error(`Unknown bundle: ${bundle} (expected one of: ${VALID_BUNDLES.join(', ')})`);
+  }
+
   if (verifyArg !== null && outArg !== null) {
     throw new Error('--verify cannot be combined with --out');
   }
@@ -100,7 +129,7 @@ function parseArgs(argv) {
     return { mode: 'verify', rootDir, verifyDir: path.resolve(verifyArg) };
   }
   const outDir = path.resolve(outArg ?? path.join(rootDir, 'staging'));
-  return { mode: 'stage', rootDir, outDir };
+  return { mode: 'stage', bundle, rootDir, outDir };
 }
 
 function isSameOrInside(candidate, base) {
@@ -112,7 +141,7 @@ function validateTargetDir(targetDir, rootDir, actionLabel) {
   if (targetDir === rootDir) {
     throw new Error(`Refusing to ${actionLabel} repo root: ${targetDir}`);
   }
-  for (const forbidden of ['town-3d', 'town-api', 'town-npc']) {
+  for (const forbidden of ['town-3d', 'town-api', 'town-npc', 'staging-polyfork']) {
     const forbiddenDir = path.join(rootDir, forbidden);
     if (isSameOrInside(targetDir, forbiddenDir)) {
       throw new Error(`Refusing to ${actionLabel} inside ${forbidden}/: ${targetDir}`);
@@ -156,24 +185,26 @@ async function assertNotSymlinkDir(dirPath, label) {
   }
 }
 
-async function collectDirRecursive(dirPath, relPrefix, results) {
-  await assertNotSymlinkDir(dirPath, `town-3d/${relPrefix}`);
+async function collectDirRecursive(dirPath, relPrefix, results, sourceLabelPrefix = 'town-3d') {
+  const dirLabel = relPrefix ? `${sourceLabelPrefix}/${relPrefix}` : sourceLabelPrefix;
+  await assertNotSymlinkDir(dirPath, dirLabel);
   const entries = await fs.readdir(dirPath);
   entries.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry);
-    const relPath = `${relPrefix}/${entry}`;
+    const relPath = relPrefix ? `${relPrefix}/${entry}` : entry;
+    const entryLabel = `${sourceLabelPrefix}/${relPath}`;
     const stat = await fs.lstat(fullPath);
     if (stat.isSymbolicLink()) {
-      throw new Error(`Refusing symlink source: town-3d/${relPath}`);
+      throw new Error(`Refusing symlink source: ${entryLabel}`);
     }
     if (stat.isDirectory()) {
-      await collectDirRecursive(fullPath, relPath, results);
+      await collectDirRecursive(fullPath, relPath, results, sourceLabelPrefix);
     } else if (stat.isFile()) {
       results.push({ srcPath: fullPath, relPath });
     } else {
-      throw new Error(`Unsupported file type: town-3d/${relPath}`);
+      throw new Error(`Unsupported file type: ${entryLabel}`);
     }
   }
 }
@@ -272,7 +303,53 @@ export async function collectSourceFilesFromTown3d(town3dDir) {
   return { files, excluded };
 }
 
-export async function collectSourceFiles(rootDir) {
+export async function collectSourceFilesFromStagingPolyfork(stagingDir, town3dDir) {
+  await assertNotSymlinkDir(stagingDir, 'staging-polyfork');
+  await assertNotSymlinkDir(town3dDir, 'town-3d');
+
+  const rawStagingFiles = [];
+  await collectDirRecursive(stagingDir, '', rawStagingFiles, 'staging-polyfork');
+
+  const files = [];
+  const excluded = [];
+  const seenRelPaths = new Set();
+
+  for (const item of rawStagingFiles) {
+    const baseName = path.posix.basename(item.relPath);
+    if (/^test-.*\.mjs$/.test(baseName)) {
+      excluded.push({ path: item.relPath, reason: 'test suite, not served content' });
+      continue;
+    }
+    if (item.relPath === 'README.md') {
+      excluded.push({ path: item.relPath, reason: 'documentation, not served content' });
+      continue;
+    }
+    seenRelPaths.add(item.relPath);
+    files.push(item);
+  }
+
+  for (const relPath of STAGING_SHARED_TOWN3D_FILES) {
+    if (seenRelPaths.has(relPath)) {
+      continue;
+    }
+    const srcPath = path.join(town3dDir, relPath);
+    await assertNotSymlinkFile(srcPath, `town-3d/${relPath}`);
+    seenRelPaths.add(relPath);
+    files.push({ srcPath, relPath });
+  }
+
+  files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
+  excluded.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { files, excluded };
+}
+
+export async function collectSourceFiles(rootDir, bundle = 'town-3d') {
+  if (bundle === 'staging-polyfork') {
+    return collectSourceFilesFromStagingPolyfork(
+      path.join(rootDir, 'staging-polyfork'),
+      path.join(rootDir, 'town-3d')
+    );
+  }
   return collectSourceFilesFromTown3d(path.join(rootDir, 'town-3d'));
 }
 
@@ -296,9 +373,18 @@ function checkSecretGuard(relPath, contentBuf) {
   }
 }
 
-function extractTownJsVersion(indexHtmlText) {
-  const match = indexHtmlText.match(/town\.js\?v=([^"'\s&#>]+)/);
+function extractJsVersion(indexHtmlText, filename) {
+  const escaped = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = indexHtmlText.match(new RegExp(`${escaped}\\?v=([^"'\\s&#>]+)`));
   return match ? match[1] : null;
+}
+
+function extractTownJsVersion(indexHtmlText) {
+  return extractJsVersion(indexHtmlText, 'town.js');
+}
+
+function extractStagingJsVersion(indexHtmlText) {
+  return extractJsVersion(indexHtmlText, 'staging.js');
 }
 
 async function pathExists(targetPath) {
@@ -310,20 +396,26 @@ async function pathExists(targetPath) {
   }
 }
 
-async function stageDeploy(rootDir, outDir) {
+async function stageDeploy(rootDir, outDir, bundle = 'town-3d') {
   validateTargetDir(outDir, rootDir, 'stage into');
 
-  const { files: sourceFiles, excluded } = await collectSourceFiles(rootDir);
+  const { files: sourceFiles, excluded } = await collectSourceFiles(rootDir, bundle);
 
   // Read and validate all files (including secret guard) before touching outDir.
   const prepared = [];
   let townJsV = null;
+  let stagingJsV = null;
 
   for (const { srcPath, relPath } of sourceFiles) {
     const buf = await fs.readFile(srcPath);
     checkSecretGuard(relPath, buf);
     if (relPath === 'index.html') {
-      townJsV = extractTownJsVersion(buf.toString('utf8'));
+      const htmlText = buf.toString('utf8');
+      if (bundle === 'staging-polyfork') {
+        stagingJsV = extractStagingJsVersion(htmlText);
+      } else {
+        townJsV = extractTownJsVersion(htmlText);
+      }
     }
     const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
     prepared.push({
@@ -357,7 +449,9 @@ async function stageDeploy(rootDir, outDir) {
     const manifest = {
       staged_at: new Date().toISOString(),
       source: 'ghostlight-town repo tree',
+      bundle,
       town_js_v: townJsV,
+      staging_js_v: stagingJsV,
       files: manifestFiles,
       total_bytes: totalBytes,
       file_count: manifestFiles.length,
@@ -371,7 +465,9 @@ async function stageDeploy(rootDir, outDir) {
     const summary = {
       ok: true,
       out: outDir,
+      bundle,
       town_js_v: townJsV,
+      staging_js_v: stagingJsV,
       file_count: manifestFiles.length,
       total_bytes: totalBytes,
     };
@@ -479,6 +575,11 @@ async function verifyDeploy(rootDir, verifyDir) {
   }
 
   const manifest = await readManifest(verifyDir);
+  const bundle = manifest.bundle ?? 'town-3d';
+  if (!VALID_BUNDLES.includes(bundle)) {
+    throw new Error(`Malformed MANIFEST.json: unknown bundle ${bundle}`);
+  }
+
   const presentFiles = new Set();
   await collectStagedFiles(verifyDir, '', presentFiles);
 
@@ -489,6 +590,7 @@ async function verifyDeploy(rootDir, verifyDir) {
   let checked = 0;
   let okCount = 0;
   let stagedTownJsV = null;
+  let stagedStagingJsV = null;
 
   for (const entry of manifest.files) {
     manifestPaths.add(entry.path);
@@ -506,7 +608,12 @@ async function verifyDeploy(rootDir, verifyDir) {
       mismatch.push(entry.path);
     }
     if (entry.path === 'index.html') {
-      stagedTownJsV = extractTownJsVersion(buf.toString('utf8'));
+      const htmlText = buf.toString('utf8');
+      if (bundle === 'staging-polyfork') {
+        stagedStagingJsV = extractStagingJsVersion(htmlText);
+      } else {
+        stagedTownJsV = extractTownJsVersion(htmlText);
+      }
     }
   }
 
@@ -520,20 +627,28 @@ async function verifyDeploy(rootDir, verifyDir) {
   missing.sort();
   extra.sort();
 
-  const expectedTownJsV = manifest.town_js_v ?? null;
-  const townJsVMatches = stagedTownJsV === expectedTownJsV;
-  const allOk = mismatch.length === 0 && missing.length === 0 && extra.length === 0 && townJsVMatches;
+  const expectedTownJsV = bundle === 'town-3d' ? (manifest.town_js_v ?? null) : null;
+  const expectedStagingJsV = bundle === 'staging-polyfork' ? (manifest.staging_js_v ?? null) : null;
+  const versionMatches =
+    bundle === 'staging-polyfork'
+      ? stagedStagingJsV === expectedStagingJsV
+      : stagedTownJsV === expectedTownJsV;
+  const allOk = mismatch.length === 0 && missing.length === 0 && extra.length === 0 && versionMatches;
 
   const result = {
     status: allOk ? 'ok' : 'fail',
+    bundle,
     checked,
     ok: okCount,
     mismatch,
     missing,
     extra,
     town_js_v: expectedTownJsV,
+    staging_js_v: expectedStagingJsV,
   };
-  if (!townJsVMatches) {
+  if (bundle === 'staging-polyfork' && stagedStagingJsV !== expectedStagingJsV) {
+    result.staged_staging_js_v = stagedStagingJsV;
+  } else if (bundle === 'town-3d' && stagedTownJsV !== expectedTownJsV) {
     result.staged_town_js_v = stagedTownJsV;
   }
 
@@ -548,7 +663,7 @@ async function main(argv) {
   if (parsed.mode === 'verify') {
     await verifyDeploy(parsed.rootDir, parsed.verifyDir);
   } else {
-    await stageDeploy(parsed.rootDir, parsed.outDir);
+    await stageDeploy(parsed.rootDir, parsed.outDir, parsed.bundle);
   }
 }
 
