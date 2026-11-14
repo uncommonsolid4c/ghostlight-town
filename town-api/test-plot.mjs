@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { createTownServer } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
+import { validateHtml } from './plot-validation.mjs';
 
 const VALID_MANIFEST = {
   cottage: 'gable',
@@ -265,6 +266,35 @@ test('HTML sanitizer rejects dangerous tags, attributes, URIs, and obfuscations'
     }
   } finally {
     await ctx.close();
+  }
+});
+
+test('validateHtml allows exact viewport meta and rejects all other meta tags', () => {
+  const allowed = [
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0"><p>ok</p>',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" /><p>ok</p>',
+    '<meta content="width=device-width, initial-scale=1.0" name="viewport"><p>ok</p>',
+    '<meta content="width=device-width, initial-scale=1.0" name="viewport" /><p>ok</p>',
+    '<META NAME="VIEWPORT" CONTENT=" width=device-width, initial-scale=1.0 "><p>ok</p>',
+  ];
+  for (const html of allowed) {
+    const res = validateHtml(html);
+    assert.deepEqual(res, { ok: true }, `Expected ok for allowed viewport meta: ${html}`);
+  }
+
+  const rejected = [
+    '<meta http-equiv="refresh" content="0;url=https://example.com">',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=500">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" data-x="1">',
+    '<meta name="viewport">',
+    '</meta name="viewport" content="width=device-width, initial-scale=1.0">',
+  ];
+  for (const html of rejected) {
+    const res = validateHtml(html);
+    assert.equal(res.ok, false, `Expected rejection for: ${html}`);
+    assert.equal(res.error, 'unsafe_html', `Expected unsafe_html for: ${html}`);
+    assert.equal(res.reason, 'forbidden_tag:meta', `Expected forbidden_tag:meta for: ${html}`);
   }
 });
 
