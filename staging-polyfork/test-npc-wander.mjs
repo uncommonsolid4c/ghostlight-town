@@ -13,8 +13,10 @@ import { fileURLToPath } from 'node:url';
 import { TOWN_LAYOUT, SEED_HOME_PADS, getPlotTargetPosition } from './avatar.mjs';
 import {
   SEED_WANDER_CONFIG,
+  GHOST_DRIFT_CONFIG,
   getStagingNewsstandFrontPosition,
   buildStagingWanderFigures,
+  buildStagingGhostDrift,
   updateStagingWander,
 } from './npc-wander.mjs';
 
@@ -340,4 +342,146 @@ test('staging.js wires attachNpcAnimation, updateStagingWander, and removes stan
   const presenceBody = src.slice(presenceStart, presenceEnd);
   assert.equal(presenceBody.includes('standIn.group.visible'), false, 'applyStagingPresence must not touch standIn.group.visible');
   assert.equal(presenceBody.includes('standIn.group.position'), false, 'applyStagingPresence must not touch standIn.group.position');
+});
+
+test('GHOST_DRIFT_CONFIG pins live Milo ghost drift speed, lingers, and deck points', () => {
+  assert.deepEqual(GHOST_DRIFT_CONFIG, {
+    handle: 'milo',
+    speed: 0.35,
+    lingers: { spot0: 25, deck1: 8, deck2: 10, deck3: 8 },
+    deckPoints: [
+      { x: -2.2, z: 1.6, label: 'deck1' },
+      { x: 0.4, z: -2.4, label: 'deck2' },
+      { x: 2.3, z: 1.4, label: 'deck3' },
+    ],
+  });
+});
+
+test('buildStagingGhostDrift derives deck y from spot0.y, omits rotY/standIn, and returns null when inputs are missing', () => {
+  const ghost = makeFakeGroup(0, 0.75, 3.8);
+  const spots = makeFakeBandstandSpots().map((s, idx) => (idx === 0 ? { ...s, y: 0.75 } : s));
+
+  const fig = buildStagingGhostDrift({ ghost, bandstandSpots: spots });
+  assert.ok(fig);
+  assert.equal(fig.handle, 'milo');
+  assert.equal(fig.group, ghost);
+  assert.equal(fig.speed, 0.35);
+  assert.equal(fig.targetIndex, 1);
+  assert.equal(fig.state, 'walking');
+  assert.equal(fig.lingerRemaining, 0);
+  assert.equal(fig.yielded, false);
+  assert.equal('standIn' in fig, false);
+
+  assert.deepEqual(fig.waypoints, [
+    { x: spots[0].x, y: 0.75, z: spots[0].z, linger: 25, label: 'spot0' },
+    { x: -2.2, y: 0.75, z: 1.6, linger: 8, label: 'deck1' },
+    { x: 0.4, y: 0.75, z: -2.4, linger: 10, label: 'deck2' },
+    { x: 2.3, y: 0.75, z: 1.4, linger: 8, label: 'deck3' },
+  ]);
+  for (const wp of fig.waypoints) {
+    assert.equal('rotY' in wp, false, `waypoint ${wp.label} must not define rotY`);
+  }
+
+  assert.equal(buildStagingGhostDrift(), null);
+  assert.equal(buildStagingGhostDrift({ ghost: null, bandstandSpots: spots }), null);
+  assert.equal(buildStagingGhostDrift({ ghost, bandstandSpots: [] }), null);
+  assert.equal(buildStagingGhostDrift({ ghost, bandstandSpots: null }), null);
+});
+
+test('updateStagingWander steps ghost drift through a full cycle without standIn and ignores dt <= 0', () => {
+  const spots = makeFakeBandstandSpots();
+  const spot0 = spots[0];
+  const ghost = makeFakeGroup(spot0.x, spot0.y, spot0.z, spot0.rotY);
+  const fig = buildStagingGhostDrift({ ghost, bandstandSpots: spots });
+
+  // dt <= 0 or non-finite is a no-op
+  updateStagingWander([fig], 0, new Map());
+  updateStagingWander([fig], -0.5, new Map());
+  updateStagingWander([fig], Number.NaN, new Map());
+  assert.equal(ghost.position.x, spot0.x);
+  assert.equal(ghost.position.z, spot0.z);
+  assert.equal(fig.targetIndex, 1);
+
+  // Step 1.0 s toward deck1 (-2.2, 1.6) at speed 0.35
+  const startDx = -2.2 - spot0.x;
+  const startDz = 1.6 - spot0.z;
+  const startDist = Math.hypot(startDx, startDz);
+  updateStagingWander([fig], 1.0, new Map());
+  const moved = Math.hypot(ghost.position.x - spot0.x, ghost.position.z - spot0.z);
+  assert.ok(Math.abs(moved - 0.35) < 1e-6);
+  assert.equal(ghost.position.y, spot0.y);
+  const expectedHeading = Math.atan2(startDx, startDz);
+  assert.ok(Math.abs(ghost.rotation.y - expectedHeading) < 1e-6);
+  assert.equal(fig.state, 'walking');
+
+  // Arrive at deck1, linger 8s, then advance through deck2 -> deck3 -> spot0 -> deck1
+  const remainingToDeck1 = startDist - 0.35;
+  updateStagingWander([fig], remainingToDeck1 / 0.35 + 0.01, new Map());
+  assert.equal(fig.state, 'lingering');
+  assert.equal(fig.lingerRemaining, 8);
+  assert.equal(ghost.position.x, -2.2);
+  assert.equal(ghost.position.z, 1.6);
+
+  updateStagingWander([fig], 8.0, new Map());
+  assert.equal(fig.state, 'walking');
+  assert.equal(fig.targetIndex, 2);
+
+  // Advance through deck2 (linger 10), deck3 (linger 8), and back to spot0 (linger 25)
+  for (const [expectedIdx, expectedLinger] of [[2, 10], [3, 8], [0, 25]]) {
+    assert.equal(fig.targetIndex, expectedIdx);
+    const wp = fig.waypoints[expectedIdx];
+    const d = Math.hypot(wp.x - ghost.position.x, wp.y - ghost.position.y, wp.z - ghost.position.z);
+    updateStagingWander([fig], d / 0.35 + 0.01, new Map());
+    assert.equal(fig.state, 'lingering');
+    assert.equal(fig.lingerRemaining, expectedLinger);
+    assert.equal(ghost.position.x, wp.x);
+    assert.equal(ghost.position.z, wp.z);
+    updateStagingWander([fig], expectedLinger, new Map());
+    assert.equal(fig.state, 'walking');
+  }
+  assert.equal(fig.targetIndex, 1);
+});
+
+test('updateStagingWander yields ghost drift when milo is in liveAvatars and restores at spot0', () => {
+  const spots = makeFakeBandstandSpots();
+  const ghost = makeFakeGroup(-1.0, 0.6, 2.0, 0.5);
+  const fig = buildStagingGhostDrift({ ghost, bandstandSpots: spots });
+  fig.targetIndex = 2;
+  fig.state = 'lingering';
+  fig.lingerRemaining = 4;
+
+  const liveAvatars = new Map([['milo', {}]]);
+  updateStagingWander([fig], 0.5, liveAvatars);
+  assert.equal(ghost.visible, false);
+  assert.equal(fig.yielded, true);
+  assert.equal(ghost.position.x, -1.0);
+  assert.equal(ghost.position.z, 2.0);
+
+  liveAvatars.delete('milo');
+  updateStagingWander([fig], 0.5, liveAvatars);
+  assert.equal(ghost.visible, true);
+  assert.equal(fig.yielded, false);
+  assert.equal(ghost.position.x, spots[0].x);
+  assert.equal(ghost.position.y, spots[0].y);
+  assert.equal(ghost.position.z, spots[0].z);
+  assert.equal(fig.targetIndex, 1);
+  assert.equal(fig.state, 'walking');
+  assert.equal(fig.lingerRemaining, 0);
+});
+
+test('staging.js wires buildStagingGhostDrift into wanderFigures while keeping ghost creation unchanged', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  const importIdx = src.indexOf('buildStagingGhostDrift,');
+  const ghostCreateIdx = src.indexOf('const ghost = createConceptMiloGhost(THREE, {');
+  const ghostAddIdx = src.indexOf('bandstandBuilt.group.add(ghost);');
+  const buildWanderIdx = src.indexOf('const wanderFigures = buildStagingWanderFigures({');
+  const buildGhostIdx = src.indexOf('const ghostDrift = buildStagingGhostDrift({ ghost, bandstandSpots: bandstandBuilt.avatarSpots });');
+  const pushGhostIdx = src.indexOf('if (ghostDrift) wanderFigures.push(ghostDrift);');
+
+  assert.ok(importIdx !== -1, 'staging.js must import buildStagingGhostDrift');
+  assert.ok(ghostCreateIdx !== -1, 'staging.js must keep createConceptMiloGhost call');
+  assert.ok(ghostAddIdx > ghostCreateIdx, 'staging.js must keep bandstandBuilt.group.add(ghost)');
+  assert.ok(buildWanderIdx !== -1, 'staging.js must build wanderFigures');
+  assert.ok(buildGhostIdx > buildWanderIdx, 'buildStagingGhostDrift must be called after buildStagingWanderFigures');
+  assert.ok(pushGhostIdx > buildGhostIdx, 'ghostDrift must be pushed into wanderFigures');
 });
