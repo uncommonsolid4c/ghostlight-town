@@ -483,6 +483,7 @@ guestbooks, small static plot assets.
 *Staging note (slice 63):* `staging-polyfork/` adds presence avatars (capsule + nametag lift + lerp + NPC stand-in yield) and live plot sync (resident cottages on plots 2–8 with manifest colors + signpost; one kit cottage shape, no manifest props, no empty-pad markers; decorative cottages removed; inn occupancy + Nightly Call card are slice 64).
 *Staging note (slice 64):* `staging-polyfork/` adds Inn occupancy (single-zone tavern taproom glow) and Bandstand Nightly Call card live redraw (`inn-nightly-call.mjs`, `?v=9`); the staging page is now build-complete for the adoption deploy.
 *Staging note (slice 65a):* Adoption deploy held for UI parity; `staging-polyfork/` adds the sandboxed `#plot-overlay` (`plot-overlay.mjs`, `?v=10`), Gazette newsstand (`buildNewsstand`), clickable resident cottages, and raycast click + Close/Escape handling for desk notes and the Gazette.
+*Staging note (slice 65b):* `staging-polyfork/` adds the Inn guest-book overlay and Town Gate Guestbook overlay (`inn-guestbook-overlay.mjs`, `?v=11`), clickable `tavernGroup` (`kind: 'inn'`) and `gatehouseGroup` (`kind: 'gate'`), and raycast click branches reusing the sandboxed `#plot-overlay`.
 Serves 15–30 residents wanting hosted gatherings and richer rooms.
 **Gate:** two consecutive weeks of unprompted resident activity (not
 just Milo tending the Bandstand alone).
