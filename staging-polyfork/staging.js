@@ -50,7 +50,9 @@ import {
 import {
   openInnOverlay,
   openGuestbookOverlay,
-} from './inn-guestbook-overlay.mjs';
+  openPlotGuestbookOverlay,
+  formatPlotGuestbookTabLabel,
+} from './inn-guestbook-overlay.mjs?v=33';
 import { openNoticeBoardOverlay } from './notice-board-overlay.mjs';
 import {
   deriveGlideMaxRadius,
@@ -152,8 +154,23 @@ const keys = new Set();
 let glideTarget = null;
 const plotOverlayEl = document.getElementById('plot-overlay');
 const plotOverlayTitleEl = document.getElementById('plot-overlay-title');
+const plotOverlayTabsEl = document.getElementById('plot-overlay-tabs');
+const plotOverlayTabNoteEl = document.getElementById('plot-overlay-tab-note');
+const plotOverlayTabGuestbookEl = document.getElementById('plot-overlay-tab-guestbook');
 const plotOverlayCloseEl = document.getElementById('plot-overlay-close');
 const plotIframeEl = document.getElementById('plot-iframe');
+let currentPlotHandle = null;
+
+function setPlotTabs(active) {
+  if (!plotOverlayTabsEl) return;
+  if (active === 'note' || active === 'guestbook') {
+    plotOverlayTabsEl.hidden = false;
+    plotOverlayTabNoteEl?.setAttribute('aria-pressed', active === 'note' ? 'true' : 'false');
+    plotOverlayTabGuestbookEl?.setAttribute('aria-pressed', active === 'guestbook' ? 'true' : 'false');
+  } else {
+    plotOverlayTabsEl.hidden = true;
+  }
+}
 const interiorExitEl = document.getElementById('interior-exit');
 
 const interiorRoom = buildInteriorRoom(THREE);
@@ -189,6 +206,8 @@ function exitCottageInterior() {
 interiorExitEl?.addEventListener('click', exitCottageInterior);
 
 function handleClosePlotOverlay() {
+  currentPlotHandle = null;
+  setPlotTabs(null);
   closePlotOverlay({
     overlayEl: plotOverlayEl,
     iframeEl: plotIframeEl,
@@ -203,6 +222,50 @@ function handleClosePlotOverlay() {
 }
 
 plotOverlayCloseEl?.addEventListener('click', handleClosePlotOverlay);
+
+plotOverlayTabNoteEl?.addEventListener('click', () => {
+  if (!currentPlotHandle) return;
+  const fetchFn = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+  if (plotOverlayTabGuestbookEl) {
+    plotOverlayTabGuestbookEl.textContent = formatPlotGuestbookTabLabel(
+      liveStore.lastState?.guestbook_by_plot?.[currentPlotHandle]
+    );
+  }
+  setPlotTabs('note');
+  openPlotOverlay(currentPlotHandle, {
+    overlayEl: plotOverlayEl,
+    titleEl: plotOverlayTitleEl,
+    iframeEl: plotIframeEl,
+    fetchFn,
+    onBeforeOpen: () => {
+      keys.clear();
+      controls.enabled = false;
+      glideTarget = null;
+    },
+  });
+});
+
+plotOverlayTabGuestbookEl?.addEventListener('click', () => {
+  if (!currentPlotHandle) return;
+  const fetchFn = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+  if (plotOverlayTabGuestbookEl) {
+    plotOverlayTabGuestbookEl.textContent = formatPlotGuestbookTabLabel(
+      liveStore.lastState?.guestbook_by_plot?.[currentPlotHandle]
+    );
+  }
+  setPlotTabs('guestbook');
+  openPlotGuestbookOverlay(currentPlotHandle, {
+    overlayEl: plotOverlayEl,
+    titleEl: plotOverlayTitleEl,
+    iframeEl: plotIframeEl,
+    fetchFn,
+    onBeforeOpen: () => {
+      keys.clear();
+      controls.enabled = false;
+      glideTarget = null;
+    },
+  });
+});
 
 window.addEventListener('keydown', (e) => {
   if (plotOverlayEl && !plotOverlayEl.hidden) {
@@ -1247,6 +1310,12 @@ async function init() {
           if (isDoorHit(target, hit)) {
             return enterCottageInterior(target);
           }
+          currentPlotHandle = target.userData.handle;
+          if (plotOverlayTabGuestbookEl) {
+            plotOverlayTabGuestbookEl.textContent = formatPlotGuestbookTabLabel(
+              liveStore.lastState?.guestbook_by_plot?.[currentPlotHandle]
+            );
+          }
           openPlotOverlay(target.userData.handle, {
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
@@ -1254,9 +1323,12 @@ async function init() {
             fetchFn,
             onBeforeOpen: onBeforeOverlayOpen,
           });
+          setPlotTabs('note');
           return true;
         }
         if (kind === 'newsstand') {
+          currentPlotHandle = null;
+          setPlotTabs(null);
           openGazetteOverlay({
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
@@ -1267,6 +1339,8 @@ async function init() {
           return true;
         }
         if (kind === 'notice_board') {
+          currentPlotHandle = null;
+          setPlotTabs(null);
           openNoticeBoardOverlay({
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
@@ -1276,6 +1350,8 @@ async function init() {
           return true;
         }
         if (kind === 'inn') {
+          currentPlotHandle = null;
+          setPlotTabs(null);
           openInnOverlay({
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
@@ -1287,6 +1363,8 @@ async function init() {
           return true;
         }
         if (kind === 'gate') {
+          currentPlotHandle = null;
+          setPlotTabs(null);
           openGuestbookOverlay({
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
