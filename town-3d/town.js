@@ -1478,12 +1478,15 @@ export function buildTown(THREE, opts = {}) {
   }
 
   const wanderState = buildWanderState(THREE, scene, bandstandBuilt.avatarSpots, milosGhost);
+  const nightlyCallCard =
+    (bandstandBuilt.group.children || []).find((c) => c && c.name === 'nightly_call_card') || null;
 
   return {
     scene,
     THREE,
     parts: {
       bandstand: bandstandBuilt.group,
+      nightlyCallCard,
       milosGhost,
       ghostlight: {
         bulb: bandstandBuilt.bulb,
@@ -1587,6 +1590,7 @@ function ensureLiveStore(town) {
       plotAssignments: new Map(),
       cottagesByHandle: new Map([['milo', town.parts.milosCottage]]),
       promptBook: [],
+      nightlyCallTopic: null,
     };
   }
   return town._live;
@@ -1917,8 +1921,63 @@ export function updateInnOccupancy(town, innState) {
   }
 }
 
+function splitNightlyCallLines(topic, maxLineLen = 60) {
+  if (topic.length <= maxLineLen) return [topic];
+  const mid = Math.floor(topic.length / 2);
+  let splitIdx = -1;
+  for (let offset = 0; offset < topic.length; offset++) {
+    if (mid - offset > 0 && topic[mid - offset] === ' ') {
+      splitIdx = mid - offset;
+      break;
+    }
+    if (mid + offset < topic.length && topic[mid + offset] === ' ') {
+      splitIdx = mid + offset;
+      break;
+    }
+  }
+  if (splitIdx === -1) {
+    return [topic.slice(0, mid), topic.slice(mid)];
+  }
+  return [topic.slice(0, splitIdx).trim(), topic.slice(splitIdx + 1).trim()];
+}
+
 /**
- * Pure state application: updates footlights, inn occupancy, avatars, optional plots, and Prompt Book model.
+ * Redraw the Bandstand's Nightly Call card texture from live state.nightly_call.
+ * Missing card, missing/malformed nightlyCall, or unchanged topic is a no-op.
+ */
+export function updateNightlyCallCard(town, nightlyCall) {
+  if (!nightlyCall || typeof nightlyCall !== 'object' || Array.isArray(nightlyCall)) return;
+  if (typeof nightlyCall.topic !== 'string') return;
+  const topic = nightlyCall.topic.trim();
+  if (!topic) return;
+
+  const card =
+    town?.parts?.nightlyCallCard ||
+    (town?.parts?.bandstand?.children || []).find((c) => c && c.name === 'nightly_call_card') ||
+    null;
+  if (!card || !card.material) return;
+
+  const THREE = town?.THREE;
+  if (!THREE) return;
+
+  const live = ensureLiveStore(town);
+  if (live.nightlyCallTopic === topic) return;
+
+  card.material.map = makeTextTexture(THREE, ['THE NIGHTLY CALL', ...splitNightlyCallLines(topic)], {
+    width: 512,
+    height: 256,
+    titleSize: 30,
+    subSize: 20,
+    bg: '#f2e6cf',
+    border: '#b59449',
+    fg: '#2b1e14',
+  });
+  card.material.needsUpdate = true;
+  live.nightlyCallTopic = topic;
+}
+
+/**
+ * Pure state application: updates footlights, inn occupancy, nightly call card, avatars, optional plots, and Prompt Book model.
  */
 export function applyState(town, state = {}, options = {}) {
   const THREE = options.THREE || town.THREE;
@@ -1991,6 +2050,9 @@ export function applyState(town, state = {}, options = {}) {
 
   // 1b. Ghostlight Inn room occupancy
   updateInnOccupancy(town, state?.inn);
+
+  // 1c. Nightly Call card
+  updateNightlyCallCard(town, state?.nightly_call);
 
   // 2. Optional inline plots in state/options
   const inlinePlots = options.plots || state?.plots;
