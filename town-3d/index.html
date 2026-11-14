@@ -35,6 +35,7 @@
       height: 100%;
       display: block;
       cursor: grab;
+      touch-action: none;
     }
     #viewport.dragging { cursor: grabbing; }
 
@@ -218,13 +219,17 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent } from './town.js?v=14';
+    import { TOWN_LAYOUT, buildTown, TownLive, renderPromptBook, resolvePlotOverlayContent, resolveInnOverlayContent, stepGlide, pinchFov } from './town.js?v=14';
 
     // Single configurable API base URL (empty string = same-origin /api/town/*)
     const API_BASE = '';
 
     const canvas = document.getElementById('viewport');
     const infoStrip = document.getElementById('info-strip');
+    const controlsHint = document.getElementById('controls-hint');
+    if (controlsHint && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+      controlsHint.textContent = 'Tap ground: walk · Drag: look · Pinch: zoom · Tap: inspect';
+    }
     const promptBookLines = document.getElementById('prompt-book-lines');
     const plotOverlay = document.getElementById('plot-overlay');
     const plotOverlayTitle = document.getElementById('plot-overlay-title');
@@ -271,6 +276,8 @@
 
     async function openPlotOverlay(handle) {
       keys.clear();
+      glideTarget = null;
+      activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
       plotOverlayTitle.textContent = `@${handle} — Desk Note`;
@@ -291,6 +298,8 @@
 
     async function openGazetteOverlay() {
       keys.clear();
+      glideTarget = null;
+      activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
       let issueNum = 1;
@@ -319,6 +328,8 @@
 
     async function openInnOverlay() {
       keys.clear();
+      glideTarget = null;
+      activePointers.clear();
       isDragging = false;
       canvas.classList.remove('dragging');
       plotOverlayTitle.textContent = 'Ghostlight Inn — The Guest Book';
@@ -353,28 +364,69 @@
         if (e.code === 'Escape') closePlotOverlay();
         return;
       }
+      glideTarget = null;
       keys.add(e.code);
     });
     window.addEventListener('keyup', (e) => {
       keys.delete(e.code);
     });
 
+    const activePointers = new Map();
     let isDragging = false;
     let pointerDownPos = { x: 0, y: 0 };
     let lastPos = { x: 0, y: 0 };
     let didDrag = false;
+    let pinchStartDist = 0;
+    let pinchStartFov = camera.fov;
+    let glideTarget = null;
+
+    function getPinchDistance() {
+      const pts = Array.from(activePointers.values());
+      if (pts.length < 2) return 0;
+      return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    }
+
+    function syncPrimaryPointer() {
+      const first = activePointers.values().next().value;
+      if (first) {
+        lastPos = { x: first.x, y: first.y };
+      }
+    }
 
     canvas.addEventListener('pointerdown', (e) => {
       if (!plotOverlay.hidden) return;
-      isDragging = true;
-      didDrag = false;
-      pointerDownPos = { x: e.clientX, y: e.clientY };
-      lastPos = { x: e.clientX, y: e.clientY };
-      canvas.classList.add('dragging');
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activePointers.size === 1) {
+        isDragging = true;
+        didDrag = false;
+        pointerDownPos = { x: e.clientX, y: e.clientY };
+        lastPos = { x: e.clientX, y: e.clientY };
+        canvas.classList.add('dragging');
+      } else if (activePointers.size === 2) {
+        didDrag = true;
+        glideTarget = null;
+        pinchStartDist = getPinchDistance();
+        pinchStartFov = camera.fov;
+        syncPrimaryPointer();
+      } else {
+        didDrag = true;
+        syncPrimaryPointer();
+      }
     });
 
     window.addEventListener('pointermove', (e) => {
-      if (!isDragging || !plotOverlay.hidden) return;
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!plotOverlay.hidden) return;
+
+      if (activePointers.size >= 2) {
+        const currentDist = getPinchDistance();
+        camera.fov = pinchFov(pinchStartFov, pinchStartDist, currentDist);
+        camera.updateProjectionMatrix();
+        return;
+      }
+
+      if (!isDragging) return;
       const dx = e.clientX - lastPos.x;
       const dy = e.clientY - lastPos.y;
       lastPos = { x: e.clientX, y: e.clientY };
@@ -384,6 +436,7 @@
         Math.abs(e.clientY - pointerDownPos.y) > 4
       ) {
         didDrag = true;
+        glideTarget = null;
       }
 
       yaw -= dx * 0.004;
@@ -391,14 +444,32 @@
       applyCameraRotation();
     });
 
-    window.addEventListener('pointerup', (e) => {
+    function finishPointer(e, allowTap) {
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.delete(e.pointerId);
+
+      if (activePointers.size >= 1) {
+        syncPrimaryPointer();
+        if (activePointers.size === 1) {
+          isDragging = true;
+        }
+        return;
+      }
+
       if (!isDragging) return;
       isDragging = false;
       canvas.classList.remove('dragging');
-      if (!didDrag && plotOverlay.hidden) {
-        handleCanvasClick(e);
+      if (allowTap && !didDrag && plotOverlay.hidden) {
+        glideTarget = null;
+        const hitClickable = handleCanvasClick(e);
+        if (!hitClickable && e.pointerType === 'touch') {
+          setGlideTargetFromTap(e);
+        }
       }
-    });
+    }
+
+    window.addEventListener('pointerup', (e) => finishPointer(e, true));
+    window.addEventListener('pointercancel', (e) => finishPointer(e, false));
 
     // Raycast on click for cottages, newsstand, bandstand, gate, and open plots
     const raycaster = new THREE.Raycaster();
@@ -426,28 +497,50 @@
           if (kind === 'cottage' && target.userData.handle) {
             infoStrip.hidden = true;
             openPlotOverlay(target.userData.handle);
-            return;
+            return true;
           }
           if (kind === 'open_plot') {
             infoStrip.textContent = 'OPEN PLOT — no resident yet';
             infoStrip.hidden = false;
-            return;
+            return true;
           }
           if (kind === 'newsstand') {
             infoStrip.hidden = true;
             openGazetteOverlay();
-            return;
+            return true;
           }
           if (kind === 'inn') {
             infoStrip.hidden = true;
             openInnOverlay();
-            return;
+            return true;
           }
           infoStrip.textContent = target.userData.label || target.name;
           infoStrip.hidden = false;
-          return;
+          return true;
         }
       }
+      infoStrip.hidden = true;
+      return false;
+    }
+
+    function setGlideTargetFromTap(e) {
+      const ground = scene.getObjectByName('clearing_ground');
+      if (!ground) return;
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObject(ground, false);
+      if (hits.length === 0) return;
+
+      let tx = hits[0].point.x;
+      let tz = hits[0].point.z;
+      const dist = Math.hypot(tx, tz);
+      if (dist > maxWalkRadius && dist > 0) {
+        const clampScale = maxWalkRadius / dist;
+        tx *= clampScale;
+        tz *= clampScale;
+      }
+      glideTarget = { x: tx, z: tz };
       infoStrip.hidden = true;
     }
 
@@ -475,6 +568,7 @@
       }
 
       if (forward !== 0 || strafe !== 0) {
+        glideTarget = null;
         const speed = 7.5 * dt;
         const sinY = Math.sin(yaw);
         const cosY = Math.cos(yaw);
@@ -492,6 +586,18 @@
           const clampScale = maxWalkRadius / dist;
           camera.position.x = nextX * clampScale;
           camera.position.z = nextZ * clampScale;
+        }
+      } else if (glideTarget && plotOverlay.hidden) {
+        const next = stepGlide(
+          { x: camera.position.x, z: camera.position.z },
+          glideTarget,
+          dt,
+          { speed: 7.5, maxRadius: maxWalkRadius, arriveDist: 0.3 }
+        );
+        camera.position.x = next.x;
+        camera.position.z = next.z;
+        if (next.arrived) {
+          glideTarget = null;
         }
       }
 
