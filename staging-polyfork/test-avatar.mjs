@@ -5,6 +5,7 @@ import {
   TOWN_LAYOUT,
   SEED_HOME_PADS,
   createAvatarCapsule,
+  setAvatarStatusText,
   getPlotTargetPosition,
   pickBandstandSpot,
 } from './avatar.mjs';
@@ -234,4 +235,66 @@ test('TOWN_LAYOUT plot ring matches formula with plot 1 at ~(17.92, 4.60) and SE
   }
 
   assert.deepEqual(SEED_HOME_PADS, { wick: 2, maren: 3, tomas: 4 });
+});
+
+test('setAvatarStatusText renders 2-line status, truncates at 24 chars, is idempotent, and restores badge-only', () => {
+  const THREE = createFakeTHREE();
+
+  withFakeDocument((drawnTexts) => {
+    const avatar = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    const sprite = avatar.userData.nametagSprite;
+    const initialMap = sprite.material.map;
+    assert.equal(initialMap.canvas.width, 384);
+    assert.equal(initialMap.canvas.height, 96);
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.375);
+
+    // Null / empty / whitespace-only keeps badge-only without re-creating texture.
+    setAvatarStatusText(THREE, avatar, null);
+    assert.equal(avatar.userData.statusText, null);
+    assert.equal(sprite.material.map, initialMap);
+
+    setAvatarStatusText(THREE, avatar, '   ');
+    assert.equal(avatar.userData.statusText, null);
+    assert.equal(sprite.material.map, initialMap);
+
+    // Setting a status swaps to 384x144, scale y = 0.5625, and disposes old map.
+    let disposedCount = 0;
+    initialMap.dispose = () => { disposedCount += 1; };
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, avatar, '  Quiet tea  ');
+    assert.equal(disposedCount, 1);
+    assert.equal(avatar.userData.statusText, 'Quiet tea');
+    const statusMap = sprite.material.map;
+    assert.notEqual(statusMap, initialMap);
+    assert.equal(statusMap.canvas.width, 384);
+    assert.equal(statusMap.canvas.height, 144);
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.5625);
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[NPC] maren', 'Quiet tea']);
+
+    // Idempotent: calling again with same trimmed status reuses the same texture object.
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, avatar, 'Quiet tea');
+    assert.equal(sprite.material.map, statusMap);
+    assert.equal(drawnTexts.length, 0);
+
+    // Truncates > 24 chars with trailing ellipsis inside 24 chars.
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, avatar, 'Listening by the gatehouse tonight');
+    assert.equal(avatar.userData.statusText.length, 24);
+    assert.ok(avatar.userData.statusText.endsWith('…'));
+    assert.equal(avatar.userData.statusText, 'Listening by the gateho…');
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[NPC] maren', 'Listening by the gateho…']);
+
+    // Clearing status restores badge-only (384x96, scale 1.5 x 0.375, statusText null).
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, avatar, '');
+    assert.equal(avatar.userData.statusText, null);
+    assert.equal(sprite.material.map.canvas.width, 384);
+    assert.equal(sprite.material.map.canvas.height, 96);
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.375);
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[NPC] maren']);
+  });
 });
