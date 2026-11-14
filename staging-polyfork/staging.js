@@ -27,7 +27,7 @@ import { renderPromptBook } from './prompt-book.mjs';
 import {
   updateStagingInnOccupancy,
   updateStagingNightlyCallCard,
-} from './inn-nightly-call.mjs';
+} from './inn-nightly-call.mjs?v=23';
 import {
   TOWN_LAYOUT,
   SEED_HOME_PADS,
@@ -58,7 +58,7 @@ import {
   updateStagingWander,
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
-import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs';
+import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=23';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
