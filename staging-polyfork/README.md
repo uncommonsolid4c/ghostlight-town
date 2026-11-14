@@ -160,8 +160,29 @@ the humanoid reappears at its home spot.
 
 ## Controls
 
-Drag to orbit, scroll/pinch to zoom, WASD or arrow keys to walk the view
-(pans the orbit target across the ground). Touch works through OrbitControls.
+Drag to orbit, scroll/pinch to zoom, WASD or arrow keys to pan the orbit
+target across the ground, touch-tap empty ground to glide the orbit target
+(clamped to the island), and tap/click a cottage, newsstand, Inn, or gatehouse
+to inspect. Multi-pointer pinches cancel any in-flight glide and suppress
+click/glide on `pointerup`. Coarse-pointer devices swap the footer
+`#controls-hint` to touch-first copy.
+
+## UI parity (slices 65a–65c)
+
+- `plot-overlay.mjs` (65a): sandboxed `#plot-overlay` for resident desk notes
+  and Gazette issues.
+- `inn-guestbook-overlay.mjs` (65b): Inn occupancy/guestbook and Town Gate
+  guestbook overlays reusing `#plot-overlay`.
+- `tap-glide.mjs` (65c): vendored `stepGlide` verbatim from `town-3d/town.js`,
+  `deriveGlideMaxRadius` (38 m on the span-2 128 m island), `stepOrbitGlide`,
+  and `createPointerTracker` (4 px drag threshold + multi-pointer pinch
+  suppression). `index.html` (`?v=12`) adds `#move-in-cta` (`href="move-in.html"`),
+  `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
+  swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
+  HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
+  `move-in.html` is relative on the assumption it ships alongside the staging
+  deploy. `pinchFov` is deliberately not ported because OrbitControls handles
+  pinch as dolly.
 
 ## Verification done locally (no browser here — no visual check claimed)
 
