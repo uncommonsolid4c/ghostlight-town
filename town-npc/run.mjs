@@ -388,7 +388,11 @@ export async function runTurn({
   }
 
   try {
-    const sayRes = await client.say(draft, 'say');
+    const replyTo =
+      decision.action === 'reply' && decision.replyLine && decision.replyLine.id != null
+        ? decision.replyLine.id
+        : undefined;
+    const sayRes = await client.say(draft, 'say', replyTo);
     if (!sayRes.ok) {
       logger({
         npc: npc.handle,
