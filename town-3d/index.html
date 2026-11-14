@@ -186,6 +186,49 @@
       padding: 3px 8px;
       border: 1px solid rgba(139, 106, 75, 0.5);
     }
+
+    @media (max-width: 640px) {
+      #title-bar {
+        font-size: 12px;
+        max-width: calc(100vw - 24px);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #prompt-book {
+        top: 52px;
+        width: min(300px, calc(100vw - 24px));
+        max-height: 32vh;
+      }
+      #plot-overlay-card {
+        width: min(760px, calc(100vw - 16px));
+        height: min(560px, 92vh);
+      }
+      #plot-overlay-header {
+        padding: 6px 12px;
+      }
+      #plot-overlay-close {
+        min-height: 44px;
+        min-width: 44px;
+        font-size: 14px;
+        padding: 10px 14px;
+      }
+      #footer-bar {
+        flex-wrap: wrap;
+        row-gap: 4px;
+      }
+      #controls-hint {
+        font-size: 11px;
+      }
+      #footer-bar a {
+        padding: 8px 4px;
+      }
+      #info-strip {
+        bottom: 72px;
+        font-size: 12px;
+        max-width: calc(100vw - 24px);
+      }
+    }
   </style>
 </head>
 <body>
