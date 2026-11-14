@@ -582,12 +582,17 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // + 1 step) for an expected total of 142. This completes the slice-73/74 porch
 // work, not prop creep; 145 keeps the guardrail meaningful and future
 // buildings need another deliberate revisit.
-test('Draw-call budget: total mesh count in built town is 142 (< 145)', () => {
+// Budget raised 145 -> 150 (owner decision, 2026-11-14, slice 76): baseline
+// measured 142 meshes; front porch rails + balusters add 4 meshes to Milo's
+// cottage (2 top rails + 2 balusters) for an expected total of 146. This
+// completes the porch trim (posts + step + rails), not prop creep; 150 keeps
+// the guardrail meaningful and future buildings need another deliberate revisit.
+test('Draw-call budget: total mesh count in built town is 146 (< 150)', () => {
   const THREE = createThreeStub();
   const { scene } = buildTown(THREE);
   const meshes = collectNodes(scene, (n) => n.isMesh);
-  assert.equal(meshes.length, 142, `Expected 142 meshes, got ${meshes.length}`);
-  assert.ok(meshes.length < 145, `Expected < 145 meshes, got ${meshes.length}`);
+  assert.equal(meshes.length, 146, `Expected 146 meshes, got ${meshes.length}`);
+  assert.ok(meshes.length < 150, `Expected < 150 meshes, got ${meshes.length}`);
 });
 
 test('No campfire terminology and no fetch() in town.js; .glb allowed only for props (not pine.glb)', async () => {
@@ -1426,7 +1431,7 @@ test('Slice 74: createCottage attaches porch deck in all 4 styles, lifts porch p
     const trim = collectNodes(cottage, (n) => n.name === 'cottage_porch_trim')[0];
     assert.ok(trim, `${v.label} cottage must have cottage_porch_trim`);
     const trimMeshes = collectNodes(trim, (n) => n.isMesh);
-    assert.equal(trimMeshes.length, 3, `${v.label} porch trim must add exactly 3 meshes`);
+    assert.equal(trimMeshes.length, 7, `${v.label} porch trim must add exactly 7 meshes`);
 
     const posts = collectNodes(trim, (n) => n.name === 'cottage_porch_post')
       .sort((a, b) => a.position.x - b.position.x);
@@ -1458,6 +1463,43 @@ test('Slice 74: createCottage attaches porch deck in all 4 styles, lifts porch p
     assert.ok(Math.abs(step.position.y + step.geometry.parameters.height / 2 - 0.09) < 1e-12, `${v.label} step top y = 0.09`);
     assert.ok(Math.abs(step.position.z - step.geometry.parameters.depth / 2 - 3.5) < 1e-12, `${v.label} step z starts at 3.5`);
     assert.ok(Math.abs(step.position.z + step.geometry.parameters.depth / 2 - 3.8) < 1e-12, `${v.label} step z ends at 3.8`);
+
+    const rails = collectNodes(trim, (n) => n.name === 'cottage_porch_rail')
+      .sort((a, b) => a.position.x - b.position.x);
+    assert.equal(rails.length, 2, `${v.label} porch trim must have 2 front rails`);
+    for (const [idx, expectedX, xMin, xMax] of [[0, -1.5, -2.3, -0.7], [1, 1.5, 0.7, 2.3]]) {
+      const rail = rails[idx];
+      assert.equal(rail.geometry.type, 'BoxGeometry');
+      assert.equal(rail.geometry.parameters.width, 1.6);
+      assert.equal(rail.geometry.parameters.height, 0.08);
+      assert.equal(rail.geometry.parameters.depth, 0.08);
+      assert.equal(rail.material.color, '#6b492b');
+      assert.ok(Math.abs(rail.position.x - expectedX) < 1e-12, `${v.label} rail x = ${expectedX}`);
+      assert.ok(Math.abs(rail.position.x - rail.geometry.parameters.width / 2 - xMin) < 1e-12, `${v.label} rail x min = ${xMin}`);
+      assert.ok(Math.abs(rail.position.x + rail.geometry.parameters.width / 2 - xMax) < 1e-12, `${v.label} rail x max = ${xMax}`);
+      assert.ok(Math.abs(rail.position.y - 0.95) < 1e-12, `${v.label} rail center y = 0.95`);
+      assert.ok(Math.abs(rail.position.y - rail.geometry.parameters.height / 2 - 0.91) < 1e-12, `${v.label} rail underside y = 0.91`);
+      assert.ok(Math.abs(rail.position.y + rail.geometry.parameters.height / 2 - 0.99) < 1e-12, `${v.label} rail top y = 0.99`);
+      assert.ok(Math.abs(rail.position.z - 3.44) < 1e-12, `${v.label} rail z = 3.44`);
+    }
+    assert.ok(Math.abs((rails[1].position.x - rails[1].geometry.parameters.width / 2) - (rails[0].position.x + rails[0].geometry.parameters.width / 2) - 1.4) < 1e-12, `${v.label} rail gap = 1.4`);
+
+    const balusters = collectNodes(trim, (n) => n.name === 'cottage_porch_baluster')
+      .sort((a, b) => a.position.x - b.position.x);
+    assert.equal(balusters.length, 2, `${v.label} porch trim must have 2 balusters`);
+    for (const [idx, expectedX] of [[0, -1.5], [1, 1.5]]) {
+      const baluster = balusters[idx];
+      assert.equal(baluster.geometry.type, 'BoxGeometry');
+      assert.equal(baluster.geometry.parameters.width, 0.05);
+      assert.equal(baluster.geometry.parameters.height, 0.73);
+      assert.equal(baluster.geometry.parameters.depth, 0.05);
+      assert.equal(baluster.material.color, '#6b492b');
+      assert.ok(Math.abs(baluster.position.x - expectedX) < 1e-12, `${v.label} baluster x = ${expectedX}`);
+      assert.ok(Math.abs(baluster.position.y - 0.545) < 1e-12, `${v.label} baluster center y = 0.545`);
+      assert.ok(Math.abs(baluster.position.y - baluster.geometry.parameters.height / 2 - 0.18) < 1e-12, `${v.label} baluster bottom y = 0.18`);
+      assert.ok(Math.abs(baluster.position.y + baluster.geometry.parameters.height / 2 - 0.91) < 1e-12, `${v.label} baluster top y = 0.91`);
+      assert.ok(Math.abs(baluster.position.z - 3.44) < 1e-12, `${v.label} baluster z = 3.44`);
+    }
   }
 
   const conceptCottage = createCottage(THREE, variants[3].manifest, variants[3].options);
