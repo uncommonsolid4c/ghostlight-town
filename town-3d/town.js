@@ -26,6 +26,11 @@ export const TOWN_LAYOUT = {
     y: 0,
     z: 14,
   },
+  inn: {
+    x: -11,
+    y: 0,
+    z: 20,
+  },
   plotRadius: 18.5,
   plots: Array.from({ length: 8 }, (_, i) => {
     const startAngle = 0.42 * Math.PI;
@@ -836,6 +841,91 @@ function buildNewsstand(THREE) {
   return group;
 }
 
+/**
+ * Build the Ghostlight Inn (two-story cedar-and-cream building with gable roof,
+ * chimney, warm lit windows on both floors, signpost, and hanging door lantern).
+ */
+export function buildInn(THREE) {
+  const { x, z } = TOWN_LAYOUT.inn;
+  const group = new THREE.Group();
+  group.name = 'ghostlight_inn';
+  group.position.set(x, 0, z);
+  group.rotation.y = Math.atan2(-x, -z);
+  group.userData = {
+    clickable: true,
+    kind: 'inn',
+    label: 'Ghostlight Inn',
+    signpostText: 'GHOSTLIGHT INN',
+  };
+
+  const cedarMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const creamMat = new THREE.MeshStandardMaterial({ color: '#f5efe0', roughness: 0.88 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: '#5a4332', roughness: 0.85 });
+  const windowMat = new THREE.MeshStandardMaterial({
+    color: '#ffbe5c',
+    emissive: '#ffbe5c',
+    emissiveIntensity: 1.4,
+    roughness: 0.4,
+  });
+
+  const ground = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.1, 3.6), cedarMat);
+  ground.name = 'inn_ground_floor';
+  ground.position.set(0, 1.05, 0);
+  group.add(ground);
+
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.8, 3.4), creamMat);
+  upper.name = 'inn_upper_floor';
+  upper.position.set(0, 3.0, 0);
+  group.add(upper);
+
+  const roof = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 4.8, 3), roofMat);
+  roof.name = 'inn_gable_roof';
+  roof.rotation.z = Math.PI / 2;
+  roof.rotation.x = -Math.PI / 2;
+  roof.position.set(0, 4.8, 0);
+  group.add(roof);
+
+  const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.8, 0.5), roofMat);
+  chimney.name = 'inn_chimney';
+  chimney.position.set(-1.35, 5.7, -0.5);
+  group.add(chimney);
+
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.6, 0.14), roofMat);
+  door.name = 'inn_door';
+  door.position.set(0, 0.8, 1.82);
+  group.add(door);
+
+  const windowGeo = new THREE.BoxGeometry(0.65, 0.82, 0.1);
+  const windowSpecs = [
+    [-1.45, 1.15, 1.81, 0],
+    [1.45, 1.15, 1.81, 0],
+    [-2.31, 1.15, 0, Math.PI / 2],
+    [2.31, 1.15, 0, Math.PI / 2],
+    [-1.25, 3.0, 1.71, 0],
+    [1.25, 3.0, 1.71, 0],
+    [-2.21, 3.0, 0, Math.PI / 2],
+    [2.21, 3.0, 0, Math.PI / 2],
+  ];
+  windowSpecs.forEach(([wx, wy, wz, rotY], idx) => {
+    const win = new THREE.Mesh(windowGeo, windowMat);
+    win.name = `inn_window_${idx}`;
+    win.position.set(wx, wy, wz);
+    win.rotation.y = rotY;
+    group.add(win);
+  });
+
+  const sign = buildSignpost(THREE, 'GHOSTLIGHT INN', 'inn_signpost');
+  sign.position.set(2.6, 0, 2.5);
+  group.add(sign);
+
+  const doorLantern = buildProceduralLantern(THREE);
+  doorLantern.name = 'inn_door_lantern';
+  doorLantern.position.set(0.75, 1.55, 1.92);
+  group.add(doorLantern);
+
+  return group;
+}
+
 function buildEmptyPlotPad(THREE, plot) {
   const group = new THREE.Group();
   group.name = `plot_pad_${plot.plotNumber}`;
@@ -1306,6 +1396,10 @@ export function buildTown(THREE, opts = {}) {
   const newsstand = buildNewsstand(THREE);
   scene.add(newsstand);
 
+  // Ghostlight Inn (southwest clearing near the gate)
+  const inn = buildInn(THREE);
+  scene.add(inn);
+
   // Plot 1: Milo's cottage (deliberate rebuild of Ghostlight Cottage)
   const plot1 = TOWN_LAYOUT.plots[0];
   const milosCottage = createCottage(THREE, MILO_REBUILD_MANIFEST, {
@@ -1368,6 +1462,7 @@ export function buildTown(THREE, opts = {}) {
       footlights: bandstandBuilt.footlights,
       gate,
       newsstand,
+      inn,
       milosCottage,
       plotPads,
       avatarSpots: bandstandBuilt.avatarSpots,
