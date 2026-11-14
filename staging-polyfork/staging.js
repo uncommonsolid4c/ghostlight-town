@@ -44,6 +44,7 @@ import {
   openInnOverlay,
   openGuestbookOverlay,
 } from './inn-guestbook-overlay.mjs';
+import { openNoticeBoardOverlay } from './notice-board-overlay.mjs';
 import {
   deriveGlideMaxRadius,
   clampGlideTarget,
@@ -358,6 +359,7 @@ function buildNoticeBoard(THREE) {
   group.name = 'town_notice_board';
   group.position.set(x, 0, z);
   group.rotation.y = Math.atan2(-x, -z);
+  group.userData = { clickable: true, kind: 'notice_board', label: 'Notice Board' };
 
   const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
   const postGeo = new THREE.BoxGeometry(0.12, 2.2, 0.12);
@@ -1142,6 +1144,15 @@ async function init() {
             titleEl: plotOverlayTitleEl,
             iframeEl: plotIframeEl,
             fetchFn,
+            onBeforeOpen: onBeforeOverlayOpen,
+          });
+          return true;
+        }
+        if (kind === 'notice_board') {
+          openNoticeBoardOverlay({
+            overlayEl: plotOverlayEl,
+            titleEl: plotOverlayTitleEl,
+            iframeEl: plotIframeEl,
             onBeforeOpen: onBeforeOverlayOpen,
           });
           return true;
