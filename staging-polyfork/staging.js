@@ -1,4 +1,4 @@
-// Ghostlight Town — Polyfork staging trial (live state layer: polling + footlights + Prompt Book + presence avatars + plot sync).
+// Ghostlight Town — Polyfork staging trial (live state layer: polling + footlights + Prompt Book + presence avatars + plot sync + Inn occupancy + Nightly Call card).
 // Bandstand, Milo's cottage, and Milo's blue ghost ported from town-3d/ onto
 // the Polyfork ground + Medieval Village buildings. Never deployed to live.
 //
@@ -20,10 +20,14 @@ import * as Villager from './kit-medieval/villager.mjs';
 import * as Tradesman from './kit-medieval/tradesman.mjs';
 import { createAsset as tallPine } from './parts/tall-pine-tree-ab4108.mjs';
 import { createAsset as youngPine } from './parts/young-pine-0d7695.mjs';
-import { buildConceptBandstand, lightFootlightSlot } from './concept-bandstand.js';
+import { buildConceptBandstand, lightFootlightSlot, makeBandstandTextTexture } from './concept-bandstand.js';
 import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js';
 import { renderPromptBook } from './prompt-book.mjs';
+import {
+  updateStagingInnOccupancy,
+  updateStagingNightlyCallCard,
+} from './inn-nightly-call.mjs';
 import {
   TOWN_LAYOUT,
   SEED_HOME_PADS,
@@ -215,6 +219,7 @@ function createStagingLiveStore() {
     plotAssignments: new Map(),
     plotCache: new Map(),
     lastState: null,
+    nightlyCallTopic: null,
   };
 }
 
@@ -444,7 +449,7 @@ function applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightS
   }
 }
 
-function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null) {
+function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null, tavernGroup = null) {
   const footlights = bandstandBuilt?.footlights || [];
   // Slot 0 / 'milo' is permanent and must never be lit, unlit, or relabeled from state.
   const footlightRows = (Array.isArray(state?.footlights) ? state.footlights : [])
@@ -489,6 +494,17 @@ function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, p
   }
 
   applyStagingPresence(liveStore, bandstandBuilt, npcStandIns, footlightSlotByHandle, state);
+
+  updateStagingInnOccupancy(tavernGroup, state?.inn);
+  updateStagingNightlyCallCard(
+    {
+      THREE,
+      bandstandBuilt,
+      liveStore,
+      makeTextTexture: makeBandstandTextTexture,
+    },
+    state?.nightly_call
+  );
 
   if (promptBookLinesEl) {
     renderPromptBook(promptBookLinesEl, state?.prompt_book, document);
@@ -669,7 +685,7 @@ async function init() {
 
   // The Ghostlight Inn (Village Tavern), width 10, at the Inn's spot.
   // The hanging sign bears a painted mug — a shop visual — so it comes off.
-  place(Tavern, { width: 10, plaster: CREAM, tile: ROOF, timber: CEDAR }, -11, 20, { remove: 'sign' });
+  const tavernGroup = place(Tavern, { width: 10, plaster: CREAM, tile: ROOF, timber: CEDAR }, -11, 20, { remove: 'sign' });
   counts.buildings++;
 
   // Plot 1: Milo's cottage (procedural concept shell + staging-local signpost),
@@ -773,6 +789,9 @@ async function init() {
   counts.npcs = npcStandIns.size;
 
   look.shadows(scene);
+  // Apply night glow once before live polling starts so `camp.group.userData.nightSet`
+  // is initialized and later frames in `loop()` do not overwrite state-driven Inn dimming.
+  look.update();
 
   // Stars: the 'night' preset leaves them off; the town's sky has stars.
   const stars = scene.getObjectByName('sky')?.getObjectByName('stars');
@@ -810,7 +829,8 @@ async function init() {
         bandstandBuilt,
         npcStandIns,
         state,
-        promptBookLinesEl
+        promptBookLinesEl,
+        tavernGroup
       );
       updateCountsLine();
       syncStagingPlotsFromState(liveStore, state).then((placedAny) => {
