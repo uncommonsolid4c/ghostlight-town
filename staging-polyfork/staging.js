@@ -44,6 +44,12 @@ import {
   openInnOverlay,
   openGuestbookOverlay,
 } from './inn-guestbook-overlay.mjs';
+import {
+  deriveGlideMaxRadius,
+  clampGlideTarget,
+  stepOrbitGlide,
+  createPointerTracker,
+} from './tap-glide.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -123,6 +129,7 @@ window.addEventListener('resize', () => {
 
 // WASD / arrow keys pan the orbit target across the ground.
 const keys = new Set();
+let glideTarget = null;
 const plotOverlayEl = document.getElementById('plot-overlay');
 const plotOverlayTitleEl = document.getElementById('plot-overlay-title');
 const plotOverlayCloseEl = document.getElementById('plot-overlay-close');
@@ -147,6 +154,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape' || e.key === 'Escape') handleClosePlotOverlay();
     return;
   }
+  glideTarget = null;
   keys.add(e.key.toLowerCase());
 });
 window.addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
@@ -161,6 +169,7 @@ function walkView(dt) {
   if (keys.has('d') || keys.has('arrowright')) move.add(right);
   if (keys.has('a') || keys.has('arrowleft')) move.sub(right);
   if (move.lengthSq() === 0) return;
+  glideTarget = null;
   move.normalize().multiplyScalar(14 * dt);
   controls.target.add(move);
   camera.position.add(move);
@@ -992,10 +1001,11 @@ async function init() {
   window.__staging.live = live;
   live.start();
 
-  // Raycast click handling for cottages (desk note) and the Gazette newsstand.
+  // Raycast click & tap-to-glide handling for cottages, Gazette, Inn, Gatehouse, and ground.
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
-  let pointerDownPos = null;
+  const pointerTracker = createPointerTracker({ dragThreshold: 4 });
+  const glideMaxRadius = deriveGlideMaxRadius(camp.terrain?.userData?.terrain);
 
   function findClickableAncestor(obj) {
     let cur = obj;
@@ -1007,6 +1017,8 @@ async function init() {
   }
 
   function onBeforeOverlayOpen() {
+    glideTarget = null;
+    pointerTracker.reset();
     keys.clear();
     controls.enabled = false;
   }
@@ -1070,27 +1082,82 @@ async function init() {
     return false;
   }
 
-  renderer.domElement.addEventListener('pointerdown', (e) => {
-    if (plotOverlayEl && !plotOverlayEl.hidden) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    pointerDownPos = { x: e.clientX, y: e.clientY };
-  });
+  function setGlideTargetFromTap(e) {
+    const ground = camp?.terrain?.getObjectByName('ground');
+    if (!ground) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObject(ground, false);
+    if (hits.length === 0) return;
 
-  renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!pointerDownPos) return;
-    const down = pointerDownPos;
-    pointerDownPos = null;
-    if (plotOverlayEl && !plotOverlayEl.hidden) return;
-    if (Math.abs(e.clientX - down.x) <= 4 && Math.abs(e.clientY - down.y) <= 4) {
-      handleCanvasClick(e);
+    const clamped = clampGlideTarget(hits[0].point.x, hits[0].point.z, glideMaxRadius);
+    const gy = camp.groundAt(clamped.x, clamped.z);
+    if (gy <= camp.groundY + 0.01 || gy < waterY) return;
+    glideTarget = clamped;
+  }
+
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    const overlayHidden = !plotOverlayEl || plotOverlayEl.hidden;
+    const res = pointerTracker.onPointerDown(e.pointerId, e.clientX, e.clientY, {
+      overlayHidden,
+      pointerType: e.pointerType,
+      button: e.button,
+    });
+    if (res.cancelGlide) {
+      glideTarget = null;
     }
   });
+
+  window.addEventListener('pointermove', (e) => {
+    const overlayHidden = !plotOverlayEl || plotOverlayEl.hidden;
+    const res = pointerTracker.onPointerMove(e.pointerId, e.clientX, e.clientY, {
+      overlayHidden,
+    });
+    if (res.cancelGlide) {
+      glideTarget = null;
+    }
+  });
+
+  function finishPointer(e, allowTap) {
+    const overlayHidden = !plotOverlayEl || plotOverlayEl.hidden;
+    const res = pointerTracker.onPointerUp(e.pointerId, e.clientX, e.clientY, {
+      overlayHidden,
+      allowTap,
+    });
+    if (!res.ended || !res.shouldClick) return;
+    glideTarget = null;
+    const hitClickable = handleCanvasClick(e);
+    if (!hitClickable && e.pointerType === 'touch') {
+      setGlideTargetFromTap(e);
+    }
+  }
+
+  window.addEventListener('pointerup', (e) => finishPointer(e, true));
+  window.addEventListener('pointercancel', (e) => finishPointer(e, false));
 
   const clock = new THREE.Clock();
   (function loop() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock.getDelta(), 0.1);
     walkView(dt);
+    if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden)) {
+      const next = stepOrbitGlide(
+        controls.target,
+        camera.position,
+        glideTarget,
+        dt,
+        { speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }
+      );
+      controls.target.x = next.targetX;
+      controls.target.z = next.targetZ;
+      camera.position.x = next.cameraX;
+      camera.position.z = next.cameraZ;
+      if (next.arrived) {
+        glideTarget = null;
+      }
+    }
     const alpha = dt >= 0.5 ? 1 : 1 - Math.exp(-6 * dt);
     for (const avatar of liveStore.avatars.values()) {
       const t = avatar.userData?.target;
