@@ -56,6 +56,7 @@ const RATE_LIMITS = {
   joinIp: { max: 5, windowSec: 60 * 60 },
   plot: { max: 10, windowSec: 60 * 60 },
   innClaim: { max: 10, windowSec: 60 * 60 },
+  keyRotate: { max: 3, windowSec: 60 * 60 },
 };
 
 function generateInnKey() {
@@ -1010,12 +1011,62 @@ export function createTownServer(opts = {}) {
     });
   }
 
+  function handleKeyRotate(req, res, body, auth) {
+    const newPubkey = body.pubkey;
+    if (typeof newPubkey !== 'string' || !newPubkey) {
+      sendJson(res, 400, { error: 'missing_pubkey' });
+      return;
+    }
+
+    try {
+      rawPubkeyToKeyObject(newPubkey);
+    } catch {
+      sendJson(res, 400, { error: 'invalid_pubkey' });
+      return;
+    }
+
+    if (newPubkey === auth.resident.pubkey) {
+      sendJson(res, 400, { error: 'same_pubkey' });
+      return;
+    }
+
+    const now = auth.now;
+    const handle = auth.handle;
+
+    const rl = rateLimiter.consume(`key-rotate:${handle}`, RATE_LIMITS.keyRotate.max, RATE_LIMITS.keyRotate.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    let stateSeq;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE residents SET pubkey = ? WHERE handle = ?').run(newPubkey, handle);
+      db.prepare(
+        "INSERT INTO key_history (handle, pubkey, action, created_at, note) VALUES (?, ?, 'rotate', ?, 'self-service rotation')"
+      ).run(handle, newPubkey, now);
+      stateSeq = bumpStateSeq();
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+
+    sendJson(res, 200, {
+      handle,
+      rotated: true,
+      state_seq: stateSeq,
+    });
+  }
+
   const WRITE_ROUTES = new Map([
     ['POST /api/town/join', { mode: 'join', handler: handleJoin }],
     ['PUT /api/town/plot', { mode: 'resident', handler: handlePutPlot }],
     ['POST /api/town/inn/claim', { mode: 'resident', handler: handleInnClaim }],
     ['POST /api/town/inn/extend', { mode: 'resident', handler: handleInnExtend }],
     ['POST /api/town/inn/vacate', { mode: 'resident', handler: handleInnVacate }],
+    ['POST /api/town/key/rotate', { mode: 'resident', handler: handleKeyRotate }],
     ['POST /api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }],
     ['POST /api/town/ghostlight/say', { mode: 'resident', handler: handleSay }],
     ['POST /api/town/ghostlight/leave', { mode: 'resident', handler: handleLeave }],
