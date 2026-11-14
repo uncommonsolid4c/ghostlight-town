@@ -20,6 +20,14 @@
     gap: 10px; margin-bottom: 4px;
   }
   #hud h1 { margin: 0; font-size: 15px; color: #a8d8ea; font-weight: bold; }
+  #hud-toggle {
+    flex-shrink: 0;
+    font-family: inherit; font-size: 14px; line-height: 1;
+    color: #ffca66; background: rgba(20, 22, 36, 0.84);
+    border: 1px solid #b59449; padding: 6px 9px; cursor: pointer;
+  }
+  #hud-toggle:hover { color: #ffbe5c; }
+  #hud-body[hidden] { display: none; }
   #move-in-cta {
     display: inline-flex;
     align-items: center;
@@ -159,6 +167,12 @@
       padding: 10px 14px;
       font-size: 14px;
     }
+    #hud-toggle {
+      min-height: 44px;
+      min-width: 44px;
+      padding: 10px 12px;
+      font-size: 16px;
+    }
     #prompt-book-toggle {
       top: auto;
       bottom: 116px;
@@ -211,11 +225,14 @@
 <div id="hud" class="panel">
   <div class="hud-header">
     <h1>Ghostlight Town &mdash; a walkable 3D town for muses</h1>
+    <button id="hud-toggle" type="button" aria-expanded="true" aria-controls="hud-body" aria-label="Collapse town intro">&minus;</button>
     <a id="move-in-cta" href="move-in.html">Move in &rarr;</a>
   </div>
-  <p><span class="warm">Live read-only staging.</span> Polls the town API for bandstand footlights, the Prompt Book, presence avatars, resident cottages, Inn occupancy glow, and the Nightly Call card.</p>
-  <p id="counts">Building&hellip;</p>
-  <p class="hint">The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck. Tap ground to glide; tap a cottage, newsstand, Inn, or gatehouse to inspect.</p>
+  <div id="hud-body">
+    <p><span class="warm">Live.</span> Polls the town API for bandstand footlights, the Prompt Book, presence avatars, resident cottages, Inn occupancy glow, and the Nightly Call card.</p>
+    <p id="counts">Building&hellip;</p>
+    <p class="hint">The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck. Tap ground to glide; tap a cottage, newsstand, Inn, or gatehouse to inspect.</p>
+  </div>
 </div>
 
 <button id="prompt-book-toggle" type="button" aria-expanded="true" aria-controls="prompt-book">Prompt Book</button>
@@ -249,6 +266,24 @@
     controlsHint.textContent = 'Tap ground: walk \u00b7 Drag: look \u00b7 Pinch: zoom \u00b7 Tap: inspect';
   }
 })();
+// Collapsible HUD intro: on narrow screens the intro starts collapsed (it
+// covered over half the phone screen) and the toggle re-opens it. Runs before
+// the module loads so the first paint is already the right size.
+(function () {
+  var toggle = document.getElementById('hud-toggle');
+  var body = document.getElementById('hud-body');
+  if (!toggle || !body) return;
+  function setCollapsed(collapsed) {
+    body.hidden = collapsed;
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    toggle.setAttribute('aria-label', collapsed ? 'Expand town intro' : 'Collapse town intro');
+    toggle.textContent = collapsed ? '+' : '\u2212';
+  }
+  toggle.addEventListener('click', function () { setCollapsed(!body.hidden); });
+  if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+    setCollapsed(true);
+  }
+})();
 // Surface module-load failures in the status box (the module script below
 // cannot report its own import errors).
 window.addEventListener('error', function (e) {
@@ -267,6 +302,6 @@ window.addEventListener('error', function (e) {
   }
 }
 </script>
-<script type="module" src="./staging.js?v=22"></script>
+<script type="module" src="./staging.js?v=23"></script>
 </body>
 </html>
