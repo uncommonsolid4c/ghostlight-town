@@ -39,6 +39,13 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   `town-3d/town.js` plus the Gazette `gazette/latest.json` resolver and
   sandboxed `#plot-overlay` open/close helpers from `town-3d/index.html` (no
   THREE dependency, no top-level document access).
+- `inn-guestbook-overlay.mjs` — verbatim copy of `INN_ROOM_DETAILS`,
+  `escapeHtml`, `hasUsableInnState`, `formatInnOccupancyLine`,
+  `buildInnOverlayHtml`, `resolveInnOverlayContent`, `GUESTBOOK_DATE_FMT`,
+  `formatGuestbookDate`, `renderGuestbookEntryLi`, `buildGuestbookOverlayHtml`,
+  and `resolveGuestbookOverlayContent` from `town-3d/town.js` plus sandboxed
+  `openInnOverlay` and `openGuestbookOverlay` helpers from `town-3d/index.html`
+  (no THREE dependency, no top-level document access).
 - `concept-bandstand.js`, `concept-cottage.js`, `concept-ghost.js` — vendored
   byte-identical copies of `town-3d/concept-*.js` (with a 1-line vendored-source
   header) so the self-contained staging bundle does not 404 on relative
@@ -48,9 +55,14 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=10` cache bust, `#plot-overlay` markup + click
-  wiring) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
+  Prompt Book UI elements, `?v=11` cache bust, `#plot-overlay` markup + click
+  wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
   single-zone glow toggle, Nightly Call card redraw/cache/split).
+- `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
+  (`resolveInnOverlayContent` API/static fallback, `resolveGuestbookOverlayContent`
+  Signatures-before-Letters/escaping/town-time/50-cap/fallback, sandboxed
+  `openInnOverlay`/`openGuestbookOverlay`, and verbatim drift guard against
+  `town-3d/town.js`).
 - `test-plot-overlay.mjs` — unit tests for `plot-overlay.mjs`
   (`resolvePlotOverlayContent` API/static fallback + drift guard,
   `resolveGazetteOverlayContent`, and sandboxed open/close DOM wiring).
