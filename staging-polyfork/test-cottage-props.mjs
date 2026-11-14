@@ -307,14 +307,14 @@ test('staging buildPorchTrim matches town-3d/town.js verbatim (no drift)', async
   );
 });
 
-test('attachPorchTrim attaches 2 posts (bottom 0.18, top 2.0, x ±2.3, z 3.44) + 1 step (top 0.09, x ±0.6, z 3.5..3.8), #6b492b', () => {
+test('attachPorchTrim attaches 2 posts, 1 step, 2 front rails, and 2 balusters, #6b492b', () => {
   const THREE = makeFakeThree();
   const cottage = new THREE.Group();
   const trim = attachPorchTrim(THREE, cottage);
   assert.ok(trim);
   assert.equal(cottage.children.length, 1);
   assert.equal(trim.name, 'cottage_porch_trim');
-  assert.equal(trim.children.length, 3, 'trim must contain exactly 3 meshes');
+  assert.equal(trim.children.length, 7, 'trim must contain exactly 7 meshes');
 
   const posts = trim.children
     .filter((c) => c.name === 'cottage_porch_post')
@@ -344,6 +344,41 @@ test('attachPorchTrim attaches 2 posts (bottom 0.18, top 2.0, x ±2.3, z 3.44) +
   assert.ok(Math.abs(step.position.y + 0.045 - 0.09) < 1e-12, 'step top y = 0.09');
   assert.ok(Math.abs(step.position.z - 0.15 - 3.5) < 1e-12, 'step z starts at 3.5');
   assert.ok(Math.abs(step.position.z + 0.15 - 3.8) < 1e-12, 'step z ends at 3.8');
+
+  const rails = trim.children
+    .filter((c) => c.name === 'cottage_porch_rail')
+    .sort((a, b) => a.position.x - b.position.x);
+  assert.equal(rails.length, 2);
+  for (const [idx, expectedX, xMin, xMax] of [[0, -1.5, -2.3, -0.7], [1, 1.5, 0.7, 2.3]]) {
+    const rail = rails[idx];
+    assert.equal(rail.geometry.type, 'BoxGeometry');
+    assert.deepEqual(rail.geometry.args, [1.6, 0.08, 0.08]);
+    assert.equal(rail.material.color, '#6b492b');
+    assert.ok(Math.abs(rail.position.x - expectedX) < 1e-12, `rail x = ${expectedX}`);
+    assert.ok(Math.abs(rail.position.x - 0.8 - xMin) < 1e-12, `rail x min = ${xMin}`);
+    assert.ok(Math.abs(rail.position.x + 0.8 - xMax) < 1e-12, `rail x max = ${xMax}`);
+    assert.ok(Math.abs(rail.position.y - 0.95) < 1e-12, 'rail center y = 0.95');
+    assert.ok(Math.abs(rail.position.y - 0.04 - 0.91) < 1e-12, 'rail underside y = 0.91');
+    assert.ok(Math.abs(rail.position.y + 0.04 - 0.99) < 1e-12, 'rail top y = 0.99');
+    assert.ok(Math.abs(rail.position.z - 3.44) < 1e-12, 'rail z = 3.44');
+  }
+  assert.ok(Math.abs((rails[1].position.x - 0.8) - (rails[0].position.x + 0.8) - 1.4) < 1e-12, 'rail gap = 1.4');
+
+  const balusters = trim.children
+    .filter((c) => c.name === 'cottage_porch_baluster')
+    .sort((a, b) => a.position.x - b.position.x);
+  assert.equal(balusters.length, 2);
+  for (const [idx, expectedX] of [[0, -1.5], [1, 1.5]]) {
+    const baluster = balusters[idx];
+    assert.equal(baluster.geometry.type, 'BoxGeometry');
+    assert.deepEqual(baluster.geometry.args, [0.05, 0.73, 0.05]);
+    assert.equal(baluster.material.color, '#6b492b');
+    assert.ok(Math.abs(baluster.position.x - expectedX) < 1e-12, `baluster x = ${expectedX}`);
+    assert.ok(Math.abs(baluster.position.y - 0.545) < 1e-12, 'baluster center y = 0.545');
+    assert.ok(Math.abs(baluster.position.y - 0.365 - 0.18) < 1e-12, 'baluster bottom y = 0.18');
+    assert.ok(Math.abs(baluster.position.y + 0.365 - 0.91) < 1e-12, 'baluster top y = 0.91');
+    assert.ok(Math.abs(baluster.position.z - 3.44) < 1e-12, 'baluster z = 3.44');
+  }
 });
 
 test('staging.js wires attachPorchTrim at both cottage sites', async () => {
