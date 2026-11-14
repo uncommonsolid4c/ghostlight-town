@@ -40,18 +40,26 @@ test('vendored concept modules match town-3d sources byte-for-byte after the ven
   }
 });
 
-test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.random, and no API wiring', async () => {
+test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.random, and scoped read-only state fetch', async () => {
   const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
   const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
   assert.match(codeOnly, /from\s+['"]\.\/concept-bandstand\.js['"]/, 'staging.js must import ./concept-bandstand.js');
   assert.match(codeOnly, /from\s+['"]\.\/concept-cottage\.js['"]/, 'staging.js must import ./concept-cottage.js');
   assert.match(codeOnly, /from\s+['"]\.\/concept-ghost\.js['"]/, 'staging.js must import ./concept-ghost.js');
+  assert.match(codeOnly, /from\s+['"]\.\/prompt-book\.mjs['"]/, 'staging.js must import ./prompt-book.mjs');
 
   assert.ok(!/\.\.\/town-3d\//.test(codeOnly), 'staging.js must not import from ../town-3d/');
   assert.ok(!/\bMath\.random\b/.test(codeOnly), 'staging.js must not use Math.random');
-  assert.ok(!/\bfetch\s*\(/.test(codeOnly), 'staging.js must remain look-only with no fetch() calls');
   assert.ok(!/\bTownLive\b/.test(codeOnly), 'staging.js must not reference TownLive');
+
+  const fetchCalls = [...codeOnly.matchAll(/\bfetch\s*\(([^)]+)\)/g)];
+  assert.equal(fetchCalls.length, 1, 'staging.js must have exactly one fetch() call');
+  assert.match(fetchCalls[0][1], /['"`]\/api\/town\/state/, 'fetch() may only target /api/town/state');
+  assert.ok(
+    !/\/api\/town\/(?!state\b)/.test(codeOnly),
+    'staging.js must not reference any /api/town/ endpoint other than /api/town/state'
+  );
 });
 
 test('staging.js builds bandstand with both options true and ghost with includeEyeSpheres: false', async () => {
@@ -85,12 +93,16 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('index.html references staging.js?v=5 and contains no banned term', async () => {
+test('index.html references staging.js?v=7, includes Prompt Book UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=5["']/, 'index.html must reference ./staging.js?v=5');
+  assert.match(html, /src=["']\.\/staging\.js\?v=7["']/, 'index.html must reference ./staging.js?v=7');
+  assert.match(html, /id=["']prompt-book["']/, 'index.html must include #prompt-book');
+  assert.match(html, /id=["']prompt-book-lines["']/, 'index.html must include #prompt-book-lines');
+  assert.match(html, /id=["']prompt-book-toggle["']/, 'index.html must include #prompt-book-toggle');
+  assert.ok(!/no live town wiring yet/i.test(html), 'index.html HUD must not still say "no live town wiring yet"');
   assert.ok(!BANNED_TERM_RE.test(html), 'index.html must not contain the banned term');
   assert.ok(!BANNED_TERM_RE.test(self), 'test-staging.mjs must not contain the banned term');
 });
