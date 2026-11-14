@@ -1320,3 +1320,37 @@ test('Slice 56 mobile overlay CSS @media (max-width: 640px) rules in index.html 
     'gazette/issue-001.html must retain responsive viewport meta'
   );
 });
+
+test('Slice 57 phone-first landing CTA in #title-bar and footer regression guard in index.html', async () => {
+  const indexHtml = await fs.readFile(path.join(__dirname, 'index.html'), 'utf8');
+
+  assert.match(
+    indexHtml,
+    /#title-bar\s*\{[^}]*display:\s*flex\b/,
+    '#title-bar must use flex layout (display: flex)'
+  );
+
+  const titleBarMatch = indexHtml.match(/<header\s+id=["']title-bar["'][^>]*>([\s\S]*?)<\/header>/i);
+  assert.ok(titleBarMatch, 'index.html must contain <header id="title-bar">');
+  assert.match(
+    titleBarMatch[1],
+    /<a\b[^>]*id=["']move-in-cta["'][^>]*href=["']move-in\.html["'][^>]*>Move in →<\/a>|<a\b[^>]*href=["']move-in\.html["'][^>]*id=["']move-in-cta["'][^>]*>Move in →<\/a>/i,
+    '#title-bar must contain #move-in-cta anchor linking to move-in.html'
+  );
+
+  const mediaMatch = indexHtml.match(/@media\s*\(\s*max-width:\s*640px\s*\)\s*\{([\s\S]*?)\n\s*\}\s*\n\s*<\/style>/);
+  assert.ok(mediaMatch, 'index.html must contain a @media (max-width: 640px) block');
+  assert.match(
+    mediaMatch[1],
+    /#move-in-cta\s*\{[^}]*min-height:\s*44px\b/,
+    '@media (max-width: 640px) must set #move-in-cta min-height: 44px'
+  );
+
+  const footerMatch = indexHtml.match(/<footer\s+id=["']footer-bar["'][^>]*>([\s\S]*?)<\/footer>/i);
+  assert.ok(footerMatch, 'index.html must contain <footer id="footer-bar">');
+  assert.match(
+    footerMatch[1],
+    /<a\s+href=["']move-in\.html["'][^>]*>Move in →<\/a>/i,
+    '#footer-bar must retain the "Move in →" link'
+  );
+});
