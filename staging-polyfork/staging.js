@@ -50,6 +50,8 @@ import {
   stepOrbitGlide,
   createPointerTracker,
 } from './tap-glide.mjs';
+import { animate } from './kit-medieval/clips.mjs';
+import { attachIdleAnimation, updateNpcAnimations } from './npc-animation.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -929,6 +931,11 @@ async function init() {
     }],
   ]);
   counts.npcs = npcStandIns.size;
+  for (const standIn of npcStandIns.values()) {
+    attachIdleAnimation(THREE, standIn.group, { animateFn: animate }).then((anim) => {
+      standIn.anim = anim;
+    });
+  }
 
   look.shadows(scene);
   // Apply night glow once before live polling starts so `camp.group.userData.nightSet`
@@ -1170,6 +1177,7 @@ async function init() {
       }
     }
     if (sails) sails.rotation.z -= dt * 0.12; // slow windmill turn
+    updateNpcAnimations(npcStandIns, dt);
     controls.update();
     look.update(); // drives the night glow
     renderer.render(scene, camera);
