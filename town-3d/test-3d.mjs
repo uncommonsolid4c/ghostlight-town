@@ -1202,6 +1202,11 @@ test('Ghostlight Inn book page exists, is static/safe, and index.html overlay UR
   ]);
 
   assert.match(innHtml, /<meta\s+charset=["']?utf-8["']?\s*>/i, 'inn/index.html must declare utf-8 charset');
+  assert.match(
+    innHtml,
+    /<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1\.0["']\s*\/?>/i,
+    'inn/index.html must declare responsive viewport meta'
+  );
   assert.ok(!/<script\b/i.test(innHtml), 'inn/index.html must not contain <script> tags');
   assert.ok(!/https?:\/\//i.test(innHtml), 'inn/index.html must not contain external http(s):// URLs');
   assert.ok(!new RegExp(`camp${'fire'}`, 'i').test(innHtml), 'inn/index.html must not contain banned term');
@@ -1271,4 +1276,47 @@ test('pinchFov zooms in/out, clamps to [40, 85], and returns startFov for curren
   assert.equal(pinchFov(65, 100, 0), 65);
   assert.equal(pinchFov(65, 100, -5), 65);
   assert.equal(pinchFov(65, 100, Number.NaN), 65);
+});
+
+test('Slice 56 mobile overlay CSS @media (max-width: 640px) rules in index.html and Gazette viewport regression guard', async () => {
+  const [indexHtml, gazetteHtml] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'gazette', 'issue-001.html'), 'utf8'),
+  ]);
+
+  const mediaMatch = indexHtml.match(/@media\s*\(\s*max-width:\s*640px\s*\)\s*\{([\s\S]*?)\n\s*\}\s*\n\s*<\/style>/);
+  assert.ok(mediaMatch, 'index.html must contain a @media (max-width: 640px) block');
+  const mediaBlock = mediaMatch[1];
+
+  assert.match(
+    mediaBlock,
+    /#plot-overlay-close\s*\{[^}]*min-height:\s*44px\b/,
+    '@media (max-width: 640px) must set #plot-overlay-close min-height: 44px'
+  );
+  assert.match(
+    mediaBlock,
+    /#prompt-book\s*\{[^}]*top:\s*52px\b/,
+    '@media (max-width: 640px) must move #prompt-book to top: 52px'
+  );
+  assert.match(
+    mediaBlock,
+    /#title-bar\s*\{[^}]*text-overflow:\s*ellipsis\b/,
+    '@media (max-width: 640px) must ellipsize #title-bar'
+  );
+  assert.match(
+    mediaBlock,
+    /#footer-bar\s*\{[^}]*flex-wrap:\s*wrap\b/,
+    '@media (max-width: 640px) must wrap #footer-bar'
+  );
+  assert.match(
+    mediaBlock,
+    /#info-strip\s*\{[^}]*bottom:\s*72px\b/,
+    '@media (max-width: 640px) must set #info-strip bottom: 72px'
+  );
+
+  assert.match(
+    gazetteHtml,
+    /<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1\.0["']\s*\/?>/i,
+    'gazette/issue-001.html must retain responsive viewport meta'
+  );
 });
