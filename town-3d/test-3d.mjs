@@ -577,11 +577,17 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // signpost, and door lantern) for an expected total of ~136–138. The inn is a
 // major town building, not prop creep; 140 keeps the guardrail meaningful and
 // future buildings will need another deliberate revisit.
-test('Draw-call budget: total mesh count in built town is < 140', () => {
+// Budget raised 140 -> 145 (owner decision, 2026-11-14, slice 75): baseline
+// measured 139 meshes; the porch trim adds 3 meshes to Milo's cottage (2 posts
+// + 1 step) for an expected total of 142. This completes the slice-73/74 porch
+// work, not prop creep; 145 keeps the guardrail meaningful and future
+// buildings need another deliberate revisit.
+test('Draw-call budget: total mesh count in built town is 142 (< 145)', () => {
   const THREE = createThreeStub();
   const { scene } = buildTown(THREE);
   const meshes = collectNodes(scene, (n) => n.isMesh);
-  assert.ok(meshes.length < 140, `Expected < 140 meshes, got ${meshes.length}`);
+  assert.equal(meshes.length, 142, `Expected 142 meshes, got ${meshes.length}`);
+  assert.ok(meshes.length < 145, `Expected < 145 meshes, got ${meshes.length}`);
 });
 
 test('No campfire terminology and no fetch() in town.js; .glb allowed only for props (not pine.glb)', async () => {
@@ -1416,6 +1422,42 @@ test('Slice 74: createCottage attaches porch deck in all 4 styles, lifts porch p
     const sign = collectNodes(cottage, (n) => n.name === 'cottage_signpost')[0];
     assert.ok(sign, `${v.label} cottage must have cottage_signpost`);
     assert.ok(Math.abs(sign.position.y - 0.18) < 1e-12, `${v.label} signpost y = 0.18`);
+
+    const trim = collectNodes(cottage, (n) => n.name === 'cottage_porch_trim')[0];
+    assert.ok(trim, `${v.label} cottage must have cottage_porch_trim`);
+    const trimMeshes = collectNodes(trim, (n) => n.isMesh);
+    assert.equal(trimMeshes.length, 3, `${v.label} porch trim must add exactly 3 meshes`);
+
+    const posts = collectNodes(trim, (n) => n.name === 'cottage_porch_post')
+      .sort((a, b) => a.position.x - b.position.x);
+    assert.equal(posts.length, 2, `${v.label} porch trim must have 2 posts`);
+    for (const [idx, expectedX] of [[-2.3, 0], [2.3, 1]].map(([x, i]) => [i, x])) {
+      const post = posts[idx];
+      assert.equal(post.geometry.type, 'BoxGeometry');
+      assert.equal(post.geometry.parameters.width, 0.12);
+      assert.equal(post.geometry.parameters.height, 1.82);
+      assert.equal(post.geometry.parameters.depth, 0.12);
+      assert.equal(post.material.color, '#6b492b');
+      assert.ok(Math.abs(post.position.x - expectedX) < 1e-12, `${v.label} post x = ${expectedX}`);
+      assert.ok(Math.abs(post.position.y - 1.09) < 1e-12, `${v.label} post center y = 1.09`);
+      assert.ok(Math.abs(post.position.y - post.geometry.parameters.height / 2 - 0.18) < 1e-12, `${v.label} post bottom y = 0.18`);
+      assert.ok(Math.abs(post.position.y + post.geometry.parameters.height / 2 - 2.0) < 1e-12, `${v.label} post top y = 2.0`);
+      assert.ok(Math.abs(post.position.z - 3.44) < 1e-12, `${v.label} post z = 3.44`);
+    }
+
+    const step = collectNodes(trim, (n) => n.name === 'cottage_porch_step')[0];
+    assert.ok(step, `${v.label} porch trim must have cottage_porch_step`);
+    assert.equal(step.geometry.type, 'BoxGeometry');
+    assert.equal(step.geometry.parameters.width, 1.2);
+    assert.equal(step.geometry.parameters.height, 0.09);
+    assert.equal(step.geometry.parameters.depth, 0.3);
+    assert.equal(step.material.color, '#6b492b');
+    assert.ok(Math.abs(step.position.x) < 1e-12, `${v.label} step center x = 0`);
+    assert.ok(Math.abs(step.position.x - step.geometry.parameters.width / 2 - (-0.6)) < 1e-12, `${v.label} step x min = -0.6`);
+    assert.ok(Math.abs(step.position.x + step.geometry.parameters.width / 2 - 0.6) < 1e-12, `${v.label} step x max = 0.6`);
+    assert.ok(Math.abs(step.position.y + step.geometry.parameters.height / 2 - 0.09) < 1e-12, `${v.label} step top y = 0.09`);
+    assert.ok(Math.abs(step.position.z - step.geometry.parameters.depth / 2 - 3.5) < 1e-12, `${v.label} step z starts at 3.5`);
+    assert.ok(Math.abs(step.position.z + step.geometry.parameters.depth / 2 - 3.8) < 1e-12, `${v.label} step z ends at 3.8`);
   }
 
   const conceptCottage = createCottage(THREE, variants[3].manifest, variants[3].options);
