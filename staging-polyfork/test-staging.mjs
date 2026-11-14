@@ -111,12 +111,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=24, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=25, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=24["']/, 'index.html must reference ./staging.js?v=24');
+  assert.match(html, /src=["']\.\/staging\.js\?v=25["']/, 'index.html must reference ./staging.js?v=25');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -398,4 +398,28 @@ test('Slice 78: staging.js builds town notice board with byte-identical notice t
   const boardFnEnd = stagingSrc.indexOf('\nfunction ', boardFnStart + 1);
   const boardFnBody = stagingSrc.slice(boardFnStart, boardFnEnd === -1 ? undefined : boardFnEnd);
   assert.match(boardFnBody, /makeBandstandTextTexture\s*\(/, 'buildNoticeBoard in staging.js must use makeBandstandTextTexture');
+});
+
+test('Slice 79: staging.js makes town notice board clickable and wires openNoticeBoardOverlay', async () => {
+  const stagingSrc = await fs.readFile(STAGING_JS_PATH, 'utf8');
+
+  assert.match(
+    stagingSrc,
+    /import\s*\{\s*openNoticeBoardOverlay\s*\}\s*from\s*['"]\.\/notice-board-overlay\.mjs['"]\s*;/,
+    'staging.js must import openNoticeBoardOverlay from ./notice-board-overlay.mjs'
+  );
+  assert.match(
+    stagingSrc,
+    /if\s*\(\s*kind\s*===\s*['"]notice_board['"]\s*\)[\s\S]*?openNoticeBoardOverlay\s*\(/,
+    'staging.js handleCanvasClick must handle kind === notice_board via openNoticeBoardOverlay'
+  );
+
+  const boardFnStart = stagingSrc.indexOf('function buildNoticeBoard(');
+  const boardFnEnd = stagingSrc.indexOf('\nfunction ', boardFnStart + 1);
+  const boardFnBody = stagingSrc.slice(boardFnStart, boardFnEnd === -1 ? undefined : boardFnEnd);
+  assert.match(
+    boardFnBody,
+    /group\.userData\s*=\s*\{\s*clickable:\s*true\s*,\s*kind:\s*['"]notice_board['"]\s*,\s*label:\s*['"]Notice Board['"]\s*\}/,
+    'buildNoticeBoard in staging.js must set clickable notice_board userData'
+  );
 });
