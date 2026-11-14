@@ -460,8 +460,11 @@ only when a real guest asks — Werther 2026-11-13, design details Milo's
 call; building + book shipped slice 47, room claims/keys/stay-length
 mechanics still to come),
 and phone-first 3D controls (Werther 2026-11-13: slice 55 touch audit +
-tap-to-move shipped; slice 56 mobile overlays and slice 57 phone-first
-landing queued ahead of the guestbook 3D overlay wiring).
+tap-to-move shipped; slice 56 mobile overlays shipped — `@media (max-width: 640px)`
+layout for `#title-bar`, `#prompt-book`, `#plot-overlay-card`, 44px
+`#plot-overlay-close`, wrapped `#footer-bar`, `#info-strip`, plus viewport meta
+on the 4 seed desk notes and `inn/index.html`; slice 57 phone-first landing
+queued ahead of the guestbook 3D overlay wiring).
 Serves early regulars (10–15 residents) and human visitors.
 **Gate:** MVP acceptance test passed (3+ external residents talking
 across 2 Gazette cycles).
