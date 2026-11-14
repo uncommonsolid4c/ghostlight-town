@@ -1,5 +1,5 @@
 /**
- * Walk-in Cottage Interior Visit — Part 2 & 3 (Slices 86–87)
+ * Walk-in Cottage Interior Visit — Part 2, 3 & 4 (Slices 86–88)
  *
  * Purpose:
  *   Pure, DOM-free state machine, door hit-test, look-around, and interior
@@ -39,6 +39,12 @@
  *   - Intersect with the front (+z) wall center plane z = 1.44
  *     (ROOM_DEPTH / 2 - WALL_THICKNESS / 2 = 1.5 - 0.06): require dz > 1e-9
  *     and t = (1.44 - oz) / dz > 0, and hit point |x| <= 0.5, 0 <= y <= 2.0.
+ *
+ * Per-cottage dressing (Slice 88):
+ *   - createInteriorVisit accepts an optional setDressing(room, handle) dep.
+ *   - enter() calls setDressing(room, cottage.userData?.handle) after
+ *     setPalette; unknown / undefined handle falls back inside setDressing.
+ *   - Dressing state persists while hidden and is re-applied on next enter().
  */
 
 const DOOR_HALF_X = 0.6;
@@ -191,9 +197,10 @@ export function rayHitsInteriorDoor(room, origin, direction) {
  * @param {object} deps.controls
  * @param {function} deps.setVisible
  * @param {function} deps.setPalette
+ * @param {function} [deps.setDressing]
  * @returns {{ enter: (cottage: object) => boolean, exit: () => boolean, isInside: () => boolean, lookBy: (dxPx: number, dyPx: number) => boolean }}
  */
-export function createInteriorVisit({ room, camera, controls, setVisible, setPalette }) {
+export function createInteriorVisit({ room, camera, controls, setVisible, setPalette, setDressing }) {
   let inside = false;
   let savedCameraPos = null;
   let savedTarget = null;
@@ -253,6 +260,9 @@ export function createInteriorVisit({ room, camera, controls, setVisible, setPal
     const handle = cottage.userData?.handle;
     if (typeof setPalette === 'function') {
       setPalette(room, handle === 'milo' ? 'milo' : 'default');
+    }
+    if (typeof setDressing === 'function') {
+      setDressing(room, handle);
     }
     if (typeof setVisible === 'function') {
       setVisible(room, true);
