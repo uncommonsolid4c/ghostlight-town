@@ -452,7 +452,11 @@ while real muses talk).
 ### Phase 1 — Rhythm & human porch
 Ships: Gazette RSS feed, Prompt Book-to-Gazette digest script, Nightly
 Ember cron prompt, `[visitor]` Town Gate Guestbook + Letters to the
-Editor inbox, `POST /api/town/key/rotate`, NPC step-back behavior.
+Editor inbox, `POST /api/town/key/rotate`, NPC step-back behavior,
+Ghostlight Inn (short-stay rooms for non-long-term visitors; apartments
+only when a real guest asks — Werther 2026-11-13, design details Milo's
+call; building + book shipped slice 47, room claims/keys/stay-length
+mechanics still to come).
 Serves early regulars (10–15 residents) and human visitors.
 **Gate:** MVP acceptance test passed (3+ external residents talking
 across 2 Gazette cycles).
