@@ -586,6 +586,239 @@ test('real tree stages guestbook/index.html in MANIFEST.json', async () => {
   }
 });
 
+test('default staging (no --bundle) sets bundle: "town-3d" and staging_js_v: null', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-default-bundle-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.bundle, 'town-3d');
+    assert.equal(summary.town_js_v, '99');
+    assert.equal(summary.staging_js_v, null);
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(manifest.bundle, 'town-3d');
+    assert.equal(manifest.town_js_v, '99');
+    assert.equal(manifest.staging_js_v, null);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('real tree --bundle staging-polyfork stages 179 files with expected manifest and exclusions', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-polyfork-real-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const res = runStage(['--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(res.status, 0, `Stage failed: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.bundle, 'staging-polyfork');
+    assert.equal(summary.staging_js_v, '13');
+    assert.equal(summary.town_js_v, null);
+    assert.equal(summary.file_count, 179);
+    assert.ok(summary.total_bytes > 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifest = JSON.parse(await fs.readFile(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
+    assert.equal(manifest.bundle, 'staging-polyfork');
+    assert.equal(manifest.staging_js_v, '13');
+    assert.equal(manifest.town_js_v, null);
+    assert.equal(manifest.file_count, 179);
+    assert.ok(manifest.total_bytes > 0);
+
+    const pathSet = new Set(manifest.files.map((f) => f.path));
+    assert.equal(pathSet.size, 179);
+
+    const requiredPaths = [
+      'index.html',
+      'staging.js',
+      'concept-bandstand.js',
+      'concept-cottage.js',
+      'concept-ghost.js',
+      'kit-campground/kit.mjs',
+      'kit-medieval/tavern.mjs',
+      'gazette/feed.xml',
+      'gazette/issue-001.html',
+      'gazette/issue-002.html',
+      'gazette/latest.json',
+      'plots/milo/index.html',
+      'plots/wick/index.html',
+      'plots/maren/index.html',
+      'plots/tomas/index.html',
+      'inn/index.html',
+      'guestbook/index.html',
+      'move-in.html',
+    ];
+    for (const reqPath of requiredPaths) {
+      assert.ok(pathSet.has(reqPath), `Expected staged manifest to include ${reqPath}`);
+    }
+
+    for (const p of pathSet) {
+      assert.ok(!/(?:^|\/)test-[^/]*\.mjs$/.test(p), `Must not stage test file: ${p}`);
+      assert.notEqual(p, 'README.md', 'Must not stage README.md');
+      assert.notEqual(p, 'town.js', 'Must not stage town.js');
+      assert.ok(!p.startsWith('town-3d/'), `Must not stage under town-3d/ prefix: ${p}`);
+      assert.ok(!/^models\/.*\.glb$/.test(p), `Must not stage models/*.glb: ${p}`);
+      assert.ok(!/^gazette\/[^/]+\.mjs$/.test(p), `Must not stage gazette/*.mjs: ${p}`);
+      assert.notEqual(p, 'CREDITS.md', 'Must not stage town-3d/CREDITS.md');
+    }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify on real staged staging-polyfork bundle succeeds with checked 179', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-polyfork-real-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const stageRes = runStage(['--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(stageRes.status, 0, `Stage failed: ${stageRes.stderr}`);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 0, `Verify failed: ${verifyRes.stdout} ${verifyRes.stderr}`);
+    assert.equal(verifyRes.stderr, '');
+
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'ok');
+    assert.equal(report.bundle, 'staging-polyfork');
+    assert.equal(report.checked, 179);
+    assert.equal(report.ok, 179);
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+    assert.equal(report.staging_js_v, '13');
+    assert.equal(report.town_js_v, null);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify reports mismatch when one staged staging-polyfork file is corrupted by one byte', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-polyfork-tamper-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    assert.equal(runStage(['--bundle', 'staging-polyfork', '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const targetFile = path.join(stagedDir, 'staging.js');
+    const buf = await fs.readFile(targetFile);
+    buf[0] = buf[0] ^ 0xff;
+    await fs.writeFile(targetFile, buf);
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.deepEqual(report.mismatch, ['staging.js']);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify fails when staging.js?v= in staged index.html disagrees with manifest staging_js_v', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-polyfork-version-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    assert.equal(runStage(['--bundle', 'staging-polyfork', '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const indexPath = path.join(stagedDir, 'index.html');
+    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=13', 'staging.js?v=999');
+    await fs.writeFile(indexPath, updatedHtml, 'utf8');
+
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const indexEntry = manifest.files.find((f) => f.path === 'index.html');
+    indexEntry.sha256 = crypto.createHash('sha256').update(updatedHtml, 'utf8').digest('hex');
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.equal(report.bundle, 'staging-polyfork');
+    assert.equal(report.staging_js_v, '13');
+    assert.equal(report.staged_staging_js_v, '999');
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--bundle bogus fails closed with JSON error on stderr and leaves no staging dir', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-bogus-bundle-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const res = runStage(['--bundle', 'bogus', '--out', outDir]);
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout, '');
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.match(errJson.error, /Unknown bundle/i);
+    assert.equal(await pathExists(outDir), false, 'No staging dir should be left behind');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--out inside staging-polyfork/ is refused', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-polyfork-refusal-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    await createFixtureTree(fixtureRoot);
+    await fs.mkdir(path.join(fixtureRoot, 'staging-polyfork'), { recursive: true });
+
+    const badOut = path.join(fixtureRoot, 'staging-polyfork', 'nested-out');
+    const res = runStage(['--root', fixtureRoot, '--out', badOut]);
+    assert.equal(res.status, 1);
+    const err = JSON.parse(res.stderr.trim());
+    assert.equal(err.ok, false);
+    assert.match(err.error, /Refusing/i);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--verify remains backwards-compatible with pre-slice-67 manifests lacking bundle field', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-legacy-manifest-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    delete manifest.bundle;
+    delete manifest.staging_js_v;
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 0, `Verify failed: ${verifyRes.stdout} ${verifyRes.stderr}`);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'ok');
+    assert.equal(report.bundle, 'town-3d');
+    assert.equal(report.town_js_v, '99');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('no banned term in either file and no fetch( in stage-deploy.mjs', async () => {
   const [stageSrc, testSrc] = await Promise.all([
     fs.readFile(STAGE_SCRIPT, 'utf8'),
