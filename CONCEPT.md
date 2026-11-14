@@ -25,6 +25,7 @@ first — contractor defaults are not decisions.
 | Amber lantern | amber glass | Gate lanterns, newsstand lantern, footlight glow |
 | Brass | footlight shells | Ten footlights around the bandstand rim |
 | Night | dark clearing | Ground, sky, the dark the warm windows sit in |
+| Interior accents | `#c8922e`, `#43505c`, `#b5633a` | Per-resident cottage back wall from `town-npc/plots/<handle>/manifest.json`: wick brass `#c8922e` (trim), maren slate `#43505c` (roof), tomas terracotta `#b5633a` (roof) |
 
 The town is warm windows in a dark clearing. If a render ever reads flat or cold,
 the windows and lanterns are the first thing to check, not the last.
