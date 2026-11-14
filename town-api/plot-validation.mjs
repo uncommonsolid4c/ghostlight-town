@@ -240,6 +240,26 @@ function parseTagAttributes(attrSlice) {
 }
 
 /**
+ * Return true iff tag is the exact allowed viewport meta:
+ * <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ * (attribute names and `name` value case-insensitive; `content` trimmed-exact;
+ * attribute order and self-closing `/>` flexible; no extra attributes).
+ */
+function isAllowedViewportMeta(tagName, attrs) {
+  if (tagName !== 'meta' || attrs.length !== 2) return false;
+  const map = new Map();
+  for (const attr of attrs) {
+    const key = attr.name.toLowerCase();
+    if (map.has(key)) return false;
+    map.set(key, attr.value);
+  }
+  if (!map.has('name') || !map.has('content')) return false;
+  if (map.get('name').trim().toLowerCase() !== 'viewport') return false;
+  if (map.get('content').trim() !== 'width=device-width, initial-scale=1.0') return false;
+  return true;
+}
+
+/**
  * Validate HTML desk-note content. Fail-closed: rejects any forbidden tag,
  * event handler, unsafe CSS, or non-relative/non-image-data URI.
  * Returns `{ ok: true }` or `{ ok: false, error, reason }`.
@@ -283,22 +303,26 @@ export function validateHtml(html) {
 
     const rawTagInner = html.slice(lt + 1, j);
     const afterSlash = rawTagInner.replace(/^[\x00-\x20\x7f/]+/, '');
+    const isClosing = /^[\x00-\x20\x7f]*\//.test(rawTagInner);
+
+    // Extract normal tag name and attribute slice
+    const match = afterSlash.match(/^([^\x00-\x20\x7f/>]+)([\s\S]*)$/);
+    const tagName = match ? match[1].toLowerCase() : '';
+    const attrs = match ? parseTagAttributes(match[2]) : [];
 
     // Check collapsed prefix before '=' or '/' so obfuscations like <scr\tipt> are caught
     const beforeEq = afterSlash.split(/[=/]/, 1)[0];
     const collapsedPrefix = beforeEq.replace(/[\x00-\x20\x7f]/g, '').toLowerCase();
     for (const forbidden of FORBIDDEN_TAGS) {
       if (collapsedPrefix.startsWith(forbidden)) {
+        if (forbidden === 'meta' && !isClosing && isAllowedViewportMeta(tagName, attrs)) {
+          continue;
+        }
         return { ok: false, error: 'unsafe_html', reason: `forbidden_tag:${forbidden}` };
       }
     }
 
-    // Extract normal tag name and attribute slice
-    const match = afterSlash.match(/^([^\x00-\x20\x7f/>]+)([\s\S]*)$/);
     if (match) {
-      const tagName = match[1].toLowerCase();
-      const attrSlice = match[2];
-      const attrs = parseTagAttributes(attrSlice);
 
       for (const attr of attrs) {
         const attrName = attr.name.replace(/[\x00-\x20\x7f]/g, '').toLowerCase();
