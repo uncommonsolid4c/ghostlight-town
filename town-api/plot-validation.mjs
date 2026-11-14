@@ -17,6 +17,8 @@ export const VALID_PROP_KINDS = new Set([
   'typewriter',
   'cat',
   'poster_frame',
+  'lantern',
+  'planter',
 ]);
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
