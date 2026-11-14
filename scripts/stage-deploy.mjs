@@ -184,7 +184,7 @@ export async function collectSourceFilesFromTown3d(town3dDir) {
   const files = [];
   const excluded = [];
 
-  for (const reqFile of ['index.html', 'move-in.html', 'town.js', 'CREDITS.md']) {
+  for (const reqFile of ['index.html', 'move-in.html', 'inn/index.html', 'town.js', 'CREDITS.md']) {
     const excludedEntry = findExcludedFile(reqFile);
     if (excludedEntry) {
       excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
