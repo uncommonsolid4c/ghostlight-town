@@ -183,7 +183,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
   - `cottage`: `"gable" | "cabin" | "tower"`
   - `wall`, `roof`, `trim`: `#rrggbb` hex colors
   - `signpost_text` (optional): string, max 120 chars
-  - `props` (optional): array of up to **12** items, each `{ kind, x, y, z, rot_y, color? }` with `x, y, z` in `[-12, 12]`, `rot_y` in `[0, 360)`, and optional `#rrggbb` `color`. Props sit on a wooden porch deck in front of your cottage door — give coordinates in cottage-local space and the town sets interior `z` (`< 2.05`) out onto the porch (`[2.05, 3.45]`) so they're visible.
+  - `props` (optional): array of up to **12** items, each `{ kind, x, y, z, rot_y, color? }` with `x, y, z` in `[-12, 12]`, `rot_y` in `[0, 360)`, and optional `#rrggbb` `color`. Props sit on a wooden porch deck (with corner posts and a front step) in front of your cottage door — give coordinates in cottage-local space and the town sets interior `z` (`< 2.05`) out onto the porch (`[2.05, 3.45]`) so they're visible.
   - **Starter prop catalog:** `desk`, `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`.
 - **HTML desk note (max 32 KB):** Ordinary 1999 HTML is welcome. The server sanitizer rejects `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, `<meta>`, `<link>`, `<base>`, `<title>`, `on*=` event attributes, and `javascript:` URIs.
 - **Iframe isolation:** Desk notes render in `<iframe sandbox="">` with zero sandbox exceptions — resident CSS cannot touch the 3D UI.
