@@ -10,6 +10,7 @@ import {
   MILO_PLOT_PROPS,
   attachPlotProps,
   attachPorchDeck,
+  attachPorchTrim,
 } from './cottage-props.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -285,4 +286,68 @@ test('attachPorchDeck attaches wooden porch deck slab at top y=0.18, z in [2.3, 
   assert.ok(Math.abs(deck.position.z - 0.6 - 2.3) < 1e-12, 'deck z starts at 2.3');
   assert.ok(Math.abs(deck.position.z + 0.6 - 3.5) < 1e-12, 'deck z ends at 3.5');
   assert.equal(deck.material.color, '#6b492b');
+});
+
+test('staging buildPorchTrim matches town-3d/town.js verbatim (no drift)', async () => {
+  const [townSrc, propsSrc] = await Promise.all([
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'cottage-props.mjs'), 'utf8'),
+  ]);
+
+  const fnMarker = 'function buildPorchTrim(THREE) {';
+  const fnStart = townSrc.indexOf(fnMarker);
+  assert.ok(fnStart !== -1, 'Could not locate buildPorchTrim in town-3d/town.js');
+  const fnEndMarker = '\n}\n';
+  const fnEnd = townSrc.indexOf(fnEndMarker, fnStart);
+  assert.ok(fnEnd !== -1, 'Could not locate end of buildPorchTrim in town-3d/town.js');
+  const verbatimBlock = townSrc.slice(fnStart, fnEnd + fnEndMarker.length);
+  assert.ok(
+    propsSrc.includes(verbatimBlock),
+    'staging-polyfork/cottage-props.mjs buildPorchTrim drifted from town-3d/town.js'
+  );
+});
+
+test('attachPorchTrim attaches 2 posts (bottom 0.18, top 2.0, x ±2.3, z 3.44) + 1 step (top 0.09, x ±0.6, z 3.5..3.8), #6b492b', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const trim = attachPorchTrim(THREE, cottage);
+  assert.ok(trim);
+  assert.equal(cottage.children.length, 1);
+  assert.equal(trim.name, 'cottage_porch_trim');
+  assert.equal(trim.children.length, 3, 'trim must contain exactly 3 meshes');
+
+  const posts = trim.children
+    .filter((c) => c.name === 'cottage_porch_post')
+    .sort((a, b) => a.position.x - b.position.x);
+  assert.equal(posts.length, 2);
+  for (const [idx, expectedX] of [[0, -2.3], [1, 2.3]]) {
+    const post = posts[idx];
+    assert.equal(post.geometry.type, 'BoxGeometry');
+    assert.deepEqual(post.geometry.args, [0.12, 1.82, 0.12]);
+    assert.equal(post.material.color, '#6b492b');
+    assert.ok(Math.abs(post.position.x - expectedX) < 1e-12, `post x = ${expectedX}`);
+    assert.ok(Math.abs(post.position.y - 1.09) < 1e-12, 'post center y = 1.09');
+    assert.ok(Math.abs(post.position.y - 0.91 - 0.18) < 1e-12, 'post bottom y = 0.18');
+    assert.ok(Math.abs(post.position.y + 0.91 - 2.0) < 1e-12, 'post top y = 2.0');
+    assert.ok(Math.abs(post.position.z - 3.44) < 1e-12, 'post z = 3.44');
+  }
+
+  const steps = trim.children.filter((c) => c.name === 'cottage_porch_step');
+  assert.equal(steps.length, 1);
+  const step = steps[0];
+  assert.equal(step.geometry.type, 'BoxGeometry');
+  assert.deepEqual(step.geometry.args, [1.2, 0.09, 0.3]);
+  assert.equal(step.material.color, '#6b492b');
+  assert.ok(Math.abs(step.position.x) < 1e-12, 'step x = 0');
+  assert.ok(Math.abs(step.position.x - 0.6 - (-0.6)) < 1e-12, 'step x min = -0.6');
+  assert.ok(Math.abs(step.position.x + 0.6 - 0.6) < 1e-12, 'step x max = 0.6');
+  assert.ok(Math.abs(step.position.y + 0.045 - 0.09) < 1e-12, 'step top y = 0.09');
+  assert.ok(Math.abs(step.position.z - 0.15 - 3.5) < 1e-12, 'step z starts at 3.5');
+  assert.ok(Math.abs(step.position.z + 0.15 - 3.8) < 1e-12, 'step z ends at 3.8');
+});
+
+test('staging.js wires attachPorchTrim at both cottage sites', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(stagingSrc.includes('attachPorchTrim(THREE, cottage);'), 'missing attachPorchTrim in applyStagingPlotManifest');
+  assert.ok(stagingSrc.includes('attachPorchTrim(THREE, milosCottage);'), 'missing attachPorchTrim for milosCottage');
 });
