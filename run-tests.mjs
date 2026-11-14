@@ -60,6 +60,8 @@ const TEST_SUITES = [
   'town-npc/test-real-brain.mjs',
   'town-npc/test-register.mjs',
   'town-npc/test-run-all.mjs',
+  // staging-polyfork (1)
+  'staging-polyfork/test-staging.mjs',
 ];
 
 function printHelp() {
@@ -67,7 +69,7 @@ function printHelp() {
     'Usage: node run-tests.mjs [--help]',
     '',
     'Runs all Ghostlight Town test suites sequentially from the repo root:',
-    `  - ${TEST_SUITES.length} explicit suites across repo root, scripts/, town-3d/, town-api/, and town-npc/`,
+    `  - ${TEST_SUITES.length} explicit suites across repo root, scripts/, staging-polyfork/, town-3d/, town-api/, and town-npc/`,
     '  - Set GHOSTLIGHT_TEST_ROOT to override the repo root for suite resolution/cwd',
     '',
     'Skip convention:',
