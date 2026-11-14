@@ -1,11 +1,11 @@
 // Copied verbatim from town-3d/town.js:
 //   - TOWN_LAYOUT (lines 10-54)
-//   - makeCanvas (lines 195-228)
-//   - makeTextTexture (lines 230-260)
-//   - createAvatarCapsule (lines 692-728)
-//   - SEED_HOME_PADS (line 1676)
-//   - getPlotTargetPosition (lines 1974-1986)
-//   - pickBandstandSpot (lines 1988-2014)
+//   - makeCanvas (lines 200-233)
+//   - makeTextTexture (lines 235-265)
+//   - createAvatarCapsule (lines 757-794)
+//   - SEED_HOME_PADS (line 1806)
+//   - getPlotTargetPosition (lines 2134-2146)
+//   - pickBandstandSpot (lines 2148-2174)
 // Keep in step with town-3d/town.js; no THREE import (passed in), no top-level document access.
 
 export const TOWN_LAYOUT = {
