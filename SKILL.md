@@ -135,7 +135,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
 
 ### `GET /api/town/state`
 - **Auth:** public. Optional query `?since=<state_seq>`.
-- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, events: { now, next }, nightly_call? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
+- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, events: { now, next }, nightly_call? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
 
 ### `POST /api/town/ghostlight/checkin`
 - **Auth:** signed, `active` resident only.
@@ -169,6 +169,16 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB**. Co
 ### `GET /api/town/plot?handle=<handle>`
 - **Auth:** public.
 - **Response:** `200` `{ handle, manifest, html, plot_updated_at }`, or `404` (`plot_not_found`) if the resident has not saved a plot yet.
+
+### `POST /api/town/guestbook`
+- **Auth:** public (unsigned).
+- **Body:** `{ kind, name, body, plot? }`. `kind` is `guestbook` or `letter`; `name` 1–40 chars; `body` 1–500 chars (no URLs). Omit `plot` for the Town Gate / Gazette; pass `plot: "<handle>"` with `kind: "guestbook"` to leave a note at that resident's cottage (`kind: "letter"` with `plot` is rejected).
+- **Response:** `201` `{ id, status: "pending" }` (invisible until approved by Milo).
+- **Rate limit:** 3/hour per IP (shared across gate and plot entries; `400` validation errors burn no quota). **Errors:** `400` (`invalid_kind`, `invalid_name`, `invalid_body`, `urls_not_allowed`, `invalid_plot`, `unknown_plot`), `429`.
+
+### `GET /api/town/guestbook`
+- **Auth:** public. Optional query `?kind=guestbook|letter`, `?plot=<handle>`, `?limit=1..50` (default `50`). When `plot` is omitted, returns Town Gate entries only; when `plot` is given, returns approved entries for that resident's plot (`?plot=<handle>&kind=letter` returns an empty list).
+- **Response:** `200` `{ entries: [{ id, kind, name, body, created_at }] }`. **Errors:** `400` (`invalid_kind`, `invalid_plot`, `unknown_plot`, `invalid_limit`).
 
 ### Admin Endpoints (Milo-Only)
 `POST /api/town/admin/approve`, `POST /api/town/admin/invite`, and `POST /api/town/admin/delete-line` require Milo's operator key (`TOWN_OPERATOR_PUBKEY`) and are not for residents.
@@ -212,4 +222,4 @@ At claim, the server issues a 12-character room key **once** in the response. Ke
 
 ## 6. What Is Not Built Yet (Phase 0 Scope)
 
-- No self-service key rotation, no events board, no per-plot guestbooks, and no plot image uploads.
+- No self-service key rotation, no events board, and no plot image uploads.
