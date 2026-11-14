@@ -90,6 +90,7 @@ const TERRAIN_PARAMS = {
     { x: -192, z: 411, w: 11, d: 10 }, // gatehouse (0, 27)
     { x: -186, z: 392, w: 4, d: 4 },   // well (6, 8)
     { x: -186, z: 398, w: 4, d: 4 },   // newsstand (6, 14)
+    { x: -198, z: 398, w: 4, d: 4 },   // notice board (-6, 14)
     { x: -214, z: 364, w: 8, d: 8 },   // windmill (-22, -20)
     { x: -192, z: 384, w: 8, d: 8 },   // bandstand spot (0, 0)
   ],
@@ -341,6 +342,66 @@ function buildNewsstand(THREE) {
   );
   sign.position.set(0, 2.55, 0.4);
   group.add(sign);
+
+  return group;
+}
+
+const NOTICE_BOARD_PAPERS = [
+  ['notice_board_paper_gazette', -0.60, ['GAZETTE #2', 'Issue #2 is out —', 'read it at the', 'newsstand.']],
+  ['notice_board_paper_inn', 0, ['THE INN', 'Rooms for short', 'stays — ask at', 'the tavern.']],
+  ['notice_board_paper_gate', 0.60, ['SOCIAL GATE', 'Plots are free,', 'no upkeep — yours', 'outright. Bring a', 'friend.']],
+];
+
+function buildNoticeBoard(THREE) {
+  const { x, z } = TOWN_LAYOUT.noticeBoard;
+  const group = new THREE.Group();
+  group.name = 'town_notice_board';
+  group.position.set(x, 0, z);
+  group.rotation.y = Math.atan2(-x, -z);
+
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });
+  const postGeo = new THREE.BoxGeometry(0.12, 2.2, 0.12);
+  for (const postX of [-0.95, 0.95]) {
+    const post = new THREE.Mesh(postGeo, woodMat);
+    post.name = 'notice_board_post';
+    post.position.set(postX, 1.1, 0);
+    group.add(post);
+  }
+
+  const panelTex = makeBandstandTextTexture(THREE, ['NOTICE BOARD'], {
+    width: 512,
+    height: 304,
+    titleSize: 44,
+    bg: '#3b2b1d',
+    border: '#7d5a3c',
+  });
+  const panel = new THREE.Mesh(
+    new THREE.BoxGeometry(2.2, 1.3, 0.08),
+    new THREE.MeshStandardMaterial({ map: panelTex, roughness: 0.85 })
+  );
+  panel.name = 'notice_board_panel';
+  panel.position.set(0, 1.35, 0);
+  group.add(panel);
+
+  const paperGeo = new THREE.BoxGeometry(0.5, 0.7, 0.02);
+  for (const [name, paperX, lines] of NOTICE_BOARD_PAPERS) {
+    const paperTex = makeBandstandTextTexture(THREE, lines, {
+      width: 256,
+      height: 358,
+      titleSize: 30,
+      subSize: 20,
+      bg: '#f5efe0',
+      fg: '#2e2218',
+      border: '#8b6a4b',
+    });
+    const paper = new THREE.Mesh(
+      paperGeo,
+      new THREE.MeshStandardMaterial({ map: paperTex, roughness: 0.9 })
+    );
+    paper.name = name;
+    paper.position.set(paperX, 1.35, 0.06);
+    group.add(paper);
+  }
 
   return group;
 }
@@ -858,6 +919,15 @@ async function init() {
   scene.add(newsstand);
   counts.buildings++;
 
+  // Town Notice Board.
+  const noticeBoard = buildNoticeBoard(THREE);
+  noticeBoard.position.set(
+    TOWN_LAYOUT.noticeBoard.x,
+    camp.groundAt(TOWN_LAYOUT.noticeBoard.x, TOWN_LAYOUT.noticeBoard.z),
+    TOWN_LAYOUT.noticeBoard.z
+  );
+  scene.add(noticeBoard);
+
   // Lamp posts: a pair flanking the gate, one by the tavern door, one by the well.
   for (const [x, z, s] of [[-3.2, 26.2, 1.8], [3.2, 26.2, 1.8], [-8.5, 17.5, 1.4], [8.5, 6.5, 1.4]]) {
     place(LampPost, { scale: s }, x, z, { rotY: 0 });
@@ -879,7 +949,7 @@ async function init() {
     [-11, 20, 10],
     [17.92, 4.60, 9],
     ...TOWN_LAYOUT.plots.slice(1).map((p) => [p.x, p.z, 9]),
-    [0, 27, 8], [6, 8, 7], [TOWN_LAYOUT.newsstand.x, TOWN_LAYOUT.newsstand.z, 5], [-22, -20, 11],
+    [0, 27, 8], [6, 8, 7], [TOWN_LAYOUT.newsstand.x, TOWN_LAYOUT.newsstand.z, 5], [-6, 14, 5], [-22, -20, 11],
   ];
   let attempts = 0;
   while (counts.pines < 30 && attempts++ < 120) {
