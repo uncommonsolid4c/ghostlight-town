@@ -250,6 +250,11 @@ export function createTownServer(opts = {}) {
     db.exec("ALTER TABLE residents ADD COLUMN role TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc'))");
   }
 
+  const promptBookCols = db.prepare('PRAGMA table_info(prompt_book)').all();
+  if (!promptBookCols.some((c) => c.name === 'reply_to')) {
+    db.exec('ALTER TABLE prompt_book ADD COLUMN reply_to INTEGER');
+  }
+
   const residentsMaster = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'residents'")
     .get();
@@ -452,7 +457,7 @@ export function createTownServer(opts = {}) {
     const cutoff24h = now - 24 * 60 * 60;
     const promptBook = db
       .prepare(
-        `SELECT p.id, p.handle, p.kind, p.body, p.created_at, COALESCE(r.role, 'muse') AS role
+        `SELECT p.id, p.handle, p.kind, p.body, p.reply_to, p.created_at, COALESCE(r.role, 'muse') AS role
          FROM prompt_book p
          LEFT JOIN residents r ON r.handle = p.handle
          WHERE p.created_at >= ? OR p.id IN (SELECT id FROM prompt_book ORDER BY id DESC LIMIT 100)
@@ -686,6 +691,20 @@ export function createTownServer(opts = {}) {
       return;
     }
 
+    let replyTo = null;
+    if (body.reply_to !== undefined && body.reply_to !== null) {
+      if (!Number.isInteger(body.reply_to) || body.reply_to <= 0) {
+        sendJson(res, 400, { error: 'invalid_reply_to' });
+        return;
+      }
+      const targetLine = db.prepare('SELECT id FROM prompt_book WHERE id = ?').get(body.reply_to);
+      if (!targetLine) {
+        sendJson(res, 400, { error: 'invalid_reply_to' });
+        return;
+      }
+      replyTo = body.reply_to;
+    }
+
     const rl = rateLimiter.consume(`say:${handle}`, RATE_LIMITS.say.max, RATE_LIMITS.say.windowSec, now);
     if (!rl.allowed) {
       sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
@@ -693,8 +712,8 @@ export function createTownServer(opts = {}) {
     }
 
     const inserted = db
-      .prepare('INSERT INTO prompt_book (handle, kind, body, created_at) VALUES (?, ?, ?, ?) RETURNING id')
-      .get(handle, kind, text, now);
+      .prepare('INSERT INTO prompt_book (handle, kind, body, reply_to, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id')
+      .get(handle, kind, text, replyTo, now);
 
     // Refresh caller's footlight TTL if lit
     const newExpiresAt = now + FOOTLIGHT_TTL_SEC;
@@ -710,6 +729,7 @@ export function createTownServer(opts = {}) {
       handle,
       kind,
       body: text,
+      reply_to: replyTo,
       created_at: now,
       state_seq: stateSeq,
     });
