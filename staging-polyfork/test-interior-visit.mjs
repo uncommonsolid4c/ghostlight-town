@@ -9,7 +9,13 @@ import {
   setInteriorVisible,
   setInteriorPalette,
 } from './interior-room.mjs';
-import { isDoorHit, createInteriorVisit } from './interior-visit.mjs';
+import {
+  isDoorHit,
+  rayHitsInteriorDoor,
+  createInteriorVisit,
+  INTERIOR_LOOK_SENSITIVITY,
+  INTERIOR_PITCH_LIMIT,
+} from './interior-visit.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -320,6 +326,149 @@ test('enter while inside and exit while outside are no-ops', () => {
     { x: camera.position.x, y: camera.position.y, z: camera.position.z },
     { x: 0, y: 26, z: 58 }
   );
+});
+
+test('rayHitsInteriorDoor hits front doorway gap and rejects misses, rotated rooms, stubs, and nulls', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  // a. Straight ahead through the gap
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }),
+    true
+  );
+
+  // b. Ray pointing away from the front (-z)
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: -1 }),
+    false
+  );
+
+  // c. Ray parallel to the front plane (dz = 0)
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 1, y: 0, z: 0 }),
+    false
+  );
+
+  // d. Ray through the plane at x = 0.9 (beside the door, |x| > 0.5)
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }),
+    false
+  );
+
+  // e. Ray through the plane above the door (y = 2.5) and at the lintel (y = 2.3)
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 2.5, z: 0.9 }, { x: 0, y: 0, z: 1 }),
+    false
+  );
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 2.3, z: 0.9 }, { x: 0, y: 0, z: 1 }),
+    false
+  );
+
+  // f. Rotated room: position (10, 0, 0), rotation.y = pi/2
+  const rotatedRoom = buildInteriorRoom(THREE);
+  rotatedRoom.position.set(10, 0, 0);
+  rotatedRoom.rotation.y = Math.PI / 2;
+  assert.equal(
+    rayHitsInteriorDoor(rotatedRoom, { x: 10.9, y: 1.55, z: 0 }, { x: 1, y: 0, z: 0 }),
+    true
+  );
+
+  // g. Headless stub without worldToLocal + null safety
+  const stubRoom = { rotation: { y: 0 } };
+  assert.equal(
+    rayHitsInteriorDoor(stubRoom, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }),
+    true
+  );
+  assert.equal(rayHitsInteriorDoor(null, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, null, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, null), false);
+});
+
+test('lookBy turns view inside, clamps pitch, leaves camera position fixed, and resets on exit', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  // Constants exported
+  assert.equal(INTERIOR_LOOK_SENSITIVITY, 0.005);
+  assert.equal(INTERIOR_PITCH_LIMIT, 0.6);
+
+  // No-op while outside
+  assert.equal(visit.lookBy(50, 20), false);
+  assert.deepEqual(
+    { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    { x: 0, y: 26, z: 58 }
+  );
+  assert.deepEqual(
+    { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+    { x: 0, y: 2, z: 0 }
+  );
+
+  const cottage = new THREE.Group();
+  cottage.userData = { handle: 'milo' };
+  cottage.position.set(17.92, 0, 4.6);
+  cottage.rotation.y = Math.PI / 4;
+  assert.equal(visit.enter(cottage), true);
+  const eyeWorld = { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+
+  // lookBy(0, 0) changes nothing (stays at (0, 1.15, -1.3))
+  assert.equal(visit.lookBy(0, 0), true);
+  let localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - 0) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - 1.15) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - -1.3) < 1e-6);
+
+  // Drag right (100 px) -> yaw -= 0.5 -> room-local target x positive (~ +1.05)
+  assert.equal(visit.lookBy(100, 0), true);
+  localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(localTarget.x > 1.0 && localTarget.x < 1.1, `expected target.x ~ +1.05, got ${localTarget.x}`);
+  // Camera position does not move
+  assert.deepEqual(
+    { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    eyeWorld
+  );
+
+  // Exit and re-enter resets yaw/pitch back to (0, 1.15, -1.3)
+  assert.equal(visit.exit(), true);
+  assert.equal(visit.enter(cottage), true);
+  localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - 0) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - 1.15) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - -1.3) < 1e-6);
+
+  // Yaw pi -> facing the front door at (0, 1.15, 3.1)
+  assert.equal(visit.lookBy(Math.PI / 0.005, 0), true);
+  localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - 0) < 1e-6, `expected x ~ 0, got ${localTarget.x}`);
+  assert.ok(Math.abs(localTarget.y - 1.15) < 1e-6, `expected y ~ 1.15, got ${localTarget.y}`);
+  assert.ok(Math.abs(localTarget.z - 3.1) < 1e-6, `expected z ~ 3.1, got ${localTarget.z}`);
+
+  // Reset to yaw 0 via exit/enter, then test pitch clamp up (+0.6) and down (-0.6)
+  assert.equal(visit.exit(), true);
+  assert.equal(visit.enter(cottage), true);
+
+  assert.equal(visit.lookBy(0, -10000), true);
+  localTarget = room.worldToLocal(controls.target.clone());
+  const expectedUpY = 1.55 + Math.sin(0.6) * Math.sqrt(5);
+  const expectedUpZ = 0.9 - Math.cos(0.6) * Math.sqrt(5);
+  assert.ok(Math.abs(localTarget.y - expectedUpY) < 1e-6, `expected y ~ ${expectedUpY}, got ${localTarget.y}`);
+  assert.ok(Math.abs(localTarget.z - expectedUpZ) < 1e-6, `expected z ~ ${expectedUpZ}, got ${localTarget.z}`);
+
+  assert.equal(visit.lookBy(0, 20000), true);
+  localTarget = room.worldToLocal(controls.target.clone());
+  const expectedDownY = 1.55 + Math.sin(-0.6) * Math.sqrt(5);
+  const expectedDownZ = 0.9 - Math.cos(-0.6) * Math.sqrt(5);
+  assert.ok(Math.abs(localTarget.y - expectedDownY) < 1e-6, `expected y ~ ${expectedDownY}, got ${localTarget.y}`);
+  assert.ok(Math.abs(localTarget.z - expectedDownZ) < 1e-6, `expected z ~ ${expectedDownZ}, got ${localTarget.z}`);
 });
 
 test('interior-visit.mjs contains no campfire term, fetch(, Math.random, or DOM access', async () => {
