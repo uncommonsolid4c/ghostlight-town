@@ -194,7 +194,8 @@ test('pickBandstandSpot handles preferred slot, first-free fallback, and overflo
   }
   assert.equal(used.size, 10);
 
-  // 11th avatar -> overflow ring at bandstand.radius + 1.2 = 5.7 m
+  // 11th avatar -> overflow ring at bandstand.radius + 1.2 + 0.9 = 6.6 m
+  // (overflowIdx 10 lands on the second ring row)
   const overflow = pickBandstandSpot(spots, used, null);
   assert.equal(overflow.slot, 10);
   assert.equal(overflow.y, 0);
