@@ -27,11 +27,13 @@ async function createFixtureTree(rootDir) {
   const town3d = path.join(rootDir, 'town-3d');
   await fs.mkdir(path.join(town3d, 'models'), { recursive: true });
   await fs.mkdir(path.join(town3d, 'gazette'), { recursive: true });
+  await fs.mkdir(path.join(town3d, 'inn'), { recursive: true });
   await fs.mkdir(path.join(town3d, 'plots', 'milo'), { recursive: true });
 
   const files = {
     'index.html': '<!doctype html><script type="module">import "./town.js?v=99";</script>\n',
     'move-in.html': '<!doctype html><h1>Move in</h1>\n',
+    'inn/index.html': '<!doctype html><h1>Ghostlight Inn</h1>\n',
     'town.js': 'export const TOWN_VERSION = 99;\n',
     'concept-bandstand.js': 'export const BANDSTAND = true;\n',
     'CREDITS.md': '# Credits\nBandstand lantern assets.\n',
@@ -505,6 +507,30 @@ test('real tree stages move-in.html in MANIFEST.json', async () => {
       await pathExists(path.join(stagedDir, 'move-in.html')),
       true,
       'move-in.html must be copied into staged dir'
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('real tree stages inn/index.html in MANIFEST.json', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-inn-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const res = runStage(['--out', outDir]);
+    assert.equal(res.status, 0, `Stage failed: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifest = JSON.parse(await fs.readFile(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
+    assert.ok(
+      manifest.files.some((f) => f.path === 'inn/index.html'),
+      'MANIFEST.json must include inn/index.html'
+    );
+    assert.equal(
+      await pathExists(path.join(stagedDir, 'inn', 'index.html')),
+      true,
+      'inn/index.html must be copied into staged dir'
     );
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
