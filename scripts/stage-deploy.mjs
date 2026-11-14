@@ -235,16 +235,22 @@ export async function collectSourceFilesFromTown3d(town3dDir) {
 
   const gazetteFiles = [];
   await collectDirRecursive(path.join(town3dDir, 'gazette'), 'gazette', gazetteFiles);
-  if (gazetteFiles.length === 0) {
-    throw new Error('Missing required source files: town-3d/gazette/**');
-  }
+  let stagedGazetteCount = 0;
   for (const item of gazetteFiles) {
+    if (/^gazette\/[^/]+\.mjs$/.test(item.relPath)) {
+      excluded.push({ path: item.relPath, reason: 'build tool, not served content' });
+      continue;
+    }
     const excludedEntry = findExcludedFile(item.relPath);
     if (excludedEntry) {
       excluded.push({ path: excludedEntry.relPath, reason: excludedEntry.reason });
     } else {
       files.push(item);
+      stagedGazetteCount += 1;
     }
+  }
+  if (stagedGazetteCount === 0) {
+    throw new Error('Missing required source files: town-3d/gazette/**');
   }
 
   const plotsFiles = [];
