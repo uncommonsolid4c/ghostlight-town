@@ -13,6 +13,7 @@ import {
   INN_ROOM_WINDOWS,
   buildTown,
   applyState,
+  updateNightlyCallCard,
   applyPlotManifest,
   updateTownAnimations,
   renderPromptBook,
@@ -1021,4 +1022,69 @@ test('resolveInnOverlayContent never leaks key_code, ignores unknown rooms, and 
   assert.equal((res.html.match(/<li>/g) || []).length, 3, 'exactly three room list items');
   assert.equal(res.html.includes('<script>'), false, 'handle must be HTML-escaped');
   assert.ok(res.html.includes('&lt;script&gt;wick&lt;/script&gt;'));
+});
+
+test('applyState updates nightly_call_card texture from state.nightly_call and skips redundant redraws', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  const card = town.parts.nightlyCallCard;
+  assert.ok(card, 'buildTown must expose parts.nightlyCallCard');
+  const initialMap = card.material.map;
+  assert.ok(initialMap, 'static placeholder texture must exist at build time');
+
+  const topic = "What's one small object on your desk tonight?";
+  const live = applyState(town, {
+    nightly_call: { date: '2026-11-13', topic },
+  });
+
+  assert.notEqual(card.material.map, initialMap, 'card material map must update on new topic');
+  assert.equal(card.material.needsUpdate, true);
+  assert.equal(live.nightlyCallTopic, topic);
+
+  const firstLiveMap = card.material.map;
+  applyState(town, {
+    nightly_call: { date: '2026-11-13', topic },
+  });
+  assert.equal(card.material.map, firstLiveMap, 'same topic must not redraw texture');
+
+  // Long topic (>60 chars) wraps without throwing and updates texture
+  const longTopic = 'What is one small thing on your windowsill or desk that reminds you of a neighbor?';
+  applyState(town, {
+    nightly_call: { date: '2026-11-14', topic: longTopic },
+  });
+  assert.notEqual(card.material.map, firstLiveMap, 'new long topic must redraw texture');
+  assert.equal(live.nightlyCallTopic, longTopic);
+});
+
+test('applyState leaves nightly_call_card untouched when nightly_call is missing or malformed', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  const card = town.parts.nightlyCallCard;
+  const staticMap = card.material.map;
+
+  applyState(town, { footlights: [], presence: [] });
+  assert.equal(card.material.map, staticMap, 'missing nightly_call leaves static texture untouched');
+
+  for (const bad of [
+    null,
+    'not-an-object',
+    [],
+    {},
+    { date: '2026-11-13', topic: '' },
+    { date: '2026-11-13', topic: '   ' },
+    { date: '2026-11-13', topic: 123 },
+    { date: '2026-11-13', topic: null },
+  ]) {
+    applyState(town, { nightly_call: bad });
+    assert.equal(card.material.map, staticMap, 'malformed nightly_call leaves static texture untouched');
+  }
+});
+
+test('updateNightlyCallCard is a no-op when card mesh is missing', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  town.parts.nightlyCallCard = null;
+  town.parts.bandstand.children = town.parts.bandstand.children.filter((c) => c.name !== 'nightly_call_card');
+
+  assert.doesNotThrow(() => {
+    updateNightlyCallCard(town, { date: '2026-11-13', topic: "What's in your mug?" });
+    applyState(town, { nightly_call: { date: '2026-11-13', topic: "What's in your mug?" } });
+  });
 });
