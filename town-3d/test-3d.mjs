@@ -21,6 +21,8 @@ import {
   createAvatarCapsule,
   getPlotTargetPosition,
   loadTownProps,
+  pinchFov,
+  stepGlide,
   updateTownAnimations,
 } from './town.js';
 
@@ -1222,4 +1224,51 @@ test('Ghostlight Inn book page exists, is static/safe, and index.html overlay UR
   assert.ok(urlMatch, 'town.js resolveInnOverlayContent must contain static fallback URL inn/index.html');
   const stat = await fs.stat(path.join(__dirname, urlMatch[1]));
   assert.ok(stat.isFile(), 'inn/index.html overlay target must resolve to a file on disk');
+});
+
+test('Slice 55 exports stepGlide and pinchFov', () => {
+  assert.equal(typeof stepGlide, 'function', 'town.js must export stepGlide');
+  assert.equal(typeof pinchFov, 'function', 'town.js must export pinchFov');
+});
+
+test('stepGlide moves toward target by speed * dt, arrives within arriveDist without overshoot, clamps maxRadius, and handles dt = 0', () => {
+  const zeroDt = stepGlide({ x: 3, z: -4 }, { x: 10, z: 10 }, 0);
+  assert.deepEqual(zeroDt, { x: 3, z: -4, arrived: false });
+
+  const step1 = stepGlide({ x: 0, z: 0 }, { x: 10, z: 0 }, 0.2);
+  assert.equal(step1.arrived, false);
+  assert.ok(Math.abs(step1.x - 1.5) < 1e-9, `expected x=1.5, got ${step1.x}`);
+  assert.ok(Math.abs(step1.z) < 1e-9, `expected z=0, got ${step1.z}`);
+
+  // Snap on arrival within arriveDist (0.3) without overshooting
+  const near = stepGlide({ x: 9.0, z: 0 }, { x: 10, z: 0 }, 0.1);
+  assert.deepEqual(near, { x: 10, z: 0, arrived: true });
+
+  const noOvershoot = stepGlide({ x: 9.9, z: 0 }, { x: 10, z: 0 }, 1.0);
+  assert.deepEqual(noOvershoot, { x: 10, z: 0, arrived: true });
+
+  // Clamp target beyond maxRadius
+  const clamped = stepGlide({ x: 0, z: 0 }, { x: 40, z: 0 }, 10);
+  assert.equal(clamped.arrived, true);
+  assert.ok(Math.abs(clamped.x - 28.5) < 1e-9, `expected x=28.5, got ${clamped.x}`);
+  assert.ok(Math.abs(clamped.z) < 1e-9, `expected z=0, got ${clamped.z}`);
+});
+
+test('pinchFov zooms in/out, clamps to [40, 85], and returns startFov for currentDist <= 0', () => {
+  // Pinch open (currentDist > startDist) -> smaller FOV (zoom in)
+  const zoomedIn = pinchFov(65, 100, 130);
+  assert.ok(zoomedIn < 65 && zoomedIn >= 40, `expected zoomedIn in [40, 65), got ${zoomedIn}`);
+
+  // Pinch close (currentDist < startDist) -> larger FOV (zoom out)
+  const zoomedOut = pinchFov(65, 100, 80);
+  assert.ok(zoomedOut > 65 && zoomedOut <= 85, `expected zoomedOut in (65, 85], got ${zoomedOut}`);
+
+  // Clamp bounds
+  assert.equal(pinchFov(65, 100, 500), 40);
+  assert.equal(pinchFov(65, 100, 10), 85);
+
+  // Non-positive or non-finite currentDist
+  assert.equal(pinchFov(65, 100, 0), 65);
+  assert.equal(pinchFov(65, 100, -5), 65);
+  assert.equal(pinchFov(65, 100, Number.NaN), 65);
 });
