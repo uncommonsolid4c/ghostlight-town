@@ -10,6 +10,13 @@ import {
   updateStagingNightlyCallCard,
 } from './inn-nightly-call.mjs';
 import { lightFootlightSlot } from './concept-bandstand.js';
+import {
+  TOWN_LAYOUT,
+  createAvatarCapsule,
+  setAvatarStatusText,
+  getPlotTargetPosition,
+  pickBandstandSpot,
+} from './avatar.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -55,7 +62,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/concept-cottage\.js['"]/, 'staging.js must import ./concept-cottage.js');
   assert.match(codeOnly, /from\s+['"]\.\/concept-ghost\.js['"]/, 'staging.js must import ./concept-ghost.js');
   assert.match(codeOnly, /from\s+['"]\.\/prompt-book\.mjs['"]/, 'staging.js must import ./prompt-book.mjs');
-  assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs['"]/, 'staging.js must import ./avatar.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs(\?v=\d+)?['"]/, 'staging.js must import ./avatar.mjs (optional ?v= cache-buster)');
   assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs(\?v=\d+)?['"]/, 'staging.js must import ./inn-nightly-call.mjs (optional ?v= cache-buster)');
   assert.match(codeOnly, /from\s+['"]\.\/plot-overlay\.mjs['"]/, 'staging.js must import ./plot-overlay.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/inn-guestbook-overlay\.mjs['"]/, 'staging.js must import ./inn-guestbook-overlay.mjs');
@@ -112,12 +119,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=27, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=28, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=27["']/, 'index.html must reference ./staging.js?v=27');
+  assert.match(html, /src=["']\.\/staging\.js\?v=28["']/, 'index.html must reference ./staging.js?v=28');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -610,4 +617,108 @@ test('Slice 82: staging.js passes row.status_text, re-lights on status change, a
     /flGroup\.userData\.statusText\s*=\s*null\s*;/,
     'applyStagingState unlit branch must clear flGroup.userData.statusText = null'
   );
+});
+
+test('Slice 83: applyStagingPresence passes footlight status_text to avatar nametag and clears back to badge-only', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingPresence(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingPresence in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  const buildApplyPresence = new Function(
+    'THREE',
+    'scene',
+    'camp',
+    'TOWN_LAYOUT',
+    'createAvatarCapsule',
+    'setAvatarStatusText',
+    'getPlotTargetPosition',
+    'pickBandstandSpot',
+    `${fnBody}\nreturn applyStagingPresence;`
+  );
+
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.userData = {};
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+        this.rotation = { x: 0, y: 0, z: 0 };
+      }
+      add(c) { this.children.push(c); }
+      removeFromParent() {}
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial { constructor(o = {}) { Object.assign(this, o); } };
+    fakeTHREE.SpriteMaterial = class SpriteMaterial { constructor(o = {}) { Object.assign(this, o); } };
+    fakeTHREE.Mesh = class Mesh { constructor(g, m) { this.geometry = g; this.material = m; this.position = { set() {} }; } };
+    fakeTHREE.Sprite = class Sprite {
+      constructor(m) {
+        this.material = m;
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+        this.scale = { x: 1, y: 1, z: 1, set: (x, y, z) => { this.scale.x = x; this.scale.y = y; this.scale.z = z; } };
+      }
+    };
+    fakeTHREE.CylinderGeometry = class CylinderGeometry {};
+    fakeTHREE.SphereGeometry = class SphereGeometry {};
+
+    const scene = { children: [], add(obj) { this.children.push(obj); } };
+    const camp = { groundAt: () => 0 };
+    const applyStagingPresence = buildApplyPresence(
+      fakeTHREE,
+      scene,
+      camp,
+      TOWN_LAYOUT,
+      createAvatarCapsule,
+      setAvatarStatusText,
+      getPlotTargetPosition,
+      pickBandstandSpot
+    );
+
+    const liveStore = { avatars: new Map(), plotAssignments: new Map() };
+    const bandstandBuilt = {
+      avatarSpots: [{ x: 1, y: 0.6, z: 1, rotY: 0 }, { x: 2, y: 0.6, z: 2, rotY: 0 }],
+    };
+    const footlightSlotByHandle = new Map([['wick', 1]]);
+
+    // 1. Lit footlight with status_text sets 2-line nametag; milo is filtered out.
+    draws.length = 0;
+    applyStagingPresence(liveStore, bandstandBuilt, null, footlightSlotByHandle, {
+      presence: [
+        { handle: 'milo', role: 'muse', zone: 'bandstand' },
+        { handle: 'wick', role: 'npc', zone: 'bandstand' },
+        { handle: 'sol', role: 'muse', zone: 'gate' },
+      ],
+      footlights: [
+        { handle: 'wick', slot: 1, status_text: 'Evening lanterns' },
+      ],
+    });
+
+    assert.equal(liveStore.avatars.has('milo'), false);
+    const wick = liveStore.avatars.get('wick');
+    const sol = liveStore.avatars.get('sol');
+    assert.equal(wick.userData.statusText, 'Evening lanterns');
+    assert.equal(wick.userData.nametagSprite.scale.y, 0.5625);
+    assert.ok(draws.some((d) => d.text === 'Evening lanterns' && d.width === 384 && d.height === 144));
+    assert.equal(sol.userData.statusText, null);
+    assert.equal(sol.userData.nametagSprite.scale.y, 0.375);
+
+    // 2. Footlight unlights (or status_text disappears) -> restores badge-only.
+    draws.length = 0;
+    applyStagingPresence(liveStore, bandstandBuilt, null, new Map(), {
+      presence: [
+        { handle: 'wick', role: 'npc', zone: 'bandstand' },
+        { handle: 'sol', role: 'muse', zone: 'gate' },
+      ],
+      footlights: [],
+    });
+
+    assert.equal(wick.userData.statusText, null);
+    assert.equal(wick.userData.nametagSprite.scale.y, 0.375);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, '[NPC] wick');
+    assert.equal(draws[0].width, 384);
+    assert.equal(draws[0].height, 96);
+  });
 });
