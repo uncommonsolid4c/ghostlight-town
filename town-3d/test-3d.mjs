@@ -522,6 +522,7 @@ test('createCottage honors tower manifest, custom colors, 0 props, and ignores u
   const propMeshes = collectNodes(tower, (n) => n.name.startsWith('prop_'));
   assert.equal(propMeshes.length, 1);
   assert.equal(propMeshes[0].name, 'prop_bookshelf');
+  assert.ok(Math.abs(propMeshes[0].position.z - 2.75) < 1e-12, 'interior bookshelf at z=0 remaps to porch z=2.75');
 
   const emptyCabin = createCottage(THREE, {
     cottage: 'cabin',
