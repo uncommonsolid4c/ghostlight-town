@@ -111,12 +111,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=16, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=17, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=16["']/, 'index.html must reference ./staging.js?v=16');
+  assert.match(html, /src=["']\.\/staging\.js\?v=17["']/, 'index.html must reference ./staging.js?v=17');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
@@ -167,8 +167,8 @@ test('staging.js removes decorative cottages, keeps pads for plots 2-8, and reta
   assert.match(codeOnly, /p\.x\s*-\s*192/, 'pad x must use sceneX - 192 (matching Milo precedent 17.92 - 192 = -174.08)');
   assert.match(codeOnly, /p\.z\s*\+\s*384/, 'pad z must use sceneZ + 384 (matching Milo precedent 4.60 + 384 = 388.6)');
 
-  assert.match(codeOnly, /\bnpcStandIns\b/, 'staging.js must keep named references to NPC stand-ins for the yield rule');
-  assert.match(codeOnly, /standIn\.group\.visible\s*=\s*false/, 'NPC stand-ins must hide when live presence avatar exists');
+  assert.match(codeOnly, /\bnpcStandIns\b/, 'staging.js must keep named references to NPC stand-ins for wandering/yield');
+  assert.match(codeOnly, /\bupdateStagingWander\s*\(/, 'staging.js must wire updateStagingWander (which owns stand-in yield)');
   assert.match(codeOnly, /\btavernGroup\s*=\s*place\s*\(\s*Tavern\b/, 'staging.js must keep tavernGroup reference from place(Tavern, ...)');
   assert.match(codeOnly, /updateStagingInnOccupancy\s*\(/, 'staging.js must wire updateStagingInnOccupancy');
   assert.match(codeOnly, /updateStagingNightlyCallCard\s*\(/, 'staging.js must wire updateStagingNightlyCallCard');
