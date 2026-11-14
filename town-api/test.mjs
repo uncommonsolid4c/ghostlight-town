@@ -1,3 +1,10 @@
+/**
+ * town-api integration tests.
+ *
+ * Known edge, accepted: the Nightly Call topic rolls at midnight UTC but only
+ * reaches polling clients on the next state change after midnight, because
+ * `state?since=` returns 304 while state_seq is unchanged.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -15,12 +22,13 @@ async function startTestServer(opts = {}) {
   const plotsDir = path.join(tmpDir, 'plots');
   const operatorKeys = generateKeypair();
   let clockOffset = 0;
-  const nowFn = () => Math.floor(Date.now() / 1000) + clockOffset;
+  const nowFn = opts.nowFn || (() => Math.floor(Date.now() / 1000) + clockOffset);
 
   const { server, db } = createTownServer({
     dbPath,
     plotsDir,
     operatorPubkey: opts.operatorPubkey !== undefined ? opts.operatorPubkey : operatorKeys.pubkey,
+    topicsPath: opts.topicsPath,
     nowFn,
   });
 
@@ -695,6 +703,57 @@ test('startTestServer writes plots to temp plotsDir and does not create town-api
 
     const repoPlotsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'plots');
     assert.equal(fs.existsSync(repoPlotsDir), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state serves deterministic nightly_call { date, topic } for fixed UTC dates', async () => {
+  const topicsFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-topics.json');
+  const topics = JSON.parse(fs.readFileSync(topicsFile, 'utf8'));
+
+  let fixedSec = Math.floor(Date.UTC(2026, 10, 13, 18, 30, 0) / 1000);
+  const ctx = await startTestServer({ nowFn: () => fixedSec });
+  try {
+    const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res1.status, 200);
+    const s1 = await res1.json();
+
+    assert.ok(s1.nightly_call && typeof s1.nightly_call === 'object');
+    assert.deepEqual(Object.keys(s1.nightly_call).sort(), ['date', 'topic']);
+    assert.match(s1.nightly_call.date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(s1.nightly_call.date, '2026-11-13');
+    const day1 = Math.floor(Date.UTC(2026, 10, 13) / 86400000);
+    assert.equal(s1.nightly_call.topic, topics[day1 % topics.length]);
+
+    // Same date twice yields the exact same topic
+    fixedSec = Math.floor(Date.UTC(2026, 10, 13, 23, 59, 0) / 1000);
+    const s1Again = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(s1Again.nightly_call.date, '2026-11-13');
+    assert.equal(s1Again.nightly_call.topic, s1.nightly_call.topic);
+
+    // Different UTC date yields the topic for that day
+    fixedSec = Math.floor(Date.UTC(2026, 10, 14, 0, 5, 0) / 1000);
+    const s2 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.deepEqual(Object.keys(s2.nightly_call).sort(), ['date', 'topic']);
+    assert.match(s2.nightly_call.date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(s2.nightly_call.date, '2026-11-14');
+    const day2 = Math.floor(Date.UTC(2026, 10, 14) / 86400000);
+    assert.equal(s2.nightly_call.topic, topics[day2 % topics.length]);
+    assert.notEqual(s2.nightly_call.topic, s1.nightly_call.topic);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('createTownServer boots and omits nightly_call when topicsPath does not exist', async () => {
+  const missingPath = path.join(os.tmpdir(), `missing-nightly-topics-${Date.now()}.json`);
+  const ctx = await startTestServer({ topicsPath: missingPath });
+  try {
+    const res = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res.status, 200);
+    const state = await res.json();
+    assert.equal('nightly_call' in state, false);
   } finally {
     await ctx.close();
   }
