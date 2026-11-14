@@ -10,6 +10,7 @@ import {
   TOWN_LAYOUT,
   MILO_REBUILD_MANIFEST,
   FOOTLIGHT_COLORS,
+  INN_ROOM_WINDOWS,
   buildTown,
   applyState,
   applyPlotManifest,
@@ -143,6 +144,11 @@ function createThreeStub() {
     constructor(type, params = {}) {
       this.type = type;
       Object.assign(this, params);
+    }
+    clone() {
+      const cloned = new this.constructor(this);
+      cloned.type = this.type;
+      return cloned;
     }
   }
   class Light extends Object3D {
@@ -830,4 +836,93 @@ test('resolvePlotOverlayContent prefers API html and falls back to static path',
   // 6. No fetchFn (offline/static preview) falls back to static without error
   const noFetchRes = await resolvePlotOverlayContent('milo', { fetchFn: null });
   assert.deepEqual(noFetchRes, { kind: 'static', url: 'plots/milo/index.html' });
+});
+
+function getInnWindow(town, idx) {
+  return collectNodes(town.parts.inn, (n) => n.name === `inn_window_${idx}`)[0];
+}
+
+test('buildTown gives each inn room window its own cloned material instance', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  assert.deepEqual(INN_ROOM_WINDOWS, { lantern: 4, window: 5, quiet: 6 });
+
+  const sharedMat = getInnWindow(town, 0).material;
+  const w4 = getInnWindow(town, 4);
+  const w5 = getInnWindow(town, 5);
+  const w6 = getInnWindow(town, 6);
+
+  assert.notEqual(w4.material, sharedMat, 'lantern window must not share common windowMat');
+  assert.notEqual(w5.material, sharedMat, 'window room window must not share common windowMat');
+  assert.notEqual(w6.material, sharedMat, 'quiet window must not share common windowMat');
+  assert.notEqual(w4.material, w5.material);
+  assert.notEqual(w4.material, w6.material);
+  assert.notEqual(w5.material, w6.material);
+
+  for (const idx of [1, 2, 3, 7]) {
+    assert.equal(getInnWindow(town, idx).material, sharedMat, `inn_window_${idx} keeps shared material`);
+  }
+});
+
+test('applyState updates inn room window glow for claimed and vacant rooms', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  applyState(town, {
+    inn: {
+      lantern: { handle: 'wick', nights: 3, expires_at: 9999999999 },
+      window: null,
+      quiet: { handle: 'maren', nights: 2, expires_at: 9999999999 },
+    },
+  });
+
+  assert.equal(getInnWindow(town, 4).material.emissiveIntensity, 1.4, 'claimed lantern window stays bright');
+  assert.ok(getInnWindow(town, 5).material.emissiveIntensity <= 0.2, 'vacant window room dims');
+  assert.equal(getInnWindow(town, 6).material.emissiveIntensity, 1.4, 'claimed quiet window stays bright');
+
+  for (const idx of [0, 1, 2, 3, 7]) {
+    assert.equal(getInnWindow(town, idx).material.emissiveIntensity, 1.4, `common inn_window_${idx} stays at 1.4`);
+  }
+});
+
+test('applyState with no inn key leaves all eight inn windows lit as built', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  applyState(town, { footlights: [], presence: [] });
+
+  for (let idx = 0; idx < 8; idx++) {
+    assert.equal(getInnWindow(town, idx).material.emissiveIntensity, 1.4, `inn_window_${idx} stays at 1.4`);
+  }
+});
+
+test('applyState inn occupancy round-trip dims a previously claimed room when vacated', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  applyState(town, {
+    inn: {
+      lantern: { handle: 'wick', nights: 1, expires_at: 9999999999 },
+      window: null,
+      quiet: null,
+    },
+  });
+  assert.equal(getInnWindow(town, 4).material.emissiveIntensity, 1.4);
+
+  applyState(town, {
+    inn: {
+      lantern: null,
+      window: null,
+      quiet: null,
+    },
+  });
+  assert.ok(getInnWindow(town, 4).material.emissiveIntensity <= 0.2, 'vacated lantern window dims again');
+});
+
+test('applyState ignores unknown inn room keys without throwing', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  applyState(town, {
+    inn: {
+      lantern: null,
+      penthouse: { handle: 'x' },
+    },
+  });
+
+  assert.ok(getInnWindow(town, 4).material.emissiveIntensity <= 0.2, 'lantern window dims');
+  for (const idx of [0, 1, 2, 3, 7]) {
+    assert.equal(getInnWindow(town, idx).material.emissiveIntensity, 1.4, `common inn_window_${idx} unchanged`);
+  }
 });
