@@ -69,6 +69,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/tap-glide\.mjs['"]/, 'staging.js must import ./tap-glide.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/interior-room\.mjs\?v=34['"]/, 'staging.js must import ./interior-room.mjs?v=34');
   assert.match(codeOnly, /from\s+['"]\.\/interior-visit\.mjs\?v=34['"]/, 'staging.js must import ./interior-visit.mjs?v=34');
+  assert.match(codeOnly, /from\s+['"]\.\/empty-pad\.mjs\?v=35['"]/, 'staging.js must import ./empty-pad.mjs?v=35');
 
   assert.ok(!/\.\.\/town-3d\//.test(codeOnly), 'staging.js must not import from ../town-3d/');
   assert.ok(!/\bMath\.random\b/.test(codeOnly), 'staging.js must not use Math.random');
@@ -121,12 +122,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=34, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=35, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=34["']/, 'index.html must reference ./staging.js?v=34');
+  assert.match(html, /src=["']\.\/staging\.js\?v=35["']/, 'index.html must reference ./staging.js?v=35');
   assert.match(html, /id=["']interior-exit["'][^>]*\bhidden\b/, 'index.html must include #interior-exit hidden');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
@@ -819,5 +820,35 @@ test('Slice 90: index.html has plot-overlay tabs with 44px mobile tap targets an
   for (const kind of ['newsstand', 'notice_board', 'inn', 'gate']) {
     const branchRe = new RegExp(`kind === '${kind}'\\)[\\s\\S]*?setPlotTabs\\(null\\)`);
     assert.match(codeOnly, branchRe, `staging.js ${kind} opener must call setPlotTabs(null)`);
+  }
+});
+
+test('Slice 92: index.html includes #info-strip and staging.js wires empty-pad markers and open_plot click', async () => {
+  const [html, src] = await Promise.all([
+    fs.readFile(INDEX_HTML_PATH, 'utf8'),
+    fs.readFile(STAGING_JS_PATH, 'utf8'),
+  ]);
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  assert.match(html, /id=["']info-strip["'][^>]*\bhidden\b/, 'index.html must include hidden #info-strip');
+  assert.match(codeOnly, /emptyPadMarkers:\s*new Map\(\)/, 'createStagingLiveStore must initialize emptyPadMarkers');
+  assert.match(
+    codeOnly,
+    /createStagingLiveStore\(\)[\s\S]*?syncEmptyPadMarkers\s*\(\s*scene\s*,\s*liveStore\b/,
+    'staging.js must call syncEmptyPadMarkers at startup'
+  );
+  assert.match(
+    codeOnly,
+    /syncStagingPlotsFromState\s*\([\s\S]*?\)\.then\s*\([\s\S]*?syncEmptyPadMarkers\s*\(\s*scene\s*,\s*liveStore\b/,
+    'staging.js must reconcile empty-pad markers in syncStagingPlotsFromState(...).then(...)'
+  );
+  assert.match(
+    codeOnly,
+    /kind === 'open_plot'[\s\S]*?infoStripEl\.textContent\s*=\s*`OPEN PLOT #\$\{target\.userData\.plotNumber\} — no resident yet`[\s\S]*?infoStripEl\.hidden\s*=\s*false/,
+    'staging.js handleCanvasClick must handle kind === open_plot and show #info-strip'
+  );
+  for (const kind of ['cottage', 'newsstand', 'notice_board', 'inn', 'gate']) {
+    const branchRe = new RegExp(`kind === '${kind}'[\\s\\S]*?infoStripEl\\.hidden = true`);
+    assert.match(codeOnly, branchRe, `staging.js ${kind} click branch must hide #info-strip`);
   }
 });
