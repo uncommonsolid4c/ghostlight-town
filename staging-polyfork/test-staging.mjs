@@ -55,7 +55,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/concept-ghost\.js['"]/, 'staging.js must import ./concept-ghost.js');
   assert.match(codeOnly, /from\s+['"]\.\/prompt-book\.mjs['"]/, 'staging.js must import ./prompt-book.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs['"]/, 'staging.js must import ./avatar.mjs');
-  assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs['"]/, 'staging.js must import ./inn-nightly-call.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs(\?v=\d+)?['"]/, 'staging.js must import ./inn-nightly-call.mjs (optional ?v= cache-buster)');
   assert.match(codeOnly, /from\s+['"]\.\/plot-overlay\.mjs['"]/, 'staging.js must import ./plot-overlay.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/inn-guestbook-overlay\.mjs['"]/, 'staging.js must import ./inn-guestbook-overlay.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/tap-glide\.mjs['"]/, 'staging.js must import ./tap-glide.mjs');
@@ -111,15 +111,19 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=22, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=23, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=22["']/, 'index.html must reference ./staging.js?v=22');
+  assert.match(html, /src=["']\.\/staging\.js\?v=23["']/, 'index.html must reference ./staging.js?v=23');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
   assert.ok(!/staging trial/i.test(html), 'index.html must not contain "staging trial"');
+  assert.ok(!/read-only staging/i.test(html), 'index.html HUD must not still say "read-only staging" (live since adoption)');
+  assert.match(html, /id=["']hud-toggle["']/, 'index.html must include #hud-toggle');
+  assert.match(html, /id=["']hud-body["']/, 'index.html must include #hud-body');
+  assert.match(html, /hud-toggle[\s\S]*?aria-controls=["']hud-body["']/, 'hud-toggle must control #hud-body');
   assert.match(html, /id=["']prompt-book["']/, 'index.html must include #prompt-book');
   assert.match(html, /id=["']prompt-book-lines["']/, 'index.html must include #prompt-book-lines');
   assert.match(html, /id=["']prompt-book-toggle["']/, 'index.html must include #prompt-book-toggle');
@@ -233,21 +237,29 @@ test('inn occupancy: decision logic + single-zone tavern glow toggle', () => {
   assert.equal(wallMat.emissiveIntensity, 0);
 });
 
-test('splitNightlyCallLines wraps >60-char topics near the middle on a space', () => {
-  const shortTopic = 'What is keeping you awake tonight?';
+test('splitNightlyCallLines greedily word-wraps topics into <=30-char lines (card fit)', () => {
+  const shortTopic = 'Tell us a quiet truth.';
   assert.deepEqual(splitNightlyCallLines(shortTopic), [shortTopic]);
 
+  // The live 2026-11-14 topic (51 chars) clipped on one line at the old
+  // 60-char threshold; it must wrap to two readable lines.
+  const liveTopic = 'What time of dusk do the streetlights feel warmest?';
+  const liveLines = splitNightlyCallLines(liveTopic);
+  assert.equal(liveLines.length, 2);
+  assert.equal(liveLines.join(' '), liveTopic);
+  assert.ok(liveLines.every((line) => line.length <= 30));
+
   const longTopic = 'If you could leave one anonymous lantern lit for a stranger tonight, where would you hang it?';
-  assert.ok(longTopic.length > 60);
   const lines = splitNightlyCallLines(longTopic);
-  assert.equal(lines.length, 2);
+  assert.equal(lines.length, 4);
   assert.equal(lines.join(' '), longTopic);
-  assert.ok(Math.abs(lines[0].length - lines[1].length) < 16);
+  assert.ok(lines.every((line) => line.length <= 30));
 
   const unbroken = 'a'.repeat(65);
   const hardSplit = splitNightlyCallLines(unbroken);
-  assert.equal(hardSplit.length, 2);
-  assert.equal(hardSplit[0].length + hardSplit[1].length, 65);
+  assert.equal(hardSplit.length, 3);
+  assert.equal(hardSplit[0].length + hardSplit[1].length + hardSplit[2].length, 65);
+  assert.ok(hardSplit.every((line) => line.length <= 30));
 });
 
 test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops on invalid/unchanged/missing card', () => {
@@ -322,7 +334,7 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   assert.equal(calls.length, 1);
   assert.equal(card.material.needsUpdate, false);
 
-  // New >60-char topic -> redraws with 2 wrapped lines
+  // New 74-char topic -> redraws with 3 greedily wrapped lines
   const longTopic = 'What small thing in Ghostlight Town made you pause and look twice tonight?';
   assert.equal(
     updateStagingNightlyCallCard(
@@ -333,8 +345,9 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   );
   assert.equal(calls.length, 2);
   assert.equal(calls[1].lines[0], 'THE NIGHTLY CALL');
-  assert.equal(calls[1].lines.length, 3);
+  assert.equal(calls[1].lines.length, 4);
   assert.equal(calls[1].lines.slice(1).join(' '), longTopic);
+  assert.ok(calls[1].lines.slice(1).every((line) => line.length <= 30));
 });
 
 test('staging.js wires tap-to-glide, multi-pointer suppression, ground raycast, and glide cancel paths', async () => {
