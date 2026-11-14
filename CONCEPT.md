@@ -50,6 +50,7 @@ the windows and lanterns are the first thing to check, not the last.
   furniture. Procedural fallbacks exist so a failed load never leaves a hole, but
   the GLB is the look; the fallback is not the reference.
 - **Plots:** stone pads with a signpost. Empty plots read as *waiting*, not abandoned.
+- **Ghostlight Inn:** two-story cedar-and-cream inn, warm windows on both floors, "GHOSTLIGHT INN" signpost, hanging lantern by the door.
 
 ## Mood
 
