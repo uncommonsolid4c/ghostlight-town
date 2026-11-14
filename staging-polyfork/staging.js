@@ -68,7 +68,7 @@ import {
 } from './npc-wander.mjs';
 import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=23';
 import { buildInteriorRoom, setInteriorVisible, setInteriorPalette } from './interior-room.mjs?v=30';
-import { isDoorHit, createInteriorVisit } from './interior-visit.mjs?v=30';
+import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=31';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -172,7 +172,7 @@ function enterCottageInterior(cottage) {
   keys.clear();
   if (interiorExitEl) interiorExitEl.hidden = false;
   const handle = cottage.userData?.handle || 'resident';
-  status(`Inside ${handle}'s cottage — Esc or Step outside to leave`);
+  status(`Inside ${handle}'s cottage — drag to look around, tap the door to step out (or Esc)`);
   return true;
 }
 
@@ -1211,6 +1211,7 @@ async function init() {
   const pointer = new THREE.Vector2();
   const pointerTracker = createPointerTracker({ dragThreshold: 4 });
   const glideMaxRadius = deriveGlideMaxRadius(camp.terrain?.userData?.terrain);
+  let interiorLook = null;
 
   function findClickableAncestor(obj) {
     let cur = obj;
@@ -1326,6 +1327,13 @@ async function init() {
     if (res.cancelGlide) {
       glideTarget = null;
     }
+    if (interiorVisit.isInside()) {
+      if (res.isPinch) {
+        interiorLook = null;
+      } else if (res.started && interiorLook === null) {
+        interiorLook = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      }
+    }
   });
 
   window.addEventListener('pointermove', (e) => {
@@ -1336,16 +1344,33 @@ async function init() {
     if (res.cancelGlide) {
       glideTarget = null;
     }
+    if (interiorVisit.isInside() && interiorLook && interiorLook.id === e.pointerId && !res.isPinch) {
+      interiorVisit.lookBy(e.clientX - interiorLook.x, e.clientY - interiorLook.y);
+      interiorLook.x = e.clientX;
+      interiorLook.y = e.clientY;
+    }
   });
 
   function finishPointer(e, allowTap) {
-    if (interiorVisit.isInside()) return;
+    if (interiorLook && interiorLook.id === e.pointerId) {
+      interiorLook = null;
+    }
     const overlayHidden = !plotOverlayEl || plotOverlayEl.hidden;
     const res = pointerTracker.onPointerUp(e.pointerId, e.clientX, e.clientY, {
       overlayHidden,
       allowTap,
     });
     if (!res.ended || !res.shouldClick) return;
+    if (interiorVisit.isInside()) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      if (rayHitsInteriorDoor(interiorRoom, raycaster.ray.origin, raycaster.ray.direction)) {
+        exitCottageInterior();
+      }
+      return;
+    }
     glideTarget = null;
     const hitClickable = handleCanvasClick(e);
     if (!hitClickable && e.pointerType === 'touch') {
