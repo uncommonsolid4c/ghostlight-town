@@ -406,6 +406,8 @@ function applyStagingPlotManifest(liveStore, handle, manifest) {
     cottage.add(sign);
   }
 
+  attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);
+
   assignment.cottage = cottage;
   return cottage;
 }
