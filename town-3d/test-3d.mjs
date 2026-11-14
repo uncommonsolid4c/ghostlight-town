@@ -587,12 +587,17 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
 // cottage (2 top rails + 2 balusters) for an expected total of 146. This
 // completes the porch trim (posts + step + rails), not prop creep; 150 keeps
 // the guardrail meaningful and future buildings need another deliberate revisit.
-test('Draw-call budget: total mesh count in built town is 146 (< 150)', () => {
+// Budget raised 150 -> 155 (owner decision, 2026-11-14, slice 78): baseline
+// measured 146 meshes; the town notice board adds 6 meshes (2 posts + 1 panel +
+// 3 papers) for an expected total of 152. This is the planned Phase 2 notice
+// board, not prop creep; 155 keeps the guardrail meaningful and future
+// buildings need another deliberate revisit.
+test('Draw-call budget: total mesh count in built town is 152 (< 155)', () => {
   const THREE = createThreeStub();
   const { scene } = buildTown(THREE);
   const meshes = collectNodes(scene, (n) => n.isMesh);
-  assert.equal(meshes.length, 146, `Expected 146 meshes, got ${meshes.length}`);
-  assert.ok(meshes.length < 150, `Expected < 150 meshes, got ${meshes.length}`);
+  assert.equal(meshes.length, 152, `Expected 152 meshes, got ${meshes.length}`);
+  assert.ok(meshes.length < 155, `Expected < 155 meshes, got ${meshes.length}`);
 });
 
 test('No campfire terminology and no fetch() in town.js; .glb allowed only for props (not pine.glb)', async () => {
@@ -1509,4 +1514,96 @@ test('Slice 74: createCottage attaches porch deck in all 4 styles, lifts porch p
   assert.ok(Math.abs(desk.position.y - 0.36 - 0.18) < 1e-12, 'desk bottom lifted to 0.18');
   assert.ok(Math.abs(kettle.position.y - 0.12 - 0.96) < 1e-12, 'kettle bottom lifted to 0.96');
   assert.ok(Math.abs(rug.position.y - 0.02 - 0.18) < 1e-12, 'rug bottom lifted to 0.18');
+});
+
+test('Slice 78: town notice board geometry, clearances, exact notice texts, and waypoint distance', async () => {
+  assert.deepEqual(TOWN_LAYOUT.noticeBoard, { x: -6, y: 0, z: 14 });
+
+  const THREE = createThreeStub();
+  const built = buildTown(THREE);
+  const board = collectNodes(built.scene, (n) => n.name === 'town_notice_board')[0];
+  assert.ok(board, 'town_notice_board group must exist in built town');
+  assert.equal(board.position.x, -6);
+  assert.equal(board.position.y, 0);
+  assert.equal(board.position.z, 14);
+  assert.ok(Math.abs(board.rotation.y - Math.atan2(6, -14)) < 1e-12, 'board must face gate path');
+  assert.ok(!board.userData?.clickable, 'notice board must not be clickable in slice 78');
+  assert.equal(board.userData?.kind, undefined, 'notice board must not set userData.kind in slice 78');
+
+  const meshes = collectNodes(board, (n) => n.isMesh);
+  assert.equal(meshes.length, 6, 'notice board must have exactly 6 meshes');
+
+  const posts = collectNodes(board, (n) => n.name === 'notice_board_post').sort((a, b) => a.position.x - b.position.x);
+  assert.equal(posts.length, 2, 'notice board must have 2 posts');
+  for (const [idx, expectedX] of [[0, -0.95], [1, 0.95]]) {
+    const post = posts[idx];
+    assert.equal(post.geometry.type, 'BoxGeometry');
+    assert.equal(post.geometry.parameters.width, 0.12);
+    assert.equal(post.geometry.parameters.height, 2.2);
+    assert.equal(post.geometry.parameters.depth, 0.12);
+    assert.equal(post.material.color, '#6b492b');
+    assert.equal(post.position.x, expectedX);
+    assert.equal(post.position.y, 1.1);
+    assert.equal(post.position.z, 0);
+  }
+
+  const panel = collectNodes(board, (n) => n.name === 'notice_board_panel')[0];
+  assert.ok(panel, 'notice_board_panel must exist');
+  assert.equal(panel.geometry.type, 'BoxGeometry');
+  assert.equal(panel.geometry.parameters.width, 2.2);
+  assert.equal(panel.geometry.parameters.height, 1.3);
+  assert.equal(panel.geometry.parameters.depth, 0.08);
+  assert.equal(panel.position.x, 0);
+  assert.equal(panel.position.y, 1.35);
+  assert.equal(panel.position.z, 0);
+
+  const expectedPapers = [
+    ['notice_board_paper_gazette', -0.60],
+    ['notice_board_paper_inn', 0],
+    ['notice_board_paper_gate', 0.60],
+  ];
+  const panelFrontZ = panel.position.z + panel.geometry.parameters.depth / 2;
+  const rightPostInnerX = posts[1].position.x - posts[1].geometry.parameters.width / 2;
+  for (const [name, expectedX] of expectedPapers) {
+    const paper = collectNodes(board, (n) => n.name === name)[0];
+    assert.ok(paper, `${name} must exist`);
+    assert.equal(paper.geometry.type, 'BoxGeometry');
+    assert.equal(paper.geometry.parameters.width, 0.5);
+    assert.equal(paper.geometry.parameters.height, 0.7);
+    assert.equal(paper.geometry.parameters.depth, 0.02);
+    assert.equal(paper.position.x, expectedX);
+    assert.equal(paper.position.y, 1.35);
+    assert.equal(paper.position.z, 0.06);
+
+    const paperBackZ = paper.position.z - paper.geometry.parameters.depth / 2;
+    assert.ok(Math.abs((paperBackZ - panelFrontZ) - 0.01) < 1e-12, `${name} must have 0.01 z-gap from panel front`);
+    const paperOuterX = Math.abs(paper.position.x) + paper.geometry.parameters.width / 2;
+    assert.ok(paperOuterX < rightPostInnerX, `${name} outer edge ${paperOuterX} must be clear of post inner face ${rightPostInnerX}`);
+    assert.ok(Math.abs((rightPostInnerX - 0.85) - 0.04) < 1e-12, 'outer paper edge (0.85) clear of post inner face (0.89) by 0.04');
+  }
+
+  const townSrc = await fs.readFile(path.join(__dirname, 'town.js'), 'utf8');
+  const expectedTexts = [
+    ['GAZETTE #2', 'Issue #2 is out —', 'read it at the', 'newsstand.'],
+    ['THE INN', 'Rooms for short', 'stays — ask at', 'the tavern.'],
+    ['SOCIAL GATE', 'Plots are free,', 'no upkeep — yours', 'outright. Bring a', 'friend.'],
+  ];
+  const match = townSrc.match(/const NOTICE_BOARD_PAPERS = \[([\s\S]*?)\];/);
+  assert.ok(match, 'NOTICE_BOARD_PAPERS must exist in town.js');
+  for (const lines of expectedTexts) {
+    for (const line of lines) {
+      assert.ok(line.length <= 21, `Notice line "${line}" exceeds 21 chars (${line.length})`);
+    }
+    const serialized = lines.map((l) => `'${l}'`).join(', ');
+    assert.ok(match[1].includes(serialized), `town.js must include exact notice lines [${serialized}]`);
+  }
+
+  let minDist = Infinity;
+  for (const fig of built._wander.figures) {
+    for (const wp of fig.waypoints) {
+      const d = Math.hypot(wp.x - (-6), wp.z - 14);
+      if (d < minDist) minDist = d;
+    }
+  }
+  assert.ok(minDist > 11, `Nearest wander waypoint to (-6, 14) must be > 11 m away, got ${minDist.toFixed(3)}`);
 });
