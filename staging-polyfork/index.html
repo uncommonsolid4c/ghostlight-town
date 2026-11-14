@@ -45,6 +45,11 @@
   #hud .warm { color: #ffbe5c; }
   #status { bottom: 42px; font-size: 12px; }
   #status.error { color: #ff9a8a; border-color: #7a2a20; }
+  #info-strip {
+    left: auto; right: 12px; bottom: 42px;
+    font-size: 12px; white-space: nowrap; max-width: none;
+  }
+  #info-strip[hidden] { display: none; }
   #counts { color: #b8b09a; }
   #footer-bar {
     position: fixed;
@@ -253,6 +258,14 @@
       font-size: 11px;
       max-width: calc(100vw - 24px);
     }
+    #info-strip {
+      left: 12px;
+      right: auto;
+      bottom: 118px;
+      font-size: 11px;
+      white-space: normal;
+      max-width: calc(100vw - 24px);
+    }
   }
 </style>
 </head>
@@ -281,6 +294,7 @@
 </aside>
 
 <div id="status" class="panel">Loading&hellip;</div>
+<div id="info-strip" class="panel" hidden></div>
 
 <footer id="footer-bar">
   <span id="controls-hint">Drag: orbit &middot; Scroll / Pinch: zoom &middot; WASD / Arrows: pan &middot; Tap ground: glide &middot; Click: inspect</span>
@@ -342,6 +356,6 @@ window.addEventListener('error', function (e) {
   }
 }
 </script>
-<script type="module" src="./staging.js?v=34"></script>
+<script type="module" src="./staging.js?v=35"></script>
 </body>
 </html>
