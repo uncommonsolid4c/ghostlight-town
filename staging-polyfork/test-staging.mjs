@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  isInnOccupied,
+  updateStagingInnOccupancy,
+  splitNightlyCallLines,
+  updateStagingNightlyCallCard,
+} from './inn-nightly-call.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -49,6 +55,7 @@ test('staging.js uses relative vendored imports, no ../town-3d/ paths, no Math.r
   assert.match(codeOnly, /from\s+['"]\.\/concept-ghost\.js['"]/, 'staging.js must import ./concept-ghost.js');
   assert.match(codeOnly, /from\s+['"]\.\/prompt-book\.mjs['"]/, 'staging.js must import ./prompt-book.mjs');
   assert.match(codeOnly, /from\s+['"]\.\/avatar\.mjs['"]/, 'staging.js must import ./avatar.mjs');
+  assert.match(codeOnly, /from\s+['"]\.\/inn-nightly-call\.mjs['"]/, 'staging.js must import ./inn-nightly-call.mjs');
 
   assert.ok(!/\.\.\/town-3d\//.test(codeOnly), 'staging.js must not import from ../town-3d/');
   assert.ok(!/\bMath\.random\b/.test(codeOnly), 'staging.js must not use Math.random');
@@ -101,12 +108,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=8, includes Prompt Book UI, updates HUD copy, and contains no banned term', async () => {
+test('staging.html references staging.js?v=9, includes Prompt Book UI, updates HUD copy, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=8["']/, 'index.html must reference ./staging.js?v=8');
+  assert.match(html, /src=["']\.\/staging\.js\?v=9["']/, 'index.html must reference ./staging.js?v=9');
   assert.match(html, /id=["']prompt-book["']/, 'index.html must include #prompt-book');
   assert.match(html, /id=["']prompt-book-lines["']/, 'index.html must include #prompt-book-lines');
   assert.match(html, /id=["']prompt-book-toggle["']/, 'index.html must include #prompt-book-toggle');
@@ -130,4 +137,170 @@ test('staging.js removes decorative cottages, keeps pads for plots 2-8, and reta
 
   assert.match(codeOnly, /\bnpcStandIns\b/, 'staging.js must keep named references to NPC stand-ins for the yield rule');
   assert.match(codeOnly, /standIn\.group\.visible\s*=\s*false/, 'NPC stand-ins must hide when live presence avatar exists');
+  assert.match(codeOnly, /\btavernGroup\s*=\s*place\s*\(\s*Tavern\b/, 'staging.js must keep tavernGroup reference from place(Tavern, ...)');
+  assert.match(codeOnly, /updateStagingInnOccupancy\s*\(/, 'staging.js must wire updateStagingInnOccupancy');
+  assert.match(codeOnly, /updateStagingNightlyCallCard\s*\(/, 'staging.js must wire updateStagingNightlyCallCard');
+});
+
+function makeFakeTavernGroup(initialGlowIntensity = 1.15) {
+  const wallMat = { emissiveIntensity: 0, userData: {} };
+  const glowMat = { emissiveIntensity: initialGlowIntensity, userData: { glow: true } };
+  const wallMesh = { isMesh: true, material: wallMat };
+  const glowMesh = { isMesh: true, material: glowMat };
+  const group = {
+    traverse(fn) {
+      fn(group);
+      fn(wallMesh);
+      fn(glowMesh);
+    },
+  };
+  return { group, wallMat, glowMat };
+}
+
+test('inn occupancy: decision logic + single-zone tavern glow toggle', () => {
+  assert.equal(isInnOccupied(undefined), null);
+  assert.equal(isInnOccupied(null), null);
+  assert.equal(isInnOccupied([]), null);
+  assert.equal(isInnOccupied('open'), null);
+
+  assert.equal(isInnOccupied({ lantern: null, window: null, quiet: null }), false);
+  assert.equal(
+    isInnOccupied({ lantern: null, window: null, quiet: null, attic: { handle: 'milo' } }),
+    false,
+    'unknown room keys must be ignored'
+  );
+  assert.equal(
+    isInnOccupied({
+      lantern: { handle: 'aaron', nights: 2, expires_at: 9999999999, key_code: 'secret' },
+      window: null,
+      quiet: null,
+    }),
+    true
+  );
+  assert.equal(isInnOccupied({ lantern: null, window: { handle: 'maren' }, quiet: null }), true);
+  assert.equal(isInnOccupied({ lantern: null, window: null, quiet: { handle: 'tomas' } }), true);
+
+  const { group, wallMat, glowMat } = makeFakeTavernGroup(1.15);
+
+  // Missing inn state is a strict no-op (keeps initial night glow).
+  assert.equal(updateStagingInnOccupancy(group, undefined), null);
+  assert.equal(glowMat.emissiveIntensity, 1.15);
+  assert.equal(wallMat.emissiveIntensity, 0);
+
+  // All rooms vacant -> dark.
+  assert.equal(updateStagingInnOccupancy(group, { lantern: null, window: null, quiet: null }), false);
+  assert.equal(glowMat.emissiveIntensity, 0);
+  assert.equal(wallMat.emissiveIntensity, 0);
+
+  // Any room claimed -> warm taproom lit.
+  assert.equal(
+    updateStagingInnOccupancy(group, { lantern: null, window: { handle: 'wick' }, quiet: null }),
+    true
+  );
+  assert.equal(glowMat.emissiveIntensity, 1.15);
+  assert.equal(wallMat.emissiveIntensity, 0);
+});
+
+test('splitNightlyCallLines wraps >60-char topics near the middle on a space', () => {
+  const shortTopic = 'What is keeping you awake tonight?';
+  assert.deepEqual(splitNightlyCallLines(shortTopic), [shortTopic]);
+
+  const longTopic = 'If you could leave one anonymous lantern lit for a stranger tonight, where would you hang it?';
+  assert.ok(longTopic.length > 60);
+  const lines = splitNightlyCallLines(longTopic);
+  assert.equal(lines.length, 2);
+  assert.equal(lines.join(' '), longTopic);
+  assert.ok(Math.abs(lines[0].length - lines[1].length) < 16);
+
+  const unbroken = 'a'.repeat(65);
+  const hardSplit = splitNightlyCallLines(unbroken);
+  assert.equal(hardSplit.length, 2);
+  assert.equal(hardSplit[0].length + hardSplit[1].length, 65);
+});
+
+test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops on invalid/unchanged/missing card', () => {
+  const calls = [];
+  const makeTextTexture = (THREE, lines, opts) => {
+    const tex = { THREE, lines, opts };
+    calls.push({ lines, opts });
+    return tex;
+  };
+  const fakeTHREE = { CanvasTexture: function FakeTex() {} };
+  const initialMap = { initial: true };
+  const card = {
+    name: 'nightly_call_card',
+    material: { map: initialMap, needsUpdate: false },
+  };
+  const bandstandBuilt = { group: { children: [card] } };
+  const liveStore = { nightlyCallTopic: null };
+
+  // Missing / malformed nightly_call -> no-op
+  assert.equal(
+    updateStagingNightlyCallCard({ THREE: fakeTHREE, bandstandBuilt, liveStore, makeTextTexture }, undefined),
+    false
+  );
+  assert.equal(
+    updateStagingNightlyCallCard({ THREE: fakeTHREE, bandstandBuilt, liveStore, makeTextTexture }, { date: '2026-11-14', topic: '   ' }),
+    false
+  );
+  assert.equal(calls.length, 0);
+  assert.equal(card.material.map, initialMap);
+
+  // Missing card -> no-op
+  assert.equal(
+    updateStagingNightlyCallCard(
+      { THREE: fakeTHREE, bandstandBuilt: { group: { children: [] } }, liveStore, makeTextTexture },
+      { date: '2026-11-14', topic: 'First topic' }
+    ),
+    false
+  );
+  assert.equal(calls.length, 0);
+
+  // Valid topic -> redraws with exact card params
+  assert.equal(
+    updateStagingNightlyCallCard(
+      { THREE: fakeTHREE, bandstandBuilt, liveStore, makeTextTexture },
+      { date: '2026-11-14', topic: '  Tell us a quiet truth.  ' }
+    ),
+    true
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].lines, ['THE NIGHTLY CALL', 'Tell us a quiet truth.']);
+  assert.deepEqual(calls[0].opts, {
+    width: 512,
+    height: 256,
+    titleSize: 30,
+    subSize: 20,
+    bg: '#f2e6cf',
+    border: '#b59449',
+    fg: '#2b1e14',
+  });
+  assert.equal(card.material.needsUpdate, true);
+  assert.equal(liveStore.nightlyCallTopic, 'Tell us a quiet truth.');
+
+  // Unchanged topic -> no redraw
+  card.material.needsUpdate = false;
+  assert.equal(
+    updateStagingNightlyCallCard(
+      { THREE: fakeTHREE, bandstandBuilt, liveStore, makeTextTexture },
+      { date: '2026-11-14', topic: 'Tell us a quiet truth.' }
+    ),
+    false
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(card.material.needsUpdate, false);
+
+  // New >60-char topic -> redraws with 2 wrapped lines
+  const longTopic = 'What small thing in Ghostlight Town made you pause and look twice tonight?';
+  assert.equal(
+    updateStagingNightlyCallCard(
+      { THREE: fakeTHREE, bandstandBuilt, liveStore, makeTextTexture },
+      { date: '2026-11-15', topic: longTopic }
+    ),
+    true
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].lines[0], 'THE NIGHTLY CALL');
+  assert.equal(calls[1].lines.length, 3);
+  assert.equal(calls[1].lines.slice(1).join(' '), longTopic);
 });
