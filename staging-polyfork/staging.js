@@ -40,6 +40,10 @@ import {
   openGazetteOverlay,
   closePlotOverlay,
 } from './plot-overlay.mjs';
+import {
+  openInnOverlay,
+  openGuestbookOverlay,
+} from './inn-guestbook-overlay.mjs';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -801,6 +805,8 @@ async function init() {
   // The Ghostlight Inn (Village Tavern), width 10, at the Inn's spot.
   // The hanging sign bears a painted mug — a shop visual — so it comes off.
   const tavernGroup = place(Tavern, { width: 10, plaster: CREAM, tile: ROOF, timber: CEDAR }, -11, 20, { remove: 'sign' });
+  tavernGroup.userData.clickable = true;
+  tavernGroup.userData.kind = 'inn';
   counts.buildings++;
 
   // Plot 1: Milo's cottage (procedural concept shell + staging-local signpost),
@@ -820,7 +826,9 @@ async function init() {
   counts.buildings++;
 
   // Village Gatehouse, gates wide open, roof-brown shingles.
-  place(Gatehouse, { shingle: ROOF, plaster: CREAM, gateState: 'wide', windows: 2 }, 0, 27);
+  const gatehouseGroup = place(Gatehouse, { shingle: ROOF, plaster: CREAM, gateState: 'wide', windows: 2 }, 0, 27);
+  gatehouseGroup.userData.clickable = true;
+  gatehouseGroup.userData.kind = 'gate';
   counts.buildings++;
 
   // Village Well.
@@ -1027,6 +1035,27 @@ async function init() {
         }
         if (kind === 'newsstand') {
           openGazetteOverlay({
+            overlayEl: plotOverlayEl,
+            titleEl: plotOverlayTitleEl,
+            iframeEl: plotIframeEl,
+            fetchFn,
+            onBeforeOpen: onBeforeOverlayOpen,
+          });
+          return true;
+        }
+        if (kind === 'inn') {
+          openInnOverlay({
+            overlayEl: plotOverlayEl,
+            titleEl: plotOverlayTitleEl,
+            iframeEl: plotIframeEl,
+            innState: liveStore.lastState?.inn,
+            fetchFn,
+            onBeforeOpen: onBeforeOverlayOpen,
+          });
+          return true;
+        }
+        if (kind === 'gate') {
+          openGuestbookOverlay({
             overlayEl: plotOverlayEl,
             titleEl: plotOverlayTitleEl,
             iframeEl: plotIframeEl,
