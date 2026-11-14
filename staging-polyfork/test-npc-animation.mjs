@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attachIdleAnimation, updateNpcAnimations } from './npc-animation.mjs';
+import { attachIdleAnimation, attachNpcAnimation, updateNpcAnimations } from './npc-animation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -105,6 +105,39 @@ test('attachIdleAnimation catches rejecting animateFn, warns once, and returns n
   }
 });
 
+test('attachNpcAnimation calls animateFn with { clips: ["Idle", "Walk"], base: "./anim/" } and returns handle', async () => {
+  const fakeGroup = { name: 'wick' };
+  const fakeHandle = { update() {}, locomotion() {} };
+  const calls = [];
+  const fakeAnimate = async (group, opts) => {
+    calls.push({ group, opts });
+    return fakeHandle;
+  };
+
+  const result = await attachNpcAnimation({}, fakeGroup, { animateFn: fakeAnimate });
+  assert.equal(result, fakeHandle);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].group, fakeGroup);
+  assert.deepEqual(calls[0].opts, { clips: ['Idle', 'Walk'], base: './anim/' });
+});
+
+test('attachNpcAnimation catches rejecting animateFn, warns once, and returns null', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = await attachNpcAnimation({}, { name: 'bad' }, {
+      animateFn: async () => {
+        throw new Error('missing Mixamo bones');
+      },
+    });
+    assert.equal(result, null);
+    assert.equal(warnings.length, 1);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 test('updateNpcAnimations calls update(dt) once per live handle and skips nulls', () => {
   const callsA = [];
   const callsB = [];
@@ -128,15 +161,15 @@ test('npc-animation.mjs contains no fetch(, no polyfork.dev, no Math.random, and
   assert.equal(new RegExp('camp' + 'fire', 'i').test(src), false, 'npc-animation.mjs must not contain banned term');
 });
 
-test('staging.js attaches Idle after npcStandIns and updates animations in the render loop', () => {
+test('staging.js attaches Idle/Walk after npcStandIns and updates animations in the render loop', () => {
   const src = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
   const mapIdx = src.indexOf('const npcStandIns = new Map([');
-  const attachIdx = src.indexOf('attachIdleAnimation(THREE, standIn.group');
+  const attachIdx = src.indexOf('attachNpcAnimation(THREE, standIn.group');
   const loopIdx = src.indexOf('(function loop() {');
   const updateIdx = src.indexOf('updateNpcAnimations(npcStandIns, dt);');
 
   assert.ok(mapIdx !== -1, 'staging.js must define npcStandIns');
-  assert.ok(attachIdx > mapIdx, 'attachIdleAnimation must be called after npcStandIns is built');
+  assert.ok(attachIdx > mapIdx, 'attachNpcAnimation must be called after npcStandIns is built');
   assert.ok(loopIdx !== -1, 'staging.js must define the render loop');
   assert.ok(updateIdx > loopIdx, 'updateNpcAnimations must be called inside the render loop');
 });
