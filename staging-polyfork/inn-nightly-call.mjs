@@ -76,11 +76,15 @@ export function updateStagingInnOccupancy(tavernGroup, innState) {
 /**
  * Greedy word-wrap a Nightly Call topic into lines of at most `maxLineLen`
  * characters. Deliberately NOT the `town-3d/town.js` split: that one only
- * splits topics longer than 60 chars, and a 51-char topic at 20px monospace
- * on the 512px card texture overflows both edges (found by the 2026-11-14
- * go-live check). At 20px bold monospace a char is ~12px wide, so 30 chars
- * (~360px) fits the card with margin; every curated topic (longest 53 chars)
- * wraps to two lines. Words longer than `maxLineLen` are hard-chunked.
+ * splits topics longer than 60 chars, and a 51-char topic on the 512px card
+ * texture overflows both edges (found by the 2026-11-14 go-live check).
+ * Two call sites share this helper:
+ *   - `updateStagingNightlyCallCard` (and the `concept-bandstand.js`
+ *     placeholder) pass `maxLineLen = 22` for 34px bold monospace (~20.4px/char
+ *     inside ~456px usable width); every curated topic (longest 53 chars)
+ *     wraps to at most 3 lines.
+ *   - `event-banner.mjs` calls with the default `30` for its 768px banner.
+ * Words longer than `maxLineLen` are hard-chunked.
  */
 export function splitNightlyCallLines(topic, maxLineLen = 30) {
   if (topic.length <= maxLineLen) return [topic];
@@ -136,11 +140,11 @@ export function updateStagingNightlyCallCard(
 
   if (liveStore.nightlyCallTopic === topic) return false;
 
-  card.material.map = makeTextTexture(THREE, ['THE NIGHTLY CALL', ...splitNightlyCallLines(topic)], {
+  card.material.map = makeTextTexture(THREE, ['THE NIGHTLY CALL', ...splitNightlyCallLines(topic, 22)], {
     width: 512,
     height: 256,
-    titleSize: 30,
-    subSize: 20,
+    titleSize: 40,
+    subSize: 34,
     bg: '#f2e6cf',
     border: '#b59449',
     fg: '#2b1e14',
