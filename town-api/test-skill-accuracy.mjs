@@ -1,6 +1,7 @@
 /**
  * Drift-guard test for SKILL.md against town-api/server.mjs,
- * town-api/plot-validation.mjs, and town-api/ghostlight-client.mjs (Slice 125).
+ * town-api/plot-validation.mjs, town-api/ghostlight-client.mjs,
+ * town.json, town-3d/town.js, and staging-polyfork (Slices 125, 135).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -255,4 +256,161 @@ test('SKILL.md state shape, admin routes, and honest live-lag note match server.
   assert.ok(deployLine.includes('guestbook_by_plot'), 'Deployment status must mention guestbook_by_plot live lag');
   assert.match(deployLine, /predates|not yet/i, 'Deployment status must note live API predates those fields');
   assert.match(deployLine, /deploy/i, 'Deployment status must note they arrive with the API update deploy');
+});
+
+test('SKILL.md §1 quickstart exports, CLI subcommands, and examples match ghostlight-client.mjs', () => {
+  assert.ok(clientSrc.includes('export class GhostlightClient'), 'GhostlightClient must be exported');
+  assert.ok(clientSrc.includes('export function generateKeypair('), 'generateKeypair must be exported');
+  assert.ok(
+    skillMd.includes("import { GhostlightClient, generateKeypair } from './town-api/ghostlight-client.mjs'"),
+    'SKILL.md §1 must show canonical GhostlightClient + generateKeypair import'
+  );
+
+  const cliUsageMatch = clientSrc.match(/const CLI_USAGE = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(cliUsageMatch, 'Could not find CLI_USAGE in ghostlight-client.mjs');
+  const cliCommands = [...cliUsageMatch[1].matchAll(/'  (\w+)\s+/g)].map((m) => m[1]);
+  assert.equal(cliCommands.length, 9, 'Expected 9 CLI subcommands in CLI_USAGE');
+
+  for (const cmd of cliCommands) {
+    assert.ok(skillMd.includes(`\`${cmd}\``), `SKILL.md §1 must list CLI subcommand ${cmd}`);
+  }
+
+  // Verify the 4 CLI examples in SKILL.md use flags accepted by parseCliFlags for each command
+  const allowedFlagsByCmd = {
+    keygen: ['out', 'api-base'],
+    join: ['api-base', 'handle', 'key', 'origin', 'bio', 'invite-code'],
+    checkin: ['api-base', 'handle', 'key', 'status-text', 'slot'],
+    say: ['api-base', 'handle', 'key', 'body', 'kind', 'reply-to'],
+  };
+  for (const [cmd, flags] of Object.entries(allowedFlagsByCmd)) {
+    const lineMatch = skillMd.match(new RegExp(`^node town-api/ghostlight-client\\.mjs ${cmd} (.+)$`, 'm'));
+    assert.ok(lineMatch, `SKILL.md §1 must include CLI example for ${cmd}`);
+    const usedFlags = [...lineMatch[1].matchAll(/--([a-z-]+)/g)].map((m) => m[1]);
+    assert.ok(usedFlags.length > 0, `CLI example for ${cmd} must pass flags`);
+    for (const flag of usedFlags) {
+      assert.ok(flags.includes(flag), `CLI example flag --${flag} is not valid for ${cmd}`);
+      assert.ok(
+        clientSrc.includes(`'${flag}'`) || clientSrc.includes(`"${flag}"`),
+        `ghostlight-client.mjs must accept --${flag} for ${cmd}`
+      );
+    }
+  }
+});
+
+test('SKILL.md deployment-status box pins live-lag 8-key payload and ports 8124/8125', () => {
+  const deployLineMatch = skillMd.match(/^> \*\*Deployment status:\*\*.*$/m);
+  assert.ok(deployLineMatch, 'SKILL.md must include Deployment status box');
+  const deployLine = deployLineMatch[0];
+
+  const live8Keys = [
+    'footlights',
+    'guestbook',
+    'inn',
+    'nightly_call',
+    'plots',
+    'presence',
+    'prompt_book',
+    'state_seq',
+  ];
+  for (const key of live8Keys) {
+    assert.ok(deployLine.includes(`\`${key}\``), `Deployment status must list live 8-key field ${key}`);
+  }
+  assert.ok(deployLine.includes('8-key'), 'Deployment status must note 8-key payload');
+  assert.ok(deployLine.includes('http://127.0.0.1:8124'), 'Deployment status must note local default 8124');
+  assert.ok(deployLine.includes('TOWN_PORT=8125'), 'Deployment status must note homelab TOWN_PORT=8125');
+  assert.ok(deployLine.includes('https://milo.4167360.xyz'), 'Deployment status must note live origin');
+  assert.ok(deployLine.includes('/api/town/*'), 'Deployment status must note /api/town/* path');
+});
+
+test('SKILL.md §3 endpoint inventory and origins match town.json', () => {
+  const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  assert.ok(Array.isArray(townJson.endpoints) && townJson.endpoints.length > 0);
+
+  const nonAdminRoutes = townJson.endpoints.filter((e) => e.auth !== 'admin');
+  const adminRoutes = townJson.endpoints.filter((e) => e.auth === 'admin');
+
+  for (const ep of nonAdminRoutes) {
+    getEndpointSection(ep.method, ep.path);
+  }
+
+  const adminStart = skillMd.indexOf('### Admin Endpoints');
+  assert.ok(adminStart !== -1, 'Missing ### Admin Endpoints section in SKILL.md');
+  const adminEnd = skillMd.indexOf('\n---', adminStart);
+  const adminSec = skillMd.slice(adminStart, adminEnd !== -1 ? adminEnd : skillMd.length);
+  for (const ep of adminRoutes) {
+    assert.ok(adminSec.includes(`\`${ep.method} ${ep.path}\``), `Admin section must list ${ep.method} ${ep.path}`);
+  }
+
+  // Ensure SKILL.md §3 does not document routes absent from town.json
+  const documentedHeadings = [...skillMd.matchAll(/^### `(GET|POST|PUT|DELETE) (\/api\/town\/[^?\s`]+)/gm)];
+  const townJsonSet = new Set(townJson.endpoints.map((e) => `${e.method} ${e.path}`));
+  for (const m of documentedHeadings) {
+    const key = `${m[1]} ${m[2]}`;
+    assert.ok(townJsonSet.has(key), `SKILL.md documents ${key} which is missing from town.json`);
+  }
+
+  for (const origin of townJson.origins) {
+    assert.ok(skillMd.includes(origin), `SKILL.md must document origin ${origin}`);
+  }
+});
+
+test('SKILL.md §3 guestbook limits, query params, and error codes match server.mjs', () => {
+  const postGb = getEndpointSection('POST', '/api/town/guestbook');
+  assert.ok(postGb.includes('`guestbook` or `letter`'), 'POST guestbook must document kinds');
+  assert.ok(postGb.includes('201` `{ id, status: "pending" }`'), 'POST guestbook must document 201 pending response');
+  for (const errCode of [
+    'invalid_kind',
+    'invalid_name',
+    'invalid_body',
+    'urls_not_allowed',
+    'invalid_plot',
+    'unknown_plot',
+  ]) {
+    assert.ok(serverSrc.includes(`'${errCode}'`), `server.mjs must emit ${errCode}`);
+    assert.ok(postGb.includes(`\`${errCode}\``), `SKILL.md POST guestbook must document ${errCode}`);
+  }
+
+  const getGb = getEndpointSection('GET', '/api/town/guestbook');
+  assert.ok(serverSrc.includes('let limit = 50;') && serverSrc.includes('Math.min(parsed, 50)'), 'server.mjs guestbook limit must be 1..50 default 50');
+  assert.ok(getGb.includes('?limit=1..50` (default `50`)'), 'GET guestbook must document limit 1..50 default 50');
+  for (const errCode of ['invalid_kind', 'invalid_plot', 'unknown_plot', 'invalid_limit']) {
+    assert.ok(getGb.includes(`\`${errCode}\``), `SKILL.md GET guestbook must document ${errCode}`);
+  }
+});
+
+test('SKILL.md §4 porch remap/sandbox, §6 shipped-list, relative links, and banned terms match repo', () => {
+  const townJsSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/town.js'), 'utf8');
+  const cottagePropsSrc = fs.readFileSync(path.join(REPO_ROOT, 'staging-polyfork/cottage-props.mjs'), 'utf8');
+  const stagingHtml = fs.readFileSync(path.join(REPO_ROOT, 'staging-polyfork/index.html'), 'utf8');
+  const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+
+  // 9 starter props match town.json
+  assert.equal(townJson.plot.starter_props.length, 9);
+  for (const kind of townJson.plot.starter_props) {
+    assert.ok(skillMd.includes(`\`${kind}\``), `SKILL.md must list starter prop ${kind}`);
+  }
+
+  // Porch deck coordinate remap (2.05 .. 3.45) and iframe sandbox=""
+  assert.ok(townJsSrc.includes('PORCH_NEAR = 2.05') && townJsSrc.includes('PORCH_FAR = 3.45'));
+  assert.ok(cottagePropsSrc.includes('PORCH_NEAR = 2.05') && cottagePropsSrc.includes('PORCH_FAR = 3.45'));
+  assert.ok(skillMd.includes('< 2.05') && skillMd.includes('[2.05, 3.45]'), 'SKILL.md §4 must state porch remap [2.05, 3.45]');
+  assert.match(stagingHtml, /<iframe[^>]+sandbox=""/, 'staging-polyfork/index.html must use sandbox=""');
+  assert.ok(skillMd.includes('<iframe sandbox="">'), 'SKILL.md §4 must document <iframe sandbox="">');
+
+  // §6 shipped-list files exist on disk
+  for (const relPath of ['staging-polyfork/events.json', 'town-api/events.mjs', 'staging-polyfork/event-banner.mjs']) {
+    assert.ok(skillMd.includes(`\`${relPath}\``), `SKILL.md §6 must reference ${relPath}`);
+    assert.ok(fs.existsSync(path.join(REPO_ROOT, relPath)), `Referenced file ${relPath} must exist on disk`);
+  }
+
+  // Every relative markdown link in SKILL.md resolves on disk
+  for (const m of skillMd.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+    const target = m[1];
+    if (/^https?:\/\//i.test(target) || target.startsWith('#')) continue;
+    const targetPath = path.join(REPO_ROOT, target.split('#')[0]);
+    assert.ok(fs.existsSync(targetPath), `Relative link in SKILL.md does not exist on disk: ${target}`);
+  }
+
+  // No banned term
+  assert.doesNotMatch(skillMd, /campfire/i, 'SKILL.md must not contain banned term');
 });
