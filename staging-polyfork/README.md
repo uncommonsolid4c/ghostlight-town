@@ -59,6 +59,26 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
   document access).
+- `cottage-props.mjs` — staging-local porch deck, porch trim, and starter plot
+  prop builders (`attachPorchDeck`, `attachPorchTrim`, `attachPlotProps`,
+  `MILO_PLOT_PROPS`, 9 valid prop kinds matching `town-3d/town.js`).
+- `empty-pad.mjs` — stone slab + `OPEN PLOT #N` signpost markers
+  (`buildEmptyPadMarker`, `syncEmptyPadMarkers`) for unclaimed pads in plots 2–8.
+- `interior-room.mjs` — standalone procedural cottage interior room
+  (`buildInteriorRoom`, `setInteriorVisible`, `setInteriorPalette`,
+  `setInteriorDressing`, 4.0×3.4 m envelope) plus procedural oil lamp,
+  typewriter, and teapot builders.
+- `interior-visit.mjs` — walk-in cottage interior state machine, door hit-test
+  (`isDoorHit`), look-around, and interior doorway exit ray-test
+  (`rayHitsInteriorDoor`, `createInteriorVisit`).
+- `notice-board-overlay.mjs` — vendored `NOTICE_BOARD_PAPERS`, `escapeHtml`,
+  and `buildNoticeBoardOverlayHtml` from `town-3d/town.js` for the
+  `#plot-overlay` Town Notice Board view.
+- `npc-animation.mjs` — Mixamo Idle/Walk clip attachment wrapper
+  (`attachNpcAnimation`) calling `./kit-medieval/clips.mjs` with `base: './anim/'`.
+- `npc-wander.mjs` — NPC stand-in home → bandstand → newsstand wander loop
+  (`SEED_WANDER_CONFIG`, `buildStagingWanderFigures`) and Milo ghost deck
+  drift (`GHOST_DRIFT_CONFIG`, `buildStagingGhostDrift`).
 - `prompt-book.mjs` — verbatim copy of `formatPromptBookEntries` and
   `renderPromptBook` from `town-3d/town.js` (no THREE dependency).
 - `plot-overlay.mjs` — verbatim copy of `resolvePlotOverlayContent` from
@@ -72,6 +92,12 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   and `resolveGuestbookOverlayContent` from `town-3d/town.js` plus sandboxed
   `openInnOverlay` and `openGuestbookOverlay` helpers from `town-3d/index.html`
   (no THREE dependency, no top-level document access).
+- `seed-door-props.mjs` — procedural door-side props beside Wick's, Maren's,
+  and Tomas's cottages (`attachSeedDoorProp`) reusing builders from
+  `interior-room.mjs`.
+- `tap-glide.mjs` — vendored `stepGlide` from `town-3d/town.js`,
+  `deriveGlideMaxRadius`, `stepOrbitGlide`, `clampGlideTarget`, and
+  `createPointerTracker`.
 - `concept-bandstand.js`, `concept-cottage.js`, `concept-ghost.js` — vendored
   byte-identical copies of `town-3d/concept-*.js` (with a 1-line vendored-source
   header) so the self-contained staging bundle does not 404 on relative
@@ -94,9 +120,27 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   `resolveGazetteOverlayContent`, and sandboxed open/close DOM wiring).
 - `test-avatar.mjs` — unit tests for `avatar.mjs` (role colors, nametag text,
   nametag lift, spot-picking + overflow, plot-target math, plot-ring coords).
+- `test-cottage-props.mjs` — unit tests for `cottage-props.mjs`.
+- `test-empty-pad.mjs` — unit tests for `empty-pad.mjs`.
+- `test-event-banner.mjs` — unit tests for `event-banner.mjs` and `events.json`.
+- `test-interior-room.mjs` — unit tests for `interior-room.mjs`.
+- `test-interior-visit.mjs` — unit tests for `interior-visit.mjs`.
+- `test-kit-docs.mjs` — static checks on vendored Polyfork kit docs/APIs
+  (`kit-campground/`, `kit-medieval/`).
+- `test-notice-board-overlay.mjs` — unit tests + `town-3d/town.js` drift guard
+  for `notice-board-overlay.mjs`.
+- `test-npc-animation.mjs` — unit tests for `npc-animation.mjs`.
+- `test-npc-wander.mjs` — unit tests for `npc-wander.mjs`.
 - `test-prompt-book.mjs` — unit tests for `prompt-book.mjs` (100-entry cap,
   chronological order, `[NPC]` pill, `reply_to` threading, say vs emote, empty
   state, `textContent`-only XSS safety).
+- `test-seed-door-props.mjs` — unit tests for `seed-door-props.mjs`.
+- `test-staging-readme.mjs` — drift-guard tests for this `README.md` against
+  `PLAN.md`, `staging-polyfork/index.html`, `staging.js`, `events.json`,
+  `scripts/stage-deploy.mjs`, and the bundle file list.
+- `test-tap-glide.mjs` — unit tests for `tap-glide.mjs`.
+- `anim/` — vendored Mixamo `anim-idle.json` and `anim-walk.json` clips for
+  local NPC animation without CDN fetches.
 - `kit-campground/` — Campground & Lake kit zip, extracted (`.glb` files
   stripped — no code references them; originals in `/tmp/kit-camp.zip`).
 - `kit-medieval/` — Medieval Village kit zip, extracted (`.glb` stripped;
@@ -205,9 +249,10 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
   `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
   swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
   HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
-  `move-in.html` is relative on the assumption it ships alongside the staging
-  deploy. `pinchFov` is deliberately not ported because OrbitControls handles
-  pinch as dolly.
+  `move-in.html` lives in `town-3d/move-in.html` (not in `staging-polyfork/`)
+  and is copied into the staged `staging-polyfork` deploy bundle via
+  `STAGING_SHARED_TOWN3D_FILES` in `scripts/stage-deploy.mjs`. `pinchFov` is
+  deliberately not ported because OrbitControls handles pinch as dolly.
 
 ## Verification done locally (no browser here — no visual check claimed)
 
