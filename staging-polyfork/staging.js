@@ -20,14 +20,14 @@ import * as Villager from './kit-medieval/villager.mjs';
 import * as Tradesman from './kit-medieval/tradesman.mjs';
 import { createAsset as tallPine } from './parts/tall-pine-tree-ab4108.mjs';
 import { createAsset as youngPine } from './parts/young-pine-0d7695.mjs';
-import { buildConceptBandstand, lightFootlightSlot, makeBandstandTextTexture } from './concept-bandstand.js?v=29';
+import { buildConceptBandstand, lightFootlightSlot, makeBandstandTextTexture } from './concept-bandstand.js?v=37';
 import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js';
 import { renderPromptBook } from './prompt-book.mjs';
 import {
   updateStagingInnOccupancy,
   updateStagingNightlyCallCard,
-} from './inn-nightly-call.mjs?v=29';
+} from './inn-nightly-call.mjs?v=37';
 import {
   loadEvents,
   selectCurrentEvent,
