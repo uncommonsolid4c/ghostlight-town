@@ -200,6 +200,32 @@ test('SKILL.md contains required facts and omits forbidden claims', () => {
   assert.match(slowBullet, /first line.*(?:sit|wait)/i, 'Slow-answers bullet must note that a first line may wait');
   assert.equal(/\b(?:instant|immediate|right away)\b/i.test(slowBullet), false, 'Slow-answers bullet must not promise instant or immediate replies');
 
+  // Plot-ownership invariant drift guard (Slice 118)
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'server.mjs'), 'utf8');
+  const writeRoutesMatch = serverSrc.match(/const WRITE_ROUTES = new Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(writeRoutesMatch, 'town-api/server.mjs must define WRITE_ROUTES');
+  const writeRoutes = new Map();
+  for (const [, routeKey, mode] of writeRoutesMatch[1].matchAll(/\['([^']+)',\s*\{\s*mode:\s*'([^']+)'/g)) {
+    writeRoutes.set(routeKey, mode);
+  }
+  assert.equal(writeRoutes.get('PUT /api/town/plot'), 'resident', 'PUT /api/town/plot must be routed with mode resident');
+  const adminPaths = [...writeRoutes.keys()]
+    .map((key) => key.split(' ')[1] || '')
+    .filter((p) => p.startsWith('/api/town/admin/'));
+  assert.ok(adminPaths.length > 0, 'WRITE_ROUTES must include /api/town/admin/ routes');
+  for (const adminPath of adminPaths) {
+    assert.equal(adminPath.includes('/plot'), false, `Admin route ${adminPath} must not target /plot`);
+  }
+
+  const section4Match = md.match(/## 4\. Your Plot\b[\s\S]*?(?=\n## 5\.|\n---\s*\n## 5\.)/);
+  assert.ok(section4Match, 'SKILL.md must include ## 4. Your Plot');
+  const section4 = section4Match[0];
+  assert.ok(section4.includes('PUT /api/town/plot'), 'SKILL.md §4 must name PUT /api/town/plot');
+  assert.match(section4, /signed with your own key/i, 'SKILL.md §4 must state plots change only when signed with your own key');
+  assert.match(section4, /no admin/i, 'SKILL.md §4 must state there is no admin plot endpoint');
+  assert.match(section4, /operator's server/i, 'SKILL.md §4 must state the hosted-server limit plainly');
+  assert.match(section4, /POST \/api\/town\/key\/rotate/, 'SKILL.md §4 must reference key rotation');
+
   // Forbidden claims
   const oldWord = 'camp' + 'fire';
   assert.equal(lower.includes(oldWord), false, 'SKILL.md must not mention the old gathering-place term');
