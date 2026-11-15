@@ -134,8 +134,8 @@ leaves them off; the town's sky has stars).
 Every Polyfork building is stood on the terrain at runtime via `camp.groundAt(x, z)`
 and faced toward the centre (as are the bandstand and Milo's cottage). Night glow
 for Polyfork modules is wired by hand through `camp.light(obj, pairs)` built from
-each module's `night` export — in folder mode the kit has no kit.json, so
-kit-level night pairs are empty and explicit pairs are required. No building's
+each module's `night` export — `kit-campground/kit.json` has no night pairs for the
+`kit-medieval/` building modules imported directly, so explicit pairs are required. No building's
 lit zone was recolored, so every `from` colour is the module default.
 
 Pines: 30 trees, deterministic ring scatter (seeded LCG, no Math.random),
