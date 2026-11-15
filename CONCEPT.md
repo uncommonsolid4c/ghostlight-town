@@ -92,7 +92,7 @@ Frozen reference images, approved by Werther 2026-11-12:
 
 Known deviations from the build (the images are the mood reference, not a literal
 render): the cottage behind the ghost in the third image is stone and timber, not
-ice-blue and cream (both `staging-polyfork/` and `town-3d/` now build the
-bandstand timber A-frame roof structure `bandstand_aframe`). Later slices
-compare against these images for mood and palette, and against the live town for
-exact geometry.
+ice-blue and cream. (Resolved 2026-11-15: the bandstand timber A-frame roof
+structure `bandstand_aframe` is now built in both `staging-polyfork/` and
+`town-3d/`.) Later slices compare against these images for mood and palette, and
+against the live town for exact geometry.
