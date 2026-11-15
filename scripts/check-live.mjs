@@ -1,36 +1,58 @@
 #!/usr/bin/env node
 /**
- * Ghostlight Town — live-site health check script (Slice 34)
+ * Ghostlight Town — live-site health check script (Slice 34, Slice 100)
  *
  * Read-only check that verifies the deployed static site at
- * `<base>/ghostlight-town/` matches the local `town-3d/` tree (file 200s,
- * GLB magic, `town.js?v=N` parity, required `town.js` markers, and
- * `gazette/latest.json` -> `issue-*.html` 200), plus an informational check
- * of `<api-base>/api/town/state`.
+ * `<base>/ghostlight-town/` matches the selected local bundle in the repo
+ * (`staging-polyfork` by default, or `town-3d` as fallback): file 200s,
+ * GLB magic, `staging.js?v=N` / `town.js?v=N` parity, required bundle JS
+ * markers, and `gazette/latest.json` -> `issue-*.html` 200, plus an
+ * informational check of `<api-base>/api/town/state`.
  *
  * Usage:
- *   node scripts/check-live.mjs [--base <url>] [--root <dir>] [--api-base <url>] [--require-api]
+ *   node scripts/check-live.mjs [--bundle <name>] [--base <url>] [--root <dir>] [--api-base <url>] [--require-api]
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listStagedFiles } from './stage-deploy.mjs';
+import { collectSourceFiles, listStagedFiles } from './stage-deploy.mjs';
 
 const DEFAULT_BASE = 'https://milo.4167360.xyz';
-const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'town-3d');
+const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const DEFAULT_BUNDLE = 'staging-polyfork';
+const VALID_BUNDLES = ['town-3d', 'staging-polyfork'];
 const REQUEST_TIMEOUT_MS = 5000;
 
-const TOWN_JS_MARKERS = [
-  'PROP_PLACEMENTS',
-  'buildConceptBandstand',
-  'SEED_WANDER_CONFIG',
-  'newsstand_papers_shelf',
-];
+const BUNDLE_CONFIG = {
+  'town-3d': {
+    entryJs: 'town.js',
+    versionKey: 'town_js_v',
+    versionRe: /town\.js\?v=(\d+)/,
+    markers: [
+      'PROP_PLACEMENTS',
+      'buildConceptBandstand',
+      'SEED_WANDER_CONFIG',
+      'newsstand_papers_shelf',
+    ],
+  },
+  'staging-polyfork': {
+    entryJs: 'staging.js',
+    versionKey: 'staging_js_v',
+    versionRe: /staging\.js\?v=(\d+)/,
+    markers: [
+      'applyStagingState',
+      'liveStore',
+      'buildConceptBandstand',
+      'concept-bandstand.js',
+    ],
+  },
+};
 
 function parseArgs(argv) {
   let base = DEFAULT_BASE;
   let root = DEFAULT_ROOT;
+  let bundle = DEFAULT_BUNDLE;
   let apiBase = null;
   let requireApi = false;
 
@@ -46,6 +68,11 @@ function parseArgs(argv) {
         throw new Error('--root requires a directory argument');
       }
       root = argv[++i];
+    } else if (arg === '--bundle') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
+        throw new Error('--bundle requires a bundle name argument');
+      }
+      bundle = argv[++i];
     } else if (arg === '--api-base') {
       if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
         throw new Error('--api-base requires a URL argument');
@@ -58,22 +85,34 @@ function parseArgs(argv) {
     }
   }
 
+  if (!VALID_BUNDLES.includes(bundle)) {
+    throw new Error(`Unknown bundle: ${bundle} (expected one of: ${VALID_BUNDLES.join(', ')})`);
+  }
+
   const normalizedBase = base.replace(/\/+$/, '');
   const normalizedApiBase = (apiBase ?? normalizedBase).replace(/\/+$/, '');
   return {
     base: normalizedBase,
     root: path.resolve(root),
+    bundle,
     apiBase: normalizedApiBase,
     requireApi,
   };
 }
 
-export async function getExpectedFiles(town3dDir) {
-  return listStagedFiles(town3dDir);
+export async function getExpectedFiles(repoRoot, bundle = DEFAULT_BUNDLE) {
+  if (!VALID_BUNDLES.includes(bundle)) {
+    throw new Error(`Unknown bundle: ${bundle} (expected one of: ${VALID_BUNDLES.join(', ')})`);
+  }
+  if (bundle === 'town-3d') {
+    return listStagedFiles(path.join(repoRoot, 'town-3d'));
+  }
+  const { files } = await collectSourceFiles(repoRoot, bundle);
+  return files.map((entry) => entry.relPath);
 }
 
-function extractTownJsVersion(html) {
-  const match = html.match(/town\.js\?v=(\d+)/);
+function extractBundleVersion(html, versionRe) {
+  const match = html.match(versionRe);
   return match ? Number(match[1]) : null;
 }
 
@@ -116,12 +155,13 @@ async function main(argv) {
     process.exit(1);
   }
 
-  const expectedFiles = await getExpectedFiles(opts.root);
+  const bundleConfig = BUNDLE_CONFIG[opts.bundle];
+  const expectedFiles = await getExpectedFiles(opts.root, opts.bundle);
 
-  let repoTownJsV = null;
+  let repoVersion = null;
   if (expectedFiles.includes('index.html')) {
-    const repoIndexHtml = await fs.readFile(path.join(opts.root, 'index.html'), 'utf8');
-    repoTownJsV = extractTownJsVersion(repoIndexHtml);
+    const repoIndexHtml = await fs.readFile(path.join(opts.root, opts.bundle, 'index.html'), 'utf8');
+    repoVersion = extractBundleVersion(repoIndexHtml, bundleConfig.versionRe);
   }
 
   const failures = [];
@@ -161,14 +201,14 @@ async function main(argv) {
     const text = fetched.buf.toString('utf8');
 
     if (relPath === 'index.html') {
-      const liveV = extractTownJsVersion(text);
-      if (liveV !== repoTownJsV) {
-        recordFailure('index.html', 'town_js_v', `repo_v=${repoTownJsV} vs live_v=${liveV}`);
+      const liveV = extractBundleVersion(text, bundleConfig.versionRe);
+      if (liveV !== repoVersion) {
+        recordFailure('index.html', bundleConfig.versionKey, `repo_v=${repoVersion} vs live_v=${liveV}`);
       }
-    } else if (relPath === 'town.js') {
-      const missingMarkers = TOWN_JS_MARKERS.filter((marker) => !text.includes(marker));
+    } else if (relPath === bundleConfig.entryJs) {
+      const missingMarkers = bundleConfig.markers.filter((marker) => !text.includes(marker));
       if (missingMarkers.length > 0) {
-        recordFailure('town.js', 'markers', `missing markers: ${missingMarkers.join(', ')}`);
+        recordFailure(bundleConfig.entryJs, 'markers', `missing markers: ${missingMarkers.join(', ')}`);
       }
     } else if (relPath === 'gazette/latest.json') {
       let parsed;
@@ -223,8 +263,9 @@ async function main(argv) {
 
   const summary = {
     status,
+    bundle: opts.bundle,
     base: opts.base,
-    town_js_v: repoTownJsV,
+    [bundleConfig.versionKey]: repoVersion,
     checked: expectedFiles.length,
     ok: okCount,
     failures,
