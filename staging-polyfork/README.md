@@ -31,9 +31,12 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   (`isInnOccupied`, `collectTavernGlowMaterials`, `updateStagingInnOccupancy`)
   and Bandstand Nightly Call card updater (`splitNightlyCallLines`,
   `updateStagingNightlyCallCard`), mirroring `town-3d/town.js` except the
-  wrap: greedy word-wrap at 30 chars (the town.js 60-char split clipped
-  51-char topics on the 512px card — found by the 2026-11-14 go-live check).
-  No THREE import; no top-level document access.
+  wrap: `updateStagingNightlyCallCard` draws onto a 1024×512 card texture
+  with greedy word-wrap at 22 chars (`splitNightlyCallLines(topic, 22)`,
+  wrapping the longest curated 53-char topic to at most 3 lines; `30` is
+  the event banner's 768px default; historically the town.js 60-char split
+  clipped 51-char topics on the 512px card — found by the 2026-11-14
+  go-live check). No THREE import; no top-level document access.
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
@@ -60,7 +63,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=11` cache bust, `#plot-overlay` markup + click
+  Prompt Book UI elements, `?v=37` cache bust, `#plot-overlay` markup + click
   wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
   single-zone glow toggle, Nightly Call card redraw/cache/split).
 - `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
@@ -85,9 +88,10 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 
 Self-contained: every Polyfork import is relative to the bundle. The only
 network dependency is three.js from jsdelivr, same as the live town.
-`clips.mjs` (animation) is loaded via `npc-animation.mjs` with `base: './anim/'`
-against the vendored `anim/anim-idle.json` clip so the three NPC stand-ins
-play Idle without any external CDN fetch.
+`clips.mjs` (animation) is imported by `staging.js` and loaded via
+`npc-animation.mjs` with `base: './anim/'` against the vendored
+`anim/anim-idle.json` and `anim/anim-walk.json` clips so the three NPC
+stand-ins play Idle and Walk without any external CDN fetch.
 
 ## Terrain (as built — no fallbacks needed)
 
@@ -179,7 +183,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - `tap-glide.mjs` (65c): vendored `stepGlide` verbatim from `town-3d/town.js`,
   `deriveGlideMaxRadius` (38 m on the span-2 128 m island), `stepOrbitGlide`,
   and `createPointerTracker` (4 px drag threshold + multi-pointer pinch
-  suppression). `index.html` (`?v=12`) adds `#move-in-cta` (`href="move-in.html"`),
+  suppression). `index.html` (`?v=37`) adds `#move-in-cta` (`href="move-in.html"`),
   `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
   swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
   HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
@@ -192,7 +196,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - `node --check` on staging.js (as `.mjs`).
 - Every relative import in staging.js resolves to a file in the bundle;
   every relative import inside the kit modules resolves too.
-- No polyfork.dev import anywhere in the page chain (`clips.mjs` unused).
+- No polyfork.dev import anywhere in the page chain (`clips.mjs` is used via `staging.js` / `npc-animation.mjs` with `base: './anim/'` against local `anim/` JSONs, no CDN fetch).
 - `window.__stagingReady` is set true on success; `window.__stagingError`
   carries the failure message; the status box shows build progress and
   errors — the deploy-time browser check should read these first.
@@ -205,8 +209,8 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
   it to dark slate glass when all three are vacant (no-op when `state.inn` is
   absent/malformed).
 - **Nightly Call card is live from state**: `updateStagingNightlyCallCard`
-  redraws `nightly_call_card` from `state.nightly_call` (no-op until the live
-  server ships `nightly_call`).
+  redraws `nightly_call_card` from `state.nightly_call`, which the live
+  server ships (`GET /api/town/state`).
 - **Inn gable watch carries over**: the procedural Inn's roof-brown prism
   triangles are gone with the tavern, but the tavern's own silhouette
   (balcony, chimney, tile roof) needs human eyes at the render.
