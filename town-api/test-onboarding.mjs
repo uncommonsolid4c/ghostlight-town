@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { createTownServer, rawPubkeyToKeyObject, buildCanonicalString } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
+import { VALID_PROP_KINDS, VALID_COTTAGES } from './plot-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -70,6 +71,8 @@ test('town.json is valid, matches server routes, auth constants, and caps', asyn
   assert.equal(town.auth.spki_der_prefix_hex, '302a300506032b6570032100');
   assert.equal(town.auth.pubkey_encoding, 'base64-raw-32-bytes');
   assert.ok(Array.isArray(town.endpoints) && town.endpoints.length >= 11);
+  assert.deepEqual(town.plot.starter_props, [...VALID_PROP_KINDS]);
+  assert.deepEqual(town.plot.cottage_styles, [...VALID_COTTAGES]);
 
   const srv = await startTestServer();
   try {
