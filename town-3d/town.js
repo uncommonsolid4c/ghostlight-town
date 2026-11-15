@@ -1146,6 +1146,7 @@ export function buildInn(THREE) {
     }
   });
   group.userData.roomWindows = roomWindows;
+  group.userData.commonWindowMaterial = windowMat;
 
   const sign = buildSignpost(THREE, 'GHOSTLIGHT INN', 'inn_signpost');
   sign.position.set(2.6, 0, 2.5);
@@ -2363,24 +2364,39 @@ function pickBandstandSpot(avatarSpots, usedSpots, preferredSlot = null) {
   return { x, y: 0, z, rotY: +Math.atan2(-x, -z).toFixed(4), slot: overflowIdx, nametagLift: (overflowIdx % 2) * 0.5 };
 }
 
+function applyInnWindowPalette(material, isClaimed) {
+  const palette = isClaimed ? INN_WINDOW_COLORS.claimed : INN_WINDOW_COLORS.vacant;
+  setMaterialColor(material, 'color', palette.color);
+  setMaterialColor(material, 'emissive', palette.emissive);
+  material.emissiveIntensity = palette.emissiveIntensity;
+}
+
 /**
- * Update Ghostlight Inn upper-floor room window glow from state.inn occupancy.
- * Missing/non-object innState leaves all windows untouched (all lit as built).
+ * Update Ghostlight Inn window glow from state.inn occupancy: each upper-floor
+ * room window reflects its own room claim, and the five shared common windows
+ * follow the any-occupancy rule (lit when any room is claimed, dim when all
+ * rooms are vacant). Missing/non-object innState leaves all windows untouched
+ * (all lit as built).
  */
 export function updateInnOccupancy(town, innState) {
   if (!innState || typeof innState !== 'object' || Array.isArray(innState)) return;
-  const roomWindows = town?.parts?.inn?.userData?.roomWindows;
+  const innUserData = town?.parts?.inn?.userData;
+  const roomWindows = innUserData?.roomWindows;
   if (!roomWindows || typeof roomWindows !== 'object') return;
 
+  let anyClaimed = false;
   for (const room of Object.keys(INN_ROOM_WINDOWS)) {
-    const win = roomWindows[room];
-    if (!win || !win.material) continue;
     const claim = Object.prototype.hasOwnProperty.call(innState, room) ? innState[room] : null;
     const isClaimed = Boolean(claim && typeof claim === 'object' && !Array.isArray(claim));
-    const palette = isClaimed ? INN_WINDOW_COLORS.claimed : INN_WINDOW_COLORS.vacant;
-    setMaterialColor(win.material, 'color', palette.color);
-    setMaterialColor(win.material, 'emissive', palette.emissive);
-    win.material.emissiveIntensity = palette.emissiveIntensity;
+    if (isClaimed) anyClaimed = true;
+    const win = roomWindows[room];
+    if (!win || !win.material) continue;
+    applyInnWindowPalette(win.material, isClaimed);
+  }
+
+  const commonMat = innUserData?.commonWindowMaterial;
+  if (commonMat) {
+    applyInnWindowPalette(commonMat, anyClaimed);
   }
 }
 
