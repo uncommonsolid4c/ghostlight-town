@@ -60,9 +60,10 @@ const TEST_SUITES = [
   'town-api/test-state-events-key.mjs',
   'town-api/test-town-json.mjs',
   'town-api/test.mjs',
-  // town-npc (5)
+  // town-npc (6)
   'town-npc/test-npc.mjs',
   'town-npc/test-plots.mjs',
+  'town-npc/test-readme.mjs',
   'town-npc/test-real-brain.mjs',
   'town-npc/test-register.mjs',
   'town-npc/test-run-all.mjs',
