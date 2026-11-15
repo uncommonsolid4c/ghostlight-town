@@ -63,6 +63,7 @@ test('town.json is valid, matches server routes, auth constants, and caps', asyn
   const raw = fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8');
   const town = JSON.parse(raw);
 
+  assert.deepEqual(town.version, '0.2.0-phase2');
   assert.equal(town.live, true);
   assert.ok(Array.isArray(town.origins) && town.origins.includes('direct'));
   assert.equal(town.gathering_place, 'Ghostlight Bandstand');
