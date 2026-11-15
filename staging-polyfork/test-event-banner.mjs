@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   loadEvents,
@@ -9,6 +12,8 @@ import {
   renderEventBannerHeader,
   formatEventWhen,
 } from './event-banner.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const VALID_EVENT = {
   title: 'Midnight Reading on the Bandstand',
@@ -177,4 +182,56 @@ test('renderEventBannerHeader and formatEventWhen format textContent and toggle 
   assert.equal(el.hidden, true);
 
   assert.equal(renderEventBannerHeader(null, VALID_EVENT, 'now'), false);
+});
+
+test('shipped events.json validates and selects next, now, and null across the Gazette #3 reading window', async () => {
+  const rawJson = await fs.readFile(path.join(HERE, 'events.json'), 'utf8');
+  const parsed = JSON.parse(rawJson);
+  assert.equal(Array.isArray(parsed.events), true);
+  assert.equal(parsed.events.length, 1);
+
+  const loaded = await loadEvents(async (url) => {
+    assert.equal(url, 'events.json');
+    return { ok: true, async json() { return parsed; } };
+  });
+  assert.equal(loaded.events.length, 1);
+  const [ev] = loaded.events;
+  assert.deepEqual(ev, {
+    title: 'Gazette #3 — read aloud at the Bandstand',
+    host_handle: 'milo',
+    start_at: '2026-11-18T15:30:00Z',
+    duration_min: 60,
+    location: 'the Bandstand',
+    blurb: "Issue #3, fresh off the press — the week's town news, read aloud. Come listen, or bring a line of your own.",
+  });
+
+  const beforeMs = Date.parse('2026-11-18T15:00:00Z');
+  const nextSel = selectCurrentEvent(loaded.events, beforeMs);
+  assert.equal(nextSel?.status, 'next');
+  assert.equal(nextSel.event.title, ev.title);
+
+  const when = formatEventWhen(Date.parse(ev.start_at));
+  assert.equal(when, 'Nov 18, 7:30 AM');
+  const headerEl = { hidden: true, textContent: '' };
+  assert.equal(renderEventBannerHeader(headerEl, nextSel.event, nextSel.status), true);
+  assert.equal(headerEl.hidden, false);
+  assert.equal(
+    headerEl.textContent,
+    'Next: Gazette #3 — read aloud at the Bandstand — Nov 18, 7:30 AM · hosted by @milo'
+  );
+
+  const duringMs = Date.parse('2026-11-18T15:45:00Z');
+  const nowSel = selectCurrentEvent(loaded.events, duringMs);
+  assert.equal(nowSel?.status, 'now');
+  assert.equal(nowSel.event.title, ev.title);
+  assert.equal(renderEventBannerHeader(headerEl, nowSel.event, nowSel.status), true);
+  assert.equal(
+    headerEl.textContent,
+    'Now: Gazette #3 — read aloud at the Bandstand — hosted by @milo'
+  );
+
+  const atEndMs = Date.parse('2026-11-18T16:30:00Z');
+  assert.equal(selectCurrentEvent(loaded.events, atEndMs), null);
+  const afterMs = Date.parse('2026-11-18T17:00:00Z');
+  assert.equal(selectCurrentEvent(loaded.events, afterMs), null);
 });
