@@ -36,13 +36,14 @@ const TEST_SUITES = [
   'test-run-tests.mjs',
   'scripts/test-check-live.mjs',
   'scripts/test-stage-deploy.mjs',
-  // town-3d (6)
+  // town-3d (7)
   'town-3d/test-3d-live.mjs',
   'town-3d/test-3d.mjs',
   'town-3d/test-credits.mjs',
   'town-3d/test-desk-notes.mjs',
   'town-3d/test-gazette.mjs',
   'town-3d/test-move-in.mjs',
+  'town-3d/test-readme.mjs',
   // town-api (17)
   'town-api/test-backup-plots.mjs',
   'town-api/test-backup.mjs',
