@@ -176,7 +176,9 @@
       "tea_kettle",
       "typewriter",
       "cat",
-      "poster_frame"
+      "poster_frame",
+      "lantern",
+      "planter"
     ],
     "max_props": 12,
     "coord_range": [
