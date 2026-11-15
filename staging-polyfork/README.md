@@ -203,11 +203,14 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 
 ## Known limits / follow-ups
 
-- **Per-room Inn glow is a single-zone occupancy glow**: the tavern has ONE
-  night zone (the whole interior), so `updateStagingInnOccupancy` lights the
-  whole taproom when any room (`lantern`, `window`, `quiet`) is claimed and dims
-  it to dark slate glass when all three are vacant (no-op when `state.inn` is
-  absent/malformed).
+- **Per-room Inn glow (front upper windows)**: `updateStagingInnOccupancy`
+  splits the tavern's `:lit` night mesh once and maps the front upper windows
+  (`cy` 4.25, `z` ~`+2.94`) per-room (`lantern` → `X(-3.60)`, `window` →
+  `X(-1.90)`, `quiet` → `X(+1.90)`); the fourth front upper window at
+  `X(+3.60)` is the stair window and stays dark always. Every other pane
+  (ground-floor front, back, and side windows) keeps the any-occupancy rule
+  (lit when any room is claimed, dark when all three are vacant; no-op when
+  `state.inn` is absent/malformed).
 - **Nightly Call card is live from state**: `updateStagingNightlyCallCard`
   redraws `nightly_call_card` from `state.nightly_call`, which the live
   server ships (`GET /api/town/state`).
