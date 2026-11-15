@@ -122,12 +122,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=36, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=37, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=36["']/, 'index.html must reference ./staging.js?v=36');
+  assert.match(html, /src=["']\.\/staging\.js\?v=37["']/, 'index.html must reference ./staging.js?v=37');
   assert.match(html, /id=["']interior-exit["'][^>]*\bhidden\b/, 'index.html must include #interior-exit hidden');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
@@ -286,7 +286,7 @@ test('Slice 84: splitNightlyCallLines at 22 chars wraps all 30 curated topics in
   }
 });
 
-test('Slice 84: Nightly Call card placeholder wraps at <=22 chars and uses titleSize 40 / subSize 34', async () => {
+test('Slice 94: Nightly Call card placeholder wraps at <=22 chars and uses 1024x512, titleSize 80, subSize 68, borderWidth 16', async () => {
   const placeholderLines = splitNightlyCallLines("tonight's prompt appears here", 22);
   assert.equal(placeholderLines.length, 2);
   assert.ok(placeholderLines.every((line) => line.length <= 22));
@@ -296,8 +296,30 @@ test('Slice 84: Nightly Call card placeholder wraps at <=22 chars and uses title
   const callTexMatch = bandstandSrc.match(/const callTex = makeBandstandTextTexture\([\s\S]*?\}\s*\);/);
   assert.ok(callTexMatch, 'Expected callTex makeBandstandTextTexture call in concept-bandstand.js');
   assert.match(callTexMatch[0], /splitNightlyCallLines\([^)]*,\s*22\s*\)/);
-  assert.match(callTexMatch[0], /titleSize:\s*40\b/);
-  assert.match(callTexMatch[0], /subSize:\s*34\b/);
+  assert.match(callTexMatch[0], /width:\s*1024\b/);
+  assert.match(callTexMatch[0], /height:\s*512\b/);
+  assert.match(callTexMatch[0], /titleSize:\s*80\b/);
+  assert.match(callTexMatch[0], /subSize:\s*68\b/);
+  assert.match(callTexMatch[0], /borderWidth:\s*16\b/);
+});
+
+test('Slice 94: makeBandstandTextTexture supports optional borderWidth (default 8) and scales strokeRect', async () => {
+  const bandstandSrc = await fs.readFile(path.join(__dirname, 'concept-bandstand.js'), 'utf8');
+  const builderMatch = bandstandSrc.match(/export function makeBandstandTextTexture\([\s\S]*?\n\}/);
+  assert.ok(builderMatch, 'Expected makeBandstandTextTexture in concept-bandstand.js');
+  const body = builderMatch[0];
+  assert.match(body, /const borderWidth\s*=\s*opts\.borderWidth\s*\|\|\s*8;/);
+  assert.match(body, /ctx\.lineWidth\s*=\s*borderWidth;/);
+  assert.match(body, /ctx\.strokeRect\(\s*borderWidth\s*,\s*borderWidth\s*,\s*width\s*-\s*2\s*\*\s*borderWidth\s*,\s*height\s*-\s*2\s*\*\s*borderWidth\s*\)/);
+
+  // Verify default (8) and explicit (16) arithmetic + event-banner placeholder omits borderWidth
+  const computeStroke = (bw, width, height) => [bw, bw, width - 2 * bw, height - 2 * bw];
+  assert.deepEqual(computeStroke(undefined || 8, 512, 256), [8, 8, 496, 240]);
+  assert.deepEqual(computeStroke(16 || 8, 1024, 512), [16, 16, 992, 480]);
+
+  const bannerMatch = bandstandSrc.match(/const eventBannerTex = makeBandstandTextTexture\([\s\S]*?\}\s*\);/);
+  assert.ok(bannerMatch, 'Expected eventBannerTex in concept-bandstand.js');
+  assert.doesNotMatch(bannerMatch[0], /borderWidth/);
 });
 
 test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops on invalid/unchanged/missing card', () => {
@@ -349,10 +371,11 @@ test('updateStagingNightlyCallCard redraws on topic change, caches, and no-ops o
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].lines, ['THE NIGHTLY CALL', 'Tell us a quiet truth.']);
   assert.deepEqual(calls[0].opts, {
-    width: 512,
-    height: 256,
-    titleSize: 40,
-    subSize: 34,
+    width: 1024,
+    height: 512,
+    titleSize: 80,
+    subSize: 68,
+    borderWidth: 16,
     bg: '#f2e6cf',
     border: '#b59449',
     fg: '#2b1e14',
