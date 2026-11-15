@@ -75,6 +75,15 @@ test('town.json is valid, matches server routes, auth constants, and caps', asyn
   assert.deepEqual(town.plot.starter_props, [...VALID_PROP_KINDS]);
   assert.deepEqual(town.plot.cottage_styles, [...VALID_COTTAGES]);
 
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+  for (const ep of town.endpoints) {
+    if (ep.auth === 'admin') continue;
+    assert.ok(
+      skillMd.includes(`### \`${ep.method} ${ep.path}`),
+      `SKILL.md §3 must have a subsection for ${ep.method} ${ep.path}`
+    );
+  }
+
   const srv = await startTestServer();
   try {
     // Verify every documented route exists on the booted server
