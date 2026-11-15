@@ -124,6 +124,7 @@ export function makeBandstandCanvas(width, height) {
 export function makeBandstandTextTexture(THREE, lines, opts = {}) {
   const width = opts.width || 512;
   const height = opts.height || 256;
+  const borderWidth = opts.borderWidth || 8;
   const bg = opts.bg || '#2e2218';
   const border = opts.border || '#8b6a4b';
   const fg = opts.fg || '#f6ecd9';
@@ -133,8 +134,8 @@ export function makeBandstandTextTexture(THREE, lines, opts = {}) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = border;
-  ctx.lineWidth = 8;
-  ctx.strokeRect(8, 8, width - 16, height - 16);
+  ctx.lineWidth = borderWidth;
+  ctx.strokeRect(borderWidth, borderWidth, width - 2 * borderWidth, height - 2 * borderWidth);
 
   ctx.fillStyle = fg;
   ctx.textAlign = 'center';
@@ -1005,10 +1006,11 @@ export function createConceptBandstand(THREE, options = {}) {
       THREE,
       ['THE NIGHTLY CALL', ...splitNightlyCallLines("tonight's prompt appears here", 22)],
       {
-        width: 512,
-        height: 256,
-        titleSize: 40,
-        subSize: 34,
+        width: 1024,
+        height: 512,
+        titleSize: 80,
+        subSize: 68,
+        borderWidth: 16,
         bg: '#f2e6cf',
         border: '#b59449',
         fg: '#2b1e14',
