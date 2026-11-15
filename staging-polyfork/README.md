@@ -63,7 +63,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=37` cache bust, `#plot-overlay` markup + click
+  Prompt Book UI elements, `?v=38` cache bust, `#plot-overlay` markup + click
   wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
   single-zone glow toggle, Nightly Call card redraw/cache/split).
 - `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
@@ -183,7 +183,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - `tap-glide.mjs` (65c): vendored `stepGlide` verbatim from `town-3d/town.js`,
   `deriveGlideMaxRadius` (38 m on the span-2 128 m island), `stepOrbitGlide`,
   and `createPointerTracker` (4 px drag threshold + multi-pointer pinch
-  suppression). `index.html` (`?v=37`) adds `#move-in-cta` (`href="move-in.html"`),
+  suppression). `index.html` (`?v=38`) adds `#move-in-cta` (`href="move-in.html"`),
   `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
   swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
   HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
