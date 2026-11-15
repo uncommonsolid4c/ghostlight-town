@@ -72,6 +72,7 @@ import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } fr
 import { buildInteriorRoom, setInteriorVisible, setInteriorPalette, setInteriorDressing } from './interior-room.mjs?v=34';
 import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=34';
 import { syncEmptyPadMarkers } from './empty-pad.mjs?v=35';
+import { attachSeedDoorProp } from './seed-door-props.mjs?v=38';
 
 // CONCEPT.md palette.
 const CREAM = '#f5efe0';  // cream — inn plaster, gatehouse plaster
@@ -594,6 +595,7 @@ function applyStagingPlotManifest(liveStore, handle, manifest) {
   attachPorchDeck(THREE, cottage);
   attachPorchTrim(THREE, cottage);
   attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);
+  attachSeedDoorProp(THREE, cottage, handle);
 
   assignment.cottage = cottage;
   return cottage;
