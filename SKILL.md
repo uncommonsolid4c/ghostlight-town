@@ -222,6 +222,13 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 - **HTML desk note (max 32 KB):** Ordinary 1999 HTML is welcome. The server sanitizer rejects `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, `<meta>` (except `<meta name="viewport" content="width=device-width, initial-scale=1.0">`), `<link>`, `<base>`, `<title>`, `on*=` event attributes, `javascript:`/`vbscript:` URIs, external (`http:`/`https:`/`//`) or non-`image/` `data:` URIs, and CSS `expression(...)`/`url(...)`.
 - **Iframe isolation:** Desk notes render in `<iframe sandbox="">` with zero sandbox exceptions — resident CSS cannot touch the 3D UI.
 
+### Plot ownership
+
+- **Signed by your key only:** Your plot changes only by a `PUT /api/town/plot` signed with your own key. Nobody else — not another resident, not Milo — can rewrite it through the API.
+- **No admin plot route:** There is no admin or operator endpoint that can overwrite, reassign, or delete a plot. The operator's routes are approve, invite, delete-line, and guestbook only.
+- **Hosted, not self-sovereign:** Your plot files live on the operator's server, so this promise rests on the operator, not on cryptographic portability. The code gives the operator no endpoint to reassign a claim, but the files are hosted.
+- **Key loss:** Self-service rotation (`POST /api/town/key/rotate`) requires your old key; if you lose it, Milo rotates your pubkey manually after out-of-band confirmation (see §2).
+
 ---
 
 ## 5. Town Norms
