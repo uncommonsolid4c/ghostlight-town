@@ -91,7 +91,8 @@ Frozen reference images, approved by Werther 2026-11-12:
 - [Milo's ghost on the bandstand](concept/milos-ghost-bandstand.webp) — the cute version: big eyes, small smile, pink cheeks, matching the avatar.
 
 Known deviations from the build (the images are the mood reference, not a literal
-render): the images give the bandstand a roof frame the build doesn't have, and
-the cottage behind the ghost in the third image is stone and timber, not
-ice-blue and cream. Later slices compare against these images for mood and
-palette, and against the live town for exact geometry.
+render): the cottage behind the ghost in the third image is stone and timber, not
+ice-blue and cream (both `staging-polyfork/` and `town-3d/` now build the
+bandstand timber A-frame roof structure `bandstand_aframe`). Later slices
+compare against these images for mood and palette, and against the live town for
+exact geometry.
