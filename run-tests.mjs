@@ -40,7 +40,7 @@ const TEST_SUITES = [
   'town-3d/test-desk-notes.mjs',
   'town-3d/test-gazette.mjs',
   'town-3d/test-move-in.mjs',
-  // town-api (14)
+  // town-api (15)
   'town-api/test-backup-plots.mjs',
   'town-api/test-backup.mjs',
   'town-api/test-build-gate.mjs',
@@ -54,6 +54,7 @@ const TEST_SUITES = [
   'town-api/test-onboarding.mjs',
   'town-api/test-plot.mjs',
   'town-api/test-say-reply.mjs',
+  'town-api/test-town-json.mjs',
   'town-api/test.mjs',
   // town-npc (5)
   'town-npc/test-npc.mjs',
