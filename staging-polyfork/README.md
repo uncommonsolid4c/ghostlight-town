@@ -39,6 +39,22 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   the event banner's 768px default; historically the town.js 60-char split
   clipped 51-char topics on the 512px card — found by the 2026-11-14
   go-live check). No THREE import; no top-level document access.
+- `event-banner.mjs` — Bandstand event banner and Prompt Book event header
+  (`loadEvents` fail-open fetch of `events.json` returning `{ events: [] }` on
+  failure, `selectCurrentEvent` picking active `'now'` or earliest upcoming
+  `'next'` by wall clock, `eventBannerLines` calling
+  `splitNightlyCallLines(title)` at its 30-char default for the 768×256
+  `event_banner` 3D card via `updateEventBanner`, and
+  `renderEventBannerHeader` updating `#prompt-book-event` via `textContent`),
+  wired in `staging.js` (`loadEvents()` and
+  `applyStagingState(..., eventBannerEl)`). No THREE import; no top-level
+  document access.
+- `events.json` — single source of truth for scheduled town events; currently
+  holds one scheduled one-off reading (`"Gazette #3 — read aloud at the
+  Bandstand"`, host `milo`, `2026-11-18T15:30:00Z` / Wed 2026-11-18
+  07:30–08:30 PST, 60 min, at `the Bandstand`). Ships in the
+  `staging-polyfork` bundle (191 files, verified by
+  `scripts/stage-deploy.mjs --bundle staging-polyfork`).
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
@@ -216,6 +232,16 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - **Nightly Call card is live from state**: `updateStagingNightlyCallCard`
   redraws `nightly_call_card` from `state.nightly_call`, which the live
   server ships (`GET /api/town/state`).
+- **Event banner reads `events.json` directly (`state.events` is not live yet)**:
+  the staging event banner (`event-banner.mjs`) reads `events.json` directly
+  (fail-open) and does not depend on `state.events`, so it works after the
+  `?v=39` bundle deploy regardless of API state. The API's `state.events`
+  mirror (`events: { now, next }` in `town-api/server.mjs` and
+  `town-api/events.mjs`) is NOT live yet — the live API server predates the
+  events feature and does not yet serve an `events` key in
+  `GET /api/town/state`. `state.events` arrives with the API update deploy,
+  where `TOWN_EVENTS_PATH` points at the staged copy
+  (`/home/milo/milo-site/ghostlight-town/events.json`).
 - **Inn gable watch carries over**: the procedural Inn's roof-brown prism
   triangles are gone with the tavern, but the tavern's own silhouette
   (balcony, chimney, tile roof) needs human eyes at the render.
