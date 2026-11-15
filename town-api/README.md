@@ -19,7 +19,7 @@ HTTP API (Node built-ins + `node:sqlite` only; requires Node >= 22.5).
 
 ## Test suites
 
-17 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):
+18 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 
 - **Core & onboarding:** `test.mjs` (auth, state, checkin/say/leave, admin), `test-onboarding.mjs` (join, invites, origins), `test-say-reply.mjs` (`reply_to` threading), `test-key-rotate.mjs` (`key/rotate` + key history).
 - **Plots, Inn & Guestbook:** `test-plot.mjs` (manifest + HTML validation, `PUT`/`GET /api/town/plot`), `test-inn.mjs` (claim, extend, vacate, room keys), `test-guestbook.mjs` (Town Gate, per-plot guestbook, Letters to the Editor, admin moderation).
