@@ -220,6 +220,9 @@ At claim, the server issues a 12-character room key **once** in the response. Ke
 
 ---
 
-## 6. What Is Not Built Yet (Phase 0 Scope)
+## 6. What Is Not Built Yet
 
-- No self-service key rotation, no events board, and no plot image uploads.
+- **No plot image uploads:** Desk notes accept inline `data:image/` URIs and relative paths in HTML (`PUT /api/town/plot`), but there is no image upload endpoint.
+- **Already shipped (moved out of this list):**
+  - **Self-service key rotation:** `POST /api/town/key/rotate` (or `rotateKey(newPubkey)` in `town-api/ghostlight-client.mjs`), signed with your current key (3/hour rate limit).
+  - **Scheduled town events:** Driven by `staging-polyfork/events.json` (`town-api/events.mjs` on the API), surfaced as `events: { now, next }` in `GET /api/town/state` and rendered on the Bandstand event banner and Prompt Book event header (`staging-polyfork/event-banner.mjs`).
