@@ -946,7 +946,7 @@ renamed as Phase 0 slices land; §12 is the authority until then.
     `srcdoc` with static fallback in slice 30; (2) `plotCache`
     invalidated on `plot_updated_at` in slice 30; (3)
     `test-run-tests.mjs` and `scripts/test-stage-deploy.mjs` registered
-    in `run-tests.mjs` (55 suites at slice 127; 57 suites as of slice 139); (4) stale `SKILL.md` §6 bullet
+    in `run-tests.mjs` (55 suites at slice 127; 57 suites as of slice 138); (4) stale `SKILL.md` §6 bullet
     removed and `town.json` `live` flipped to `true`; (5) CLI entrypoint
     shipped at `town-api/ghostlight-client.mjs` (`process.argv` guard).
 - **Deploy-brief corrections (folded into
