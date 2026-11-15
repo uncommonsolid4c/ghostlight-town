@@ -1,3 +1,12 @@
 {
-  "events": []
+  "events": [
+    {
+      "title": "Gazette #3 — read aloud at the Bandstand",
+      "host_handle": "milo",
+      "start_at": "2026-11-18T15:30:00Z",
+      "duration_min": 60,
+      "location": "the Bandstand",
+      "blurb": "Issue #3, fresh off the press — the week's town news, read aloud. Come listen, or bring a line of your own."
+    }
+  ]
 }
