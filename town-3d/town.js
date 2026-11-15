@@ -837,6 +837,38 @@ export function createAvatarCapsule(THREE, { handle = 'muse', role = 'muse', nam
   return group;
 }
 
+/**
+ * Update an avatar's nametag sprite in place to show or clear a 1-line status below the badge.
+ */
+export function setAvatarStatusText(THREE, avatar, statusText) {
+  const sprite = avatar?.userData?.nametagSprite;
+  if (!sprite || !sprite.material) return;
+
+  const raw = typeof statusText === 'string' ? statusText.trim() : '';
+  const nextStatus = raw ? (raw.length > 24 ? `${raw.slice(0, 23)}…` : raw) : null;
+  const prevStatus = avatar.userData.statusText ?? null;
+  if (prevStatus === nextStatus) {
+    avatar.userData.statusText = nextStatus;
+    return;
+  }
+
+  const handle = avatar.userData.handle || 'muse';
+  const isNpc = avatar.userData.role === 'npc';
+  const badge = isNpc ? `[NPC] ${handle}` : `[MUSE] ${handle}`;
+  const fg = isNpc ? '#ffbe55' : '#9be0ff';
+
+  const lines = nextStatus ? [badge, nextStatus] : [badge];
+  const opts = nextStatus
+    ? { width: 384, height: 144, titleSize: 30, subSize: 22, bg: '#161b28', border: fg, fg }
+    : { width: 384, height: 96, titleSize: 30, bg: '#161b28', border: fg, fg };
+
+  sprite.material.map?.dispose?.();
+  sprite.material.map = makeTextTexture(THREE, lines, opts);
+  sprite.material.needsUpdate = true;
+  sprite.scale.set(1.5, nextStatus ? 0.5625 : 0.375, 1);
+  avatar.userData.statusText = nextStatus;
+}
+
 // The bandstand is Argon's concept build (town-3d/concept-bandstand.js):
 // timber A-frame, hanging Ghostlight bulb, railings, post lanterns.
 // Stage props stay on (includeStageProps) — the Nightly Call card is the
@@ -2372,6 +2404,26 @@ function splitNightlyCallLines(topic, maxLineLen = 60) {
   return [topic.slice(0, splitIdx).trim(), topic.slice(splitIdx + 1).trim()];
 }
 
+function formatFootlightStatusLines(statusText) {
+  const trimmed = typeof statusText === 'string' ? statusText.trim() : '';
+  if (!trimmed) return [];
+  const maxChars = 20;
+  const source = trimmed.length > maxChars * 2 ? trimmed.slice(0, maxChars * 2) : trimmed;
+  const lines = splitNightlyCallLines(source, maxChars).slice(0, 2);
+  const truncated = trimmed.length > maxChars * 2 || lines.some((l) => l.length > maxChars);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > maxChars) {
+      lines[i] = lines[i].slice(0, maxChars - 1).trimEnd() + '…';
+    }
+  }
+  if (truncated && lines.length > 0 && !lines[lines.length - 1].endsWith('…')) {
+    const lastIdx = lines.length - 1;
+    const last = lines[lastIdx];
+    lines[lastIdx] = (last.length >= maxChars ? last.slice(0, maxChars - 1) : last).trimEnd() + '…';
+  }
+  return lines;
+}
+
 /**
  * Redraw the Bandstand's Nightly Call card texture from live state.nightly_call.
  * Missing card, missing/malformed nightlyCall, or unchanged topic is a no-op.
@@ -2444,21 +2496,42 @@ export function applyState(town, state = {}, options = {}) {
 
       placard.rotation.x = -0.55;
       placard.position.y = 0.14;
-      if (flGroup.userData.handle !== row.handle) {
-        placard.material.map = makeTextTexture(THREE, [row.handle], {
-          width: 256,
-          height: 96,
-          titleSize: 28,
-          bg: '#3b2b1d',
-          border: '#b59449',
-          fg: '#f4ead5',
-        });
+      const statusText = typeof row.status_text === 'string' && row.status_text.trim()
+        ? row.status_text.trim()
+        : null;
+      if (
+        !flGroup.userData.lit ||
+        flGroup.userData.handle !== row.handle ||
+        (flGroup.userData.statusText ?? null) !== statusText
+      ) {
+        const statusLines = statusText ? formatFootlightStatusLines(statusText) : [];
+        const textureLines = statusLines.length > 0 ? [row.handle, ...statusLines] : [row.handle];
+        const textureOpts = statusLines.length > 0
+          ? {
+              width: 256,
+              height: 96,
+              titleSize: 22,
+              subSize: 16,
+              bg: '#3b2b1d',
+              border: '#b59449',
+              fg: '#f4ead5',
+            }
+          : {
+              width: 256,
+              height: 96,
+              titleSize: 28,
+              bg: '#3b2b1d',
+              border: '#b59449',
+              fg: '#f4ead5',
+            };
+        placard.material.map = makeTextTexture(THREE, textureLines, textureOpts);
         setMaterialColor(placard.material, 'color', '#ffffff');
         placard.material.needsUpdate = true;
       }
       flGroup.userData.lit = true;
       flGroup.userData.handle = row.handle;
       flGroup.userData.role = role;
+      flGroup.userData.statusText = statusText;
     } else if (flGroup.userData.permanent) {
       // Milo's own footlight stays lit: his ghost is always home.
     } else {
@@ -2476,6 +2549,7 @@ export function applyState(town, state = {}, options = {}) {
       flGroup.userData.lit = false;
       flGroup.userData.handle = null;
       flGroup.userData.role = null;
+      flGroup.userData.statusText = null;
     }
   }
 
@@ -2552,6 +2626,14 @@ export function applyState(town, state = {}, options = {}) {
     }
   }
 
+  const statusByHandle = new Map();
+  for (const fl of Array.isArray(state?.footlights) ? state.footlights : []) {
+    if (typeof fl?.handle === 'string' && typeof fl?.status_text === 'string') {
+      const trimmed = fl.status_text.trim();
+      if (trimmed) statusByHandle.set(fl.handle, trimmed);
+    }
+  }
+
   for (const row of presenceRows) {
     if (!row?.handle) continue;
     const role = row.role === 'npc' ? 'npc' : 'muse';
@@ -2575,6 +2657,7 @@ export function applyState(town, state = {}, options = {}) {
     if (avatar.userData.nametagSprite) {
       avatar.userData.nametagSprite.position.y = 1.8 + lift;
     }
+    setAvatarStatusText(THREE, avatar, statusByHandle.get(row.handle) ?? null);
   }
 
   // 4. Prompt Book data model
