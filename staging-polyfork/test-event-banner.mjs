@@ -12,8 +12,10 @@ import {
   renderEventBannerHeader,
   formatEventWhen,
 } from './event-banner.mjs';
+import { collectSourceFiles } from '../scripts/stage-deploy.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, '..');
 
 const VALID_EVENT = {
   title: 'Midnight Reading on the Bandstand',
@@ -234,4 +236,33 @@ test('shipped events.json validates and selects next, now, and null across the G
   assert.equal(selectCurrentEvent(loaded.events, atEndMs), null);
   const afterMs = Date.parse('2026-11-18T17:00:00Z');
   assert.equal(selectCurrentEvent(loaded.events, afterMs), null);
+});
+
+test('README Contents lists event-banner.mjs and events.json bullets', async () => {
+  const readme = await fs.readFile(path.join(HERE, 'README.md'), 'utf8');
+  const contentsStart = readme.indexOf('## Contents');
+  assert.notEqual(contentsStart, -1, 'README.md must have a ## Contents section');
+  const nextSection = readme.indexOf('\n## ', contentsStart + 1);
+  const contentsBody = nextSection === -1
+    ? readme.slice(contentsStart)
+    : readme.slice(contentsStart, nextSection);
+
+  assert.match(contentsBody, /^- `event-banner\.mjs` /m);
+  assert.match(contentsBody, /^- `events\.json` /m);
+});
+
+test('README states the banner reads events.json directly and live API does not yet serve state.events', async () => {
+  const readme = await fs.readFile(path.join(HERE, 'README.md'), 'utf8');
+  assert.ok(readme.includes('reads `events.json` directly'));
+  assert.ok(readme.includes('fail-open'));
+  assert.ok(readme.includes('predates'));
+  assert.ok(readme.includes('does not yet serve'));
+});
+
+test('staging-polyfork staged bundle includes events.json', async () => {
+  const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
+  assert.ok(
+    files.some((f) => f.relPath === 'events.json'),
+    'staging-polyfork bundle must include events.json'
+  );
 });
