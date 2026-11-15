@@ -222,11 +222,14 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
   town's lanterns are the same).
 - The two-story house from the kit was NOT placed (brief said 2–3
   cottages); it is available in the zip if the ring wants a fourth building.
-- **Tomas's teapot GLB is a follow-up**: Milo's three procedural props
-  (desk, tea kettle, cat) and Wick/Maren/Tomas manifest props are now attached
-  in staging via `attachPlotProps` on `manifest.props` (`cottage-props.mjs`);
-  `models/teapot.glb` is a page-relative GLB that would 404 from the staging
-  subpath and still waits on a prop-path decision.
+- **Seed door-side character props are procedural-only in staging**: Milo's
+  three procedural props (desk, tea kettle, cat) and Wick/Maren/Tomas manifest
+  props are attached via `attachPlotProps` (`cottage-props.mjs`), and the
+  three seed door-side props (Wick's oil lamp, Maren's typewriter, Tomas's
+  teapot) are attached via `attachSeedDoorProp` (`seed-door-props.mjs`),
+  reusing the procedural builders from `interior-room.mjs`. The GLB models
+  (`models/oil-lamp.glb`, `models/teapot.glb`) stay live-town-only, with no
+  `staging-polyfork/models/` directory.
 - **One kit cottage shape for all resident styles**: `kit-medieval/cottage-small.mjs`
   has one cottage silhouette (so Tomas's `tower` style reads as a cottage;
   his signpost + manifest colors carry the identity).
