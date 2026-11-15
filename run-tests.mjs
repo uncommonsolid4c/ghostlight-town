@@ -66,7 +66,7 @@ const TEST_SUITES = [
   'town-npc/test-real-brain.mjs',
   'town-npc/test-register.mjs',
   'town-npc/test-run-all.mjs',
-  // staging-polyfork (15)
+  // staging-polyfork (16)
   'staging-polyfork/test-staging.mjs',
   'staging-polyfork/test-prompt-book.mjs',
   'staging-polyfork/test-avatar.mjs',
@@ -82,6 +82,7 @@ const TEST_SUITES = [
   'staging-polyfork/test-interior-visit.mjs',
   'staging-polyfork/test-empty-pad.mjs',
   'staging-polyfork/test-seed-door-props.mjs',
+  'staging-polyfork/test-kit-docs.mjs',
 ];
 
 function printHelp() {
