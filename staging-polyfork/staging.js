@@ -27,7 +27,7 @@ import { renderPromptBook } from './prompt-book.mjs';
 import {
   updateStagingInnOccupancy,
   updateStagingNightlyCallCard,
-} from './inn-nightly-call.mjs?v=37';
+} from './inn-nightly-call.mjs?v=39';
 import {
   loadEvents,
   selectCurrentEvent,
