@@ -81,6 +81,13 @@ ghostlight: it burns in an empty house by design.
   there is no money here, and nothing should look for sale.
 - No contractor-default colors left unexamined. If a hex has no line in the
   palette table, it doesn't ship.
+  (Scoped 2026-11-15, slice 139: the rule governs the visible material
+  palette. Functional accents — footlight glow states, ghost cheek/blush
+  tints, unlit-state darks, emissive variants — live in code, not the
+  table: 90 such hexes ship as of this slice, counted from `town-3d/` +
+  `staging-polyfork/` shipped JS/MJS excluding `kit-*/models/test-*`. A new
+  *palette* color still needs a line here first, and any unlisted hex that
+  reads as a material color rather than a glow/state tint is still drift.)
 
 ## Visual reference
 
