@@ -122,12 +122,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=38, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=39, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=38["']/, 'index.html must reference ./staging.js?v=38');
+  assert.match(html, /src=["']\.\/staging\.js\?v=39["']/, 'index.html must reference ./staging.js?v=39');
   assert.match(html, /id=["']interior-exit["'][^>]*\bhidden\b/, 'index.html must include #interior-exit hidden');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
@@ -247,6 +247,218 @@ test('inn occupancy: decision logic + single-zone tavern glow toggle', () => {
   );
   assert.equal(glowMat.emissiveIntensity, 1.15);
   assert.equal(wallMat.emissiveIntensity, 0);
+});
+
+// Tavern-local coords from kit-medieval/tavern.mjs (width 10: X(x) = x, HZ = 2.90, WPW = 0.04 => front pane z = 2.94).
+function makeStubPaneTavernGroup(initialGlowIntensity = 1.15) {
+  const sharedGlowMat = { emissiveIntensity: initialGlowIntensity, userData: { glow: true } };
+  const wallMat = { emissiveIntensity: 0, userData: {} };
+  const wallMesh = { isMesh: true, material: wallMat };
+
+  const makePane = (x, y, z) => ({
+    isMesh: true,
+    position: { x, y, z },
+    material: sharedGlowMat, // intentionally shared to verify cloning per pane
+  });
+
+  const panes = {
+    // Four front upper windows (cy = 4.25, z = HZ + WPW = 2.94)
+    lantern: makePane(-3.60, 4.25, 2.94),
+    window: makePane(-1.90, 4.25, 2.94),
+    quiet: makePane(1.90, 4.25, 2.94),
+    stair: makePane(3.60, 4.25, 2.94),
+    // Ground-floor front windows (cy = 1.55)
+    groundFrontLeftOuter: makePane(-3.60, 1.55, 2.94),
+    groundFrontLeftInner: makePane(-1.90, 1.55, 2.94),
+    groundFrontRightInner: makePane(1.90, 1.55, 2.94),
+    groundFrontRightOuter: makePane(3.60, 1.55, 2.94),
+    // Back windows (z = -(HZ + WPW) = -2.94)
+    backUpperLeft: makePane(-2.60, 4.25, -2.94),
+    backGroundRight: makePane(2.60, 1.55, -2.94),
+    // Side windows (x = HX + WPW = 5.04, z = -1.30)
+    sideUpper: makePane(5.04, 4.25, -1.30),
+    sideGround: makePane(5.04, 1.55, -1.30),
+  };
+
+  const allNodes = [wallMesh, ...Object.values(panes)];
+  const group = {
+    traverse(fn) {
+      fn(group);
+      for (const n of allNodes) fn(n);
+    },
+  };
+  return { group, wallMesh, panes };
+}
+
+class StubBufferAttribute {
+  constructor(array, itemSize, normalized = false) {
+    this.array = array;
+    this.itemSize = itemSize;
+    this.normalized = normalized;
+    this.count = array.length / itemSize;
+  }
+  getX(i) { return this.array[i * this.itemSize]; }
+  getY(i) { return this.array[i * this.itemSize + 1]; }
+  getZ(i) { return this.array[i * this.itemSize + 2]; }
+}
+
+class StubBufferGeometry {
+  constructor() {
+    this.attributes = {};
+  }
+  setAttribute(name, attr) {
+    this.attributes[name] = attr;
+  }
+}
+
+class StubMesh {
+  constructor(geometry, material) {
+    this.isMesh = true;
+    this.geometry = geometry;
+    this.material = material;
+    this.children = [];
+    this.userData = {};
+    this.castShadow = true;
+    this.receiveShadow = true;
+  }
+  add(child) {
+    this.children.push(child);
+  }
+}
+
+function makeMergedLitTavernGroup(initialGlowIntensity = 1.15) {
+  // Build two triangles per pane at real kit-medieval/tavern.mjs coords (WHW=0.48, WHH=0.50, WPW=0.04, HZ=2.90, HX=5.00).
+  const verts = [];
+  const pushZPane = (cx, cy, z) => {
+    const hw = 0.48, hh = 0.50;
+    verts.push(
+      cx - hw, cy - hh, z, cx + hw, cy - hh, z, cx + hw, cy + hh, z,
+      cx - hw, cy - hh, z, cx + hw, cy + hh, z, cx - hw, cy + hh, z,
+    );
+  };
+  const pushXPane = (x, cy, cz) => {
+    const hw = 0.48, hh = 0.50;
+    verts.push(
+      x, cy - hh, cz - hw, x, cy - hh, cz + hw, x, cy + hh, cz + hw,
+      x, cy - hh, cz - hw, x, cy + hh, cz + hw, x, cy + hh, cz - hw,
+    );
+  };
+  for (const x of [-3.60, -1.90, 1.90, 3.60]) {
+    pushZPane(x, 4.25, 2.94);
+    pushZPane(x, 1.55, 2.94);
+  }
+  pushZPane(-2.60, 4.25, -2.94);
+  pushZPane(2.60, 1.55, -2.94);
+  pushXPane(5.04, 4.25, -1.30);
+  pushXPane(5.04, 1.55, -1.30);
+
+  const geo = new StubBufferGeometry();
+  geo.setAttribute('position', new StubBufferAttribute(new Float32Array(verts), 3));
+  const mat = {
+    emissiveIntensity: initialGlowIntensity,
+    userData: { glow: true },
+    clone() {
+      return {
+        emissiveIntensity: this.emissiveIntensity,
+        userData: { ...this.userData },
+        clone: this.clone,
+      };
+    },
+  };
+  const litMesh = new StubMesh(geo, mat);
+  litMesh.name = 'tavern-shell:lit';
+  const group = {
+    traverse(fn) {
+      const visit = (node) => {
+        fn(node);
+        for (const c of node.children || []) visit(c);
+      };
+      visit({ children: [litMesh] });
+    },
+  };
+  return { group, litMesh };
+}
+
+test('inn occupancy: per-room front-upper window glow, stair window dark, any-occupancy ground/back/side', () => {
+  // Missing group / missing or malformed innState -> strict no-op (returns null).
+  assert.equal(updateStagingInnOccupancy(null, { lantern: { handle: 'a' }, window: null, quiet: null }), null);
+  const { group, wallMesh, panes } = makeStubPaneTavernGroup(1.15);
+  assert.equal(updateStagingInnOccupancy(group, undefined), null);
+  assert.equal(updateStagingInnOccupancy(group, 'bad'), null);
+  assert.equal(panes.lantern.material.emissiveIntensity, 1.15);
+  assert.equal(wallMesh.material.emissiveIntensity, 0);
+
+  const anyOccupancyKeys = [
+    'groundFrontLeftOuter',
+    'groundFrontLeftInner',
+    'groundFrontRightInner',
+    'groundFrontRightOuter',
+    'backUpperLeft',
+    'backGroundRight',
+    'sideUpper',
+    'sideGround',
+  ];
+
+  // One room claimed (lantern) -> only lantern front-upper + any-occupancy panes lit; window, quiet, stair stay 0.
+  assert.equal(
+    updateStagingInnOccupancy(group, { lantern: { handle: 'milo' }, window: null, quiet: null }),
+    true
+  );
+  assert.equal(panes.lantern.material.emissiveIntensity, 1.15);
+  assert.equal(panes.window.material.emissiveIntensity, 0);
+  assert.equal(panes.quiet.material.emissiveIntensity, 0);
+  assert.equal(panes.stair.material.emissiveIntensity, 0);
+  for (const k of anyOccupancyKeys) {
+    assert.equal(panes[k].material.emissiveIntensity, 1.15, `${k} must be lit when any room is claimed`);
+  }
+  assert.equal(wallMesh.material.emissiveIntensity, 0);
+
+  // Two rooms claimed (window + quiet) -> both lit, lantern + stair dark, any-occupancy lit.
+  assert.equal(
+    updateStagingInnOccupancy(group, { lantern: null, window: { handle: 'wick' }, quiet: { handle: 'maren' } }),
+    true
+  );
+  assert.equal(panes.lantern.material.emissiveIntensity, 0);
+  assert.equal(panes.window.material.emissiveIntensity, 1.15);
+  assert.equal(panes.quiet.material.emissiveIntensity, 1.15);
+  assert.equal(panes.stair.material.emissiveIntensity, 0);
+  for (const k of anyOccupancyKeys) {
+    assert.equal(panes[k].material.emissiveIntensity, 1.15);
+  }
+
+  // All three claimed -> all three room panes lit, stair window still 0.
+  assert.equal(
+    updateStagingInnOccupancy(group, {
+      lantern: { handle: 'a' },
+      window: { handle: 'b' },
+      quiet: { handle: 'c' },
+    }),
+    true
+  );
+  assert.equal(panes.lantern.material.emissiveIntensity, 1.15);
+  assert.equal(panes.window.material.emissiveIntensity, 1.15);
+  assert.equal(panes.quiet.material.emissiveIntensity, 1.15);
+  assert.equal(panes.stair.material.emissiveIntensity, 0);
+
+  // All vacant -> every pane 0.
+  assert.equal(updateStagingInnOccupancy(group, { lantern: null, window: null, quiet: null }), false);
+  for (const [name, pane] of Object.entries(panes)) {
+    assert.equal(pane.material.emissiveIntensity, 0, `${name} must be 0 when all rooms are vacant`);
+  }
+
+  // Merged tavern-shell:lit path (real camp.light() output): splits front-upper panes into child meshes with unique materials.
+  const { group: mergedGroup, litMesh } = makeMergedLitTavernGroup(1.15);
+  assert.equal(
+    updateStagingInnOccupancy(mergedGroup, { lantern: null, window: { handle: 'wick' }, quiet: null }),
+    true
+  );
+  const byName = Object.fromEntries(litMesh.children.map((c) => [c.name, c]));
+  assert.equal(byName['tavern-shell:lit:lantern'].material.emissiveIntensity, 0);
+  assert.equal(byName['tavern-shell:lit:window'].material.emissiveIntensity, 1.15);
+  assert.equal(byName['tavern-shell:lit:quiet'].material.emissiveIntensity, 0);
+  assert.equal(byName['tavern-shell:lit:stair'].material.emissiveIntensity, 0);
+  assert.equal(litMesh.material.emissiveIntensity, 1.15);
+  assert.equal(litMesh.geometry.attributes.position.count, 8 * 6, 'rest geometry keeps 8 non-front-upper panes');
 });
 
 test('splitNightlyCallLines greedily word-wraps topics into <=30-char lines (card fit)', () => {
