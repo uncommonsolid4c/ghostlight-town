@@ -39,7 +39,9 @@ the windows and lanterns are the first thing to check, not the last.
   a test assertion (Milo's cottage ≥ 6 windows, all emissive).
 - **The Ghostlight Bandstand:** octagonal cedar bandstand, ghostlight bulb burning
   24/7 at its center. The light no landlord can turn off. Presence is a brass
-  footlight switching on, not an avatar teleporting in.
+  footlight switching on, not an avatar teleporting in; lit footlights flip up a
+  dark `#3b2b1d` placard (`#b59449` border, `#f4ead5` ink) showing the handle
+  and optional `status_text`.
 - **Milo's ghost:** dome + flared pleated sheet + only a short wisp tip at the
   bottom. Face decal, not bead eyes: big starry eyes, small smile, pink cheeks,
   facing the gate. Never a long taper (that reads as an ice cream cone — test
@@ -47,11 +49,21 @@ the windows and lanterns are the first thing to check, not the last.
   washed-out against the night scene and the bulb (Werther, live render,
   2026-11-12). No legs, just the wisp. The shell-free ghost from the guestbook
   desk, not a capsule person.
-- **Props:** real GLB models (Poly Pizza, CC0) for set dressing — lanterns, bench,
-  furniture. Procedural fallbacks exist so a failed load never leaves a hole, but
-  the GLB is the look; the fallback is not the reference.
-- **Plots:** stone pads with a signpost. Empty plots read as *waiting*, not abandoned.
-- **Ghostlight Inn:** two-story cedar-and-cream inn, warm windows on both floors, "GHOSTLIGHT INN" signpost, hanging lantern by the door.
+- **Props:** in `town-3d/` (fallback), 7 Poly Pizza CC0 `.glb` models (lanterns,
+  bench, street light, bookshelf, oil lamp, teapot) with procedural fallbacks so
+  a failed load never leaves a hole. In `staging-polyfork/` (live), all props
+  are procedural (no `.glb` loader): kit set dressing, starter porch props
+  (`lantern`, `planter` with `#4d3522` soil and `#1f3f26` foliage), and seed
+  door-side character props (`oil_lamp` `#9a7b3e`/`#fff1c9`/`#ffcf70`,
+  `typewriter` `#6b492b`/`#2b2f33`/`#d8d2c5`, `teapot` `#8f6b47`).
+- **Plots:** stone pads (`#6e7278`) with an `OPEN PLOT #N` signpost (`#3b2b1d`
+  / `#7d5a3c`). Empty plots read as *waiting*, not abandoned.
+- **Ghostlight Inn:** live town uses the two-story Polyfork Village Tavern
+  (`width: 10`, cream `#f5efe0` plaster, roof brown `#5a4332` tile, cedar
+  `#6b492b` timber) at `(-11, 20)` with warm windows on both floors and a lamp
+  post by the door (`(-8.5, 17.5)`); its hanging mug sign is removed (no
+  signpost). The `town-3d/` fallback keeps the `"GHOSTLIGHT INN"` signpost and
+  hanging door lantern.
 - **Town Notice Board:** cedar `#6b492b` twin-post board at `(-6, 14)` facing the gate path, dark `#3b2b1d` header panel (`#7d5a3c` border), and three cream `#f5efe0` notice papers (`#8b6a4b` border, `#2e2218` ink) — same palette, no new color.
 - **Bandstand Event Banner:** hanging `event_banner` card under the Bandstand crossbeam (`(0, 3.92, 0.40)`), using the Nightly Call card's cream `#f2e6cf` / brass `#b59449` / `#2b1e14` palette (no new color), hidden when no event is scheduled.
 
