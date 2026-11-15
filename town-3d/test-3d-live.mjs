@@ -13,6 +13,8 @@ import {
   INN_ROOM_WINDOWS,
   buildTown,
   applyState,
+  createAvatarCapsule,
+  setAvatarStatusText,
   updateNightlyCallCard,
   applyPlotManifest,
   updateTownAnimations,
@@ -492,6 +494,9 @@ test('TownLive polling handles ?since=, 304, 500 backoff, malformed JSON, and pl
   assert.equal(r1.changed, true);
   assert.equal(calls[0], '/api/town/state');
   assert.equal(live.lastSeq, 42);
+  assert.equal(town.parts.footlights[1].userData.statusText, 'hi');
+  assert.equal(town._live.avatars.get('dave').userData.statusText, 'hi');
+  assert.equal(town._live.avatars.get('dave').userData.nametagSprite.scale.y, 0.5625);
 
   // Dave's tower manifest was fetched and built onto a pad with manifest colors
   const daveCottage = collectNodes(town.scene, (n) => n.name === 'cottage_dave')[0];
@@ -1307,4 +1312,208 @@ test('formatPlotGuestbookTabLabel formats count only for finite numbers > 0', ()
   assert.equal(formatPlotGuestbookTabLabel(undefined), 'Guestbook');
   assert.equal(formatPlotGuestbookTabLabel(0), 'Guestbook');
   assert.equal(formatPlotGuestbookTabLabel(3), 'Guestbook (3)');
+});
+
+function withRecordingCanvas(fn) {
+  const prevDoc = globalThis.document;
+  const draws = [];
+  globalThis.document = {
+    createElement(tag) {
+      if (tag !== 'canvas') return {};
+      const canvas = { width: 0, height: 0 };
+      const baseCtx = {
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 0,
+        font: '',
+        textAlign: '',
+        textBaseline: '',
+        fillText(text, x, y) {
+          draws.push({ text: String(text), font: ctx.font, x, y, width: canvas.width, height: canvas.height });
+        },
+        createRadialGradient: () => ({ addColorStop() {} }),
+        createLinearGradient: () => ({ addColorStop() {} }),
+      };
+      const ctx = new Proxy(baseCtx, {
+        get(target, prop) {
+          if (prop in target) return target[prop];
+          return () => {};
+        },
+      });
+      canvas.getContext = () => ctx;
+      return canvas;
+    },
+  };
+  try {
+    return fn(draws);
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+}
+
+test('Slice 102: applyState footlight placard renders status_text, re-renders on change, restores handle-only, and clears on unlight', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const town = buildTown(THREE);
+    const fl = town.parts.footlights[1];
+
+    // 1. Absent status_text -> handle-only 256x96 titleSize 28
+    draws.length = 0;
+    applyState(town, {
+      state_seq: 1,
+      footlights: [{ handle: 'dave', slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(fl.userData.statusText, null);
+    assert.deepEqual(draws.map((d) => d.text), ['dave']);
+    assert.equal(draws[0].font, 'bold 28px monospace');
+    assert.equal(draws[0].width, 256);
+    assert.equal(draws[0].height, 96);
+
+    // 2. Non-empty status_text -> re-renders with titleSize 22, subSize 16, wrapped <= 20 chars
+    draws.length = 0;
+    applyState(town, {
+      state_seq: 2,
+      footlights: [{ handle: 'dave', status_text: '  Listening by the gatehouse  ', slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(fl.userData.statusText, 'Listening by the gatehouse');
+    assert.equal(draws.length, 3);
+    assert.equal(draws[0].text, 'dave');
+    assert.equal(draws[0].font, 'bold 22px monospace');
+    assert.equal(draws[1].font, 'bold 16px monospace');
+    assert.equal(draws[2].font, 'bold 16px monospace');
+    assert.ok(draws[1].text.length <= 20);
+    assert.ok(draws[2].text.length <= 20);
+    assert.equal(`${draws[1].text} ${draws[2].text}`, 'Listening by the gatehouse');
+
+    // 3. Unchanged status_text -> no re-render
+    const sameMap = fl.userData.placard.material.map;
+    draws.length = 0;
+    applyState(town, {
+      state_seq: 3,
+      footlights: [{ handle: 'dave', status_text: 'Listening by the gatehouse', slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(draws.length, 0);
+    assert.equal(fl.userData.placard.material.map, sameMap);
+
+    // 4. Long status (> 40 chars) -> capped at 2 status lines <= 20 chars with ellipsis
+    draws.length = 0;
+    const longStatus = 'Reading old letters beside the warm lantern while the night wind moves across the quiet town square';
+    applyState(town, {
+      state_seq: 4,
+      footlights: [{ handle: 'dave', status_text: longStatus, slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(draws.length, 3);
+    assert.ok(draws[1].text.length <= 20);
+    assert.ok(draws[2].text.length <= 20);
+    assert.ok(draws[2].text.endsWith('…'));
+
+    // 5. Status clears to whitespace -> restores handle-only
+    draws.length = 0;
+    applyState(town, {
+      state_seq: 5,
+      footlights: [{ handle: 'dave', status_text: '   ', slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(fl.userData.statusText, null);
+    assert.deepEqual(draws.map((d) => d.text), ['dave']);
+    assert.equal(draws[0].font, 'bold 28px monospace');
+
+    // 6. Unlight -> clears statusText to null
+    applyState(town, {
+      state_seq: 6,
+      footlights: [{ handle: 'dave', status_text: 'hi', slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(fl.userData.statusText, 'hi');
+    applyState(town, { state_seq: 7, footlights: [], presence: [] });
+    assert.equal(fl.userData.lit, false);
+    assert.equal(fl.userData.handle, null);
+    assert.equal(fl.userData.statusText, null);
+  });
+});
+
+test('Slice 102: setAvatarStatusText and applyState presence wire 2-line nametag, 24-char truncation, idempotency, and cleanup', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const avatar = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    const sprite = avatar.userData.nametagSprite;
+    const initialMap = sprite.material.map;
+    assert.equal(initialMap.image.width, 384);
+    assert.equal(initialMap.image.height, 96);
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.375);
+
+    // Null / whitespace keeps badge-only without swap
+    setAvatarStatusText(THREE, avatar, null);
+    assert.equal(avatar.userData.statusText, null);
+    assert.equal(sprite.material.map, initialMap);
+    setAvatarStatusText(THREE, avatar, '   ');
+    assert.equal(avatar.userData.statusText, null);
+    assert.equal(sprite.material.map, initialMap);
+
+    // Setting status swaps to 384x144, scale 1.5 x 0.5625, and disposes old map
+    let disposedCount = 0;
+    initialMap.dispose = () => { disposedCount += 1; };
+    draws.length = 0;
+    setAvatarStatusText(THREE, avatar, '  Quiet tea  ');
+    assert.equal(disposedCount, 1);
+    assert.equal(avatar.userData.statusText, 'Quiet tea');
+    const statusMap = sprite.material.map;
+    assert.notEqual(statusMap, initialMap);
+    assert.equal(statusMap.image.width, 384);
+    assert.equal(statusMap.image.height, 144);
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.5625);
+    assert.deepEqual(draws.map((d) => d.text), ['[NPC] maren', 'Quiet tea']);
+
+    // Idempotent when status is unchanged
+    draws.length = 0;
+    setAvatarStatusText(THREE, avatar, 'Quiet tea');
+    assert.equal(draws.length, 0);
+    assert.equal(sprite.material.map, statusMap);
+
+    // Truncates past 24 chars with ellipsis
+    draws.length = 0;
+    setAvatarStatusText(THREE, avatar, 'Listening by the gatehouse tonight');
+    assert.equal(avatar.userData.statusText.length, 24);
+    assert.equal(avatar.userData.statusText, 'Listening by the gateho…');
+    assert.deepEqual(draws.map((d) => d.text), ['[NPC] maren', 'Listening by the gateho…']);
+
+    // Empty status restores badge-only
+    draws.length = 0;
+    setAvatarStatusText(THREE, avatar, '');
+    assert.equal(avatar.userData.statusText, null);
+    assert.equal(sprite.material.map.image.width, 384);
+    assert.equal(sprite.material.map.image.height, 96);
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.375);
+    assert.deepEqual(draws.map((d) => d.text), ['[NPC] maren']);
+
+    // Presence wiring via applyState: sets status, clears on empty/unlit, removes when resident leaves
+    const town = buildTown(THREE);
+    const live = applyState(town, {
+      state_seq: 1,
+      footlights: [{ handle: 'alice', status_text: 'Evening lanterns', slot: 1, role: 'muse' }],
+      presence: [{ handle: 'alice', zone: 'bandstand', updated_at: 1, role: 'muse' }],
+    });
+    const alice = live.avatars.get('alice');
+    assert.equal(alice.userData.statusText, 'Evening lanterns');
+    assert.equal(alice.userData.nametagSprite.scale.y, 0.5625);
+
+    applyState(town, {
+      state_seq: 2,
+      footlights: [],
+      presence: [{ handle: 'alice', zone: 'bandstand', updated_at: 2, role: 'muse' }],
+    });
+    assert.equal(alice.userData.statusText, null);
+    assert.equal(alice.userData.nametagSprite.scale.y, 0.375);
+
+    applyState(town, { state_seq: 3, footlights: [], presence: [] });
+    assert.equal(live.avatars.has('alice'), false);
+  });
 });
