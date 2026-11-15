@@ -10,7 +10,9 @@ backoff to 60 s, `?since=`, 304 no-op), lights/unlights bandstand footlights
 slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent), renders
 the Prompt Book panel, places/lerps presence avatars (`avatar.mjs`), syncs
 resident cottages from `state.plots` via `GET /api/town/plot?handle=`, drives
-the Inn's single-zone taproom glow from `state.inn`, and redraws the
+the Inn's per-room window glow from `state.inn` (front-upper windows per
+room, `X(+3.60)` stair window dark; ground/back/side panes any-occupancy),
+and redraws the
 Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 `../CONCEPT.md` after deploy, by a browser task with human eyes.
 
@@ -27,7 +29,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   NPCs, controls) plus the staging-local `StagingLive` poller, footlight/avatar
   state applier (`applyStagingState` / `applyStagingPresence`), plot sync
   (`syncStagingPlotsFromState`), and Inn / Nightly Call card wiring.
-- `inn-nightly-call.mjs` — staging-local Inn single-zone occupancy glow
+- `inn-nightly-call.mjs` — staging-local Inn per-room occupancy glow
   (`isInnOccupied`, `collectTavernGlowMaterials`, `updateStagingInnOccupancy`)
   and Bandstand Nightly Call card updater (`splitNightlyCallLines`,
   `updateStagingNightlyCallCard`), mirroring `town-3d/town.js` except the
@@ -63,9 +65,9 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=38` cache bust, `#plot-overlay` markup + click
+  Prompt Book UI elements, `?v=39` cache bust, `#plot-overlay` markup + click
   wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
-  single-zone glow toggle, Nightly Call card redraw/cache/split).
+  per-room glow toggle, Nightly Call card redraw/cache/split).
 - `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
   (`resolveInnOverlayContent` API/static fallback, `resolveGuestbookOverlayContent`
   Signatures-before-Letters/escaping/town-time/50-cap/fallback, sandboxed
@@ -183,7 +185,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - `tap-glide.mjs` (65c): vendored `stepGlide` verbatim from `town-3d/town.js`,
   `deriveGlideMaxRadius` (38 m on the span-2 128 m island), `stepOrbitGlide`,
   and `createPointerTracker` (4 px drag threshold + multi-pointer pinch
-  suppression). `index.html` (`?v=38`) adds `#move-in-cta` (`href="move-in.html"`),
+  suppression). `index.html` (`?v=39`) adds `#move-in-cta` (`href="move-in.html"`),
   `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
   swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
   HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
