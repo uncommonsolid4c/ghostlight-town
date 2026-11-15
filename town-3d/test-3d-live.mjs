@@ -11,6 +11,7 @@ import {
   MILO_REBUILD_MANIFEST,
   FOOTLIGHT_COLORS,
   INN_ROOM_WINDOWS,
+  INN_WINDOW_COLORS,
   buildTown,
   applyState,
   createAvatarCapsule,
@@ -921,6 +922,9 @@ test('applyState inn occupancy round-trip dims a previously claimed room when va
     },
   });
   assert.ok(getInnWindow(town, 4).material.emissiveIntensity <= 0.2, 'vacated lantern window dims again');
+  for (const idx of [0, 1, 2, 3, 7]) {
+    assert.ok(getInnWindow(town, idx).material.emissiveIntensity <= 0.2, `common inn_window_${idx} dims when all rooms are vacant`);
+  }
 });
 
 test('applyState ignores unknown inn room keys without throwing', () => {
@@ -934,7 +938,40 @@ test('applyState ignores unknown inn room keys without throwing', () => {
 
   assert.ok(getInnWindow(town, 4).material.emissiveIntensity <= 0.2, 'lantern window dims');
   for (const idx of [0, 1, 2, 3, 7]) {
-    assert.equal(getInnWindow(town, idx).material.emissiveIntensity, 1.4, `common inn_window_${idx} unchanged`);
+    assert.ok(getInnWindow(town, idx).material.emissiveIntensity <= 0.2, `common inn_window_${idx} dims when all known rooms are vacant`);
+  }
+});
+
+test('applyState dims all common inn windows when all rooms are vacant and re-lights them when one room is claimed', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  applyState(town, {
+    inn: {
+      lantern: null,
+      window: null,
+      quiet: null,
+    },
+  });
+
+  for (const idx of [0, 1, 2, 3, 7]) {
+    const mat = getInnWindow(town, idx).material;
+    assert.ok(mat.emissiveIntensity <= 0.2, `vacant common inn_window_${idx} dims`);
+    assert.equal(mat.color, INN_WINDOW_COLORS.vacant.color);
+    assert.equal(mat.emissive, INN_WINDOW_COLORS.vacant.emissive);
+  }
+
+  applyState(town, {
+    inn: {
+      lantern: null,
+      window: { handle: 'wick', nights: 1, expires_at: 9999999999 },
+      quiet: null,
+    },
+  });
+
+  for (const idx of [0, 1, 2, 3, 7]) {
+    const mat = getInnWindow(town, idx).material;
+    assert.equal(mat.emissiveIntensity, 1.4, `common inn_window_${idx} re-lights when a room is claimed`);
+    assert.equal(mat.color, INN_WINDOW_COLORS.claimed.color);
+    assert.equal(mat.emissive, INN_WINDOW_COLORS.claimed.emissive);
   }
 });
 
