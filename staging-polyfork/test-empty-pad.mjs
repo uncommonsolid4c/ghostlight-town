@@ -192,3 +192,146 @@ test('syncEmptyPadMarkers builds 7 markers (plots 2-8), removes on assignment, i
   assert.notEqual(liveStore.emptyPadMarkers.get(2), marker2);
   assert.equal(scene.children.length, 7);
 });
+
+test('buildEmptyPadMarker uses plot 8 layout, label, group name, and sign name for the last plot', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[7]; // plotNumber 8
+  assert.equal(plot.plotNumber, 8);
+  const texCalls = [];
+  const makeTextTexture = (threeArg, lines, opts) => {
+    texCalls.push({ threeArg, lines, opts });
+    return { isFakeTexture: true };
+  };
+
+  const group = buildEmptyPadMarker(THREE, plot, 2.5, makeTextTexture);
+
+  assert.equal(group.name, 'plot_pad_8');
+  assert.equal(group.position.x, plot.x);
+  assert.equal(group.position.y, 2.5);
+  assert.equal(group.position.z, plot.z);
+  assert.equal(group.rotation.y, plot.rotY);
+  assert.deepEqual(group.userData, {
+    clickable: true,
+    kind: 'open_plot',
+    plotNumber: 8,
+    label: 'OPEN PLOT #8',
+  });
+  const [, sign] = group.children;
+  assert.equal(sign.name, 'plot_8_signpost');
+  assert.deepEqual(sign.userData, { signpostText: 'OPEN PLOT #8' });
+  assert.deepEqual(texCalls[0].lines, ['OPEN PLOT #8']);
+});
+
+test('buildEmptyPadMarker varies only group.position.y when groundY changes', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[2]; // plotNumber 3
+  const fakeTex = { isFakeTexture: true };
+  const makeTextTexture = () => fakeTex;
+
+  const groupA = buildEmptyPadMarker(THREE, plot, 0.5, makeTextTexture);
+  const groupB = buildEmptyPadMarker(THREE, plot, 4.25, makeTextTexture);
+
+  assert.equal(groupA.position.y, 0.5);
+  assert.equal(groupB.position.y, 4.25);
+  assert.equal(groupA.position.x, groupB.position.x);
+  assert.equal(groupA.position.z, groupB.position.z);
+  assert.equal(groupA.rotation.y, groupB.rotation.y);
+  assert.deepEqual(groupA.userData, groupB.userData);
+
+  const [slabA, signA] = groupA.children;
+  const [slabB, signB] = groupB.children;
+  assert.deepEqual(slabA.geometry.args, slabB.geometry.args);
+  assert.equal(slabA.material.color, slabB.material.color);
+  assert.equal(slabA.material.roughness, slabB.material.roughness);
+  assert.deepEqual([slabA.position.x, slabA.position.y, slabA.position.z], [slabB.position.x, slabB.position.y, slabB.position.z]);
+
+  assert.deepEqual(signA.geometry.args, signB.geometry.args);
+  assert.equal(signA.material.roughness, signB.material.roughness);
+  assert.equal(signA.name, signB.name);
+  assert.deepEqual(signA.userData, signB.userData);
+  assert.deepEqual([signA.position.x, signA.position.y, signA.position.z], [signB.position.x, signB.position.y, signB.position.z]);
+});
+
+test('syncEmptyPadMarkers initializes emptyPadMarkers when missing from liveStore', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map() };
+
+  const count = syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt: () => 0,
+  });
+
+  assert.equal(count, 7);
+  assert.ok(liveStore.emptyPadMarkers instanceof Map);
+  assert.equal(liveStore.emptyPadMarkers.size, 7);
+  assert.equal(scene.children.length, 7);
+});
+
+test('syncEmptyPadMarkers removes multiple assigned plots at once and calls removeFromParent on each', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  const removed = [2, 3, 4].map((n) => liveStore.emptyPadMarkers.get(n));
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 2 });
+  liveStore.plotAssignments.set('maren', { plotNumber: 3 });
+  liveStore.plotAssignments.set('tomas', { plotNumber: 4 });
+
+  const remaining = syncEmptyPadMarkers(scene, liveStore, opts);
+  assert.equal(remaining, 4);
+  assert.deepEqual([...liveStore.emptyPadMarkers.keys()].sort((a, b) => a - b), [5, 6, 7, 8]);
+  assert.equal(scene.children.length, 4);
+  for (const marker of removed) {
+    assert.equal(marker.removedCount, 1);
+  }
+});
+
+test('syncEmptyPadMarkers ignores assignments with an unknown plotNumber', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = {
+    plotAssignments: new Map([['stranger', { plotNumber: 9 }]]),
+    emptyPadMarkers: new Map(),
+  };
+
+  const count = syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt: () => 0,
+  });
+
+  assert.equal(count, 7);
+  assert.equal(liveStore.emptyPadMarkers.size, 7);
+  assert.equal(liveStore.emptyPadMarkers.has(9), false);
+  assert.equal(scene.children.length, 7);
+});
+
+test('syncEmptyPadMarkers sets each marker position.y from groundAt(plot.x, plot.z)', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const groundCalls = [];
+  const groundAt = (x, z) => {
+    groundCalls.push([x, z]);
+    return +(x * 0.1 - z * 0.05).toFixed(4);
+  };
+
+  syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt,
+  });
+
+  const expectedPlots = TOWN_LAYOUT.plots.slice(1);
+  assert.equal(groundCalls.length, expectedPlots.length);
+  expectedPlots.forEach((plot, idx) => {
+    assert.deepEqual(groundCalls[idx], [plot.x, plot.z]);
+    const expectedY = +(plot.x * 0.1 - plot.z * 0.05).toFixed(4);
+    assert.equal(liveStore.emptyPadMarkers.get(plot.plotNumber).position.y, expectedY);
+  });
+});
