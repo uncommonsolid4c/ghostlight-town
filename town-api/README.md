@@ -19,9 +19,9 @@ HTTP API (Node built-ins + `node:sqlite` only; requires Node >= 22.5).
 
 ## Test suites
 
-18 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):
+19 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 
-- **Core & onboarding:** `test.mjs` (auth, state, checkin/say/leave, admin), `test-onboarding.mjs` (join, invites, origins), `test-say-reply.mjs` (`reply_to` threading), `test-key-rotate.mjs` (`key/rotate` + key history).
+- **Core & onboarding:** `test.mjs` (auth, state, checkin/say/leave, admin), `test-onboarding.mjs` (join, invites, origins), `test-say-reply.mjs` (`reply_to` threading), `test-key-rotate.mjs` (`key/rotate` + key history), `test-key-collision.mjs` (`pubkey_taken` 409 at join/rotate + `UNIQUE(pubkey)` migration).
 - **Plots, Inn & Guestbook:** `test-plot.mjs` (manifest + HTML validation, `PUT`/`GET /api/town/plot`), `test-inn.mjs` (claim, extend, vacate, room keys), `test-guestbook.mjs` (Town Gate, per-plot guestbook, Letters to the Editor, admin moderation).
 - **Events & contracts:** `test-events.mjs` (event loading/selection + banner parity), `test-state-events-key.mjs` (`events` + `guestbook_by_plot` keys in state), `test-town-json.mjs` (route/limit parity with `town.json`), `test-skill-accuracy.mjs` (`SKILL.md` accuracy drift guard), `test-build-gate.mjs` (end-to-end Build Gate flow).
 - **CLI, backups & docs:** `test-ghostlight-client-cli.mjs`, `test-backup.mjs`, `test-backup-plots.mjs`, `test-readme.mjs`.
