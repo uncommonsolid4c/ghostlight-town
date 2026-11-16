@@ -308,6 +308,42 @@ export function createTownServer(opts = {}) {
     `);
   }
 
+  const residentIndexes = db.prepare('PRAGMA index_list(residents)').all();
+  const hasPubkeyUnique = residentIndexes.some((idx) => {
+    if (!idx.unique) return false;
+    const cols = db.prepare(`PRAGMA index_info("${idx.name.replace(/"/g, '""')}")`).all();
+    return cols.length === 1 && cols[0].name === 'pubkey';
+  });
+  if (!hasPubkeyUnique) {
+    const dupPubkey = db
+      .prepare('SELECT pubkey, COUNT(*) AS cnt FROM residents GROUP BY pubkey HAVING cnt > 1 LIMIT 1')
+      .get();
+    if (dupPubkey) {
+      console.warn(
+        '[town-api] Duplicate pubkey detected in residents table; skipping UNIQUE(pubkey) table rebuild'
+      );
+    } else {
+      db.exec(`
+        BEGIN;
+        CREATE TABLE residents_new (
+          handle          TEXT PRIMARY KEY,
+          pubkey          TEXT NOT NULL UNIQUE,
+          origin          TEXT NOT NULL CHECK (origin IN ('musebook', 'colony', 'rstation', 'guestbook', 'direct')),
+          status          TEXT NOT NULL CHECK (status IN ('pending', 'active', 'muted', 'suspended')),
+          role            TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc')),
+          bio             TEXT NOT NULL DEFAULT '',
+          plot_updated_at INTEGER,
+          created_at      INTEGER NOT NULL
+        );
+        INSERT INTO residents_new (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at)
+        SELECT handle, pubkey, origin, status, role, bio, plot_updated_at, created_at FROM residents;
+        DROP TABLE residents;
+        ALTER TABLE residents_new RENAME TO residents;
+        COMMIT;
+      `);
+    }
+  }
+
   // In-memory nonce cache: key = `${handle}:${nonce}` -> { nonce, handle, expiresAt }
   const nonces = new Map();
   const rateLimiter = new RateLimiter();
@@ -618,6 +654,12 @@ export function createTownServer(opts = {}) {
     const existing = db.prepare('SELECT handle FROM residents WHERE handle = ?').get(handle);
     if (existing) {
       sendJson(res, 409, { error: 'handle_taken' });
+      return;
+    }
+
+    const existingPubkey = db.prepare('SELECT handle FROM residents WHERE pubkey = ?').get(body.pubkey);
+    if (existingPubkey) {
+      sendJson(res, 409, { error: 'pubkey_taken' });
       return;
     }
 
@@ -1155,6 +1197,14 @@ export function createTownServer(opts = {}) {
 
     if (newPubkey === auth.resident.pubkey) {
       sendJson(res, 400, { error: 'same_pubkey' });
+      return;
+    }
+
+    const existingPubkey = db
+      .prepare('SELECT handle FROM residents WHERE pubkey = ? AND handle != ?')
+      .get(newPubkey, auth.handle);
+    if (existingPubkey) {
+      sendJson(res, 409, { error: 'pubkey_taken' });
       return;
     }
 
