@@ -400,3 +400,190 @@ test('interior-room.mjs contains no campfire term, fetch(, or Math.random', asyn
   assert.equal(src.includes('fetch('), false, 'Must not contain fetch(');
   assert.equal(src.includes('Math.random'), false, 'Must not contain Math.random');
 });
+
+function assertNear(actual, expected, label) {
+  assert.ok(
+    Math.abs(actual - expected) < 1e-9,
+    `${label}: expected ${expected}, got ${actual}`
+  );
+}
+
+function assertBoxAt(mesh, expectedArgs, expectedPos, label) {
+  assert.ok(mesh, `Expected ${label}`);
+  assert.equal(mesh.geometry.type, 'BoxGeometry', `${label} geometry type`);
+  assert.equal(mesh.geometry.args.length, 3, `${label} args length`);
+  for (let i = 0; i < 3; i++) {
+    assertNear(mesh.geometry.args[i], expectedArgs[i], `${label} arg[${i}]`);
+  }
+  assertNear(mesh.position.x, expectedPos[0], `${label} x`);
+  assertNear(mesh.position.y, expectedPos[1], `${label} y`);
+  assertNear(mesh.position.z, expectedPos[2], `${label} z`);
+}
+
+function assertCylinderAt(mesh, expectedArgs, expectedPos, label) {
+  assert.ok(mesh, `Expected ${label}`);
+  assert.equal(mesh.geometry.type, 'CylinderGeometry', `${label} geometry type`);
+  assert.equal(mesh.geometry.args.length, 4, `${label} args length`);
+  for (let i = 0; i < 4; i++) {
+    assertNear(mesh.geometry.args[i], expectedArgs[i], `${label} arg[${i}]`);
+  }
+  assertNear(mesh.position.x, expectedPos[0], `${label} x`);
+  assertNear(mesh.position.y, expectedPos[1], `${label} y`);
+  assertNear(mesh.position.z, expectedPos[2], `${label} z`);
+}
+
+test('floor and wall geometry are exact', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((m) => [m.name, m]));
+
+  assertBoxAt(byName.get('interior_floor'), [3.7, 0.08, 3.0], [0, 0.04, 0], 'interior_floor');
+  assertBoxAt(byName.get('interior_wall_back'), [3.7, 2.6, 0.12], [0, 1.3, -1.44], 'interior_wall_back');
+  assertBoxAt(byName.get('interior_wall_left'), [0.12, 2.6, 2.76], [-1.79, 1.3, 0], 'interior_wall_left');
+  assertBoxAt(byName.get('interior_wall_right'), [0.12, 2.6, 2.76], [1.79, 1.3, 0], 'interior_wall_right');
+  assertBoxAt(byName.get('interior_wall_front_lintel'), [1.0, 0.6, 0.12], [0, 2.3, 1.44], 'interior_wall_front_lintel');
+});
+
+test('rafters are four, evenly spaced, peaking at 2.72', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const rafters = room.children.filter((m) => m.name.startsWith('interior_rafter_'));
+  const expectedZ = [-1.05, -0.35, 0.35, 1.05];
+
+  assert.equal(rafters.length, 4);
+  for (let i = 0; i < expectedZ.length; i++) {
+    const rafter = rafters[i];
+    assert.equal(rafter.name, `interior_rafter_${i + 1}`);
+    assertBoxAt(rafter, [3.46, 0.12, 0.14], [0, 2.66, expectedZ[i]], rafter.name);
+    assertNear(meshBounds(rafter).maxY, 2.72, `${rafter.name} maxY`);
+  }
+});
+
+test('window glows sit inside the side walls', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const leftGlow = room.children.find((m) => m.name === 'interior_window_glow_left');
+  const rightGlow = room.children.find((m) => m.name === 'interior_window_glow_right');
+
+  assertBoxAt(leftGlow, [0.02, 0.8, 0.9], [-1.72, 1.45, 0], 'interior_window_glow_left');
+  assertBoxAt(rightGlow, [0.02, 0.8, 0.9], [1.72, 1.45, 0], 'interior_window_glow_right');
+
+  for (const glow of [leftGlow, rightGlow]) {
+    const b = meshBounds(glow);
+    assert.ok(b.minX >= -1.73 - 1e-9, `${glow.name} minX ${b.minX} exceeds left inner wall`);
+    assert.ok(b.maxX <= 1.73 + 1e-9, `${glow.name} maxX ${b.maxX} exceeds right inner wall`);
+  }
+});
+
+test('dressing builders have the exact geometry, materials, and group offsets', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  const milo = byName.get('interior_dressing_milo');
+  assertNear(milo.position.x, 0, 'milo.position.x');
+  assertNear(milo.position.y, 0, 'milo.position.y');
+  assertNear(milo.position.z, 0, 'milo.position.z');
+  const kettle = milo.children.find((m) => m.name === 'interior_tea_kettle');
+  const cat = milo.children.find((m) => m.name === 'interior_cat');
+  assertCylinderAt(kettle, [0.14, 0.18, 0.24, 8], [-0.8, 0.92, -0.85], 'milo kettle');
+  assert.ok(cat, 'Expected milo cat');
+  assert.equal(cat.geometry.type, 'ConeGeometry');
+  assert.deepEqual(cat.geometry.args, [0.16, 0.36, 6]);
+  assertNear(cat.position.x, 1.35, 'milo cat x');
+  assertNear(cat.position.y, 0.26, 'milo cat y');
+  assertNear(cat.position.z, -0.9, 'milo cat z');
+
+  const wick = byName.get('interior_dressing_wick');
+  assertNear(wick.position.x, -0.8, 'wick.position.x');
+  assertNear(wick.position.y, 0.8, 'wick.position.y');
+  assertNear(wick.position.z, -0.85, 'wick.position.z');
+  assert.equal(wick.children.length, 3);
+  assertCylinderAt(wick.children[0], [0.14, 0.18, 0.14, 8], [0, 0.07, 0], 'wick base');
+  assert.equal(wick.children[0].material.color, '#9a7b3e');
+  assertCylinderAt(wick.children[1], [0.09, 0.12, 0.24, 8], [0, 0.26, 0], 'wick globe');
+  assert.equal(wick.children[1].material.color, '#fff1c9');
+  assert.equal(wick.children[1].material.emissive, '#ffcf70');
+  assert.equal(wick.children[1].material.emissiveIntensity, 1.1);
+  assertBoxAt(wick.children[2], [0.04, 0.18, 0.04], [0.13, 0.22, 0], 'wick handle');
+  assert.equal(wick.children[2].material.color, '#9a7b3e');
+
+  const maren = byName.get('interior_dressing_maren');
+  assertNear(maren.position.x, -0.8, 'maren.position.x');
+  assertNear(maren.position.y, 0.8, 'maren.position.y');
+  assertNear(maren.position.z, -0.85, 'maren.position.z');
+  assert.equal(maren.children.length, 3);
+  assertBoxAt(maren.children[0], [0.7, 0.08, 0.55], [0, 0.04, 0], 'maren stand');
+  assert.equal(maren.children[0].material.color, '#6b492b');
+  assertBoxAt(maren.children[1], [0.46, 0.18, 0.36], [0, 0.17, 0], 'maren body');
+  assert.equal(maren.children[1].material.color, '#2b2f33');
+  assertCylinderAt(maren.children[2], [0.05, 0.05, 0.42, 8], [0, 0.28, -0.1], 'maren roller');
+  assertNear(maren.children[2].rotation.z, Math.PI / 2, 'maren roller rotation.z');
+  assert.equal(maren.children[2].material.color, '#d8d2c5');
+
+  const tomas = byName.get('interior_dressing_tomas');
+  assertNear(tomas.position.x, -0.8, 'tomas.position.x');
+  assertNear(tomas.position.y, 0.8, 'tomas.position.y');
+  assertNear(tomas.position.z, -0.85, 'tomas.position.z');
+  assert.equal(tomas.children.length, 3);
+  assertCylinderAt(tomas.children[0], [0.16, 0.2, 0.28, 8], [0, 0.14, 0], 'tomas body');
+  assert.equal(tomas.children[0].material.color, '#8f6b47');
+  assertBoxAt(tomas.children[1], [0.14, 0.05, 0.05], [0.2, 0.18, 0], 'tomas spout');
+  assert.equal(tomas.children[1].material.color, '#8f6b47');
+  assertCylinderAt(tomas.children[2], [0.06, 0.12, 0.08, 8], [0, 0.32, 0], 'tomas lid');
+  assert.equal(tomas.children[2].material.color, '#8f6b47');
+});
+
+test("every dressing group's world bounds fit the room", () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const handles = ['milo', 'wick', 'maren', 'tomas'];
+
+  for (const h of handles) {
+    const group = room.children.find((c) => c.name === `interior_dressing_${h}`);
+    const b = computeGroupBounds(group);
+    assert.ok(b.minX >= -1.73 - 1e-9, `${h} minX ${b.minX} outside room`);
+    assert.ok(b.maxX <= 1.73 + 1e-9, `${h} maxX ${b.maxX} outside room`);
+    assert.ok(b.minZ >= -1.38 - 1e-9, `${h} minZ ${b.minZ} outside room`);
+    assert.ok(b.maxZ <= 1.38 + 1e-9, `${h} maxZ ${b.maxZ} outside room`);
+    assert.ok(b.maxY <= 2.72 + 1e-9, `${h} maxY ${b.maxY} exceeds rafter peak`);
+  }
+
+  const wick = room.children.find((c) => c.name === 'interior_dressing_wick');
+  const maren = room.children.find((c) => c.name === 'interior_dressing_maren');
+  const tomas = room.children.find((c) => c.name === 'interior_dressing_tomas');
+
+  assertNear(computeGroupBounds(wick).maxY, 1.18, 'wick globe world top');
+  const roller = maren.children[2];
+  assertNear(maren.position.y + roller.position.y + roller.geometry.args[0], 1.13, 'maren roller world top');
+  assertNear(computeGroupBounds(tomas).maxY, 1.16, 'tomas lid world top');
+});
+
+test('setter edge cases: non-object rooms, plain-color assignment, partial dressing groups, build-time palette', () => {
+  const THREE = makeFakeThree();
+
+  // (a) non-object rooms in setInteriorVisible
+  assert.doesNotThrow(() => setInteriorVisible(42, true));
+  assert.doesNotThrow(() => setInteriorVisible('room', true));
+  assert.equal(setInteriorVisible(42, true), false);
+  assert.equal(setInteriorVisible('room', true), false);
+
+  // (b) plain-color assignment and missing material in setInteriorPalette
+  const plainRoom = { children: [{ name: 'interior_wall_back', material: { color: '#f5efe0' } }] };
+  assert.equal(setInteriorPalette(plainRoom, 'wick'), true);
+  assert.equal(plainRoom.children[0].material.color, '#c8922e');
+
+  const noMatRoom = { children: [{ name: 'interior_wall_back' }] };
+  assert.equal(setInteriorPalette(noMatRoom, 'milo'), false);
+
+  // (c) partial dressing groups in setInteriorDressing
+  const partialRoom = { children: [{ name: 'interior_dressing_milo', visible: false }] };
+  assert.equal(setInteriorDressing(partialRoom, 'milo'), false);
+
+  // (d) build-time palette only applies accent for 'milo'
+  for (const opts of [{ palette: 'wick' }, undefined, { palette: undefined }]) {
+    const r = buildInteriorRoom(THREE, opts);
+    const back = r.children.find((m) => m.name === 'interior_wall_back');
+    assert.equal(back.material.color, '#f5efe0');
+  }
+});
