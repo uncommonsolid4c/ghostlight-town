@@ -125,7 +125,7 @@ test('say reply_to rejects non-integer, 0, negative, and missing id with 400 inv
   try {
     const { client: alice } = await createResident(ctx, 'alice');
 
-    const badValues = ['3', 0, -1, 99999];
+    const badValues = ['3', 0, -1, 99999, 1.5, true];
     for (const bad of badValues) {
       const res = await alice.say('Should fail.', 'say', bad);
       assert.equal(res.status, 400, `expected 400 for reply_to=${JSON.stringify(bad)}`);
@@ -273,22 +273,222 @@ test('CLI say --reply-to <id> posts reply_to and --reply-to abc exits 2', async 
     assert.equal(parsed.status, 201);
     assert.equal(parsed.data.reply_to, first.data.id);
 
-    const bad = await runCliAsync([
-      'say',
-      '--api-base',
-      ctx.baseUrl,
-      '--handle',
-      'maren',
-      '--key',
-      keyPath,
-      '--body',
-      'Bad reply',
-      '--reply-to',
-      'abc',
-    ]);
-    assert.equal(bad.status, 2);
+    for (const badVal of ['abc', '0', '-3']) {
+      const bad = await runCliAsync([
+        'say',
+        '--api-base',
+        ctx.baseUrl,
+        '--handle',
+        'maren',
+        '--key',
+        keyPath,
+        '--body',
+        'Bad reply',
+        '--reply-to',
+        badVal,
+      ]);
+      assert.equal(bad.status, 2, `expected exit 2 for --reply-to ${badVal}`);
+    }
   } finally {
     fs.rmSync(keyDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('say reply_to: reply to an emote line is accepted', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const emoteRes = await maren.say('tends the lantern wick', 'emote');
+    assert.equal(emoteRes.status, 201);
+    assert.equal(emoteRes.data.kind, 'emote');
+    assert.equal(emoteRes.data.reply_to, null);
+
+    const replyRes = await lampmoth.say('Brighter already.', 'say', emoteRes.data.id);
+    assert.equal(replyRes.status, 201);
+    assert.equal(replyRes.data.kind, 'say');
+    assert.equal(replyRes.data.reply_to, emoteRes.data.id);
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const pb = stateRes.data.prompt_book;
+    assert.equal(pb.length, 2);
+    assert.equal(pb[0].id, emoteRes.data.id);
+    assert.equal(pb[0].kind, 'emote');
+    assert.equal(pb[1].id, replyRes.data.id);
+    assert.equal(pb[1].reply_to, emoteRes.data.id);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: reply chains nest one level', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const topRes = await maren.say('Evening at the bandstand.');
+    assert.equal(topRes.status, 201);
+
+    const replyA = await lampmoth.say('Good evening.', 'say', topRes.data.id);
+    assert.equal(replyA.status, 201);
+    assert.equal(replyA.data.reply_to, topRes.data.id);
+
+    const replyB = await maren.say('Glad you made it.', 'say', replyA.data.id);
+    assert.equal(replyB.status, 201);
+    assert.equal(replyB.data.reply_to, replyA.data.id);
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const pb = stateRes.data.prompt_book;
+    const byId = new Map(pb.map((entry) => [entry.id, entry]));
+    assert.equal(byId.get(replyA.data.id).reply_to, topRes.data.id);
+    assert.equal(byId.get(replyB.data.id).reply_to, replyA.data.id);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: explicit null is treated as a top-level say', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+
+    const res = await maren.say('Explicit null reply_to.', 'say', null);
+    assert.equal(res.status, 201);
+    assert.equal(res.data.reply_to, null);
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const entry = stateRes.data.prompt_book.find((e) => e.id === res.data.id);
+    assert.ok(entry);
+    assert.equal(entry.reply_to, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: replying to a pruned line returns 400 invalid_reply_to', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const eightDaysAgo = Math.floor(Date.now() / 1000) - 8 * 24 * 60 * 60;
+    const oldRow = ctx.db
+      .prepare("INSERT INTO prompt_book (handle, kind, body, reply_to, created_at) VALUES ('maren', 'say', 'Old line', NULL, ?) RETURNING id")
+      .get(eightDaysAgo);
+
+    // State read triggers prompt_book pruning
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    assert.equal(stateRes.data.prompt_book.some((e) => e.id === oldRow.id), false);
+
+    const replyRes = await maren.say('Replying to pruned line.', 'say', oldRow.id);
+    assert.equal(replyRes.status, 400);
+    assert.equal(replyRes.data.error, 'invalid_reply_to');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: replies count toward the 6/10min say rate limit', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const target = await lampmoth.say('Target line.');
+    assert.equal(target.status, 201);
+
+    for (let i = 1; i <= 5; i++) {
+      const res = await maren.say(`Top-level ${i}`);
+      assert.equal(res.status, 201);
+    }
+
+    const sixthReply = await maren.say('Sixth say is a reply.', 'say', target.data.id);
+    assert.equal(sixthReply.status, 201);
+
+    const seventh = await maren.say('Seventh say hits limit.', 'say', target.data.id);
+    assert.equal(seventh.status, 429);
+    assert.equal(seventh.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: a reply bumps state_seq', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const topRes = await maren.say('Initial line.');
+    assert.equal(topRes.status, 201);
+
+    const beforeState = await maren.state();
+    assert.equal(beforeState.status, 200);
+    const seqBefore = beforeState.data.state_seq;
+
+    const replyRes = await lampmoth.say('Reply bumps seq.', 'say', topRes.data.id);
+    assert.equal(replyRes.status, 201);
+
+    const afterState = await maren.state();
+    assert.equal(afterState.status, 200);
+    assert.ok(afterState.data.state_seq > seqBefore, `expected state_seq > ${seqBefore}, got ${afterState.data.state_seq}`);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: muted resident cannot reply (403 resident_muted) and prompt_book is unchanged', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const topRes = await maren.say('Open floor.');
+    assert.equal(topRes.status, 201);
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'lampmoth'").run();
+
+    const beforeState = await maren.state();
+    assert.equal(beforeState.status, 200);
+    const lenBefore = beforeState.data.prompt_book.length;
+
+    const mutedReply = await lampmoth.say('Trying to reply while muted.', 'say', topRes.data.id);
+    assert.equal(mutedReply.status, 403);
+    assert.equal(mutedReply.data.error, 'resident_muted');
+
+    const afterState = await maren.state();
+    assert.equal(afterState.status, 200);
+    assert.equal(afterState.data.prompt_book.length, lenBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: reply still works after target author leaves', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const checkinRes = await maren.checkin({ status_text: 'At the bandstand' });
+    assert.equal(checkinRes.status, 200);
+
+    const topRes = await maren.say('Leaving a note before heading out.');
+    assert.equal(topRes.status, 201);
+
+    const leaveRes = await maren.leave();
+    assert.equal(leaveRes.status, 200);
+    assert.equal(leaveRes.data.extinguished, true);
+
+    const replyRes = await lampmoth.say('See you tomorrow.', 'say', topRes.data.id);
+    assert.equal(replyRes.status, 201);
+    assert.equal(replyRes.data.reply_to, topRes.data.id);
+  } finally {
     await ctx.close();
   }
 });
