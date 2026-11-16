@@ -197,3 +197,172 @@ test('neither new file contains legacy gathering-place terminology', () => {
     assert.equal(content.includes(forbidden), false, `${path.basename(file)} must not contain "${forbidden}"`);
   }
 });
+
+function formatUtcTimestamp(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+    `-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
+  );
+}
+
+test('unknown argument exits 1 with JSON error and empty stdout', async () => {
+  const res = await runBackupCli(['--bogus']);
+  assert.equal(res.code, 1);
+  assert.equal(res.stdout.trim(), '');
+
+  const errLines = res.stderr.trim().split('\n');
+  assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+  const errPayload = JSON.parse(errLines[0]);
+  assert.equal(errPayload.status, 'error');
+  assert.equal(errPayload.error, 'Unknown argument: --bogus');
+});
+
+test('missing value for --db exits 1 with JSON error and empty stdout', async () => {
+  const res = await runBackupCli(['--db']);
+  assert.equal(res.code, 1);
+  assert.equal(res.stdout.trim(), '');
+
+  const errLines = res.stderr.trim().split('\n');
+  assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+  const errPayload = JSON.parse(errLines[0]);
+  assert.equal(errPayload.status, 'error');
+  assert.equal(errPayload.error, 'Missing value for --db');
+});
+
+test('--db pointing at a directory exits 1 with JSON error and does not create out-dir', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dirAsDb = path.join(tmpDir, 'dir-as-db');
+    fs.mkdirSync(dirAsDb);
+    const outDir = path.join(tmpDir, 'nested', 'never-created');
+
+    const res = await runBackupCli(['--db', dirAsDb, '--out-dir', outDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, 'Source database path is not a file');
+    assert.equal(fs.existsSync(outDir), false, 'out-dir must not be created when --db is a directory');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--db pointing at a non-database file exits 1 with JSON error and leaves no backup file', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const textFile = path.join(tmpDir, 'not-a-db.txt');
+    fs.writeFileSync(textFile, 'plain text, not sqlite\n', 'utf8');
+    const outDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(outDir);
+
+    const res = await runBackupCli(['--db', textFile, '--out-dir', outDir]);
+    assert.equal(res.code, 1);
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.ok(
+      errPayload.error.startsWith('Failed to read source database: '),
+      `Unexpected error message: ${errPayload.error}`
+    );
+    assert.deepEqual(fs.readdirSync(outDir), [], 'out-dir must contain no backup file');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('collision suffix advances to -3 when base and -2 already exist', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(outDir);
+    const expectedCounts = seedDatabase(dbPath);
+
+    const baseMs = Date.now();
+    for (let offset = 0; offset <= 5; offset++) {
+      const ts = formatUtcTimestamp(new Date(baseMs + offset * 1000));
+      fs.writeFileSync(path.join(outDir, `town-${ts}.db`), '');
+      fs.writeFileSync(path.join(outDir, `town-${ts}-2.db`), '');
+    }
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.match(payload.backup, /^town-\d{8}-\d{6}-3\.db$/);
+
+    const backupPath = path.join(outDir, payload.backup);
+    assert.ok(fs.existsSync(backupPath), 'Backup file must exist');
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      for (const table of SCHEMA_TABLES) {
+        const row = backupDb.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).get();
+        assert.equal(Number(row.count), expectedCounts[table], `Row count mismatch for ${table}`);
+      }
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves exact row content across seeded tables', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath);
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const resident = backupDb
+        .prepare('SELECT handle, pubkey, origin, role, bio FROM residents WHERE handle = ?')
+        .get('alice');
+      assert.deepEqual({ ...resident }, {
+        handle: 'alice',
+        pubkey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        origin: 'musebook',
+        role: 'muse',
+        bio: 'Test resident',
+      });
+
+      const promptRow = backupDb
+        .prepare('SELECT handle, kind, body FROM prompt_book WHERE handle = ?')
+        .get('alice');
+      assert.deepEqual({ ...promptRow }, {
+        handle: 'alice',
+        kind: 'say',
+        body: 'Testing the Bandstand acoustics.',
+      });
+
+      const footlight = backupDb
+        .prepare('SELECT handle, status_text, slot FROM footlights WHERE handle = ?')
+        .get('alice');
+      assert.deepEqual({ ...footlight }, {
+        handle: 'alice',
+        status_text: 'rehearsing',
+        slot: 0,
+      });
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
