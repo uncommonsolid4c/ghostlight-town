@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   TOWN_LAYOUT,
@@ -297,4 +300,202 @@ test('setAvatarStatusText renders 2-line status, truncates at 24 chars, is idemp
     assert.equal(sprite.scale.y, 0.375);
     assert.deepEqual(drawnTexts.map((d) => d.text), ['[NPC] maren']);
   });
+});
+
+test('createAvatarCapsule defaults, unknown role fallback, geometry, and negative nametagLift', () => {
+  const THREE = createFakeTHREE();
+
+  withFakeDocument((drawnTexts) => {
+    const def = createAvatarCapsule(THREE);
+    assert.equal(def.name, 'avatar_muse');
+    assert.equal(def.userData.handle, 'muse');
+    assert.equal(def.userData.role, 'muse');
+    assert.equal(def.userData.nametagLift, 0);
+    assert.equal(def.children[0].material.color, '#6cb4d8');
+
+    const body = def.children[0];
+    assert.equal(body.geometry.kind, 'cylinder');
+    assert.deepEqual(body.geometry.args, [0.28, 0.32, 1.0, 8]);
+    assert.equal(body.position.y, 0.5);
+
+    const head = def.children[1];
+    assert.equal(head.geometry.kind, 'sphere');
+    assert.deepEqual(head.geometry.args, [0.24, 8, 6]);
+    assert.equal(head.position.y, 1.2);
+
+    const sprite = def.children[2];
+    assert.equal(def.userData.nametagSprite, sprite);
+    assert.equal(sprite.name, 'nametag_sprite');
+    assert.equal(sprite.scale.x, 1.5);
+    assert.equal(sprite.scale.y, 0.375);
+    assert.equal(sprite.scale.z, 1);
+
+    const unknown = createAvatarCapsule(THREE, { handle: 'guest', role: 'admin', nametagLift: -0.25 });
+    assert.equal(unknown.userData.role, 'muse');
+    assert.equal(unknown.children[0].material.color, '#6cb4d8');
+    assert.equal(unknown.userData.nametagLift, -0.25);
+    assert.equal(unknown.userData.nametagSprite.position.y, 1.55);
+
+    assert.deepEqual(
+      drawnTexts.map((d) => d.text),
+      ['[MUSE] muse', '[MUSE] guest']
+    );
+  });
+});
+
+test('pickBandstandSpot rejects invalid preferredSlot values and places overflowIdx 20 on third ring', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set();
+
+  assert.equal(pickBandstandSpot(spots, used, -1).slot, 0);
+  assert.equal(pickBandstandSpot(spots, used, 10).slot, 1);
+  assert.equal(pickBandstandSpot(spots, used, 3.5).slot, 2);
+  assert.equal(pickBandstandSpot(spots, used, '3').slot, 3);
+
+  for (let i = 4; i < 20; i++) {
+    pickBandstandSpot(spots, used, null);
+  }
+  assert.equal(used.size, 20);
+
+  const ring3 = pickBandstandSpot(spots, used, null);
+  assert.equal(ring3.slot, 20);
+  assert.equal(ring3.nametagLift, 0);
+  const r = Math.hypot(ring3.x, ring3.z);
+  assert.ok(Math.abs(r - 7.5) < 0.01, `expected third overflow ring radius ~7.5, got ${r}`);
+  assert.equal(ring3.rotY, +Math.atan2(-ring3.x, -ring3.z).toFixed(4));
+});
+
+test('getPlotTargetPosition handles wider stagger indices 3 and 4 and plot 8', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const p0 = getPlotTargetPosition(plot1, 0);
+  const sideX = Math.cos(plot1.rotY);
+  const sideZ = -Math.sin(plot1.rotY);
+
+  const p3 = getPlotTargetPosition(plot1, 3);
+  const p4 = getPlotTargetPosition(plot1, 4);
+  for (const p of [p0, p3, p4]) {
+    assert.equal(p.y, 0);
+    assert.equal(p.rotY, plot1.rotY);
+  }
+
+  // Source formula: odd index -> +1, even index >= 2 -> -1, times ceil(index / 2) * 0.9
+  const proj3 = (p3.x - p0.x) * sideX + (p3.z - p0.z) * sideZ;
+  const proj4 = (p4.x - p0.x) * sideX + (p4.z - p0.z) * sideZ;
+  assert.ok(Math.abs(proj3 - 1.8) < 0.01, `expected index 3 lateral +1.8, got ${proj3}`);
+  assert.ok(Math.abs(proj4 + 1.8) < 0.01, `expected index 4 lateral -1.8, got ${proj4}`);
+
+  const plot8 = TOWN_LAYOUT.plots[7];
+  const endAngle = 1.58 * Math.PI;
+  assert.equal(plot8.x, +(Math.sin(endAngle) * 18.5).toFixed(3));
+  assert.equal(plot8.z, +(Math.cos(endAngle) * 18.5).toFixed(3));
+  const target8 = getPlotTargetPosition(plot8, 0);
+  const dist8 = Math.hypot(target8.x - plot8.x, target8.z - plot8.z);
+  assert.ok(Math.abs(dist8 - 3.6) < 0.01, `expected 3.6 m in front of plot 8, got ${dist8}`);
+  assert.equal(target8.y, 0);
+  assert.equal(target8.rotY, plot8.rotY);
+});
+
+test('TOWN_LAYOUT fixed landmarks and per-plot rotY match expected coordinates', () => {
+  assert.equal(TOWN_LAYOUT.clearingRadius, 30);
+  assert.deepEqual(TOWN_LAYOUT.bandstand, { x: 0, y: 0, z: 0, radius: 4.5, height: 0.6 });
+  assert.deepEqual(TOWN_LAYOUT.gate, { x: 0, y: 0, z: 27 });
+  assert.deepEqual(TOWN_LAYOUT.newsstand, { x: 6, y: 0, z: 14 });
+  assert.deepEqual(TOWN_LAYOUT.noticeBoard, { x: -6, y: 0, z: 14 });
+  assert.deepEqual(TOWN_LAYOUT.inn, { x: -11, y: 0, z: 20 });
+  assert.equal(TOWN_LAYOUT.plotRadius, 18.5);
+
+  for (const pl of TOWN_LAYOUT.plots) {
+    assert.equal(pl.rotY, +Math.atan2(-pl.x, -pl.z).toFixed(4));
+  }
+});
+
+test('setAvatarStatusText handles missing sprite/material, muse badge, 24/25-char boundary, and dispose counts', () => {
+  const THREE = createFakeTHREE();
+
+  const noSprite = { userData: { handle: 'x' } };
+  setAvatarStatusText(THREE, noSprite, 'hi');
+  assert.deepEqual(noSprite.userData, { handle: 'x' });
+
+  const noMat = { userData: { handle: 'y', nametagSprite: {} } };
+  setAvatarStatusText(THREE, noMat, 'hi');
+  assert.equal('statusText' in noMat.userData, false);
+
+  withFakeDocument((drawnTexts) => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, muse, 'Sketching by the gate');
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[MUSE] sol', 'Sketching by the gate']);
+
+    const exact24 = '123456789012345678901234';
+    assert.equal(exact24.length, 24);
+    setAvatarStatusText(THREE, muse, exact24);
+    assert.equal(muse.userData.statusText, exact24);
+    assert.equal(muse.userData.statusText.includes('…'), false);
+
+    const over25 = '1234567890123456789012345';
+    assert.equal(over25.length, 25);
+    setAvatarStatusText(THREE, muse, over25);
+    assert.equal(muse.userData.statusText, '12345678901234567890123…');
+    assert.equal(muse.userData.statusText.length, 24);
+
+    let disposed = 0;
+    muse.userData.nametagSprite.material.map.dispose = () => { disposed += 1; };
+    setAvatarStatusText(THREE, muse, over25);
+    assert.equal(disposed, 0);
+
+    setAvatarStatusText(THREE, muse, 'Resting');
+    assert.equal(disposed, 1);
+  });
+});
+
+test('avatar.mjs copied declarations stay verbatim with town-3d/town.js', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const avatarSrc = fs.readFileSync(path.join(dir, 'avatar.mjs'), 'utf8');
+  const townSrc = fs.readFileSync(path.join(dir, '..', 'town-3d', 'town.js'), 'utf8');
+
+  function extractDeclaration(src, name) {
+    const re = new RegExp(`(?:export\\s+)?(?:const|function)\\s+${name}\\b`);
+    const match = re.exec(src);
+    assert.ok(match, `missing declaration for ${name}`);
+    const start = match.index;
+    const braceIdx = src.indexOf('{', start);
+    assert.ok(braceIdx !== -1, `missing opening brace for ${name}`);
+    let depth = 0;
+    let end = braceIdx;
+    for (; end < src.length; end++) {
+      if (src[end] === '{') depth += 1;
+      else if (src[end] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          end += 1;
+          break;
+        }
+      }
+    }
+    if (src[end] === ';') end += 1;
+    return src.slice(start, end).replace(/^export\s+/, '').replace(/\s+/g, ' ').trim();
+  }
+
+  const symbols = [
+    'TOWN_LAYOUT',
+    'makeCanvas',
+    'makeTextTexture',
+    'createAvatarCapsule',
+    'SEED_HOME_PADS',
+    'getPlotTargetPosition',
+    'pickBandstandSpot',
+  ];
+  for (const sym of symbols) {
+    assert.equal(
+      extractDeclaration(avatarSrc, sym),
+      extractDeclaration(townSrc, sym),
+      `${sym} drifted between staging-polyfork/avatar.mjs and town-3d/town.js`
+    );
+  }
 });
