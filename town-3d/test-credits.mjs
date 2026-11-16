@@ -11,12 +11,44 @@ const CREDITS_PATH = path.join(__dirname, 'CREDITS.md');
 const MODELS_DIR = path.join(__dirname, 'models');
 const LOCAL_ONLY_GLB = new Set(['pine.glb']);
 
+const MIN_GLB_BYTES = 1024;
+const MAX_GLB_BYTES = 1024 * 1024;
+
+const EXPECTED_TUPLES = [
+  ['Post Lantern', 'models/post-lantern.glb', 'Kay Lousberg', 'ZSQ65S4lEu'],
+  ['Lantern', 'models/lantern.glb', 'Kay Lousberg', 'CtHBJ1ufeW'],
+  ['Bench', 'models/bench.glb', 'Kay Lousberg', '6d92UYCIC1'],
+  ['Street Light', 'models/street-light.glb', 'Quaternius', 'nFwrlcLvM5'],
+  ['Bookshelf', 'models/bookshelf.glb', 'CreativeTrio', '30Iealxb0p'],
+  ['Lamp', 'models/oil-lamp.glb', 'Quaternius', 'RsWYHKkDhD'],
+  ['Kettle', 'models/teapot.glb', 'MilkAndBanana', 'XggUrd5f03'],
+];
+
 function parseCreditedModels(creditsMd) {
   const models = [];
   for (const match of creditsMd.matchAll(/`models\/([^`\s]+\.glb)`/g)) {
     models.push(match[1]);
   }
   return models;
+}
+
+function parseCreditEntries(creditsMd) {
+  const headerRe = /^- \*\*([^*]+)\*\* \(`models\/([^`\s]+\.glb)`\)/gm;
+  const headers = [...creditsMd.matchAll(headerRe)];
+  return headers.map((match, idx) => {
+    const start = match.index + match[0].length;
+    const end = idx + 1 < headers.length ? headers[idx + 1].index : creditsMd.length;
+    const body = creditsMd.slice(start, end);
+    const field = (re) => body.match(re)?.[1]?.trim() ?? null;
+    return {
+      displayName: match[1].trim(),
+      file: match[2],
+      author: field(/^\s*- Author:\s*(.+)$/m),
+      id: field(/^\s*- Poly Pizza ID:\s*`([^`\s]+)`$/m),
+      page: field(/^\s*- Page:\s*(\S+)$/m),
+      licence: field(/^\s*- Licence:\s*(.+)$/m),
+    };
+  });
 }
 
 test('CREDITS.md entries match valid glTF v2 GLBs, committed models, and PROP_PLACEMENTS', async () => {
@@ -55,5 +87,83 @@ test('CREDITS.md entries match valid glTF v2 GLBs, committed models, and PROP_PL
   for (const file of creditedFiles) {
     const relPath = `models/${file}`;
     assert.ok(placedModels.has(relPath), `${relPath} credited in CREDITS.md must appear in PROP_PLACEMENTS`);
+  }
+});
+
+test('CREDITS.md has 7 structured entries with Author, Poly Pizza ID, matching Page, and CC0 1.0 Licence', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+  assert.equal(creditedFiles.length, 7, 'CREDITS.md must list exactly 7 models/*.glb entries');
+
+  const entries = parseCreditEntries(creditsMd);
+  assert.equal(entries.length, 7, 'CREDITS.md must have exactly 7 structured entry headings');
+
+  for (const entry of entries) {
+    assert.ok(entry.author, `${entry.displayName} must have an Author line`);
+    assert.ok(entry.id, `${entry.displayName} must have a Poly Pizza ID line`);
+    assert.ok(entry.page, `${entry.displayName} must have a Page line`);
+    assert.ok(entry.licence, `${entry.displayName} must have a Licence line`);
+    assert.equal(
+      entry.page,
+      `https://poly.pizza/m/${entry.id}`,
+      `${entry.displayName} Page must match its Poly Pizza ID`
+    );
+    assert.equal(entry.licence, 'CC0 1.0', `${entry.displayName} must be CC0 1.0`);
+  }
+});
+
+test('CREDITS.md author and Poly Pizza ID tuples match pinned records', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const entries = parseCreditEntries(creditsMd);
+  const actualTuples = entries.map((e) => [e.displayName, `models/${e.file}`, e.author, e.id]);
+  assert.deepEqual(actualTuples, EXPECTED_TUPLES);
+});
+
+test('every placed PROP_PLACEMENTS model is credited in CREDITS.md (model-less placements exempt)', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedPaths = new Set(parseCreditedModels(creditsMd).map((file) => `models/${file}`));
+
+  const modelLessPlacements = PROP_PLACEMENTS.filter((p) => !('model' in p) || p.model == null);
+  assert.ok(
+    modelLessPlacements.length >= 1,
+    'expected at least one model-less procedural placement (e.g. maren_typewriter) to pin exemption'
+  );
+
+  for (const placement of PROP_PLACEMENTS) {
+    if (typeof placement.model === 'string') {
+      assert.ok(
+        creditedPaths.has(placement.model),
+        `placed model ${placement.model} (${placement.id}) must be credited in CREDITS.md`
+      );
+    }
+  }
+});
+
+test('CREDITS.md preamble claims match repo architecture and licensing', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const firstEntryIdx = creditsMd.search(/^- \*\*/m);
+  assert.ok(firstEntryIdx > 0, 'CREDITS.md must have a preamble before the first entry');
+  const preamble = creditsMd.slice(0, firstEntryIdx);
+
+  assert.match(preamble, /architectural core/i);
+  assert.match(
+    preamble,
+    /bandstand[\s\S]*gate[\s\S]*newsstand[\s\S]*cottages[\s\S]*Milo's ghost[\s\S]*perimeter scenery/i
+  );
+  assert.match(preamble, /procedural Three\.js geometry/i);
+  assert.match(preamble, /CC0 1\.0[\s\S]*set dressing[\s\S]*town-3d\/models\//i);
+  assert.match(preamble, /CC0 1\.0 requires no attribution/i);
+  assert.match(preamble, /credit the creator/i);
+});
+
+test('credited GLB files are between 1 KB and 1 MB inclusive', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+  for (const file of creditedFiles) {
+    const stat = await fs.stat(path.join(MODELS_DIR, file));
+    assert.ok(
+      stat.size >= MIN_GLB_BYTES && stat.size <= MAX_GLB_BYTES,
+      `${file} size ${stat.size} bytes must be between ${MIN_GLB_BYTES} and ${MAX_GLB_BYTES}`
+    );
   }
 });
