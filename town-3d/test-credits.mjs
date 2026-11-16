@@ -8,6 +8,7 @@ import { PROP_PLACEMENTS } from './town.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREDITS_PATH = path.join(__dirname, 'CREDITS.md');
+const README_PATH = path.join(__dirname, 'README.md');
 const MODELS_DIR = path.join(__dirname, 'models');
 const LOCAL_ONLY_GLB = new Set(['pine.glb']);
 
@@ -23,6 +24,16 @@ const EXPECTED_TUPLES = [
   ['Lamp', 'models/oil-lamp.glb', 'Quaternius', 'RsWYHKkDhD'],
   ['Kettle', 'models/teapot.glb', 'MilkAndBanana', 'XggUrd5f03'],
 ];
+
+const DISPLAY_NAME_TO_KIND = new Map([
+  ['Post Lantern', 'post-lantern'],
+  ['Lantern', 'lantern'],
+  ['Bench', 'bench'],
+  ['Street Light', 'street-light'],
+  ['Bookshelf', 'bookshelf'],
+  ['Lamp', 'oil-lamp'],
+  ['Kettle', 'teapot'],
+]);
 
 function parseCreditedModels(creditsMd) {
   const models = [];
@@ -166,4 +177,142 @@ test('credited GLB files are between 1 KB and 1 MB inclusive', async () => {
       `${file} size ${stat.size} bytes must be between ${MIN_GLB_BYTES} and ${MAX_GLB_BYTES}`
     );
   }
+});
+
+test('credited GLB JSON chunks parse as glTF 2.0 with meshes, nodes, and matching BIN chunk', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+
+  for (const file of creditedFiles) {
+    const buf = await fs.readFile(path.join(MODELS_DIR, file));
+    assert.ok(buf.length >= 20, `${file} must be large enough to hold GLB header and chunk 0 header`);
+
+    const jsonLen = buf.readUInt32LE(12);
+    const chunk0Type = buf.subarray(16, 20).toString('ascii');
+    assert.equal(chunk0Type, 'JSON', `${file} chunk 0 type must be JSON`);
+
+    const jsonEnd = 20 + jsonLen;
+    assert.ok(jsonEnd + 8 <= buf.length, `${file} must have a second chunk header after JSON chunk`);
+
+    const gltf = JSON.parse(buf.subarray(20, jsonEnd).toString('utf8'));
+    assert.equal(gltf.asset?.version, '2.0', `${file} glTF asset.version must be 2.0`);
+    assert.ok(Array.isArray(gltf.meshes) && gltf.meshes.length > 0, `${file} must have a non-empty meshes array`);
+    assert.ok(Array.isArray(gltf.nodes) && gltf.nodes.length >= 2, `${file} must have at least 2 nodes`);
+
+    const binLen = buf.readUInt32LE(jsonEnd);
+    const chunk1Type = buf.subarray(jsonEnd + 4, jsonEnd + 8).toString('ascii');
+    assert.equal(chunk1Type, 'BIN\0', `${file} chunk 1 type must be BIN`);
+    assert.equal(
+      12 + 8 + jsonLen + 8 + binLen,
+      buf.length,
+      `${file} header + JSON + BIN chunk lengths must equal file size`
+    );
+  }
+});
+
+test('PROP_PLACEMENTS counts per credited model are pinned (total 8)', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+
+  const counts = new Map();
+  let totalModelPlacements = 0;
+  for (const placement of PROP_PLACEMENTS) {
+    if (typeof placement.model === 'string') {
+      totalModelPlacements += 1;
+      counts.set(placement.model, (counts.get(placement.model) ?? 0) + 1);
+    }
+  }
+
+  assert.equal(totalModelPlacements, 8, 'total model placements in PROP_PLACEMENTS must be 8');
+  for (const file of creditedFiles) {
+    const relPath = `models/${file}`;
+    const expectedCount = relPath === 'models/post-lantern.glb' ? 2 : 1;
+    assert.equal(
+      counts.get(relPath),
+      expectedCount,
+      `${relPath} must appear ${expectedCount} time(s) in PROP_PLACEMENTS`
+    );
+  }
+});
+
+test('model placement geometry in PROP_PLACEMENTS is within clearing bounds and valid', () => {
+  const modelPlacements = PROP_PLACEMENTS.filter((p) => typeof p.model === 'string');
+  assert.ok(modelPlacements.length > 0, 'expected at least one model placement');
+
+  for (const placement of modelPlacements) {
+    assert.ok(
+      Number.isFinite(placement.x) && Math.abs(placement.x) <= 30,
+      `${placement.id} x (${placement.x}) must be finite and within [-30, 30]`
+    );
+    assert.ok(
+      Number.isFinite(placement.z) && Math.abs(placement.z) <= 30,
+      `${placement.id} z (${placement.z}) must be finite and within [-30, 30]`
+    );
+    assert.ok(
+      Number.isFinite(placement.targetSize) && placement.targetSize > 0 && placement.targetSize <= 3.0,
+      `${placement.id} targetSize (${placement.targetSize}) must be finite and in (0, 3.0]`
+    );
+    assert.ok(
+      placement.scaleAxis === 'y' || placement.scaleAxis === 'length',
+      `${placement.id} scaleAxis (${placement.scaleAxis}) must be 'y' or 'length'`
+    );
+    assert.ok(
+      placement.parent === 'scene' || placement.parent === 'newsstand',
+      `${placement.id} parent (${placement.parent}) must be 'scene' or 'newsstand'`
+    );
+  }
+});
+
+test('each credited display name maps to exactly one PROP_PLACEMENTS kind', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const entries = parseCreditEntries(creditsMd);
+  assert.equal(entries.length, DISPLAY_NAME_TO_KIND.size, 'credited entries count must match kind map');
+
+  const modelPlacements = PROP_PLACEMENTS.filter((p) => typeof p.model === 'string');
+  const actualKinds = new Set(modelPlacements.map((p) => p.kind));
+  const expectedKinds = new Set(DISPLAY_NAME_TO_KIND.values());
+  assert.deepEqual(actualKinds, expectedKinds, 'model placement kinds must match the 7 pinned kinds');
+
+  for (const entry of entries) {
+    const expectedKind = DISPLAY_NAME_TO_KIND.get(entry.displayName);
+    assert.ok(expectedKind, `unexpected display name ${entry.displayName}`);
+    const relPath = `models/${entry.file}`;
+    const matching = modelPlacements.filter((p) => p.model === relPath);
+    assert.ok(matching.length > 0, `${relPath} must have at least one placement`);
+    for (const placement of matching) {
+      assert.equal(
+        placement.kind,
+        expectedKind,
+        `${entry.displayName} (${relPath}) placement ${placement.id} must have kind ${expectedKind}`
+      );
+    }
+  }
+});
+
+test('CREDITS.md has no CC-BY anywhere and has 7 Licence: CC0 1.0 lines', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  assert.ok(!creditsMd.includes('CC-BY'), 'CREDITS.md must not contain CC-BY anywhere');
+  const licenceLines = creditsMd.match(/^\s*- Licence: CC0 1\.0$/gm) ?? [];
+  assert.equal(licenceLines.length, 7, 'CREDITS.md must have exactly 7 Licence: CC0 1.0 lines');
+});
+
+test('CREDITS.md is discoverable from town-3d/README.md and Poly Pizza IDs and URLs are pairwise distinct', async () => {
+  const [creditsMd, readmeMd] = await Promise.all([
+    fs.readFile(CREDITS_PATH, 'utf8'),
+    fs.readFile(README_PATH, 'utf8'),
+  ]);
+
+  assert.ok(readmeMd.includes('CREDITS.md'), 'town-3d/README.md must mention CREDITS.md');
+
+  const creditedFiles = parseCreditedModels(creditsMd);
+  assert.ok(
+    creditedFiles.some((file) => readmeMd.includes(file)),
+    'town-3d/README.md must mention at least one credited model filename'
+  );
+
+  const entries = parseCreditEntries(creditsMd);
+  const ids = entries.map((e) => e.id);
+  const pages = entries.map((e) => e.page);
+  assert.equal(new Set(ids).size, entries.length, 'credited Poly Pizza IDs must be pairwise distinct');
+  assert.equal(new Set(pages).size, entries.length, 'credited Page URLs must be pairwise distinct');
 });
