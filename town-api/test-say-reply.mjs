@@ -132,7 +132,7 @@ test('say reply_to rejects non-integer, 0, negative, and missing id with 400 inv
       assert.equal(res.data.error, 'invalid_reply_to');
     }
 
-    // All 6 quota slots should still be available after the 4 rejected replies
+    // All 6 quota slots should still be available after the 6 rejected replies
     for (let i = 1; i <= 6; i++) {
       const okRes = await alice.say(`Valid line ${i}`);
       assert.equal(okRes.status, 201, `expected 201 on valid say #${i}`);
