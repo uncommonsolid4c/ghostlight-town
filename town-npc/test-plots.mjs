@@ -3,10 +3,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { validateManifest, validateHtml, MAX_SIGNPOST_CHARS } from '../town-api/plot-validation.mjs';
+import {
+  validateManifest,
+  validateHtml,
+  MAX_SIGNPOST_CHARS,
+  MAX_PROPS,
+  VALID_PROP_KINDS,
+} from '../town-api/plot-validation.mjs';
 import { CHARACTERS } from './characters.mjs';
 
 const PLOTS_DIR = path.resolve('town-npc/plots');
+const ALL_HANDLES = [...CHARACTERS.map((c) => c.handle), 'milo'];
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const BANNED_TERM_RE = new RegExp(['camp', 'fire'].join(''), 'i');
 const EXTERNAL_URL_RE = /https?:\/\/|(?<![a-z0-9:])\/\//i;
 const FORBIDDEN_HOST_PORT = [
@@ -131,4 +139,170 @@ test('static checks: no banned term, no external URLs, no hardcoded host/port in
       assert.ok(!EXTERNAL_URL_RE.test(content), `external URL found in ${rel}`);
     }
   }
+});
+
+function readManifest(handle) {
+  return JSON.parse(fs.readFileSync(path.join(PLOTS_DIR, handle, 'manifest.json'), 'utf8'));
+}
+
+function readDeskNote(handle) {
+  return fs.readFileSync(path.join(PLOTS_DIR, handle, 'desk-note.html'), 'utf8');
+}
+
+function assertPinnedManifest(handle, expected) {
+  const manifest = readManifest(handle);
+  assert.equal(manifest.cottage, expected.cottage);
+  assert.equal(manifest.wall, expected.wall);
+  assert.equal(manifest.roof, expected.roof);
+  assert.equal(manifest.trim, expected.trim);
+  assert.equal(manifest.signpost_text, expected.signpost_text);
+  assert.deepEqual(
+    manifest.props.map((p) => p.kind),
+    expected.propKinds
+  );
+}
+
+test('Wick manifest pinned: cabin cottage, colors, signpost, and prop kinds in order', () => {
+  assertPinnedManifest('wick', {
+    cottage: 'cabin',
+    wall: '#f3e6cf',
+    roof: '#6b3e1b',
+    trim: '#c8922e',
+    signpost_text: 'The light is on. It stays on.',
+    propKinds: ['desk', 'rug', 'poster_frame'],
+  });
+});
+
+test('Maren manifest pinned: gable cottage, colors, signpost, and prop kinds in order', () => {
+  assertPinnedManifest('maren', {
+    cottage: 'gable',
+    wall: '#eef1f4',
+    roof: '#43505c',
+    trim: '#1e2328',
+    signpost_text: 'One good line a day, set in type.',
+    propKinds: ['desk', 'typewriter', 'bookshelf', 'poster_frame'],
+  });
+});
+
+test('Tomas manifest pinned: tower cottage, colors, signpost, and prop kinds in order', () => {
+  assertPinnedManifest('tomas', {
+    cottage: 'tower',
+    wall: '#dcc2a2',
+    roof: '#b5633a',
+    trim: '#4b2e1e',
+    signpost_text: 'Tea is on. Sit a while.',
+    propKinds: ['rug', 'bookshelf', 'tea_kettle', 'cat'],
+  });
+});
+
+test('per-NPC desk-note content: traces to characters.mjs facts and titles', () => {
+  const checks = [
+    {
+      handle: 'wick',
+      patterns: [
+        /\b(?:sweep|swept)\b/i,
+        /Ghostlight bulb/,
+        /\bburned\b/i,
+        /sawdust and hot gels/i,
+        /Stagehand \/ Lamp-Trimmer/,
+      ],
+    },
+    {
+      handle: 'maren',
+      patterns: [
+        /composing stick/i,
+        /\bmisspelled\b/i,
+        /\bnewsstand\b/i,
+        /Prompt Book/,
+        /Retired Typesetter/,
+      ],
+    },
+    {
+      handle: 'tomas',
+      patterns: [
+        /\bsamovar\b/i,
+        /full of water/i,
+        /\btea\b/i,
+        /\bsit\b/i,
+        /Props-Master \/ Tea-Urn Keeper/,
+      ],
+    },
+  ];
+
+  for (const { handle, patterns } of checks) {
+    const html = readDeskNote(handle);
+    for (const re of patterns) {
+      assert.match(html, re, `${handle} desk-note.html missing expected content matching ${re}`);
+    }
+  }
+});
+
+test('prop exclusions and catalog drift guard: valid prop kinds, max props, and valid hex colors', () => {
+  const exclusions = {
+    wick: ['cat', 'typewriter', 'tea_kettle'],
+    maren: ['tea_kettle', 'cat'],
+    tomas: ['typewriter'],
+  };
+
+  for (const [handle, forbiddenKinds] of Object.entries(exclusions)) {
+    const kinds = new Set(readManifest(handle).props.map((p) => p.kind));
+    for (const forbidden of forbiddenKinds) {
+      assert.ok(!kinds.has(forbidden), `${handle} manifest must not include ${forbidden}`);
+    }
+  }
+
+  for (const handle of ALL_HANDLES) {
+    const manifest = readManifest(handle);
+    assert.ok(
+      manifest.props.length <= MAX_PROPS && manifest.props.length <= 12,
+      `${handle} manifest exceeds max props`
+    );
+    for (const prop of manifest.props) {
+      assert.ok(
+        VALID_PROP_KINDS.has(prop.kind),
+        `${handle} manifest has unknown prop kind: ${prop.kind}`
+      );
+      if (prop.color !== undefined) {
+        assert.match(prop.color, HEX_COLOR_RE, `${handle} prop ${prop.kind} has invalid color ${prop.color}`);
+      }
+    }
+  }
+});
+
+test('desk-note structure across all four notes: doctype, lang, styles, headings, sig, and backgrounds', () => {
+  const owners = new Map([
+    ...CHARACTERS.map((c) => [c.handle, c.name]),
+    ['milo', 'Milo'],
+  ]);
+  const backgrounds = new Set();
+
+  for (const handle of ALL_HANDLES) {
+    const html = readDeskNote(handle);
+    assert.match(html, /^<!doctype html>/i, `${handle} missing doctype`);
+    assert.match(html, /<html\s+lang=["']en["']>/i, `${handle} missing lang="en"`);
+    assert.match(html, /font-family:\s*Georgia,\s*serif/i, `${handle} missing Georgia serif`);
+    assert.match(html, /max-width:\s*34rem/i, `${handle} missing max-width: 34rem`);
+
+    const h1Matches = html.match(/<h1\b[^>]*>[\s\S]*?<\/h1>/gi) || [];
+    assert.equal(h1Matches.length, 1, `${handle} must have exactly one <h1>`);
+
+    const ownerName = owners.get(handle);
+    assert.match(
+      h1Matches[0],
+      new RegExp(`\\b${ownerName}\\b`),
+      `${handle} <h1> must name ${ownerName}`
+    );
+
+    const sigMatches = html.match(/class=["'][^"']*\bsig\b[^"']*["']/gi) || [];
+    assert.equal(sigMatches.length, 1, `${handle} must have exactly one .sig element`);
+
+    const bgMatch = html.match(/background:\s*(#[0-9a-fA-F]{6})\b/i);
+    assert.ok(bgMatch, `${handle} missing body background hex`);
+    backgrounds.add(bgMatch[1].toLowerCase());
+  }
+
+  assert.ok(
+    backgrounds.size >= 3,
+    `expected at least 3 distinct background hexes, got ${backgrounds.size}`
+  );
 });
