@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MAX_PROPS, VALID_PROP_KINDS } from '../town-api/plot-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOVE_IN_PATH = path.join(__dirname, 'move-in.html');
@@ -109,4 +110,105 @@ test('Slice 57 phone-first landing section, #join anchor, and 44px phone tap tar
     /footer\s+a\s*\{[^}]*min-height:\s*44px\b/,
     '@media (max-width: 640px) must set footer a min-height: 44px'
   );
+});
+
+test('Founding Law box wording is present in move-in.html', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const lawMatch = html.match(/<div\s+class=["']law["']>([\s\S]*?)<\/div>/i);
+  assert.ok(lawMatch, 'move-in.html must contain a .law div');
+  const lawText = lawMatch[1];
+  assert.match(lawText, /Founding Law:/);
+  assert.match(lawText, /No currency, no upkeep, no rent, no tokens/);
+  assert.match(lawText, /owned outright/);
+});
+
+test('Join steps 1-4 appear in order with the key-loss warning', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const headings = [
+    /<h3>1\. Generate an Ed25519 keypair<\/h3>/,
+    /<h3>2\. Join with <code>--origin direct<\/code><\/h3>/,
+    /<h3>3\. Light a footlight and say hello \(once active\)<\/h3>/,
+    /<h3>4\. Claim and furnish your plot<\/h3>/,
+  ];
+  let prevIdx = -1;
+  for (const headingRe of headings) {
+    const idx = html.search(headingRe);
+    assert.ok(idx !== -1, `Missing expected step heading: ${headingRe}`);
+    assert.ok(idx > prevIdx, `Step heading out of order: ${headingRe}`);
+    prevIdx = idx;
+  }
+  assert.match(
+    html,
+    /losing your private key means\s+losing your plot/,
+    'move-in.html must warn that losing your private key means losing your plot'
+  );
+});
+
+test('Keygen command matches the documented Ed25519 wire format', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.match(html, /openssl genpkey -algorithm ed25519/);
+  assert.match(html, /tail -c 32 \| base64/);
+  assert.match(html, /44-character base64 public key/);
+});
+
+test('Example CLI invocations use ghostlight-client.mjs and the live API base', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const expectedCommands = [
+    { name: 'join', extraFlag: /--origin direct\b/ },
+    { name: 'checkin', extraFlag: /--status-text\b/ },
+    { name: 'say', extraFlag: /--body\b/ },
+    { name: 'plot', extraFlag: null },
+  ];
+  for (const { name, extraFlag } of expectedCommands) {
+    const re = new RegExp(`node town-api/ghostlight-client\\.mjs ${name}\\b[\\s\\S]*?(?=\\n\\n|</code>)`);
+    const match = html.match(re);
+    assert.ok(match, `Missing example CLI invocation for ${name}`);
+    assert.match(
+      match[0],
+      /--api-base https:\/\/milo\.4167360\.xyz\b/,
+      `${name} example must pass --api-base https://milo.4167360.xyz`
+    );
+    if (extraFlag) {
+      assert.match(match[0], extraFlag, `${name} example must pass ${extraFlag}`);
+    }
+  }
+});
+
+test('move-in.html is self-contained with no embedded content tags', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.equal(
+    /<(?:img|form|iframe|object|embed)\b/i.test(html),
+    false,
+    'move-in.html must not contain <img>, <form>, <iframe>, <object>, or <embed> tags'
+  );
+});
+
+test('move-in.html declares expected document lang, viewport meta, and title', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.match(html, /<html\s+lang=["']en["']>/i);
+  assert.match(
+    html,
+    /<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1\.0["']\s*\/?>/i
+  );
+  assert.match(html, /<title>Move in — Ghostlight Town<\/title>/);
+});
+
+test('Step 4 starter prop catalog matches VALID_PROP_KINDS and MAX_PROPS', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step4Match = html.match(
+    /<h3>4\. Claim and furnish your plot<\/h3>\s*<p>([\s\S]*?)<\/p>/
+  );
+  assert.ok(step4Match, 'move-in.html must contain step 4 paragraph');
+  const propListMatch = step4Match[1].match(/up to (\d+) starter props from([\s\S]*?)\)/);
+  assert.ok(propListMatch, 'Step 4 must state the starter prop limit and list');
+  assert.equal(Number(propListMatch[1]), MAX_PROPS, 'Step 4 starter prop limit must match MAX_PROPS');
+  assert.match(step4Match[1], /up to 12 starter props/);
+
+  const listedKinds = [...propListMatch[2].matchAll(/<code>([a-z0-9_]+)<\/code>/g)].map((m) => m[1]);
+  assert.equal(
+    listedKinds.length,
+    VALID_PROP_KINDS.size,
+    `Expected ${VALID_PROP_KINDS.size} unique prop kinds in step 4, got ${listedKinds.length}`
+  );
+  assert.deepEqual(new Set(listedKinds), VALID_PROP_KINDS);
 });
