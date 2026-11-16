@@ -203,3 +203,242 @@ test('resolvePlotOverlayContent in plot-overlay.mjs stays in sync with town-3d/t
   assert.ok(stagingMatch, 'staging-polyfork/plot-overlay.mjs must export resolvePlotOverlayContent');
   assert.equal(stagingMatch[0], townMatch[0], 'resolvePlotOverlayContent drifted from town-3d/town.js');
 });
+
+test('resolvePlotOverlayContent validates handle length, case, and non-string edges', async () => {
+  const fetchedHandles = [];
+  const makeSpyFetch = () => async (url) => {
+    fetchedHandles.push(url);
+    return { status: 200, async json() { return { html: '<p>ok</p>' }; } };
+  };
+
+  // Minimum valid length (2 chars) and maximum valid length (32 chars)
+  const twoChar = await resolvePlotOverlayContent('ab', { fetchFn: makeSpyFetch() });
+  assert.deepEqual(twoChar, { kind: 'api', html: '<p>ok</p>' });
+
+  const handle32 = 'a'.repeat(32);
+  const thirtyTwoChar = await resolvePlotOverlayContent(handle32, { fetchFn: makeSpyFetch() });
+  assert.deepEqual(thirtyTwoChar, { kind: 'api', html: '<p>ok</p>' });
+  assert.deepEqual(fetchedHandles, [
+    '/api/town/plot?handle=ab',
+    `/api/town/plot?handle=${handle32}`,
+  ]);
+
+  // Invalid handles must not call fetchFn
+  let invalidFetchCalls = 0;
+  const noCallFetch = async () => {
+    invalidFetchCalls++;
+    return { status: 200, async json() { return { html: '<p>nope</p>' }; } };
+  };
+
+  const oneChar = await resolvePlotOverlayContent('a', { fetchFn: noCallFetch });
+  assert.deepEqual(oneChar, { kind: 'static', url: 'plots/a/index.html' });
+
+  const handle33 = 'a'.repeat(33);
+  const thirtyThreeChar = await resolvePlotOverlayContent(handle33, { fetchFn: noCallFetch });
+  assert.deepEqual(thirtyThreeChar, { kind: 'static', url: `plots/${handle33}/index.html` });
+
+  const upperRes = await resolvePlotOverlayContent('Wick', { fetchFn: noCallFetch });
+  assert.deepEqual(upperRes, { kind: 'static', url: 'plots/Wick/index.html' });
+
+  const numRes = await resolvePlotOverlayContent(42, { fetchFn: noCallFetch });
+  assert.deepEqual(numRes, { kind: 'static', url: 'plots/42/index.html' });
+
+  const nullRes = await resolvePlotOverlayContent(null, { fetchFn: noCallFetch });
+  assert.deepEqual(nullRes, { kind: 'static', url: 'plots//index.html' });
+
+  assert.equal(invalidFetchCalls, 0, 'invalid handles must not trigger fetchFn');
+});
+
+test('resolvePlotOverlayContent handles apiBase trailing slashes and malformed responses', async () => {
+  const slashRes = await resolvePlotOverlayContent('wick', {
+    apiBase: 'https://example.test///',
+    fetchFn: async (url) => {
+      assert.equal(url, 'https://example.test/api/town/plot?handle=wick');
+      return { status: 200, async json() { return { html: '<p>slash</p>' }; } };
+    },
+  });
+  assert.deepEqual(slashRes, { kind: 'api', html: '<p>slash</p>' });
+
+  const status500 = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => ({ status: 500, async json() { return { html: '<p>err</p>' }; } }),
+  });
+  assert.deepEqual(status500, { kind: 'static', url: 'plots/wick/index.html' });
+
+  const nullResponse = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => null,
+  });
+  assert.deepEqual(nullResponse, { kind: 'static', url: 'plots/wick/index.html' });
+
+  const jsonThrows = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, async json() { throw new Error('bad json'); } }),
+  });
+  assert.deepEqual(jsonThrows, { kind: 'static', url: 'plots/wick/index.html' });
+
+  const dataNull = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, async json() { return null; } }),
+  });
+  assert.deepEqual(dataNull, { kind: 'static', url: 'plots/wick/index.html' });
+
+  const missingStatus = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => ({ ok: true, async json() { return { html: '<p>no status</p>' }; } }),
+  });
+  assert.deepEqual(missingStatus, { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('resolveGazetteOverlayContent handles fallback issue selection and response edges', async () => {
+  const fallbackFirst = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() {
+        return {
+          latest: 99,
+          issues: [
+            { n: 3, file: 'issue-003.html' },
+            { n: 4, file: 'issue-004.html' },
+          ],
+        };
+      },
+    }),
+  });
+  assert.deepEqual(fallbackFirst, {
+    issueNum: 3,
+    issueFile: 'issue-003.html',
+    url: 'gazette/issue-003.html',
+    title: 'The Ghostlight Gazette — Issue #3',
+  });
+
+  const emptyIssues = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({ ok: true, async json() { return { latest: 1, issues: [] }; } }),
+  });
+  assert.equal(emptyIssues.issueFile, 'issue-001.html');
+  assert.equal(emptyIssues.issueNum, 1);
+
+  const notOk = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({ ok: false, async json() { return { latest: 2, issues: [{ n: 2, file: 'issue-002.html' }] }; } }),
+  });
+  assert.equal(notOk.issueFile, 'issue-001.html');
+
+  const jsonThrows = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({ ok: true, async json() { throw new Error('parse'); } }),
+  });
+  assert.equal(jsonThrows.issueFile, 'issue-001.html');
+
+  const dataNull = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({ ok: true, async json() { return null; } }),
+  });
+  assert.equal(dataNull.issueFile, 'issue-001.html');
+
+  const upperFile = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { latest: 2, issues: [{ n: 2, file: 'Issue-002.HTML' }] }; },
+    }),
+  });
+  assert.deepEqual(upperFile, {
+    issueNum: 2,
+    issueFile: 'Issue-002.HTML',
+    url: 'gazette/Issue-002.HTML',
+    title: 'The Ghostlight Gazette — Issue #2',
+  });
+
+  const missingN = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { issues: [{ file: 'issue-005.html' }] }; },
+    }),
+  });
+  assert.deepEqual(missingN, {
+    issueNum: 1,
+    issueFile: 'issue-005.html',
+    url: 'gazette/issue-005.html',
+    title: 'The Ghostlight Gazette — Issue #1',
+  });
+});
+
+test('openPlotOverlay opens static fallback path when API returns 404', async () => {
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+  iframeEl.srcdoc = '<p>stale</p>';
+
+  const result = await openPlotOverlay('wick', {
+    overlayEl,
+    titleEl,
+    iframeEl,
+    fetchFn: async () => ({ status: 404 }),
+  });
+
+  assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  assert.equal(titleEl.textContent, '@wick — Desk Note');
+  assert.equal(iframeEl.getAttribute('sandbox'), '');
+  assert.equal(iframeEl.src, 'plots/wick/index.html');
+  assert.equal(iframeEl.getAttribute('srcdoc'), null);
+  assert.equal(overlayEl.hidden, false);
+});
+
+test('openPlotOverlay and openGazetteOverlay guard missing elements and tolerate non-function onBeforeOpen', async () => {
+  for (const missingKey of ['overlayEl', 'titleEl', 'iframeEl']) {
+    const plotEls = makeFakeOverlayElements();
+    plotEls[missingKey] = null;
+    assert.equal(await openPlotOverlay('wick', plotEls), null);
+
+    const gazetteEls = makeFakeOverlayElements();
+    gazetteEls[missingKey] = null;
+    assert.equal(await openGazetteOverlay(gazetteEls), null);
+  }
+
+  const plotEls = makeFakeOverlayElements();
+  const plotRes = await openPlotOverlay('wick', { ...plotEls, onBeforeOpen: 'x' });
+  assert.deepEqual(plotRes, { kind: 'static', url: 'plots/wick/index.html' });
+  assert.equal(plotEls.overlayEl.hidden, false);
+
+  const gazetteEls = makeFakeOverlayElements();
+  const gazetteRes = await openGazetteOverlay({ ...gazetteEls, onBeforeOpen: 'x' });
+  assert.equal(gazetteRes.issueFile, 'issue-001.html');
+  assert.equal(gazetteEls.overlayEl.hidden, false);
+
+  const omittedEls = makeFakeOverlayElements();
+  const omittedRes = await openPlotOverlay('wick', omittedEls);
+  assert.deepEqual(omittedRes, { kind: 'static', url: 'plots/wick/index.html' });
+  assert.equal(omittedEls.overlayEl.hidden, false);
+});
+
+test('closePlotOverlay guards missing elements and tolerates non-function or omitted onAfterClose', () => {
+  let afterCalled = 0;
+  const { iframeEl } = makeFakeOverlayElements();
+  assert.equal(
+    closePlotOverlay({ overlayEl: null, iframeEl, onAfterClose: () => { afterCalled++; } }),
+    undefined,
+  );
+  assert.equal(afterCalled, 0);
+
+  const { overlayEl } = makeFakeOverlayElements();
+  overlayEl.hidden = false;
+  assert.equal(
+    closePlotOverlay({ overlayEl, iframeEl: null, onAfterClose: () => { afterCalled++; } }),
+    undefined,
+  );
+  assert.equal(afterCalled, 0);
+  assert.equal(overlayEl.hidden, false);
+
+  const nonFnEls = makeFakeOverlayElements();
+  nonFnEls.overlayEl.hidden = false;
+  nonFnEls.iframeEl.srcdoc = '<p>hi</p>';
+  closePlotOverlay({
+    overlayEl: nonFnEls.overlayEl,
+    iframeEl: nonFnEls.iframeEl,
+    onAfterClose: 'x',
+  });
+  assert.equal(nonFnEls.overlayEl.hidden, true);
+  assert.equal(nonFnEls.iframeEl.src, 'about:blank');
+  assert.equal(nonFnEls.iframeEl.getAttribute('srcdoc'), null);
+
+  const omittedEls = makeFakeOverlayElements();
+  omittedEls.overlayEl.hidden = false;
+  omittedEls.iframeEl.srcdoc = '<p>hi</p>';
+  closePlotOverlay({
+    overlayEl: omittedEls.overlayEl,
+    iframeEl: omittedEls.iframeEl,
+  });
+  assert.equal(omittedEls.overlayEl.hidden, true);
+  assert.equal(omittedEls.iframeEl.src, 'about:blank');
+  assert.equal(omittedEls.iframeEl.getAttribute('srcdoc'), null);
+});
