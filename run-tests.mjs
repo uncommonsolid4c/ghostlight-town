@@ -48,7 +48,7 @@ const TEST_SUITES = [
   'town-3d/test-gazette.mjs',
   'town-3d/test-move-in.mjs',
   'town-3d/test-readme.mjs',
-  // town-api (18)
+  // town-api (19)
   'town-api/test-backup-plots.mjs',
   'town-api/test-backup.mjs',
   'town-api/test-build-gate.mjs',
@@ -56,6 +56,7 @@ const TEST_SUITES = [
   'town-api/test-ghostlight-client-cli.mjs',
   'town-api/test-guestbook.mjs',
   'town-api/test-inn.mjs',
+  'town-api/test-key-collision.mjs',
   'town-api/test-key-rotate.mjs',
   'town-api/test-live-proxy.mjs',
   'town-api/test-live-proxy-inn.mjs',
