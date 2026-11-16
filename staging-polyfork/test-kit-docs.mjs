@@ -166,3 +166,92 @@ test('API.md is identical across kits and all documented API names exist in vend
     assert.match(clipsSrc, new RegExp(`\\b${name}\\b`), `_internal/clips.mjs must define ${name}`);
   }
 });
+
+test('LAYOUT.json rows reference valid PARTS.json keys or _terrain with numeric coordinates', () => {
+  const expectedTerrainRows = { 'kit-campground': 1, 'kit-medieval': 0 };
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    let terrainCount = 0;
+
+    for (let i = 0; i < layoutJson.length; i++) {
+      const row = layoutJson[i];
+      assert.equal(typeof row.x, 'number', `${kit} LAYOUT[${i}].x must be a number`);
+      assert.equal(typeof row.y, 'number', `${kit} LAYOUT[${i}].y must be a number`);
+      assert.equal(typeof row.z, 'number', `${kit} LAYOUT[${i}].z must be a number`);
+      assert.ok(Number.isFinite(row.x) && Number.isFinite(row.y) && Number.isFinite(row.z));
+
+      if (row.part === '_terrain') {
+        terrainCount++;
+        assert.equal(typeof row.module, 'string', `${kit} _terrain row must have a module string`);
+        assert.ok(row.module.length > 0, `${kit} _terrain row module must be non-empty`);
+      } else {
+        assert.ok(row.part in partsJson, `${kit} LAYOUT[${i}].part '${row.part}' must exist in PARTS.json`);
+      }
+    }
+
+    assert.equal(terrainCount, expectedTerrainRows[kit], `${kit} _terrain row count`);
+  }
+});
+
+test('kit.json title, classes keys, and terrain flag match KIT.md and PARTS.json', () => {
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+
+    const h1Match = kitMd.match(/^#\s+(.+)$/m);
+    assert.ok(h1Match, `${kit}/KIT.md must have an H1 title`);
+    assert.equal(kitJson.title, h1Match[1], `${kit}/kit.json title must match KIT.md H1`);
+
+    const classKeys = Object.keys(kitJson.classes || {}).sort();
+    const partKeys = Object.keys(partsJson).sort();
+    assert.deepEqual(classKeys, partKeys, `${kit}/kit.json classes keys must match PARTS.json keys`);
+
+    assert.equal(
+      kitJson.terrain,
+      'terrain' in partsJson,
+      `${kit}/kit.json terrain flag must match presence of terrain in PARTS.json`
+    );
+  }
+});
+
+test('vendored kit documentation, metadata, and runtime modules named in KIT.md exist on disk', () => {
+  const commonFiles = [
+    'API.md',
+    'KIT.md',
+    'PARTS.json',
+    'LAYOUT.json',
+    'kit.json',
+    'terrain.mjs',
+    ...INFRA_MJS,
+    '_internal/kit.mjs',
+    '_internal/stage.mjs',
+    '_internal/clips.mjs',
+  ];
+  const kitSpecificFiles = {
+    'kit-campground': ['TERRAIN.json'],
+    'kit-medieval': [],
+  };
+
+  for (const kit of KITS) {
+    for (const rel of [...commonFiles, ...kitSpecificFiles[kit]]) {
+      assert.ok(
+        fs.existsSync(path.join(__dirname, kit, rel)),
+        `${kit}/${rel} must exist on disk`
+      );
+    }
+  }
+});
+
+test('every part .mjs module in PARTS.json is non-empty and exports createAsset', () => {
+  const exportRe = /export\s+function\s+createAsset\b|export\s*\{[^}]*\bcreateAsset\b/;
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    for (const partKey of Object.keys(partsJson)) {
+      const src = readKitFile(kit, `${partKey}.mjs`);
+      assert.ok(src.trim().length > 0, `${kit}/${partKey}.mjs must be non-empty`);
+      assert.match(src, exportRe, `${kit}/${partKey}.mjs must export createAsset`);
+    }
+  }
+});
