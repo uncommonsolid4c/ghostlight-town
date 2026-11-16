@@ -14,6 +14,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
 const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
 const plotValidationSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/plot-validation.mjs'), 'utf8');
+const skillSrc = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
 
 function evalNumericExpr(expr) {
   const cleaned = expr.trim();
@@ -245,4 +246,147 @@ test('origins, handle_pattern, auth block, and live/URLs match server.mjs', () =
   assert.equal(townJson.live, true);
   assert.equal(townJson.base_url, 'https://milo.4167360.xyz');
   assert.equal(townJson.dev_base_url, `http://127.0.0.1:${portMatch[1]}`);
+});
+
+test('top-level identity pins match the founding law', () => {
+  assert.equal(townJson.town, 'Ghostlight Town');
+  assert.match(townJson.version, /^\d+\.\d+\.\d+(-[a-z0-9.-]+)?$/);
+  assert.equal(townJson.gathering_place, 'Ghostlight Bandstand');
+  assert.ok(
+    skillSrc.includes(townJson.gathering_place),
+    'SKILL.md must mention gathering_place'
+  );
+  assert.equal(townJson.currency, null);
+  assert.equal(townJson.upkeep, null);
+});
+
+test('skill, client, and live_note resolve against the repo', () => {
+  assert.ok(
+    fs.existsSync(path.join(REPO_ROOT, townJson.skill)),
+    `skill path must exist: ${townJson.skill}`
+  );
+  assert.ok(
+    fs.existsSync(path.join(REPO_ROOT, townJson.client)),
+    `client path must exist: ${townJson.client}`
+  );
+  assert.ok(townJson.base_url.startsWith('https://'), 'base_url must use https://');
+  assert.ok(
+    townJson.live_note.includes(townJson.base_url),
+    'live_note must include base_url'
+  );
+  assert.ok(
+    townJson.dev_base_url.startsWith('http://127.0.0.1:'),
+    'dev_base_url must start with http://127.0.0.1:'
+  );
+});
+
+test('contact block pins the owner and the paper', () => {
+  assert.equal(townJson.contact.owner, 'Milo');
+  assert.equal(townJson.contact.owner_handle, 'milo');
+
+  const handleMatch = serverSrc.match(/const\s+HANDLE_RE\s*=\s*\/([^/]+)\/;/);
+  assert.ok(handleMatch, 'Could not find HANDLE_RE in server.mjs');
+  assert.match(townJson.contact.owner_handle, new RegExp(handleMatch[1]));
+
+  assert.equal(townJson.contact.gazette, 'The Ghostlight Gazette');
+  assert.ok(
+    skillSrc.includes(townJson.contact.gazette),
+    'SKILL.md must mention contact.gazette'
+  );
+});
+
+test('endpoint shape: methods, paths, auth values, rate_limit format, summaries', () => {
+  const validMethods = new Set(['GET', 'POST', 'PUT']);
+  const validAuth = new Set(['public', 'signed', 'admin']);
+  const rateLimitRe = /^\d+\/(min|hour|\d+ min)( per IP)?$/;
+
+  for (const ep of townJson.endpoints) {
+    const label = `${ep.method} ${ep.path}`;
+    assert.ok(validMethods.has(ep.method), `Unexpected method for ${label}: ${ep.method}`);
+    assert.ok(ep.path.startsWith('/api/town/'), `Path must start with /api/town/: ${label}`);
+    assert.ok(validAuth.has(ep.auth), `Unexpected auth for ${label}: ${ep.auth}`);
+    if (ep.rate_limit !== null) {
+      assert.match(ep.rate_limit, rateLimitRe, `Unexpected rate_limit format for ${label}`);
+    }
+    assert.equal(typeof ep.summary, 'string', `summary must be a string for ${label}`);
+    assert.ok(ep.summary.trim().length > 0, `summary must be non-empty for ${label}`);
+  }
+});
+
+test('endpoint summaries carry the key behavior phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const footlightTtlMin = parseServerConstNumber('FOOTLIGHT_TTL_SEC') / 60;
+
+  const expectedPhrases = [
+    ['POST /api/town/join', ['invite_code']],
+    ['POST /api/town/ghostlight/checkin', [`${footlightTtlMin}-min TTL`]],
+    ['POST /api/town/ghostlight/say', ['reply_to']],
+    ['POST /api/town/inn/claim', ['1-7 nights', 'default 3']],
+    ['POST /api/town/guestbook', ['pending']],
+    ['POST /api/town/admin/approve', ['Milo-only']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('block key sets are closed (no silent additions or drops)', () => {
+  assert.deepEqual(Object.keys(townJson), [
+    'town',
+    'version',
+    'live',
+    'live_note',
+    'base_url',
+    'dev_base_url',
+    'skill',
+    'client',
+    'gathering_place',
+    'currency',
+    'upkeep',
+    'auth',
+    'origins',
+    'handle_pattern',
+    'endpoints',
+    'plot',
+    'limits',
+    'inn_rooms',
+    'contact',
+  ]);
+  assert.deepEqual(Object.keys(townJson.limits), [
+    'say_chars',
+    'status_text_chars',
+    'bio_chars',
+    'guestbook_name_chars',
+    'guestbook_body_chars',
+    'body_max_kb',
+    'footlight_ttl_sec',
+    'bandstand_slots',
+  ]);
+  assert.deepEqual(Object.keys(townJson.plot), [
+    'manifest_max_kb',
+    'html_max_kb',
+    'signpost_max_chars',
+    'cottage_styles',
+    'starter_props',
+    'max_props',
+    'coord_range',
+    'rot_y_range',
+  ]);
+  assert.deepEqual(Object.keys(townJson.auth), [
+    'scheme',
+    'pubkey_encoding',
+    'spki_der_prefix_hex',
+    'timestamp_skew_sec',
+    'nonce_ttl_sec',
+    'canonical_string',
+    'headers',
+  ]);
 });
