@@ -275,3 +275,213 @@ test('inn-guestbook-overlay.mjs pure resolvers and helpers stay verbatim in sync
   assert.ok(stagingBlock, 'staging-polyfork/inn-guestbook-overlay.mjs must contain INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent');
   assert.equal(stagingBlock[0], townBlock[0], 'inn-guestbook-overlay.mjs drifted from town-3d/town.js');
 });
+
+test('resolveInnOverlayContent handles occupancy-line edges and innState usability', async () => {
+  const nowSec = 1_700_000_000;
+
+  const edgesRes = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'expired', expires_at: nowSec - 1000 },
+      window: { handle: 'zero', nights: 0 },
+      quiet: { handle: 'frac', nights: 2.5 },
+    },
+    nowSec,
+  });
+  assert.equal(edgesRes.kind, 'api');
+  assert.match(edgesRes.html, /Occupied — @expired, 1 night left\./);
+  assert.match(edgesRes.html, /Occupied — @zero, 1 night left\./);
+  assert.match(edgesRes.html, /Occupied — @frac, 3 nights left\./);
+
+  const precedenceRes = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'precedence', expires_at: nowSec + 5 * 86400, nights: 1 },
+      window: { handle: '', nights: 2 },
+      quiet: { nights: 2 },
+    },
+    nowSec,
+  });
+  assert.equal(precedenceRes.kind, 'api');
+  assert.match(precedenceRes.html, /Occupied — @precedence, 5 nights left\./);
+  assert.match(precedenceRes.html, /The Window Room[\s\S]*?Vacant — free tonight\./);
+  assert.match(precedenceRes.html, /The Quiet Room[\s\S]*?Vacant — free tonight\./);
+
+  const nonObjectAndNullRes = await resolveInnOverlayContent({
+    innState: {
+      lantern: null,
+      window: 'x',
+    },
+    nowSec,
+  });
+  assert.equal(nonObjectAndNullRes.kind, 'api');
+  assert.match(nonObjectAndNullRes.html, /The Lantern Room[\s\S]*?Vacant — free tonight\./);
+  assert.match(nonObjectAndNullRes.html, /The Window Room[\s\S]*?Vacant — free tonight\./);
+
+  let fetchCalled = false;
+  const unknownRoomRes = await resolveInnOverlayContent({
+    innState: { attic: { handle: 'ghost', nights: 2 } },
+    nowSec,
+    fetchFn: async () => {
+      fetchCalled = true;
+      return { status: 404 };
+    },
+  });
+  assert.equal(fetchCalled, true, 'innState with only unknown room keys must fall through to fetch');
+  assert.deepEqual(unknownRoomRes, { kind: 'static', url: 'inn/index.html' });
+});
+
+test('resolveGuestbookOverlayContent handles entry-shape edges, empty lists, and non-array entries', async () => {
+  const mixedRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return {
+          entries: [
+            null,
+            'not-an-object',
+            42,
+            { kind: 'announcement', name: 'Ignored', body: 'Should be dropped', created_at: 1700000000 },
+            { kind: 'guestbook', name: 'NoDate', body: 'Signed without timestamp' },
+          ],
+        };
+      },
+    }),
+  });
+  assert.equal(mixedRes.kind, 'api');
+  assert.ok(!mixedRes.html.includes('Ignored'));
+  assert.ok(!mixedRes.html.includes('Should be dropped'));
+  assert.match(mixedRes.html, /<li><strong>NoDate<\/strong><br>Signed without timestamp<\/li>/);
+
+  const emptyRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() { return { entries: [] }; },
+    }),
+  });
+  assert.equal(emptyRes.kind, 'api');
+  assert.ok(emptyRes.html.includes('No signatures yet'));
+  assert.ok(emptyRes.html.includes('No letters yet'));
+
+  const nonArrayRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() { return { entries: 'x' }; },
+    }),
+  });
+  assert.deepEqual(nonArrayRes, { kind: 'static', url: 'guestbook/index.html' });
+});
+
+test('resolvePlotGuestbookOverlayContent handles non-array entries, thrown fetch, invalid handles, and trailing slashes', async () => {
+  const nonArrayRes = await resolvePlotGuestbookOverlayContent('maren', {
+    fetchFn: async () => ({
+      status: 200,
+      async json() { return { entries: 'invalid' }; },
+    }),
+  });
+  assert.equal(nonArrayRes.kind, 'fallback');
+  assert.ok(nonArrayRes.html.includes('maren'));
+  assert.ok(nonArrayRes.html.includes('How to sign'));
+
+  const throwRes = await resolvePlotGuestbookOverlayContent('maren', {
+    fetchFn: async () => { throw new Error('network down'); },
+  });
+  assert.equal(throwRes.kind, 'fallback');
+  assert.ok(throwRes.html.includes('maren'));
+
+  for (const badHandle of ['Milo', 'milo.test', 'a<b']) {
+    let called = false;
+    const badRes = await resolvePlotGuestbookOverlayContent(badHandle, {
+      fetchFn: async () => {
+        called = true;
+        return { status: 200, async json() { return { entries: [] }; } };
+      },
+    });
+    assert.equal(called, false, `invalid handle ${badHandle} must not trigger fetch`);
+    assert.equal(badRes.kind, 'fallback');
+  }
+
+  const fetchedUrls = [];
+  const slashRes = await resolvePlotGuestbookOverlayContent('maren', {
+    apiBase: 'https://example.test///',
+    fetchFn: async (url) => {
+      fetchedUrls.push(url);
+      return {
+        status: 200,
+        async json() { return { entries: [] }; },
+      };
+    },
+  });
+  assert.equal(slashRes.kind, 'api');
+  assert.deepEqual(fetchedUrls, ['https://example.test/api/town/guestbook?plot=maren&limit=50']);
+});
+
+test('formatPlotGuestbookTabLabel handles negative, non-finite, non-number, and singular inputs', () => {
+  assert.equal(formatPlotGuestbookTabLabel(-1), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(NaN), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(Infinity), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel('3'), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(1), 'Guestbook (1)');
+});
+
+test('openInnOverlay fetch path and openGuestbookOverlay api path set srcdoc and remove src', async () => {
+  const innEls = makeFakeOverlayElements();
+  innEls.iframeEl.src = 'stale.html';
+  const innRes = await openInnOverlay({
+    ...innEls,
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { inn: { lantern: { handle: 'wick', nights: 4 }, window: null, quiet: null } };
+      },
+    }),
+  });
+  assert.equal(innRes.kind, 'api');
+  assert.equal(innEls.overlayEl.hidden, false);
+  assert.equal(innEls.iframeEl.getAttribute('src'), null);
+  assert.match(innEls.iframeEl.srcdoc, /@wick, 4 nights left\./);
+
+  const gbEls = makeFakeOverlayElements();
+  gbEls.iframeEl.src = 'stale.html';
+  const gbRes = await openGuestbookOverlay({
+    ...gbEls,
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { entries: [{ kind: 'guestbook', name: 'Rowan', body: 'Hello town' }] };
+      },
+    }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  assert.equal(gbEls.overlayEl.hidden, false);
+  assert.equal(gbEls.iframeEl.getAttribute('src'), null);
+  assert.ok(gbEls.iframeEl.srcdoc.includes('Rowan'));
+});
+
+test('openPlotGuestbookOverlay with invalid handle and openInnOverlay static fallback update iframe correctly', async () => {
+  const plotEls = makeFakeOverlayElements();
+  plotEls.iframeEl.src = 'stale.html';
+  let plotFetchCalled = false;
+  const plotRes = await openPlotGuestbookOverlay('BadHandle', {
+    ...plotEls,
+    fetchFn: async () => {
+      plotFetchCalled = true;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(plotFetchCalled, false);
+  assert.equal(plotRes.kind, 'fallback');
+  assert.equal(plotEls.overlayEl.hidden, false);
+  assert.equal(plotEls.titleEl.textContent, '@BadHandle — Guestbook');
+  assert.equal(plotEls.iframeEl.getAttribute('src'), null);
+  assert.ok(plotEls.iframeEl.srcdoc.includes("couldn't be reached"));
+
+  const innEls = makeFakeOverlayElements();
+  innEls.iframeEl.srcdoc = '<p>stale</p>';
+  const innRes = await openInnOverlay({
+    ...innEls,
+    fetchFn: async () => ({ status: 404 }),
+  });
+  assert.equal(innRes.kind, 'static');
+  assert.equal(innEls.overlayEl.hidden, false);
+  assert.equal(innEls.iframeEl.src, 'inn/index.html');
+  assert.equal(innEls.iframeEl.getAttribute('srcdoc'), null);
+});
