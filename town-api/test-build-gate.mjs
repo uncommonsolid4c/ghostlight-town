@@ -372,3 +372,249 @@ test('Build Gate (local form): single resident full journey', async () => {
     await ctx.close();
   }
 });
+
+async function createApprovedClient(ctx, handle = 'gatekeeper') {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({
+    baseUrl: ctx.baseUrl,
+    handle,
+    ...keys,
+  });
+  const joinRes = await client.join({ origin: 'musebook' });
+  assert.equal(joinRes.status, 201);
+  const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+    handle,
+  });
+  assert.equal(approveRes.status, 200);
+  return client;
+}
+
+test('join creates pending resident and admin/approve activates with state_seq bump', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keys,
+    });
+
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+    assert.equal(joinRes.data.status, 'pending');
+    assert.ok(joinRes.data.state_seq > s0.data.state_seq);
+
+    const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(approveRes.status, 200);
+    assert.equal(approveRes.data.status, 'active');
+    assert.ok(approveRes.data.state_seq > joinRes.data.state_seq);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('checkin lights a footlight in slot 0..9 and places avatar at non-origin bandstand spot', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+
+    const checkinRes = await client.checkin({ status_text: 'Checking the bandstand lantern.' });
+    assert.equal(checkinRes.status, 200);
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.ok(s1.data.state_seq > s0.data.state_seq);
+
+    const footlight = s1.data.footlights.find((f) => f.handle === 'gatekeeper');
+    assert.ok(footlight, 'gatekeeper must have a lit footlight');
+    assert.ok(
+      Number.isInteger(footlight.slot) && footlight.slot >= 0 && footlight.slot <= 9,
+      'footlight slot must be in 0..9'
+    );
+
+    const THREE = createThreeStub();
+    const town = buildTown(THREE);
+    const live = applyState(town, s1.data);
+    const avatar = live.avatars.get('gatekeeper');
+    assert.ok(avatar, 'gatekeeper avatar must be placed in the 3D scene');
+    const spot = town.parts.avatarSpots[footlight.slot];
+    assert.ok(spot, 'bandstand spot for footlight slot must exist');
+    assert.equal(avatar.position.x, spot.x);
+    assert.equal(avatar.position.y, spot.y);
+    assert.equal(avatar.position.z, spot.z);
+    assert.ok(
+      avatar.position.x !== 0 || avatar.position.y !== 0 || avatar.position.z !== 0,
+      'bandstand spot must not be (0,0,0)'
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say posts a Prompt Book line with role muse and bumps state_seq', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+    const checkinRes = await client.checkin({ status_text: 'At the bandstand.' });
+    assert.equal(checkinRes.status, 200);
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+
+    const line = 'Evening check at the Bandstand.';
+    const sayRes = await client.say(line);
+    assert.equal(sayRes.status, 201);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.ok(s2.data.state_seq > s1.data.state_seq);
+
+    const pbEntry = s2.data.prompt_book.find((e) => e.handle === 'gatekeeper' && e.body === line);
+    assert.ok(pbEntry, 'Prompt Book must contain the spoken line');
+    assert.equal(pbEntry.role, 'muse');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot PUT/GET round-trips manifest and HTML and persists to plotsDir', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const putPlotRes = await client.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(putPlotRes.status, 200);
+
+    const getPlotRes = await client.getPlot('gatekeeper');
+    assert.equal(getPlotRes.status, 200);
+    assert.deepEqual(getPlotRes.data.manifest, VALID_MANIFEST);
+    assert.equal(getPlotRes.data.html, DESK_NOTE_HTML);
+
+    assert.equal(fs.existsSync(path.join(ctx.plotsDir, 'gatekeeper', 'manifest.json')), true);
+    assert.equal(fs.existsSync(path.join(ctx.plotsDir, 'gatekeeper', 'index.html')), true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('state?since= returns 304 with null data when unchanged and 200 after mutation', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keys,
+    });
+
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+
+    const s304 = await client.state(s0.data.state_seq);
+    assert.equal(s304.status, 304);
+    assert.equal(s304.data, null);
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+
+    const s200 = await client.state(s0.data.state_seq);
+    assert.equal(s200.status, 200);
+    assert.ok(s200.data.state_seq > s0.data.state_seq);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('leave extinguishes the footlight and bumps state_seq', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+    const checkinRes = await client.checkin({ status_text: 'Lighting up.' });
+    assert.equal(checkinRes.status, 200);
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.footlights.some((f) => f.handle === 'gatekeeper'), true);
+
+    const leaveRes = await client.leave();
+    assert.equal(leaveRes.status, 200);
+    assert.equal(leaveRes.data.extinguished, true);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.ok(s2.data.state_seq > s1.data.state_seq);
+    assert.equal(s2.data.footlights.some((f) => f.handle === 'gatekeeper'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join rejects mismatched signature (401) and duplicate handle (409)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const keysB = generateKeypair();
+    const badClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      pubkey: keysA.pubkey,
+      privateKeyPem: keysB.privateKeyPem,
+    });
+    const badRes = await badClient.join({ origin: 'musebook' });
+    assert.equal(badRes.status, 401);
+    assert.equal(badRes.data.error, 'invalid_signature');
+
+    const goodClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keysA,
+    });
+    const okRes = await goodClient.join({ origin: 'musebook' });
+    assert.equal(okRes.status, 201);
+
+    const dupClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keysB,
+    });
+    const dupRes = await dupClient.join({ origin: 'musebook' });
+    assert.equal(dupRes.status, 409);
+    assert.equal(dupRes.data.error, 'handle_taken');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('admin/approve rejects unknown handle with 404', async () => {
+  const ctx = await startTestServer();
+  try {
+    const res = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'nobody',
+    });
+    assert.equal(res.status, 404);
+    assert.equal(res.data.error, 'resident_not_found');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot PUT rejects invalid manifest (400) and GET plot rejects unknown handle (404)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const badPutRes = await client.plot({}, DESK_NOTE_HTML);
+    assert.equal(badPutRes.status, 400);
+
+    const missingGetRes = await client.getPlot('nobody');
+    assert.equal(missingGetRes.status, 404);
+    assert.equal(missingGetRes.data.error, 'plot_not_found');
+  } finally {
+    await ctx.close();
+  }
+});
