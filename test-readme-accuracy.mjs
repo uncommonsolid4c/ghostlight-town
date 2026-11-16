@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHARACTERS } from './town-npc/characters.mjs';
+import { collectSourceFiles } from './scripts/stage-deploy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = __dirname;
@@ -19,6 +20,7 @@ const stagingHtml = fs.readFileSync(path.join(REPO_ROOT, 'staging-polyfork/index
 const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
 const plotValidationSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/plot-validation.mjs'), 'utf8');
 const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/ghostlight-client.mjs'), 'utf8');
+const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
 
 function parseStringListFromSet(src, name) {
   const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*new\\s+Set\\(\\[([\\s\\S]*?)\\]\\);`));
@@ -111,4 +113,65 @@ test('README.md ## Seed Neighbors names and roles match town-npc/characters.mjs'
     assert.ok(npcSec.includes(`**${char.name}**`), `README.md ## Seed Neighbors must list ${char.name}`);
     assert.ok(npcSec.includes(char.title), `README.md ## Seed Neighbors must state ${char.name} role "${char.title}"`);
   }
+});
+
+test('README.md ## Status Social Gate state matches PLAN.md §12.6', () => {
+  const statusSec = getSection(readmeMd, 'Status');
+  const sec126Heading = '### 12.6 Header refresh; §12.4 verdict superseded';
+  const sec126Idx = planMd.indexOf(sec126Heading);
+  assert.ok(sec126Idx !== -1, `PLAN.md must contain "${sec126Heading}"`);
+  const nextH3 = planMd.indexOf('\n### ', sec126Idx + sec126Heading.length);
+  const sec126 = planMd.slice(sec126Idx, nextH3 !== -1 ? nextH3 : planMd.length);
+
+  for (const fact of ['unmet', '1 of 2–3', '`lampmoth`', '~Nov 20', 'quoted in Gazette #2']) {
+    assert.ok(statusSec.includes(fact), `README.md ## Status must include Social Gate fact "${fact}"`);
+    assert.ok(sec126.includes(fact), `PLAN.md §12.6 must include Social Gate fact "${fact}"`);
+  }
+});
+
+test('README.md ## Status deploy-candidate bundle is 191 files', async () => {
+  const statusSec = getSection(readmeMd, 'Status');
+  assert.ok(statusSec.includes('191-file'), 'README.md ## Status must state 191-file deploy-candidate bundle');
+  const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
+  assert.equal(files.length, 191, `Expected staging-polyfork bundle to contain 191 files, found ${files.length}`);
+});
+
+test('README.md ## How a Muse Joins named endpoints exist in town.json', () => {
+  const joinSec = getSection(readmeMd, 'How a Muse Joins');
+  const endpoints = townJson.endpoints;
+  assert.ok(Array.isArray(endpoints), 'town.json must have an endpoints array');
+
+  const expectedEndpoints = [
+    ['POST', '/api/town/join'],
+    ['POST', '/api/town/ghostlight/checkin'],
+    ['POST', '/api/town/ghostlight/say'],
+    ['PUT', '/api/town/plot'],
+  ];
+  for (const [method, endpointPath] of expectedEndpoints) {
+    assert.ok(
+      joinSec.includes(`${method} ${endpointPath}`),
+      `README.md ## How a Muse Joins must name ${method} ${endpointPath}`
+    );
+    assert.ok(
+      endpoints.some((entry) => entry.method === method && entry.path === endpointPath),
+      `town.json endpoints must contain ${method} ${endpointPath}`
+    );
+  }
+});
+
+test('README.md ## The Gathering Place Prompt Book 24-hour rolling log matches server.mjs', () => {
+  const gatheringSec = getSection(readmeMd, 'The Gathering Place');
+  assert.ok(gatheringSec.includes('24-hour'), 'README.md ## The Gathering Place must state 24-hour rolling log');
+  assert.ok(
+    serverSrc.includes('const cutoff24h = now - 24 * 60 * 60;'),
+    'town-api/server.mjs must window Prompt Book state on 24 hours (cutoff24h)'
+  );
+});
+
+test('README.md intro Gazette twice-weekly cadence matches PLAN.md', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  assert.ok(firstH2 !== -1, 'README.md must have at least one ## heading');
+  const intro = readmeMd.slice(0, firstH2);
+  assert.ok(intro.includes('twice a week'), 'README.md intro must state Gazette runs twice a week');
+  assert.ok(planMd.includes('twice a week'), 'PLAN.md must state Gazette runs twice a week');
 });
