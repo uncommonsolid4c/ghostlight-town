@@ -12,8 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 import { createTownServer } from '../town-api/server.mjs';
-import { generateKeypair } from '../town-api/ghostlight-client.mjs';
+import { generateKeypair, GhostlightClient } from '../town-api/ghostlight-client.mjs';
 import { ensureKeypair } from './keygen.mjs';
+import { getCharacter } from './characters.mjs';
 
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REGISTER_SCRIPT = path.join(THIS_DIR, 'register.mjs');
@@ -288,5 +289,192 @@ test('missing operator key file fails cleanly with usage error', async () => {
     assert.equal(fs.existsSync(stateDir), false);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('invalid --npc value fails cleanly without creating state dir', async () => {
+  const ctx = await startTestServer();
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'bogus',
+    ]);
+    assert.equal(res.code, 1);
+    assert.ok(res.stderr.includes('Invalid --npc "bogus"'), `unexpected stderr: ${res.stderr}`);
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('usage errors for --help, -h, and unknown argument', async () => {
+  const helpRes = await runRegisterCli(['--help']);
+  assert.equal(helpRes.code, 1);
+  assert.ok(helpRes.stderr.includes('Usage:'), `unexpected stderr: ${helpRes.stderr}`);
+
+  const shortRes = await runRegisterCli(['-h']);
+  assert.equal(shortRes.code, 1);
+  assert.ok(shortRes.stderr.includes('Usage:'), `unexpected stderr: ${shortRes.stderr}`);
+
+  const bogusRes = await runRegisterCli(['--bogus']);
+  assert.equal(bogusRes.code, 1);
+  assert.ok(
+    bogusRes.stderr.includes('Unknown or incomplete argument: --bogus'),
+    `unexpected stderr: ${bogusRes.stderr}`
+  );
+});
+
+test('missing required arguments fail cleanly without creating state dir', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-missing-'));
+  const operatorKeys = generateKeypair();
+  const operatorKeyPath = path.join(tmpDir, 'operator.pem');
+  fs.writeFileSync(operatorKeyPath, operatorKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(tmpDir, 'npc_state');
+
+  try {
+    const noBase = await runRegisterCli([
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      operatorKeyPath,
+    ]);
+    assert.equal(noBase.code, 1);
+    assert.ok(noBase.stderr.includes('Missing --api-base'), `unexpected stderr: ${noBase.stderr}`);
+    assert.equal(fs.existsSync(stateDir), false);
+
+    const noKey = await runRegisterCli([
+      '--api-base',
+      'http://127.0.0.1:1',
+      '--state-dir',
+      stateDir,
+    ]);
+    assert.equal(noKey.code, 1);
+    assert.ok(noKey.stderr.includes('Missing --operator-key'), `unexpected stderr: ${noKey.stderr}`);
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('operator key value validation rejects raw PEM and empty file', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-keyval-'));
+  const emptyKeyPath = path.join(tmpDir, 'empty.pem');
+  fs.writeFileSync(emptyKeyPath, '', { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(tmpDir, 'npc_state');
+
+  try {
+    const rawPemRes = await runRegisterCli([
+      '--api-base',
+      'http://127.0.0.1:1',
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      '-----BEGIN PRIVATE KEY-----\nfake',
+    ]);
+    assert.equal(rawPemRes.code, 1);
+    assert.ok(
+      rawPemRes.stderr.includes('must be a filesystem path, not a raw key value'),
+      `unexpected stderr: ${rawPemRes.stderr}`
+    );
+    assert.equal(fs.existsSync(stateDir), false);
+
+    const emptyRes = await runRegisterCli([
+      '--api-base',
+      'http://127.0.0.1:1',
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      emptyKeyPath,
+    ]);
+    assert.equal(emptyRes.code, 1);
+    assert.ok(emptyRes.stderr.includes('is empty'), `unexpected stderr: ${emptyRes.stderr}`);
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('wrong operator key fails cleanly with JSON error and no residents', async () => {
+  const ctx = await startTestServer();
+  const wrongKeys = generateKeypair();
+  const wrongKeyPath = path.join(ctx.tmpDir, 'wrong-operator.pem');
+  fs.writeFileSync(wrongKeyPath, wrongKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      wrongKeyPath,
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.equal(errObj.ok, false);
+    assert.ok(typeof errObj.error === 'string' && errObj.error.length > 0);
+    assert.deepEqual(readResidents(ctx.dbPath), []);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('already-joined-but-unapproved resident registers as existing and strips trailing slash', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const keys = ensureKeypair({ handle: 'wick', stateDir, allowExisting: true });
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'wick',
+      privateKeyPem: keys.privateKeyPem,
+      pubkey: keys.pubkey,
+    });
+    await client.join({ origin: 'colony', bio: getCharacter('wick').title });
+
+    const res = await runRegisterCli([
+      '--api-base',
+      `${ctx.baseUrl}/`,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    assert.equal(res.stdout.includes('BEGIN'), false);
+    assert.equal(res.stdout.includes('PRIVATE'), false);
+
+    const lines = res.stdout.trim().split('\n');
+    assert.equal(lines.length, 1);
+    const row = JSON.parse(lines[0]);
+    assert.equal(row.joined, 'existing');
+    assert.equal(row.approved, 'existing');
+    assert.equal(row.plot, 'ok');
+
+    const residents = readResidents(ctx.dbPath);
+    assert.equal(residents.length, 1);
+    assert.equal(residents[0].handle, 'wick');
+    assert.equal(residents[0].origin, 'colony');
+    assert.equal(residents[0].bio, 'Stagehand / Lamp-Trimmer');
+    assert.equal(residents[0].role, 'npc');
+    assert.equal(residents[0].status, 'active');
+
+    assert.ok(fs.existsSync(path.join(ctx.plotsDir, 'wick', 'manifest.json')));
+    assert.ok(fs.existsSync(path.join(ctx.plotsDir, 'wick', 'index.html')));
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
