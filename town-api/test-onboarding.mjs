@@ -496,3 +496,349 @@ test('startup migration upgrades old residents origin CHECK while preserving exi
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('town.json limits, inn, handle pattern, and origins match the server constants', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'server.mjs'), 'utf8');
+
+  const evalNumericExpr = (expr) => {
+    assert.match(expr, /^[\d\s*]+$/);
+    return expr.split('*').reduce((acc, part) => acc * Number(part.trim()), 1);
+  };
+
+  const parseConstNum = (name) => {
+    const m = serverSrc.match(new RegExp(`const ${name}\\s*=\\s*([^;]+);`));
+    assert.ok(m, `server.mjs must define ${name}`);
+    return evalNumericExpr(m[1].trim());
+  };
+
+  const parseStringArray = (body) =>
+    [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+
+  const capsMatch = serverSrc.match(/const CAPS\s*=\s*\{([\s\S]*?)\};/);
+  assert.ok(capsMatch, 'server.mjs must define CAPS');
+  const CAPS = {};
+  for (const [, key, val] of capsMatch[1].matchAll(/(\w+)\s*:\s*(\d+)/g)) {
+    CAPS[key] = Number(val);
+  }
+
+  const FOOTLIGHT_TTL_SEC = parseConstNum('FOOTLIGHT_TTL_SEC');
+  const MAX_BODY_BYTES = parseConstNum('MAX_BODY_BYTES');
+  const INN_MAX_NIGHTS = parseConstNum('INN_MAX_NIGHTS');
+  const INN_DEFAULT_NIGHTS = parseConstNum('INN_DEFAULT_NIGHTS');
+
+  const innRoomsMatch = serverSrc.match(/const INN_ROOMS\s*=\s*\[([^\]]+)\];/);
+  assert.ok(innRoomsMatch, 'server.mjs must define INN_ROOMS');
+  const INN_ROOMS = parseStringArray(innRoomsMatch[1]);
+
+  const handleReMatch = serverSrc.match(/const HANDLE_RE\s*=\s*\/([^/]+)\/;/);
+  assert.ok(handleReMatch, 'server.mjs must define HANDLE_RE');
+  const HANDLE_RE_SOURCE = handleReMatch[1];
+
+  const originsMatch = serverSrc.match(/const VALID_ORIGINS\s*=\s*new Set\(\[([^\]]+)\]\);/);
+  assert.ok(originsMatch, 'server.mjs must define VALID_ORIGINS');
+  const VALID_ORIGINS = parseStringArray(originsMatch[1]);
+
+  const rlMatch = serverSrc.match(/const RATE_LIMITS\s*=\s*\{([\s\S]*?)\};/);
+  assert.ok(rlMatch, 'server.mjs must define RATE_LIMITS');
+  const RATE_LIMITS = {};
+  for (const [, key, maxStr, winStr] of rlMatch[1].matchAll(
+    /(\w+)\s*:\s*\{\s*max\s*:\s*(\d+)\s*,\s*windowSec\s*:\s*([^}]+?)\s*\}/g
+  )) {
+    RATE_LIMITS[key] = {
+      max: Number(maxStr),
+      windowSec: evalNumericExpr(winStr.trim()),
+    };
+  }
+
+  assert.equal(town.limits.say_chars, CAPS.say);
+  assert.equal(town.limits.status_text_chars, CAPS.statusText);
+  assert.equal(town.limits.bio_chars, CAPS.bio);
+  assert.equal(town.limits.guestbook_name_chars, CAPS.guestbookName);
+  assert.equal(town.limits.guestbook_body_chars, CAPS.guestbookBody);
+  assert.equal(town.limits.body_max_kb, MAX_BODY_BYTES / 1024);
+  assert.equal(town.limits.footlight_ttl_sec, FOOTLIGHT_TTL_SEC);
+  assert.equal(town.limits.bandstand_slots, 10);
+  assert.ok(serverSrc.includes('slot > 9'), 'server.mjs must enforce bandstand slot > 9 guard');
+
+  assert.deepEqual(
+    town.inn_rooms.rooms.map((r) => r.id),
+    [...INN_ROOMS]
+  );
+  assert.equal(town.inn_rooms.nights_min, 1);
+  assert.equal(town.inn_rooms.nights_max, INN_MAX_NIGHTS);
+  assert.equal(town.inn_rooms.nights_default, INN_DEFAULT_NIGHTS);
+
+  assert.equal(town.handle_pattern, HANDLE_RE_SOURCE);
+  assert.deepEqual(town.origins, [...VALID_ORIGINS]);
+
+  const unitForWindow = { 60: 'min', 600: '10 min', 3600: 'hour' };
+  const fmtRateLimit = (rl, perIp = false) => {
+    const unit = unitForWindow[rl.windowSec];
+    assert.ok(unit, `Unexpected rate-limit windowSec: ${rl.windowSec}`);
+    return `${rl.max}/${unit}${perIp ? ' per IP' : ''}`;
+  };
+
+  const expectedRateLimits = new Map([
+    ['POST /api/town/join', fmtRateLimit(RATE_LIMITS.joinIp, true)],
+    ['POST /api/town/ghostlight/checkin', fmtRateLimit(RATE_LIMITS.checkin)],
+    ['POST /api/town/ghostlight/say', fmtRateLimit(RATE_LIMITS.say)],
+    ['PUT /api/town/plot', fmtRateLimit(RATE_LIMITS.plot)],
+    ['POST /api/town/inn/claim', fmtRateLimit(RATE_LIMITS.innClaim)],
+    ['POST /api/town/inn/extend', fmtRateLimit(RATE_LIMITS.innClaim)],
+    ['POST /api/town/key/rotate', fmtRateLimit(RATE_LIMITS.keyRotate)],
+    ['POST /api/town/guestbook', fmtRateLimit(RATE_LIMITS.guestbook, true)],
+  ]);
+
+  for (const ep of town.endpoints) {
+    const key = `${ep.method} ${ep.path}`;
+    if (expectedRateLimits.has(key)) {
+      assert.equal(ep.rate_limit, expectedRateLimits.get(key), `${key} rate_limit mismatch`);
+    } else {
+      assert.equal(ep.rate_limit ?? null, null, `${key} should have null/absent rate_limit`);
+    }
+  }
+});
+
+test('leave extinguishes the footlight and is idempotent', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'leave-tester',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const joined = await client.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+    const approved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'leave-tester',
+    });
+    assert.equal(approved.status, 200);
+
+    const checkedIn = await client.checkin({ status_text: 'here for a bit' });
+    assert.equal(checkedIn.status, 200);
+
+    const stateBefore = await client.state();
+    assert.equal(stateBefore.status, 200);
+    assert.ok(stateBefore.data.footlights.some((f) => f.handle === 'leave-tester'));
+
+    const left1 = await client.leave();
+    assert.equal(left1.status, 200);
+    assert.equal(left1.data.extinguished, true);
+    assert.equal(left1.data.handle, 'leave-tester');
+
+    const stateAfter = await client.state();
+    assert.equal(stateAfter.status, 200);
+    assert.equal(
+      stateAfter.data.footlights.some((f) => f.handle === 'leave-tester'),
+      false
+    );
+
+    const left2 = await client.leave();
+    assert.equal(left2.status, 200);
+    assert.equal(left2.data.extinguished, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('say supports emote kind and reply_to, and rejects bad kind / dangling reply', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'reply-tester',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const joined = await client.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+    const approved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'reply-tester',
+    });
+    assert.equal(approved.status, 200);
+
+    const checkedIn = await client.checkin({ status_text: 'at the bandstand' });
+    assert.equal(checkedIn.status, 200);
+
+    const first = await client.say('First line at the Bandstand.');
+    assert.equal(first.status, 201);
+    assert.equal(typeof first.data.id, 'number');
+    const firstId = first.data.id;
+
+    const emoteReply = await client.say('nods along', 'emote', firstId);
+    assert.equal(emoteReply.status, 201);
+    assert.equal(emoteReply.data.kind, 'emote');
+    assert.equal(emoteReply.data.reply_to, firstId);
+
+    const stateRes = await client.state();
+    assert.equal(stateRes.status, 200);
+    assert.ok(
+      stateRes.data.prompt_book.some(
+        (line) =>
+          line.handle === 'reply-tester' &&
+          line.kind === 'emote' &&
+          line.body === 'nods along' &&
+          line.reply_to === firstId
+      )
+    );
+
+    const dangling = await client.say('dangling', 'say', 999999);
+    assert.equal(dangling.status, 400);
+    assert.equal(dangling.data?.error, 'invalid_reply_to');
+
+    const badKind = await client.say('loud', 'shout');
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data?.error, 'invalid_kind');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('presence zones round-trip through state, and bad zones are rejected', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'zone-tester',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const joined = await client.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+    const approved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'zone-tester',
+    });
+    assert.equal(approved.status, 200);
+
+    const p1 = await client.presence('bandstand');
+    assert.equal(p1.status, 200);
+    assert.equal(p1.data.zone, 'bandstand');
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    const rows1 = s1.data.presence.filter((p) => p.handle === 'zone-tester');
+    assert.equal(rows1.length, 1);
+    assert.equal(rows1[0].zone, 'bandstand');
+
+    const p2 = await client.presence('plot:zone-tester');
+    assert.equal(p2.status, 200);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    const rows2 = s2.data.presence.filter((p) => p.handle === 'zone-tester');
+    assert.equal(rows2.length, 1);
+    assert.equal(rows2[0].zone, 'plot:zone-tester');
+
+    const badZone = await client.presence('nowhere');
+    assert.equal(badZone.status, 400);
+    assert.equal(badZone.data?.error, 'invalid_zone');
+
+    const badPlotZone = await client.presence('plot:Bad Handle!');
+    assert.equal(badPlotZone.status, 400);
+    assert.equal(badPlotZone.data?.error, 'invalid_zone');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('a pending resident cannot check in or say', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'pending-tester',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const joined = await client.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+    assert.equal(joined.data.status, 'pending');
+
+    const checkinRes = await client.checkin({ status_text: 'trying to light up' });
+    assert.equal(checkinRes.status, 403);
+    assert.equal(checkinRes.data?.error, 'resident_not_active');
+    assert.equal(checkinRes.data?.resident_status, 'pending');
+
+    const sayRes = await client.say('hello before approval');
+    assert.equal(sayRes.status, 403);
+    assert.equal(sayRes.data?.error, 'resident_not_active');
+    assert.equal(sayRes.data?.resident_status, 'pending');
+
+    const stateRes = await client.state();
+    assert.equal(stateRes.status, 200);
+    assert.equal(
+      stateRes.data.footlights.some((f) => f.handle === 'pending-tester'),
+      false
+    );
+    assert.equal(
+      stateRes.data.prompt_book.some((line) => line.handle === 'pending-tester'),
+      false
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test('guestbook caps from town.json limits, and pending entries stay hidden', async () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const srv = await startTestServer();
+  try {
+    const postGuestbook = async (payload) => {
+      const res = await fetch(`${srv.baseUrl}/api/town/guestbook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => null);
+      return { status: res.status, data };
+    };
+
+    const badName = await postGuestbook({
+      kind: 'guestbook',
+      name: 'n'.repeat(town.limits.guestbook_name_chars + 1),
+      body: 'Hello.',
+    });
+    assert.equal(badName.status, 400);
+    assert.equal(badName.data?.error, 'invalid_name');
+    assert.equal(badName.data?.max, 40);
+
+    const badBody = await postGuestbook({
+      kind: 'guestbook',
+      name: 'Onboarding Tester',
+      body: 'b'.repeat(town.limits.guestbook_body_chars + 1),
+    });
+    assert.equal(badBody.status, 400);
+    assert.equal(badBody.data?.error, 'invalid_body');
+    assert.equal(badBody.data?.max, 500);
+
+    const okPost = await postGuestbook({
+      kind: 'guestbook',
+      name: 'Onboarding Tester',
+      body: 'Lovely light tonight.',
+    });
+    assert.equal(okPost.status, 201);
+    assert.equal(okPost.data?.status, 'pending');
+    assert.equal(typeof okPost.data?.id, 'number');
+
+    const listRes = await fetch(`${srv.baseUrl}/api/town/guestbook`);
+    assert.equal(listRes.status, 200);
+    const listData = await listRes.json();
+    assert.ok(Array.isArray(listData.entries));
+    assert.equal(
+      listData.entries.some((e) => e.id === okPost.data.id),
+      false
+    );
+  } finally {
+    await srv.close();
+  }
+});
