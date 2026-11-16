@@ -114,3 +114,100 @@ test('openNoticeBoardOverlay sets title, sandbox, srcdoc, unhides overlay, calls
   assert.equal(openNoticeBoardOverlay({}), null);
   assert.equal(openNoticeBoardOverlay({ overlayEl, titleEl }), null);
 });
+
+test('notice-board-overlay.mjs escapeHtml stays verbatim in sync with town-3d/town.js', async () => {
+  const [townSrc, stagingSrc] = await Promise.all([
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'notice-board-overlay.mjs'), 'utf8'),
+  ]);
+
+  const townEscape = townSrc.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  const stagingEscape = stagingSrc.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(townEscape, 'town-3d/town.js must define escapeHtml');
+  assert.ok(stagingEscape, 'staging-polyfork/notice-board-overlay.mjs must define escapeHtml');
+  assert.equal(stagingEscape[0], townEscape[0], 'escapeHtml drifted from town-3d/town.js');
+});
+
+test('buildNoticeBoardOverlayHtml renders 3 notice sections in order with one h2 and one p each', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const sections = [...html.matchAll(/<section class="notice">([\s\S]*?)<\/section>/g)];
+  assert.equal(sections.length, 3);
+
+  const expectedTitles = ['GAZETTE #2', 'THE INN', 'SOCIAL GATE'];
+  const actualTitles = [];
+  const actualBodies = [];
+
+  for (const [, inner] of sections) {
+    const h2Matches = [...inner.matchAll(/<h2>([\s\S]*?)<\/h2>/g)];
+    const pMatches = [...inner.matchAll(/<p>([\s\S]*?)<\/p>/g)];
+    assert.equal(h2Matches.length, 1, 'each notice section must have exactly one <h2>');
+    assert.equal(pMatches.length, 1, 'each notice section must have exactly one <p>');
+    actualTitles.push(h2Matches[0][1]);
+    actualBodies.push(pMatches[0][1]);
+  }
+
+  assert.deepEqual(actualTitles, expectedTitles);
+  assert.equal(actualBodies[2], 'Plots are free, no upkeep — yours outright. Bring a friend.');
+});
+
+test('buildNoticeBoardOverlayHtml renders document shell, Georgia serif #f5efe0 style, and no inline handlers or javascript: URLs', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  assert.ok(html.includes('<html lang="en">'));
+  assert.ok(html.includes('<meta charset="utf-8">'));
+  assert.ok(html.includes('<title>Notice Board</title>'));
+
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(styleMatch, 'overlay HTML must include a <style> block');
+  assert.match(styleMatch[1], /font-family:\s*Georgia,\s*serif/);
+  assert.match(styleMatch[1], /background:\s*#f5efe0/);
+
+  assert.ok(!/\son[a-z]+\s*=/i.test(html), 'overlay HTML must contain no on*= event attributes');
+  assert.ok(!/javascript:/i.test(html), 'overlay HTML must contain no javascript: URLs');
+});
+
+test('openNoticeBoardOverlay returns null with no args or any single missing element', () => {
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+
+  assert.equal(openNoticeBoardOverlay(), null);
+  assert.equal(openNoticeBoardOverlay({ titleEl, iframeEl }), null);
+  assert.equal(openNoticeBoardOverlay({ overlayEl, iframeEl }), null);
+  assert.equal(openNoticeBoardOverlay({ overlayEl, titleEl }), null);
+  assert.equal(overlayEl.hidden, true);
+});
+
+test('openNoticeBoardOverlay opens normally when onBeforeOpen is omitted or not a function', () => {
+  const els1 = makeFakeOverlayElements();
+  const html1 = openNoticeBoardOverlay(els1);
+  assert.equal(typeof html1, 'string');
+  assert.equal(els1.overlayEl.hidden, false);
+  assert.equal(els1.titleEl.textContent, 'Notice Board');
+  assert.equal(els1.iframeEl.srcdoc, html1);
+
+  const els2 = makeFakeOverlayElements();
+  const html2 = openNoticeBoardOverlay({ ...els2, onBeforeOpen: 'x' });
+  assert.equal(html2, html1);
+  assert.equal(els2.overlayEl.hidden, false);
+  assert.equal(els2.titleEl.textContent, 'Notice Board');
+  assert.equal(els2.iframeEl.srcdoc, html2);
+});
+
+test('openNoticeBoardOverlay returns buildNoticeBoardOverlayHtml() and is idempotent across repeated calls', () => {
+  const els = makeFakeOverlayElements();
+  let beforeCount = 0;
+  const expectedHtml = buildNoticeBoardOverlayHtml();
+
+  const first = openNoticeBoardOverlay({
+    ...els,
+    onBeforeOpen: () => { beforeCount++; },
+  });
+  const second = openNoticeBoardOverlay({
+    ...els,
+    onBeforeOpen: () => { beforeCount++; },
+  });
+
+  assert.equal(first, expectedHtml);
+  assert.equal(second, expectedHtml);
+  assert.equal(beforeCount, 2);
+  assert.equal(els.overlayEl.hidden, false);
+  assert.equal(els.iframeEl.srcdoc, expectedHtml);
+});
