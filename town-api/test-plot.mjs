@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { createTownServer } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
-import { validateHtml } from './plot-validation.mjs';
+import { validateHtml, validateManifest, VALID_PROP_KINDS } from './plot-validation.mjs';
 
 const VALID_MANIFEST = {
   cottage: 'gable',
@@ -404,6 +404,190 @@ test('plot rate limit (10/hour) and GET 404 for missing/unknown plots', async ()
     const eleventh = await client.plot(VALID_MANIFEST, '<p>Save #11</p>');
     assert.equal(eleventh.status, 429);
     assert.equal(eleventh.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('validateManifest boundaries: 12 props, 120/121 signpost_text, x=12/12.0001, rot_y=359.999', () => {
+  const twelveProps = Array.from({ length: 12 }, (_, i) => ({
+    kind: 'cat',
+    x: i - 6,
+    y: 0,
+    z: 0,
+    rot_y: 0,
+  }));
+  const res12 = validateManifest({ ...VALID_MANIFEST, props: twelveProps });
+  assert.equal(res12.ok, true);
+  assert.equal(res12.manifest.props.length, 12);
+
+  const resSign120 = validateManifest({ ...VALID_MANIFEST, signpost_text: 'a'.repeat(120) });
+  assert.equal(resSign120.ok, true);
+  assert.equal(resSign120.manifest.signpost_text.length, 120);
+
+  const resSign121 = validateManifest({ ...VALID_MANIFEST, signpost_text: 'a'.repeat(121) });
+  assert.deepEqual(resSign121, { ok: false, error: 'invalid_signpost_text', max: 120 });
+
+  const resX12 = validateManifest({
+    ...VALID_MANIFEST,
+    props: [{ kind: 'desk', x: 12, y: 0, z: 0, rot_y: 0 }],
+  });
+  assert.equal(resX12.ok, true);
+
+  const resXOver = validateManifest({
+    ...VALID_MANIFEST,
+    props: [{ kind: 'desk', x: 12.0001, y: 0, z: 0, rot_y: 0 }],
+  });
+  assert.deepEqual(resXOver, { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 });
+
+  const resRot = validateManifest({
+    ...VALID_MANIFEST,
+    props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 359.999 }],
+  });
+  assert.equal(resRot.ok, true);
+});
+
+test('validateManifest defaults, shape errors, and VALID_PROP_KINDS catalog', () => {
+  const minimal = {
+    cottage: 'gable',
+    wall: '#d8c8a8',
+    roof: '#5a3d2b',
+    trim: '#2f4f4f',
+  };
+  assert.deepEqual(validateManifest(minimal), {
+    ok: true,
+    manifest: {
+      cottage: 'gable',
+      wall: '#d8c8a8',
+      roof: '#5a3d2b',
+      trim: '#2f4f4f',
+      signpost_text: '',
+      props: [],
+    },
+  });
+
+  const noCottage = { wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f' };
+  assert.deepEqual(validateManifest(noCottage), { ok: false, error: 'invalid_cottage' });
+  assert.deepEqual(validateManifest(null), { ok: false, error: 'invalid_manifest' });
+  assert.deepEqual(validateManifest([]), { ok: false, error: 'invalid_manifest' });
+
+  assert.deepEqual(Array.from(VALID_PROP_KINDS), [
+    'desk',
+    'bookshelf',
+    'rug',
+    'tea_kettle',
+    'typewriter',
+    'cat',
+    'poster_frame',
+    'lantern',
+    'planter',
+  ]);
+});
+
+test('validateHtml URI reasons, image data URI, and HTML comments', () => {
+  assert.deepEqual(validateHtml('<a href="vbscript:msgbox(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'vbscript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="data:text/html;base64,PHNjcmlwdD4=">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="&#106;avascript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(
+    validateHtml('<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">'),
+    { ok: true }
+  );
+  assert.deepEqual(validateHtml('<!-- <script>alert(1)</script> --><p>ok</p>'), { ok: true });
+});
+
+test('validateHtml CSS, mixed-case event attr reasons, and non-string inputs', () => {
+  assert.deepEqual(validateHtml('<div style="background:url(evil.png)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<div style="width:expression(alert(1))">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('<div OnClick="x()">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:onclick',
+  });
+  assert.deepEqual(validateHtml(undefined), { ok: false, error: 'missing_html' });
+  assert.deepEqual(validateHtml(42), { ok: false, error: 'missing_html' });
+});
+
+test('GET /api/town/state plots map tracks plot_updated_at across PUTs', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+    assert.deepEqual(s0.data.plots, {});
+    assert.equal(Object.hasOwn(s0.data.plots, 'alice'), false);
+
+    const put1 = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(put1.status, 200);
+    assert.ok(Number.isInteger(put1.data.plot_updated_at));
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.plots.alice, put1.data.plot_updated_at);
+
+    const put2 = await client.plot(
+      { ...VALID_MANIFEST, signpost_text: 'Second visit' },
+      '<p>Updated note</p>'
+    );
+    assert.equal(put2.status, 200);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.plots.alice, put2.data.plot_updated_at);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('PUT /api/town/plot rejects malformed bodies (null/array manifest, missing html/manifest)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys } = await createApprovedResident(ctx, 'alice');
+
+    const cases = [
+      { body: { manifest: null, html: VALID_HTML }, expectedError: 'invalid_manifest' },
+      { body: { manifest: [], html: VALID_HTML }, expectedError: 'invalid_manifest' },
+      { body: { manifest: VALID_MANIFEST }, expectedError: 'missing_html' },
+      { body: { html: VALID_HTML }, expectedError: 'missing_manifest' },
+    ];
+
+    for (const tc of cases) {
+      const signed = signRequest({
+        method: 'PUT',
+        path: '/api/town/plot',
+        body: tc.body,
+        handle: 'alice',
+        privateKeyPem: keys.privateKeyPem,
+      });
+      const res = await fetch(`${ctx.baseUrl}/api/town/plot`, {
+        method: 'PUT',
+        headers: signed.headers,
+        body: signed.rawBody,
+      });
+      assert.equal(res.status, 400);
+      const data = await res.json();
+      assert.equal(data.error, tc.expectedError);
+    }
   } finally {
     await ctx.close();
   }
