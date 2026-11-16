@@ -255,3 +255,115 @@ test('every part .mjs module in PARTS.json is non-empty and exports createAsset'
     }
   }
 });
+
+test('KIT.md code-block placement count matches LAYOUT.json length', () => {
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    const match = kitMd.match(/all (\d+) placements/);
+    assert.ok(match, `${kit}/KIT.md code block must state 'all <N> placements'`);
+    assert.equal(Number(match[1]), layoutJson.length, `${kit}/KIT.md code-block placement count must match LAYOUT.json`);
+  }
+});
+
+test('KIT.md "## Parts" section count matches PARTS.json key count', () => {
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const match = kitMd.match(/^## Parts\r?\n+(\d+) parts\./m);
+    assert.ok(match, `${kit}/KIT.md ## Parts section must start with '<N> parts.'`);
+    assert.equal(Number(match[1]), Object.keys(partsJson).length, `${kit}/KIT.md ## Parts count must match PARTS.json`);
+  }
+});
+
+test('kit.json night entries are well-formed and reference real PARTS.json keys', () => {
+  const hexColorRe = /^#[0-9a-fA-F]{6}$/;
+  for (const kit of KITS) {
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    assert.ok(Array.isArray(kitJson.night) && kitJson.night.length > 0, `${kit}/kit.json night must be a non-empty array`);
+
+    for (let i = 0; i < kitJson.night.length; i++) {
+      const entry = kitJson.night[i];
+      assert.match(entry.from, hexColorRe, `${kit} night[${i}].from must be a 6-digit hex color`);
+      assert.match(entry.to, hexColorRe, `${kit} night[${i}].to must be a 6-digit hex color`);
+      assert.equal(typeof entry.intensity, 'number', `${kit} night[${i}].intensity must be a number`);
+      assert.ok(Number.isFinite(entry.intensity) && entry.intensity > 0, `${kit} night[${i}].intensity must be > 0`);
+      assert.ok(Array.isArray(entry.parts) && entry.parts.length > 0, `${kit} night[${i}].parts must be a non-empty array`);
+      for (const part of entry.parts) {
+        assert.ok(part in partsJson, `${kit} night[${i}].parts '${part}' must exist in PARTS.json`);
+      }
+    }
+  }
+});
+
+test('CREDITS.txt and LICENSE.txt exist, are non-empty, and CREDITS.txt names Polyfork', () => {
+  for (const kit of KITS) {
+    for (const file of ['CREDITS.txt', 'LICENSE.txt']) {
+      const filePath = path.join(__dirname, kit, file);
+      assert.ok(fs.existsSync(filePath), `${kit}/${file} must exist on disk`);
+      assert.ok(fs.statSync(filePath).size > 0, `${kit}/${file} must have size > 0`);
+    }
+    const credits = readKitFile(kit, 'CREDITS.txt');
+    assert.match(credits, /polyfork/i, `${kit}/CREDITS.txt must name Polyfork`);
+  }
+});
+
+test('terrain.mjs exports createAsset and TERRAIN.json matches _terrain row where present', () => {
+  for (const kit of KITS) {
+    const terrainSrc = readKitFile(kit, 'terrain.mjs');
+    assert.match(terrainSrc, /export[^;]*createAsset/, `${kit}/terrain.mjs must export createAsset`);
+
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    const terrainRows = layoutJson.filter((row) => row.part === '_terrain');
+    const terrainJsonPath = path.join(__dirname, kit, 'TERRAIN.json');
+
+    if (kit === 'kit-campground') {
+      assert.ok(fs.existsSync(terrainJsonPath), `${kit}/TERRAIN.json must exist on disk`);
+      assert.equal(terrainRows.length, 1, `${kit} LAYOUT.json must have 1 _terrain row`);
+      const terrainJson = JSON.parse(readKitFile(kit, 'TERRAIN.json'));
+      assert.deepEqual(terrainJson, terrainRows[0].params, `${kit}/TERRAIN.json must match _terrain row params`);
+    } else {
+      assert.equal(fs.existsSync(terrainJsonPath), false, `${kit} must not have TERRAIN.json`);
+      assert.equal(terrainRows.length, 0, `${kit} LAYOUT.json must have 0 _terrain rows`);
+    }
+  }
+});
+
+test('LAYOUT.json non-_terrain row fields (rx/ry/rz, s, params) are well-typed', () => {
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+
+    for (let i = 0; i < layoutJson.length; i++) {
+      const row = layoutJson[i];
+      if (row.part === '_terrain') continue;
+
+      for (const rot of ['rx', 'ry', 'rz']) {
+        if (row[rot] !== undefined) {
+          assert.equal(typeof row[rot], 'number', `${kit} LAYOUT[${i}].${rot} must be a number`);
+          assert.ok(Number.isFinite(row[rot]), `${kit} LAYOUT[${i}].${rot} must be finite`);
+        }
+      }
+
+      if (row.s !== undefined) {
+        assert.ok(Array.isArray(row.s) && row.s.length === 3, `${kit} LAYOUT[${i}].s must be a 3-element array`);
+        for (let j = 0; j < 3; j++) {
+          assert.equal(typeof row.s[j], 'number', `${kit} LAYOUT[${i}].s[${j}] must be a number`);
+          assert.ok(Number.isFinite(row.s[j]) && row.s[j] > 0, `${kit} LAYOUT[${i}].s[${j}] must be finite and > 0`);
+        }
+      }
+
+      if (row.params !== undefined) {
+        assert.ok(
+          typeof row.params === 'object' && row.params !== null && !Array.isArray(row.params),
+          `${kit} LAYOUT[${i}].params must be a plain object`
+        );
+        const knobs = partsJson[row.part].knobs || {};
+        for (const key of Object.keys(row.params)) {
+          assert.ok(key in knobs, `${kit} LAYOUT[${i}].params.${key} must exist in PARTS.json[${row.part}].knobs`);
+        }
+      }
+    }
+  }
+});
