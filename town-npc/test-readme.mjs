@@ -173,3 +173,89 @@ test('town-npc/README.md character plot assignments and run order match characte
     `town-npc/README.md must state run-all order ${expectedOrder}`
   );
 });
+
+test('town-npc/README.md CLI flags and defaults match run-all.mjs and run.mjs', () => {
+  const readme = readReadme();
+  const runAllSrc = fs.readFileSync(path.join(__dirname, 'run-all.mjs'), 'utf8');
+  const runSrc = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
+
+  for (const flag of ['--api-base', '--state-dir', '--npc', '--dry-run', '--force']) {
+    assert.ok(readme.includes(flag), `town-npc/README.md must document ${flag}`);
+  }
+  assert.ok(readme.includes('./npc_state'), 'town-npc/README.md must document ./npc_state default');
+  assert.ok(readme.includes('TOWN_API_BASE'), 'town-npc/README.md must document TOWN_API_BASE fallback');
+
+  const runAllUsage = runAllSrc.match(/Usage: node town-npc\/run-all\.mjs[^\n'"]+/)?.[0];
+  assert.ok(runAllUsage, 'run-all.mjs must have a Usage line');
+  for (const flag of ['--api-base', '--state-dir', '--npc', '--dry-run']) {
+    assert.ok(runAllUsage.includes(flag), `run-all.mjs Usage line must include ${flag}`);
+    assert.ok(runAllSrc.includes(`a === '${flag}'`), `run-all.mjs argument parser must handle ${flag}`);
+  }
+  assert.match(runAllSrc, /stateDir:\s*'\.\/npc_state'/);
+  assert.match(runAllSrc, /apiBase:\s*process\.env\.TOWN_API_BASE/);
+
+  const runUsage = runSrc.match(/Usage: node town-npc\/run\.mjs[^\n'"]+/)?.[0];
+  assert.ok(runUsage, 'run.mjs must have a Usage line');
+  assert.ok(runUsage.includes('--force'), 'run.mjs Usage line must include --force');
+  for (const flag of ['--api-base', '--state-dir', '--dry-run', '--force']) {
+    assert.ok(runSrc.includes(`a === '${flag}'`), `run.mjs argument parser must handle ${flag}`);
+  }
+});
+
+test('town-npc/README.md brain command, override, and timeout match run.mjs', () => {
+  const readme = readReadme();
+  const runSrc = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
+
+  assert.ok(readme.includes('gemini-4-hydrogen-medium'), 'town-npc/README.md must name gemini-4-hydrogen-medium');
+  assert.ok(readme.includes('120 s timeout'), 'town-npc/README.md must state 120 s timeout');
+  assert.ok(readme.includes('BRAIN_TIMEOUT_MS = 120_000'), 'town-npc/README.md must state BRAIN_TIMEOUT_MS = 120_000');
+  assert.ok(readme.includes('NPC_BRAIN_CMD'), 'town-npc/README.md must document NPC_BRAIN_CMD');
+
+  assert.ok(
+    runSrc.includes("['--model', 'gemini-4-hydrogen-medium', '-p', prompt]"),
+    'run.mjs must pass exact default agy args array'
+  );
+  assert.match(runSrc, /const file = customCmd \? '\/bin\/sh' : 'agy';/);
+  assert.ok(runSrc.includes('process.env.NPC_BRAIN_CMD'), 'run.mjs must read process.env.NPC_BRAIN_CMD');
+  assert.match(runSrc, /execFile\(file,\s*args,\s*\{[^}]*timeout:\s*BRAIN_TIMEOUT_MS/);
+  assert.ok(runSrc.includes('const BRAIN_TIMEOUT_MS = 120_000;'), 'run.mjs must declare BRAIN_TIMEOUT_MS = 120_000');
+});
+
+test('town-npc/README.md town clock is America/Los_Angeles via Intl.DateTimeFormat', () => {
+  const readme = readReadme();
+  const runSrc = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
+
+  assert.ok(readme.includes('America/Los_Angeles'), 'town-npc/README.md must state America/Los_Angeles');
+  assert.ok(readme.includes('Intl.DateTimeFormat'), 'town-npc/README.md must mention Intl.DateTimeFormat');
+  assert.ok(readme.includes('getPartOfDay'), 'town-npc/README.md must mention getPartOfDay');
+
+  assert.match(
+    runSrc,
+    /new Intl\.DateTimeFormat\('en-US',\s*\{[^}]*timeZone:\s*'America\/Los_Angeles'/s,
+    'run.mjs must construct Intl.DateTimeFormat with America/Los_Angeles'
+  );
+  assert.match(runSrc, /export function getPartOfDay\(/, 'run.mjs must export getPartOfDay');
+});
+
+test('town-npc/README.md operator key is a file path, never a raw key value', () => {
+  const readme = readReadme();
+  const registerSrc = fs.readFileSync(path.join(__dirname, 'register.mjs'), 'utf8');
+
+  assert.ok(readme.includes('--operator-key'), 'town-npc/README.md must document --operator-key');
+  assert.ok(readme.includes('TOWN_OPERATOR_KEY'), 'town-npc/README.md must document TOWN_OPERATOR_KEY');
+
+  assert.ok(
+    registerSrc.includes('--operator-key <path-to-operator-key.pem>'),
+    'register.mjs Usage line must show --operator-key <path-to-operator-key.pem>'
+  );
+  assert.ok(registerSrc.includes("a === '--operator-key'"), 'register.mjs argument parser must handle --operator-key');
+  assert.match(
+    registerSrc,
+    /operatorKeyPath:\s*process\.env(?:\['TOWN_OPERATOR_KEY'\]|\.TOWN_OPERATOR_KEY)/,
+    'register.mjs must default operatorKeyPath from TOWN_OPERATOR_KEY'
+  );
+  assert.ok(
+    registerSrc.includes('--operator-key must be a filesystem path, not a raw key value'),
+    'register.mjs must reject raw key values passed to --operator-key'
+  );
+});
