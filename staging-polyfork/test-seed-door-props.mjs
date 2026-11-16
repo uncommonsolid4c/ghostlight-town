@@ -9,6 +9,11 @@ import { attachSeedDoorProp } from './seed-door-props.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
 const MODULE_PATH = path.join(__dirname, 'seed-door-props.mjs');
+const TOWN_JS_PATH = path.join(__dirname, '..', 'town-3d', 'town.js');
+
+function assertPos(obj, x, y, z) {
+  assert.deepEqual({ x: obj.position.x, y: obj.position.y, z: obj.position.z }, { x, y, z });
+}
 
 function makeFakeThree() {
   class BoxGeometry {
@@ -174,4 +179,140 @@ test('seed-door-props.mjs and test-seed-door-props.mjs contain no banned term or
   assert.ok(!/camp[f]ire/i.test(modSrc), 'seed-door-props.mjs must not contain the banned term');
   assert.ok(!/camp[f]ire/i.test(selfSrc), 'test-seed-door-props.mjs must not contain the banned term');
   assert.ok(!/\bfetch\s*\(/.test(modSrc), 'seed-door-props.mjs must not call fetch(');
+});
+
+test('oil-lamp geometry detail (wick): exact args, child positions, and brass roughness', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const prop = attachSeedDoorProp(THREE, cottage, 'wick');
+
+  const [base, globe, handle] = prop.children;
+  assert.deepEqual(base.geometry.args, [0.14, 0.18, 0.14, 8]);
+  assert.deepEqual(globe.geometry.args, [0.09, 0.12, 0.24, 8]);
+  assert.deepEqual(handle.geometry.args, [0.04, 0.18, 0.04]);
+
+  assertPos(base, 0, 0.07, 0);
+  assertPos(globe, 0, 0.26, 0);
+  assertPos(handle, 0.13, 0.22, 0);
+
+  assert.equal(base.material, handle.material);
+  assert.equal(base.material.opts.roughness, 0.65);
+});
+
+test('typewriter geometry detail (maren): exact args, child positions, and material roughness', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const prop = attachSeedDoorProp(THREE, cottage, 'maren');
+
+  const [stand, body, roller] = prop.children;
+  assert.deepEqual(stand.geometry.args, [0.7, 0.08, 0.55]);
+  assert.deepEqual(body.geometry.args, [0.46, 0.18, 0.36]);
+  assert.deepEqual(roller.geometry.args, [0.05, 0.05, 0.42, 8]);
+
+  assertPos(stand, 0, 0.04, 0);
+  assertPos(body, 0, 0.17, 0);
+  assertPos(roller, 0, 0.28, -0.1);
+
+  assert.equal(stand.material.opts.roughness, 0.88);
+  assert.equal(body.material.opts.roughness, 0.75);
+  assert.equal(roller.material.opts.roughness, 0.8);
+});
+
+test('teapot geometry detail (tomas): child positions and shared metalMat with roughness 0.65', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const prop = attachSeedDoorProp(THREE, cottage, 'tomas');
+
+  const [body, spout, lid] = prop.children;
+  assertPos(body, 0, 0.14, 0);
+  assertPos(spout, 0.2, 0.18, 0);
+  assertPos(lid, 0, 0.32, 0);
+
+  assert.equal(spout.material, body.material);
+  assert.equal(lid.material, body.material);
+  assert.equal(body.material.opts.roughness, 0.65);
+});
+
+test('attachSeedDoorProp yields distinct groups per cottage and appends on repeat attach', () => {
+  const THREE = makeFakeThree();
+  const cWick = new THREE.Group();
+  const cMaren = new THREE.Group();
+  const cTomas = new THREE.Group();
+
+  const pWick = attachSeedDoorProp(THREE, cWick, 'wick');
+  const pMaren = attachSeedDoorProp(THREE, cMaren, 'maren');
+  const pTomas = attachSeedDoorProp(THREE, cTomas, 'tomas');
+
+  assert.notEqual(pWick, pMaren);
+  assert.notEqual(pWick, pTomas);
+  assert.notEqual(pMaren, pTomas);
+
+  assert.equal(pWick.name, 'seed_door_prop_wick');
+  assert.equal(pMaren.name, 'seed_door_prop_maren');
+  assert.equal(pTomas.name, 'seed_door_prop_tomas');
+
+  assert.equal(pWick.rotation.y, -1.1733);
+  assert.equal(pMaren.rotation.y, -0.6525);
+  assert.equal(pTomas.rotation.y, -0.1322);
+
+  // Repeat attach on the same cottage adds a second group (no dedup guard)
+  const second = attachSeedDoorProp(THREE, cWick, 'wick');
+  assert.equal(cWick.children.length, 2);
+  assert.equal(cWick.children[0], pWick);
+  assert.equal(cWick.children[1], second);
+  assert.notEqual(second, pWick);
+  assert.equal(cWick.children[0].name, 'seed_door_prop_wick');
+  assert.equal(cWick.children[1].name, 'seed_door_prop_wick');
+});
+
+test('attachSeedDoorProp rejects handle-shape edges, prototype keys, and Symbol handles', () => {
+  const THREE = makeFakeThree();
+  const edges = [
+    'Wick',
+    ' wick',
+    'wick ',
+    'wick2',
+    'MILO',
+    'constructor',
+    'toString',
+    '__proto__',
+    Symbol('wick'),
+  ];
+  for (const handle of edges) {
+    const cottage = new THREE.Group();
+    const res = attachSeedDoorProp(THREE, cottage, handle);
+    assert.equal(res, null, `expected null for handle ${String(handle)}`);
+    assert.equal(cottage.children.length, 0);
+  }
+});
+
+test('live-rotation drift guard against town-3d/town.js and shared builder imports', async () => {
+  const [townSrc, modSrc] = await Promise.all([
+    fs.readFile(TOWN_JS_PATH, 'utf8'),
+    fs.readFile(MODULE_PATH, 'utf8'),
+  ]);
+
+  const expected = [
+    ['wick', 'wick_oil_lamp'],
+    ['maren', 'maren_typewriter'],
+    ['tomas', 'tomas_teapot'],
+  ];
+  const THREE = makeFakeThree();
+  for (const [handle, propId] of expected) {
+    const match = townSrc.match(new RegExp(`id:\\s*'${propId}'[^}]*?rotY:\\s*(-?\\d+(?:\\.\\d+)?)`));
+    assert.ok(match, `expected PROP_PLACEMENTS entry for ${propId} in town-3d/town.js`);
+    const liveRotY = Number(match[1]);
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.equal(prop.rotation.y, liveRotY, `${handle} rotY must match ${propId} in town-3d/town.js`);
+  }
+
+  const importMatch = modSrc.match(/import\s*\{([^}]+)\}\s*from\s*['"]\.\/interior-room\.mjs['"]/);
+  assert.ok(importMatch, 'seed-door-props.mjs must import builders from ./interior-room.mjs');
+  for (const fn of ['buildProceduralOilLamp', 'buildProceduralTypewriter', 'buildProceduralTeapot']) {
+    assert.ok(importMatch[1].includes(fn), `expected ${fn} in ./interior-room.mjs import`);
+  }
+  assert.ok(
+    !/function\s+buildProcedural(?:OilLamp|Typewriter|Teapot)\b/.test(modSrc),
+    'seed-door-props.mjs must not re-vendor procedural builders'
+  );
 });
