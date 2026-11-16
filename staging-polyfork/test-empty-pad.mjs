@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { TOWN_LAYOUT } from './avatar.mjs';
 import { buildEmptyPadMarker, syncEmptyPadMarkers } from './empty-pad.mjs';
@@ -334,4 +335,93 @@ test('syncEmptyPadMarkers sets each marker position.y from groundAt(plot.x, plot
     const expectedY = +(plot.x * 0.1 - plot.z * 0.05).toFixed(4);
     assert.equal(liveStore.emptyPadMarkers.get(plot.plotNumber).position.y, expectedY);
   });
+});
+
+test('syncEmptyPadMarkers ignores an assignment to plot 1 (removes no marker and creates none)', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+
+  liveStore.plotAssignments.set('milo', { plotNumber: 1 });
+  const count = syncEmptyPadMarkers(scene, liveStore, opts);
+
+  assert.equal(count, 7);
+  assert.equal(liveStore.emptyPadMarkers.size, 7);
+  assert.equal(liveStore.emptyPadMarkers.has(1), false);
+  assert.equal(scene.children.length, 7);
+});
+
+test('syncEmptyPadMarkers removes a marker once when two residents share a plotNumber and does not double-remove', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  const marker2 = liveStore.emptyPadMarkers.get(2);
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 2 });
+  liveStore.plotAssignments.set('maren', { plotNumber: 2 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(marker2.removedCount, 1);
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(marker2.removedCount, 1);
+});
+
+test('syncEmptyPadMarkers rebuilds a freed plot with the fresh groundAt value', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  let groundY = 1.0;
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => groundY };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  const oldMarker3 = liveStore.emptyPadMarkers.get(3);
+  assert.equal(oldMarker3.position.y, 1.0);
+
+  liveStore.plotAssignments.set('maren', { plotNumber: 3 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(liveStore.emptyPadMarkers.has(3), false);
+
+  groundY = 2.5;
+  liveStore.plotAssignments.delete('maren');
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+
+  assert.equal(liveStore.emptyPadMarkers.has(3), true);
+  const newMarker3 = liveStore.emptyPadMarkers.get(3);
+  assert.notEqual(newMarker3, oldMarker3);
+  assert.equal(newMarker3.position.y, 2.5);
+});
+
+test('staging empty-pad literals match town.js buildEmptyPlotPad (drift guard)', () => {
+  const townSrc = readFileSync(new URL('../town-3d/town.js', import.meta.url), 'utf8');
+  const stagingSrc = readFileSync(new URL('./empty-pad.mjs', import.meta.url), 'utf8');
+
+  const match = townSrc.match(/function buildEmptyPlotPad\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(match, 'buildEmptyPlotPad must exist in town-3d/town.js');
+  const townBody = match[0];
+
+  const literals = [
+    '5.2, 0.18, 4.6',
+    "'#6e7278'",
+    '0.95',
+    '1.5, 0.75, 0.1',
+    '0.85',
+    '2.0, 0.45, 2.35',
+    '0, 0.09, 0',
+    'width: 512',
+    'height: 160',
+    'titleSize: 30',
+    "'#3b2b1d'",
+    "'#7d5a3c'",
+  ];
+
+  for (const lit of literals) {
+    assert.ok(townBody.includes(lit), `town.js buildEmptyPlotPad missing literal: ${lit}`);
+    assert.ok(stagingSrc.includes(lit), `staging-polyfork/empty-pad.mjs missing literal: ${lit}`);
+  }
 });
