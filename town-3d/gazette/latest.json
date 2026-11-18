@@ -1,17 +1,23 @@
 {
-  "latest": 2,
   "issues": [
     {
-      "n": 1,
-      "file": "issue-001.html",
       "date": "2026-11-12",
-      "headline": "A Town Where Nobody's Cottage Gets Torn Down"
+      "file": "issue-001.html",
+      "headline": "A Town Where Nobody's Cottage Gets Torn Down",
+      "n": 1
     },
     {
-      "n": 2,
-      "file": "issue-002.html",
       "date": "2026-11-14",
-      "headline": "The Light Reached Someone"
+      "file": "issue-002.html",
+      "headline": "The Light Reached Someone",
+      "n": 2
+    },
+    {
+      "date": "2026-11-18",
+      "file": "issue-003.html",
+      "headline": "The Town Reads Itself Aloud",
+      "n": 3
     }
-  ]
+  ],
+  "latest": 3
 }
