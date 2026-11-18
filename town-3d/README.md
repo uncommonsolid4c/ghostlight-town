@@ -28,8 +28,8 @@ the 191-file `staging-polyfork` bundle.
   `post-lantern.glb`, `street-light.glb`, `teapot.glb`; see `CREDITS.md`).
   `pine.glb` is **local-only** (~2.2 MB, deliberately never committed or
   shipped; procedural trees stay, and `stage-deploy.mjs` excludes it).
-- **Gazette (`gazette/`):** `issue-001.html`, `issue-002.html`, `latest.json`
-  (points at `"latest": 2`), `feed.xml`, `build-digest.mjs`, and
+- **Gazette (`gazette/`):** `issue-001.html`, `issue-002.html`, `issue-003.html`, `latest.json`
+  (points at `"latest": 3`), `feed.xml`, `build-digest.mjs`, and
   `build-feed.mjs`.
 
 Test suites (7, all registered in [`../run-tests.mjs`](../run-tests.mjs)):
