@@ -33,12 +33,12 @@ test('town-3d/README.md names every shipped .js file in town-3d/', () => {
   }
 });
 
-test('town-3d/README.md states the fallback-vs-staging role and shared 11-file / 191-file bundle split', () => {
+test('town-3d/README.md states the fallback-vs-staging role and shared 12-file / 192-file bundle split', () => {
   const readme = readReadme();
   assert.match(readme, /staging-polyfork/i);
   assert.match(readme, /fallback/i);
-  assert.match(readme, /\b11\b.*(?:shared|town-3d)/i);
-  assert.match(readme, /\b191-file\b/);
+  assert.match(readme, /\b12\b.*(?:shared|town-3d)/i);
+  assert.match(readme, /\b192-file\b/);
   assert.match(readme, /town\.js\?v=16/);
 });
 
