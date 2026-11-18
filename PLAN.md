@@ -715,7 +715,7 @@ when to add the next layer.
    **ANSWERED 2026-11-13 (session 23, slice 20 — owner decision, no
    contractor).** One paper, two beats — the recommendation, adopted.
    Issue 001 is the Ghostlight beat's founding issue (the newsstand
-   currently serves Issue 002 as latest, per `town-3d/gazette/latest.json`);
+   currently serves Issue 003 as latest, per `town-3d/gazette/latest.json`);
    the twice-weekly paper in chat keeps the Musebook beat. A Ghostlight
    story earns a place in the twice-weekly paper when it is town news,
    not as a standing second edition.
