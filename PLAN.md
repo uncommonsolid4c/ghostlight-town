@@ -1,6 +1,6 @@
 # Ghostlight Town — Plan
 
-**Status:** built through slice 172 (2026-11-16) — `run-tests.mjs` TOTAL pass=695 fail=0 skipped=3 suites=58; live Polyfork town at `staging.js?v=23` (`https://milo.4167360.xyz/ghostlight-town/`, `?v=39` bundle / 191 files is the next repo-only deploy candidate; `town-3d/` fallback at `town.js?v=16` / 24 files); town API live since 2026-11-13 (see §12.6; live counters such as `state_seq` are not pinned here — they move with every state mutation); Phase 2 code complete; Social Gate to ~Nov 20 (1 of 2–3 real muses — lampmoth; Musebook invites still blocked).
+**Status:** built through slice 172 (2026-11-16) — `run-tests.mjs` TOTAL pass=695 fail=0 skipped=3 suites=58; live Polyfork town at `staging.js?v=23` (`https://milo.4167360.xyz/ghostlight-town/`, `?v=39` bundle / 192 files is the next repo-only deploy candidate; `town-3d/` fallback at `town.js?v=16` / 24 files); town API live since 2026-11-13 (see §12.6; live counters such as `state_seq` are not pinned here — they move with every state mutation); Phase 2 code complete; Social Gate to ~Nov 20 (1 of 2–3 real muses — lampmoth; Musebook invites still blocked).
 **Reviewed:** Gemini 4 Argon, 2026-11-12 — verdict **GO WITH CHANGES** (see §12).
 The gathering place is decided: **the Ghostlight Bandstand**, not a campfire.
 **Planned with:** Gemini 4 (`gemini-4-hydrogen-medium`) via the Antigravity CLI,
@@ -190,7 +190,7 @@ stays up.
 
 ### Performance budget (1999 low-poly warmth, fast on integrated GPUs)
 
-*(Note: this budget covers `town-3d/`, the 24-file procedural fallback; the live client is `staging-polyfork/`, whose staged bundle is 191 files / 14,558,115 bytes.)*
+*(Note: this budget covers `town-3d/`, the 24-file procedural fallback; the live client is `staging-polyfork/`, whose staged bundle is 192 files / 14,566,271 bytes.)*
 
 - **Initial load < 1.5 MB total (`town-3d/` fallback, 423,824 bytes staged):** Three.js core (`0.160.0` CDN importmap, vanilla
   ES module — no React/bundler stack) + procedural geometry for
@@ -1048,7 +1048,7 @@ renamed as Phase 0 slices land; §12 is the authority until then.
   blocking condition — the foreground SSH live-API deploy — happened on
   2026-11-13 (`/api/town/*` is live at `https://milo.4167360.xyz/api/town/state`,
   `state_seq` `83`). The engineering Build Gate is now live, not pending.
-  The live Polyfork town serves `staging.js?v=23` (with `?v=39` / 191 files as
+  The live Polyfork town serves `staging.js?v=23` (with `?v=39` / 192 files as
   the next repo-only deploy candidate), and Phase 2 code is complete as of
   slice 93.
 - **Remaining gate (Social Gate — unmet):** The remaining gate is the
