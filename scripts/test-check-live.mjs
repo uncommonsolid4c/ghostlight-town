@@ -110,8 +110,9 @@ async function createStagingFixtureTree(repoRoot) {
     'gazette/feed.xml': '<rss version="2.0"></rss>\n',
     'gazette/issue-001.html': '<h1>Ghostlight Gazette #1</h1>\n',
     'gazette/issue-002.html': '<h1>Ghostlight Gazette #2</h1>\n',
+    'gazette/issue-003.html': '<h1>Ghostlight Gazette #3</h1>\n',
     'gazette/latest.json': JSON.stringify({
-      latest: 2,
+      latest: 3,
       issues: [{ n: 2, file: 'issue-002.html', date: '2026-11-14', headline: 'Issue 2' }],
     }),
     'plots/milo/index.html': '<p>Milo desk note</p>\n',
