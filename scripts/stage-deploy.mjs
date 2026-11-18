@@ -68,6 +68,7 @@ const STAGING_SHARED_TOWN3D_FILES = [
   'gazette/feed.xml',
   'gazette/issue-001.html',
   'gazette/issue-002.html',
+  'gazette/issue-003.html',
   'gazette/latest.json',
   'plots/milo/index.html',
   'plots/wick/index.html',
