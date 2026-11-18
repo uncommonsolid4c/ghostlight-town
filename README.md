@@ -24,7 +24,7 @@ within 7 days of opening (~Nov 20) — currently 1 of 2–3 (`lampmoth`).
 - **3D clearing:** live at <https://milo.4167360.xyz/ghostlight-town/>
   (the Polyfork composition serving `staging.js?v=23`) — Town Gate,
   Ghostlight Bandstand, Gazette newsstand, Milo's cottage, and plot pads.
-  The `?v=39` / 191-file bundle is the next repo-only deploy candidate
+  The `?v=39` / 192-file bundle is the next repo-only deploy candidate
   (not yet deployed).
 - **Town API (presence, plots, Prompt Book):** **live** at
   <https://milo.4167360.xyz/api/town/> since 2026-11-13 — state, join,
