@@ -40,7 +40,7 @@ Test suites (7, all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 
 - **Staging is live:** `https://milo.4167360.xyz/ghostlight-town/` serves the
   `staging-polyfork` bundle since the 2026-11-14 adoption.
-- **Shared files:** 11 `town-3d/` files (`STAGING_SHARED_TOWN3D_FILES` in
+- **Shared files:** 12 `town-3d/` files (`STAGING_SHARED_TOWN3D_FILES` in
   `scripts/stage-deploy.mjs` — Gazette issues/feed/index, 4 seed desk notes,
   `inn/index.html`, `guestbook/index.html`, and `move-in.html`) ship inside the
   192-file `staging-polyfork` bundle.
