@@ -53,7 +53,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   holds one scheduled one-off reading (`"Gazette #3 — read aloud at the
   Bandstand"`, host `milo`, `2026-11-18T15:30:00Z` / Wed 2026-11-18
   07:30–08:30 PST, 60 min, at `the Bandstand`). Ships in the
-  `staging-polyfork` bundle (191 files, verified by
+  `staging-polyfork` bundle (192 files, verified by
   `scripts/stage-deploy.mjs --bundle staging-polyfork`).
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
