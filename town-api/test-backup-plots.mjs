@@ -257,3 +257,190 @@ test('neither new file contains legacy gathering-place terminology', () => {
     assert.equal(content.includes(forbidden), false, `${path.basename(file)} must not contain "${forbidden}"`);
   }
 });
+
+test('unknown argument exits 1 with JSON error and creates no out-dir', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'never-created-backups');
+    seedPlotsDir(plotsDir);
+
+    const res = await runBackupPlotsCli(['--bogus', '--plots-dir', plotsDir, '--out-dir', outDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1);
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, 'Unknown argument: --bogus');
+    assert.equal(fs.existsSync(outDir), false, 'out-dir must not be created on unknown argument');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('missing flag value exits 1 with JSON error', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    seedPlotsDir(plotsDir);
+
+    const res1 = await runBackupPlotsCli(['--plots-dir']);
+    assert.equal(res1.code, 1);
+    assert.equal(res1.stdout.trim(), '');
+    const errLines1 = res1.stderr.trim().split('\n');
+    assert.equal(errLines1.length, 1);
+    const err1 = JSON.parse(errLines1[0]);
+    assert.equal(err1.status, 'error');
+    assert.equal(err1.error, 'Missing value for --plots-dir');
+
+    const res2 = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir']);
+    assert.equal(res2.code, 1);
+    assert.equal(res2.stdout.trim(), '');
+    const errLines2 = res2.stderr.trim().split('\n');
+    assert.equal(errLines2.length, 1);
+    const err2 = JSON.parse(errLines2[0]);
+    assert.equal(err2.status, 'error');
+    assert.equal(err2.error, 'Missing value for --out-dir');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('source path that is a file, or a symlink to a dir, exits 1 with JSON error and creates no snapshot', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const regularFile = path.join(tmpDir, 'not-a-dir.txt');
+    fs.writeFileSync(regularFile, 'hello', 'utf8');
+    const outDirFile = path.join(tmpDir, 'backups-file');
+
+    const resFile = await runBackupPlotsCli(['--plots-dir', regularFile, '--out-dir', outDirFile]);
+    assert.equal(resFile.code, 1);
+    assert.equal(resFile.stdout.trim(), '');
+    const errLinesFile = resFile.stderr.trim().split('\n');
+    assert.equal(errLinesFile.length, 1);
+    const errFile = JSON.parse(errLinesFile[0]);
+    assert.equal(errFile.status, 'error');
+    assert.equal(errFile.error, 'Source plots path is not a directory');
+    assert.equal(fs.existsSync(outDirFile), false, 'out-dir must not be created when plots path is a file');
+
+    const realPlots = path.join(tmpDir, 'real-plots');
+    seedPlotsDir(realPlots);
+    const symlinkPlots = path.join(tmpDir, 'symlink-plots');
+    fs.symlinkSync(realPlots, symlinkPlots);
+    const outDirSymlink = path.join(tmpDir, 'backups-symlink');
+    fs.mkdirSync(outDirSymlink, { recursive: true });
+
+    const resSymlink = await runBackupPlotsCli(['--plots-dir', symlinkPlots, '--out-dir', outDirSymlink]);
+    assert.equal(resSymlink.code, 1);
+    assert.equal(resSymlink.stdout.trim(), '');
+    const errLinesSymlink = resSymlink.stderr.trim().split('\n');
+    assert.equal(errLinesSymlink.length, 1);
+    const errSymlink = JSON.parse(errLinesSymlink[0]);
+    assert.equal(errSymlink.status, 'error');
+    assert.equal(errSymlink.error, 'Source plots directory must not be a symlink');
+    assert.deepEqual(fs.readdirSync(outDirSymlink), [], 'no snapshot may be created for symlinked plots dir');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('top-level file in the plots dir is backed up but is not listed as a handle', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'backups');
+    const seeded = seedPlotsDir(plotsDir);
+    const topFile = path.join(plotsDir, 'README.txt');
+    fs.writeFileSync(topFile, 'top-level note\n', 'utf8');
+
+    const res = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const lines = res.stdout.trim().split('\n');
+    assert.equal(lines.length, 1);
+    const payload = JSON.parse(lines[0]);
+    assert.equal(payload.status, 'ok');
+    assert.equal(payload.files, Object.keys(seeded).length + 1);
+    assert.deepEqual(payload.handles, ['alpha', 'zeta']);
+
+    const backedUpTopFile = path.join(outDir, payload.backup, 'README.txt');
+    assert.ok(fs.existsSync(backedUpTopFile), 'top-level file must exist in snapshot');
+    assert.equal(sha256File(backedUpTopFile), sha256File(topFile));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('symlinked directory inside the plots tree exits 1 with JSON error and leaves no snapshot behind', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'backups');
+    const outsideDir = path.join(tmpDir, 'outside-dir');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'outside', 'utf8');
+    seedPlotsDir(plotsDir);
+    fs.symlinkSync(outsideDir, path.join(plotsDir, 'alpha', 'linkdir'));
+    fs.mkdirSync(outDir, { recursive: true });
+    const beforeEntries = fs.readdirSync(outDir);
+
+    const res = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1);
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.match(errPayload.error, /Symlink found in plots tree/);
+    assert.deepEqual(fs.readdirSync(outDir), beforeEntries, 'no snapshot may be left behind');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('three backups in the same second get distinct -2 and -3 suffixes', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'backups');
+    seedPlotsDir(plotsDir);
+
+    const msIntoSecond = Date.now() % 1000;
+    if (msIntoSecond > 250) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 - msIntoSecond + 15));
+    }
+
+    const res1 = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    const res2 = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    const res3 = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+
+    assert.equal(res1.code, 0, `First backup failed: ${res1.stderr}`);
+    assert.equal(res2.code, 0, `Second backup failed: ${res2.stderr}`);
+    assert.equal(res3.code, 0, `Third backup failed: ${res3.stderr}`);
+
+    const p1 = JSON.parse(res1.stdout.trim());
+    const p2 = JSON.parse(res2.stdout.trim());
+    const p3 = JSON.parse(res3.stdout.trim());
+
+    for (const p of [p1, p2, p3]) {
+      assert.match(p.backup, /^plots-\d{8}-\d{6}(-\d+)?$/);
+    }
+    assert.ok(p2.backup.endsWith('-2'), `Expected second backup to end with -2, got ${p2.backup}`);
+    assert.ok(p3.backup.endsWith('-3'), `Expected third backup to end with -3, got ${p3.backup}`);
+    assert.equal(new Set([p1.backup, p2.backup, p3.backup]).size, 3);
+
+    const srcManifest = path.join(plotsDir, 'alpha', 'manifest.json');
+    for (const p of [p1, p2, p3]) {
+      const snapshotDir = path.join(outDir, p.backup);
+      assert.ok(fs.existsSync(snapshotDir), `${p.backup} must exist`);
+      const dstManifest = path.join(snapshotDir, 'alpha', 'manifest.json');
+      assert.ok(fs.existsSync(dstManifest), `${p.backup} missing alpha/manifest.json`);
+      assert.equal(sha256File(dstManifest), sha256File(srcManifest));
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
