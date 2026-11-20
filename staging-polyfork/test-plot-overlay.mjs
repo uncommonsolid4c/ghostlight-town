@@ -442,3 +442,166 @@ test('closePlotOverlay guards missing elements and tolerates non-function or omi
   assert.equal(omittedEls.iframeEl.src, 'about:blank');
   assert.equal(omittedEls.iframeEl.getAttribute('srcdoc'), null);
 });
+
+test('resolvePlotOverlayContent returns API html verbatim and accepts dash/underscore handles; non-200 status falls back', async () => {
+  const fetchedUrls = [];
+
+  const verbatimRes = await resolvePlotOverlayContent('wick', {
+    fetchFn: async (url) => {
+      fetchedUrls.push(url);
+      return { status: 200, async json() { return { html: '  <p>hi</p>\n' }; } };
+    },
+  });
+  assert.deepEqual(verbatimRes, { kind: 'api', html: '  <p>hi</p>\n' });
+
+  const dashRes = await resolvePlotOverlayContent('wick-2', {
+    fetchFn: async (url) => {
+      fetchedUrls.push(url);
+      return { status: 200, async json() { return { html: '<p>ok</p>' }; } };
+    },
+  });
+  assert.deepEqual(dashRes, { kind: 'api', html: '<p>ok</p>' });
+
+  const underscoreRes = await resolvePlotOverlayContent('a_b', {
+    fetchFn: async (url) => {
+      fetchedUrls.push(url);
+      return { status: 200, async json() { return { html: '<p>ok</p>' }; } };
+    },
+  });
+  assert.deepEqual(underscoreRes, { kind: 'api', html: '<p>ok</p>' });
+
+  assert.deepEqual(fetchedUrls, [
+    '/api/town/plot?handle=wick',
+    '/api/town/plot?handle=wick-2',
+    '/api/town/plot?handle=a_b',
+  ]);
+
+  const status201Res = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => ({ status: 201, async json() { return { html: '<p>created</p>' }; } }),
+  });
+  assert.deepEqual(status201Res, { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('resolvePlotOverlayContent treats a non-string apiBase as empty and an undefined response as static', async () => {
+  let fetchedUrl = null;
+  const nonStringBaseRes = await resolvePlotOverlayContent('wick', {
+    apiBase: 42,
+    fetchFn: async (url) => {
+      fetchedUrl = url;
+      return { status: 200, async json() { return { html: '<p>ok</p>' }; } };
+    },
+  });
+  assert.equal(fetchedUrl, '/api/town/plot?handle=wick');
+  assert.deepEqual(nonStringBaseRes, { kind: 'api', html: '<p>ok</p>' });
+
+  const undefRes = await resolvePlotOverlayContent('wick', {
+    fetchFn: async () => undefined,
+  });
+  assert.deepEqual(undefRes, { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('resolveGazetteOverlayContent ignores a string latest and a non-string file, and tolerates a null response', async () => {
+  const stringLatestRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() {
+        return {
+          latest: '2',
+          issues: [
+            { n: 1, file: 'issue-001.html' },
+            { n: 2, file: 'issue-002.html' },
+          ],
+        };
+      },
+    }),
+  });
+  assert.deepEqual(stringLatestRes, {
+    issueNum: 1,
+    issueFile: 'issue-001.html',
+    url: 'gazette/issue-001.html',
+    title: 'The Ghostlight Gazette — Issue #1',
+  });
+
+  const nonStringFileRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() {
+        return {
+          latest: 2,
+          issues: [{ n: 2, file: 42 }],
+        };
+      },
+    }),
+  });
+  assert.equal(nonStringFileRes.issueFile, 'issue-001.html');
+  assert.equal(nonStringFileRes.issueNum, 1);
+
+  const nullRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => null,
+  });
+  assert.equal(nullRes.issueFile, 'issue-001.html');
+  assert.equal(nullRes.issueNum, 1);
+});
+
+test('resolveGazetteOverlayContent maps issue n 0 to title Issue #1 while keeping its file', async () => {
+  const zeroRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() {
+        return {
+          latest: 0,
+          issues: [{ n: 0, file: 'issue-000.html' }],
+        };
+      },
+    }),
+  });
+  assert.deepEqual(zeroRes, {
+    issueNum: 1,
+    issueFile: 'issue-000.html',
+    url: 'gazette/issue-000.html',
+    title: 'The Ghostlight Gazette — Issue #1',
+  });
+});
+
+test('openPlotOverlay and openGazetteOverlay let a throwing onBeforeOpen propagate before any DOM change', async () => {
+  const plotEls = makeFakeOverlayElements();
+  await assert.rejects(
+    () => openPlotOverlay('wick', {
+      ...plotEls,
+      onBeforeOpen: () => { throw new Error('boom'); },
+    }),
+    /boom/,
+  );
+  assert.equal(plotEls.overlayEl.hidden, true);
+  assert.equal(plotEls.titleEl.textContent, '');
+
+  const gazetteEls = makeFakeOverlayElements();
+  await assert.rejects(
+    () => openGazetteOverlay({
+      ...gazetteEls,
+      onBeforeOpen: () => { throw new Error('boom'); },
+    }),
+    /boom/,
+  );
+  assert.equal(gazetteEls.overlayEl.hidden, true);
+  assert.equal(gazetteEls.titleEl.textContent, '');
+});
+
+test('closePlotOverlay propagates a throwing onAfterClose after hiding the overlay', () => {
+  const { overlayEl, iframeEl } = makeFakeOverlayElements();
+  overlayEl.hidden = false;
+  iframeEl.srcdoc = '<p>hi</p>';
+
+  assert.throws(
+    () => closePlotOverlay({
+      overlayEl,
+      iframeEl,
+      onAfterClose: () => { throw new Error('after-boom'); },
+    }),
+    /after-boom/,
+  );
+
+  assert.equal(overlayEl.hidden, true);
+  assert.equal(iframeEl.src, 'about:blank');
+  assert.equal(iframeEl.getAttribute('srcdoc'), null);
+});
