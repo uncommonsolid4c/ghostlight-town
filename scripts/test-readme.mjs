@@ -213,3 +213,155 @@ test('scripts/README.md cross-links resolve to existing files in the repo', () =
     assert.ok(fs.existsSync(resolved), `Cross-link target must exist: ${href}`);
   }
 });
+
+test('scripts/README.md target safety: default bundle/out and refusal set match stage-deploy.mjs', () => {
+  const readme = readReadme();
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+
+  assert.ok(stageSrc.includes("const bundle = bundleArg ?? 'town-3d';"));
+  assert.ok(stageSrc.includes("path.join(rootDir, 'staging')"));
+  assert.ok(stageSrc.includes("for (const forbidden of ['town-3d', 'town-api', 'town-npc', 'staging-polyfork'])"));
+  assert.ok(stageSrc.includes('if (targetDir === rootDir)'));
+
+  assert.ok(readme.includes('defaults `--out` to `<root>/staging`'));
+  assert.ok(readme.includes('refuses to stage\n  into or verify `<root>` itself or inside `town-3d/`'));
+
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', path.join(ROOT_DIR, 'town-3d')],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.match(err.stderr, /Refusing to stage into inside town-3d\//);
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', ROOT_DIR],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.match(err.stderr, /Refusing to stage into repo root:/);
+      return true;
+    }
+  );
+});
+
+test('scripts/README.md town-3d exclusions: gazette build tools and pine.glb stay out of staging', () => {
+  const readme = readReadme();
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+
+  assert.ok(stageSrc.includes('/^gazette\\/[^/]+\\.mjs$/'));
+  assert.ok(stageSrc.includes('SECRET_FILENAME_RES'));
+  assert.ok(stageSrc.includes('SECRET_CONTENT_RES'));
+  assert.ok(readme.includes('blocks secret-like filenames or'));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-town3d-'));
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.bundle, 'town-3d');
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    const byPath = new Map(manifest.excluded.map((entry) => [entry.path, entry.reason]));
+
+    assert.equal(byPath.get('gazette/build-digest.mjs'), 'build tool, not served content');
+    assert.equal(byPath.get('gazette/build-feed.mjs'), 'build tool, not served content');
+    assert.ok(byPath.has('models/pine.glb'), 'models/pine.glb must be in MANIFEST.json excluded');
+    assert.equal(
+      manifest.files.some((item) => item.path.startsWith('gazette/') && item.path.endsWith('.mjs')),
+      false,
+      'gazette/*.mjs must not be staged in files'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md staging-polyfork exclusions: test suites and README.md stay out of staging', () => {
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+
+  assert.ok(stageSrc.includes('/^test-.*\\.mjs$/'));
+  assert.ok(stageSrc.includes("item.relPath === 'README.md'"));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-polyfork-'));
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'staging-polyfork', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.file_count, 193);
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    const excludedTests = manifest.excluded.filter(
+      (entry) => /^test-.*\.mjs$/.test(entry.path) && entry.reason === 'test suite, not served content'
+    );
+    assert.ok(excludedTests.length >= 10, `expected >= 10 excluded test suites, got ${excludedTests.length}`);
+
+    const readmeExcluded = manifest.excluded.find((entry) => entry.path === 'README.md');
+    assert.ok(readmeExcluded, 'README.md must be in MANIFEST.json excluded');
+    assert.equal(readmeExcluded.reason, 'documentation, not served content');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md check-live ?v parity matches check-live.mjs', () => {
+  const readme = readReadme();
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+
+  assert.ok(checkLiveSrc.includes('versionRe: /town\\.js\\?v=(\\d+)/'));
+  assert.ok(checkLiveSrc.includes('versionRe: /staging\\.js\\?v=(\\d+)/'));
+  assert.ok(checkLiveSrc.includes('`repo_v=${repoVersion} vs live_v=${liveV}`'));
+  assert.ok(readme.includes('`staging.js?v=N` / `town.js?v=N` parity'));
+});
+
+test('scripts/README.md check-live defaults: root and api-base match check-live.mjs', () => {
+  const readme = readReadme();
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+
+  assert.ok(
+    checkLiveSrc.includes("const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');")
+  );
+  assert.ok(checkLiveSrc.includes('const normalizedApiBase = (apiBase ?? normalizedBase)'));
+
+  assert.ok(readme.includes('`--api-base` defaults to `--base`'));
+  assert.ok(readme.includes('`--root` defaults to repo root'));
+});
+
+test('scripts/README.md check-live checks: glTF magic, latest.json, and informational API match source', () => {
+  const readme = readReadme();
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+
+  assert.ok(checkLiveSrc.includes("magic !== 'glTF'"));
+  assert.ok(checkLiveSrc.includes("recordFailure('gazette/latest.json', 'mismatch', `invalid JSON: "));
+  assert.ok(
+    checkLiveSrc.includes("recordFailure('gazette/latest.json', 'mismatch', 'missing issue-*.html filename in latest.json');")
+  );
+  assert.ok(checkLiveSrc.includes("if (apiRes.status === 200) {\n      apiStatus = 'live';"));
+  assert.ok(checkLiveSrc.includes("if (opts.requireApi && apiStatus !== 'live')"));
+
+  assert.ok(readme.includes('`glTF` 4-byte magic header on `.glb` models.'));
+  assert.ok(readme.includes('`gazette/latest.json` parses cleanly'));
+  assert.ok(readme.includes('Informational check of `<api-base>/api/town/state`; pass `--require-api` to'));
+});
