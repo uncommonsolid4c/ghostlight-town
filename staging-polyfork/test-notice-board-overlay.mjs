@@ -211,3 +211,103 @@ test('openNoticeBoardOverlay returns buildNoticeBoardOverlayHtml() and is idempo
   assert.equal(els.overlayEl.hidden, false);
   assert.equal(els.iframeEl.srcdoc, expectedHtml);
 });
+
+test('buildNoticeBoardOverlayHtml renders all three <p> bodies verbatim in order', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const bodies = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => m[1]);
+  assert.deepEqual(bodies, [
+    'Issue #2 is out — read it at the newsstand.',
+    'Rooms for short stays — ask at the tavern.',
+    'Plots are free, no upkeep — yours outright. Bring a friend.',
+  ]);
+});
+
+test('buildNoticeBoardOverlayHtml <style> block pins layout, typography, and colors', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(styleMatch, 'overlay HTML must include a <style> block');
+  const css = styleMatch[1];
+
+  assert.match(css, /h1\s*\{[^}]*border-bottom:\s*1px\s+solid\s+#6b492b/);
+  assert.match(css, /h2\s*\{[^}]*color:\s*#5a4332/);
+  assert.match(css, /body\s*\{[^}]*color:\s*#2b2118/);
+  assert.match(css, /max-width:\s*34rem/);
+  assert.match(css, /line-height:\s*1\.6/);
+  assert.match(css, /\.notice\s+p\s*\{\s*margin:\s*0;\s*\}/);
+});
+
+test('buildNoticeBoardOverlayHtml contains no links, forms, or frames and has exact shell shape', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  assert.ok(!/<a\b/i.test(html), 'overlay HTML must contain no <a>');
+  assert.ok(!/<form\b/i.test(html), 'overlay HTML must contain no <form>');
+  assert.ok(!/<iframe\b/i.test(html), 'overlay HTML must contain no <iframe>');
+  assert.ok(!/\btarget=/i.test(html), 'overlay HTML must contain no target=');
+  assert.ok(!/\bsrc=/i.test(html), 'overlay HTML must contain no src=');
+
+  assert.ok(html.startsWith('<!doctype html>'));
+  assert.ok(html.endsWith('</html>'));
+  assert.equal([...html.matchAll(/<style>/gi)].length, 1);
+  assert.equal([...html.matchAll(/<h1>/gi)].length, 1);
+});
+
+test('openNoticeBoardOverlay invokes onBeforeOpen with 0 args before any DOM mutation', () => {
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+  let observed = null;
+
+  openNoticeBoardOverlay({
+    overlayEl,
+    titleEl,
+    iframeEl,
+    onBeforeOpen: function () {
+      observed = {
+        argCount: arguments.length,
+        title: titleEl.textContent,
+        hidden: overlayEl.hidden,
+        srcdoc: iframeEl.srcdoc,
+      };
+    },
+  });
+
+  assert.deepEqual(observed, {
+    argCount: 0,
+    title: '',
+    hidden: true,
+    srcdoc: '',
+  });
+});
+
+test('openNoticeBoardOverlay propagates throwing onBeforeOpen and leaves overlay untouched', () => {
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+
+  assert.throws(() => {
+    openNoticeBoardOverlay({
+      overlayEl,
+      titleEl,
+      iframeEl,
+      onBeforeOpen: () => {
+        throw new Error('boom');
+      },
+    });
+  }, /boom/);
+
+  assert.equal(overlayEl.hidden, true);
+  assert.equal(titleEl.textContent, '');
+  assert.equal(iframeEl.srcdoc, '');
+});
+
+test('openNoticeBoardOverlay keeps pre-visible overlay visible and overwrites stale title, src, and srcdoc', () => {
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+  overlayEl.hidden = false;
+  titleEl.textContent = 'Old Title';
+  iframeEl.src = 'stale.html';
+  iframeEl.srcdoc = 'stale doc';
+
+  const html = openNoticeBoardOverlay({ overlayEl, titleEl, iframeEl });
+  const expectedHtml = buildNoticeBoardOverlayHtml();
+
+  assert.equal(overlayEl.hidden, false);
+  assert.equal(titleEl.textContent, 'Notice Board');
+  assert.equal(iframeEl.getAttribute('src'), null);
+  assert.equal(iframeEl.srcdoc, html);
+  assert.equal(html, expectedHtml);
+});
