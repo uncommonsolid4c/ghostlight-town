@@ -266,3 +266,174 @@ test('staging-polyfork staged bundle includes events.json', async () => {
     'staging-polyfork bundle must include events.json'
   );
 });
+
+test('loadEvents trims fields and accepts boundary values', async () => {
+  const E = {
+    ...VALID_EVENT,
+    title: '  Midnight Reading  ',
+    host_handle: '  milo ',
+    start_at: ' 2026-11-15T20:00:00Z ',
+    duration_min: 15,
+    location: '  Bandstand ',
+    blurb: '  poems ',
+  };
+  const payload = {
+    events: [
+      E,
+      { ...E, title: 'x'.repeat(80), host_handle: 'ab' },
+      { ...E, duration_min: 240 },
+      { ...E, duration_min: 30.5 },
+      { ...E, duration_min: '60' },
+      ['array-entry'],
+      { ...E, start_at: 123 },
+      { ...E, blurb: 'b'.repeat(200) },
+    ],
+  };
+
+  const result = await loadEvents(async () => ({
+    ok: true,
+    async json() {
+      return payload;
+    },
+  }));
+
+  assert.equal(result.events.length, 5);
+  assert.deepEqual(result.events[0], {
+    title: 'Midnight Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-15T20:00:00Z',
+    duration_min: 15,
+    location: 'Bandstand',
+    blurb: 'poems',
+  });
+});
+
+test('loadEvents rejects a non-function fetchFn', async () => {
+  assert.deepEqual(await loadEvents('nope'), { events: [] });
+  assert.deepEqual(await loadEvents(null), { events: [] });
+});
+
+test('selectCurrentEvent handles guards, overlapping now events, and exact boundaries', () => {
+  assert.equal(selectCurrentEvent(null, 0), null);
+  assert.equal(selectCurrentEvent([VALID_EVENT], NaN), null);
+
+  const early = {
+    ...VALID_EVENT,
+    title: 'Early',
+    start_at: '2026-11-15T19:00:00Z',
+    duration_min: 120,
+  };
+  const late = {
+    ...VALID_EVENT,
+    title: 'Late',
+    start_at: '2026-11-15T19:30:00Z',
+    duration_min: 120,
+  };
+
+  const during = Date.parse('2026-11-15T20:00:00Z');
+  const overlapRes = selectCurrentEvent([late, early], during);
+  assert.equal(overlapRes?.status, 'now');
+  assert.equal(overlapRes.event.title, 'Early');
+
+  const atStart = Date.parse('2026-11-15T19:00:00Z');
+  assert.equal(selectCurrentEvent([early], atStart)?.status, 'now');
+
+  const atEnd = Date.parse('2026-11-15T21:00:00Z');
+  assert.equal(selectCurrentEvent([early], atEnd), null);
+});
+
+test('eventBannerLines handles non-now status and empty or non-string titles', () => {
+  assert.equal(eventBannerLines(VALID_EVENT, 'soon')[0], 'NEXT EVENT');
+  assert.equal(eventBannerLines(VALID_EVENT, undefined)[0], 'NEXT EVENT');
+  assert.deepEqual(eventBannerLines({ ...VALID_EVENT, title: '   ' }, 'now'), ['EVENTS', '']);
+  assert.deepEqual(eventBannerLines({ ...VALID_EVENT, title: 42 }, 'now'), ['EVENTS', '']);
+});
+
+test('updateEventBanner handles guards, group-children fallback, and start_at cache key', () => {
+  let redrawCount = 0;
+  const makeTextTexture = () => {
+    redrawCount += 1;
+    return {};
+  };
+  const makeCard = () => ({
+    name: 'event_banner',
+    visible: false,
+    material: { map: null, needsUpdate: false },
+  });
+
+  const card = makeCard();
+  const ctx = {
+    THREE: {},
+    bandstandBuilt: { group: { children: [card] } },
+    liveStore: { eventBannerKey: null },
+    makeTextTexture,
+  };
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), true);
+  assert.equal(redrawCount, 1);
+
+  const noMaterialCard = { name: 'event_banner', visible: true };
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { group: { children: [noMaterialCard] } }, liveStore: { eventBannerKey: null }, makeTextTexture },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(redrawCount, 1);
+
+  assert.equal(
+    updateEventBanner(
+      { THREE: null, bandstandBuilt: { group: { children: [makeCard()] } }, liveStore: { eventBannerKey: null }, makeTextTexture },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { group: { children: [makeCard()] } }, liveStore: null, makeTextTexture },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { group: { children: [makeCard()] } }, liveStore: { eventBannerKey: null }, makeTextTexture: 'x' },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(redrawCount, 1);
+
+  assert.equal(
+    updateEventBanner(ctx, { ...VALID_EVENT, start_at: '2026-11-16T20:00:00Z' }, 'next'),
+    true
+  );
+  assert.equal(redrawCount, 2);
+
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { eventBanner: card }, liveStore: null, makeTextTexture: () => ({}) },
+      null,
+      null
+    ),
+    false
+  );
+});
+
+test('formatEventWhen handles non-finite input and renderEventBannerHeader clears on invalid status', () => {
+  assert.equal(formatEventWhen(NaN), '');
+  assert.equal(formatEventWhen(undefined), '');
+
+  const el = { hidden: false, textContent: 'old text' };
+  assert.equal(renderEventBannerHeader(el, VALID_EVENT, 'soon'), false);
+  assert.equal(el.hidden, true);
+  assert.equal(el.textContent, '');
+
+  const el2 = { hidden: false, textContent: 'old text' };
+  assert.equal(renderEventBannerHeader(el2, null, null), false);
+  assert.equal(el2.textContent, '');
+});
