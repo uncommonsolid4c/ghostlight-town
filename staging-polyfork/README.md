@@ -53,8 +53,12 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   holds one scheduled one-off reading (`"Gazette #3 — read aloud at the
   Bandstand"`, host `milo`, `2026-11-18T15:30:00Z` / Wed 2026-11-18
   07:30–08:30 PST, 60 min, at `the Bandstand`). Ships in the
-  `staging-polyfork` bundle (192 files, verified by
+  `staging-polyfork` bundle (193 files, verified by
   `scripts/stage-deploy.mjs --bundle staging-polyfork`).
+- `daylight-drift.mjs` — dynamic minimal daylight controller (`DAYLIGHT_DRIFT_CONFIG`,
+  `daylightAt`, `buildDaylightDrift`): 30-minute town-clock cycle
+  (night → dawn → overcast → dawn → night), capped below noon so windows and
+  ghostlight always win, with quantized `look.night` updates and star fade.
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
@@ -107,9 +111,12 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=39` cache bust, `#plot-overlay` markup + click
+  Prompt Book UI elements, `?v=40` cache bust, `#plot-overlay` markup + click
   wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
   per-room glow toggle, Nightly Call card redraw/cache/split).
+- `test-daylight-drift.mjs` — unit tests for `daylight-drift.mjs` (keyframe
+  exactness, below-noon caps, wrap continuity, monotonic easing, star fade,
+  stub `look` applier without calling `setTime`, static hygiene).
 - `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
   (`resolveInnOverlayContent` API/static fallback, `resolveGuestbookOverlayContent`
   Signatures-before-Letters/escaping/town-time/50-cap/fallback, sandboxed
@@ -175,10 +182,13 @@ don't #1 — the campfire IS in the scatter pool) and `lakeside-swing-tree`
 (a swing reads wrong in a town centre). Remaining scatter is exposed tree
 roots and reed beds only.
 
-Night: `stage(renderer, scene, { time: 'night', shadowSpan: 120 })`.
+Night: `stage(renderer, scene, { time: 'night', shadowSpan: 120 })` plus
+`daylight-drift.mjs`: the town keeps its own slow 30-minute clock (starting at
+night on every load) and drifts night → dawn → overcast → dawn → night, capped
+below noon so lit windows, lanterns, and the ghostlight always win.
 Shadow span raised from the default 70 so the whole clearing + windmill
-sit inside the shadow frustum. Stars forced visible (the `night` preset
-leaves them off; the town's sky has stars).
+sit inside the shadow frustum. Stars start visible (`night` preset leaves them
+off) and fade with the drift's night factor.
 
 ## Buildings (place coordinates, metres; bandstand spot at 0,0)
 
@@ -280,7 +290,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - **Event banner reads `events.json` directly (`state.events` is not live yet)**:
   the staging event banner (`event-banner.mjs`) reads `events.json` directly
   (fail-open) and does not depend on `state.events`, so it works after the
-  `?v=39` bundle deploy regardless of API state. The API's `state.events`
+  `?v=40` bundle deploy regardless of API state. The API's `state.events`
   mirror (`events: { now, next }` in `town-api/server.mjs` and
   `town-api/events.mjs`) is NOT live yet — the live API server predates the
   events feature and does not yet serve an `events` key in
