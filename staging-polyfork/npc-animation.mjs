@@ -39,7 +39,11 @@ export function updateNpcAnimations(standIns, dt) {
   const entries = typeof standIns.values === 'function' ? standIns.values() : standIns;
   for (const standIn of entries) {
     if (standIn?.anim && typeof standIn.anim.update === 'function') {
-      standIn.anim.update(dt);
+      try {
+        standIn.anim.update(dt);
+      } catch (err) {
+        console.warn('[npc-animation] anim.update failed:', err?.message || err);
+      }
     }
   }
 }
