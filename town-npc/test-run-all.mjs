@@ -441,3 +441,181 @@ test('runAll per-line selectivity: one unaddressed muse line -> exactly one NPC 
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('runAll function-level guards: missing apiBase, unknown npc, probe throw, probe 500', async (t) => {
+  const sleepImpl = async () => {};
+
+  await t.test('A. missing apiBase logs error and never calls fetch', async () => {
+    const logs = [];
+    let fetchCalled = false;
+    const res = await runAll({
+      apiBase: '',
+      stateDir: '/tmp/nope',
+      fetchImpl: async () => {
+        fetchCalled = true;
+        throw new Error('should not be called');
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl,
+    });
+    assert.deepEqual(res, { ok: false, results: [] });
+    assert.equal(fetchCalled, false);
+    assert.deepEqual(logs, [{ action: 'error', ok: false, error: 'Missing apiBase' }]);
+  });
+
+  await t.test('B. unknown npc logs error and never calls fetch', async () => {
+    const logs = [];
+    let fetchCalled = false;
+    const res = await runAll({
+      apiBase: 'http://fake.local',
+      npc: 'nobody',
+      stateDir: '/tmp/nope',
+      fetchImpl: async () => {
+        fetchCalled = true;
+        throw new Error('should not be called');
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl,
+    });
+    assert.deepEqual(res, { ok: false, results: [] });
+    assert.equal(fetchCalled, false);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].error, 'Unknown seed NPC: nobody');
+  });
+
+  await t.test('C. probe fetch throwing logs error without status key', async () => {
+    const logs = [];
+    const res = await runAll({
+      apiBase: 'http://fake.local',
+      stateDir: '/tmp/nope',
+      fetchImpl: async () => {
+        throw new Error('boom');
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl,
+    });
+    assert.deepEqual(res, { ok: false, results: [] });
+    assert.deepEqual(logs, [
+      { action: 'error', ok: false, error: 'API unreachable: boom', api_base: 'http://fake.local' },
+    ]);
+    assert.equal('status' in logs[0], false);
+  });
+
+  await t.test('D. probe HTTP 500 logs error with status 500', async () => {
+    const logs = [];
+    const res = await runAll({
+      apiBase: 'http://fake.local',
+      stateDir: '/tmp/nope',
+      fetchImpl: async () => ({ ok: false, status: 500 }),
+      logger: (obj) => logs.push(obj),
+      sleepImpl,
+    });
+    assert.deepEqual(res, { ok: false, results: [] });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].status, 500);
+    assert.match(logs[0].error, /HTTP 500/);
+  });
+});
+
+test('runTurn throwing is caught per NPC when stateDir is a regular file', async () => {
+  const ctx = await startTestServer();
+  const keysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  const fileStateDir = path.join(os.tmpdir(), `ghostlight-runall-file-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(fileStateDir, 'not a dir', 'utf8');
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, keysDir);
+    const logs = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir: fileStateDir,
+      staggerMs: 0,
+      brainImpl: async () => 'x',
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.results.length, 3);
+    for (const r of res.results) {
+      assert.equal(r.action, 'error');
+      assert.equal(r.ok, false);
+      assert.equal(r.posted, false);
+    }
+
+    assert.equal(logs.length, 4);
+    assert.deepEqual(
+      logs.slice(0, 3).map((l) => l.npc),
+      ['wick', 'maren', 'tomas']
+    );
+    for (const entry of logs.slice(0, 3)) {
+      assert.equal(entry.action, 'error');
+      assert.equal(typeof entry.reason, 'string');
+      assert.ok(entry.reason.length > 0);
+    }
+    assert.equal(logs[3].action, 'run_all');
+    assert.equal(logs[3].ok, false);
+  } finally {
+    fs.rmSync(fileStateDir, { force: true });
+    fs.rmSync(keysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI --help and invalid --stagger-ms exit 1 with usage on stderr', async () => {
+  const helpRes = await runAllCli(['--help']);
+  assert.equal(helpRes.code, 1);
+  assert.match(helpRes.stderr, /Usage:/);
+  assert.equal(helpRes.stdout, '');
+
+  const staggerRes = await runAllCli(['--api-base', 'http://127.0.0.1:9999', '--stagger-ms', 'abc']);
+  assert.equal(staggerRes.code, 1);
+  assert.match(staggerRes.stderr, /Usage:/);
+  assert.match(staggerRes.stderr, /Invalid --stagger-ms/);
+});
+
+test('CLI TOWN_API_BASE env fallback runs dry-run and exits 0', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-env-'));
+  try {
+    const res = await runAllCli(
+      ['--state-dir', stateDir, '--stagger-ms', '0', '--dry-run'],
+      { TOWN_API_BASE: ctx.baseUrl }
+    );
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs.length, 3);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI partial failure exits 1 with ok: false summary', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const res = await runAllCli(
+      ['--api-base', ctx.baseUrl, '--state-dir', stateDir, '--stagger-ms', '0'],
+      { NPC_BRAIN_CMD: 'false' }
+    );
+    assert.equal(res.code, 1, `expected exit 1, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, false);
+    assert.equal(summary.npcs.length, 3);
+    for (const entry of summary.npcs) {
+      assert.equal(entry.ok, false);
+    }
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
