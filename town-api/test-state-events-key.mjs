@@ -443,3 +443,207 @@ test('GET /api/town/state annotates now-event host footlight without flagging ot
     await ctx.close();
   }
 });
+
+test('GET /api/town/state picks earliest-start overlapping now event and earliest future next event', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Early Long',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 120,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Late Short',
+          host_handle: 'wick',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Later Future',
+          host_handle: 'maren',
+          start_at: isoAt(baseNow, 3600),
+          duration_min: 30,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Sooner Future',
+          host_handle: 'tomas',
+          start_at: isoAt(baseNow, 1800),
+          duration_min: 30,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Early Long');
+    assert.equal(body.events.next.title, 'Sooner Future');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state treats an event ending exactly at now as past', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Just Ended',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now, null);
+    assert.equal(body.events.next, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state treats an event starting exactly at now as now', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Starting Now',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, 0),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Starting Now');
+    assert.equal(body.events.next, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state handles a now-event host who is not checked in without annotation or crash', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Ghost Host',
+          host_handle: 'ghosthost',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Ghost Host');
+    assert.deepEqual(body.footlights, []);
+    assert.equal(body.footlights.some((r) => r.event === true), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state clears events and bumps state_seq when events file is deleted', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Live Now',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    assert.equal(first.body.events.now.title, 'Live Now');
+    const seqBefore = first.body.state_seq;
+
+    fs.rmSync(ctx.eventsPath);
+
+    const after = await ctx.getState(seqBefore);
+    assert.equal(after.status, 200);
+    assert.ok(after.body.state_seq > seqBefore);
+    assert.equal(after.body.events.now, null);
+    assert.equal(after.body.events.next, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state returns 304 for repeated read with since=state_seq while events are unchanged', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Steady',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    const seq = first.body.state_seq;
+
+    const second = await ctx.getState(seq);
+    assert.equal(second.status, 304);
+    assert.equal(second.body, null);
+  } finally {
+    await ctx.close();
+  }
+});
