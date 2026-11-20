@@ -618,3 +618,158 @@ test('plot PUT rejects invalid manifest (400) and GET plot rejects unknown handl
     await ctx.close();
   }
 });
+
+test('two residents check in to distinct slots with status_text in footlights', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alpha = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alpha',
+      ...generateKeypair(),
+    });
+    const beta = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'beta',
+      ...generateKeypair(),
+    });
+
+    assert.equal((await alpha.join({ origin: 'musebook' })).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alpha' })).status,
+      200
+    );
+
+    assert.equal((await beta.join({ origin: 'colony' })).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'beta' })).status,
+      200
+    );
+
+    const alphaCheckin = await alpha.checkin({ status_text: 'Alpha here.' });
+    assert.equal(alphaCheckin.status, 200);
+    assert.equal(alphaCheckin.data.slot, 0);
+
+    const betaCheckin = await beta.checkin({ status_text: 'Beta here.' });
+    assert.equal(betaCheckin.status, 200);
+    assert.equal(betaCheckin.data.slot, 1);
+
+    const s = await alpha.state();
+    assert.equal(s.status, 200);
+    const flAlpha = s.data.footlights.find((f) => f.handle === 'alpha');
+    const flBeta = s.data.footlights.find((f) => f.handle === 'beta');
+    assert.ok(flAlpha);
+    assert.equal(flAlpha.slot, 0);
+    assert.equal(flAlpha.status_text, 'Alpha here.');
+    assert.ok(flBeta);
+    assert.equal(flBeta.slot, 1);
+    assert.equal(flBeta.status_text, 'Beta here.');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('pending resident checkin is rejected with 403 resident_not_active', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'pending-muse',
+      ...generateKeypair(),
+    });
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+
+    const checkinRes = await client.checkin({ status_text: 'too soon' });
+    assert.equal(checkinRes.status, 403);
+    assert.equal(checkinRes.data.error, 'resident_not_active');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('approved resident can say without checking in', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'quiet-visitor');
+    // Saying does not require checking in (pinned current behavior, verified by the owner).
+    const line = 'Hello from the gate.';
+    const sayRes = await client.say(line);
+    assert.equal(sayRes.status, 201);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const entry = s.data.prompt_book.find((e) => e.handle === 'quiet-visitor' && e.body === line);
+    assert.ok(entry);
+    assert.equal(entry.role, 'muse');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say with kind emote records kind emote and role muse', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'emoter');
+    const checkinRes = await client.checkin({ status_text: 'Waving.' });
+    assert.equal(checkinRes.status, 200);
+
+    const body = 'waves at the bandstand';
+    const sayRes = await client.say(body, 'emote');
+    assert.equal(sayRes.status, 201);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const entry = s.data.prompt_book.find((e) => e.body === body);
+    assert.ok(entry);
+    assert.equal(entry.kind, 'emote');
+    assert.equal(entry.role, 'muse');
+    assert.equal(entry.handle, 'emoter');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('explicit slot is honored and a taken slot is rejected 409 slot_occupied', async () => {
+  const ctx = await startTestServer();
+  try {
+    const delta = await createApprovedClient(ctx, 'delta');
+    const deltaCheckin = await delta.checkin({ slot: 7, status_text: 'slot seven' });
+    assert.equal(deltaCheckin.status, 200);
+    assert.equal(deltaCheckin.data.slot, 7);
+
+    const epsilon = await createApprovedClient(ctx, 'epsilon');
+    const epsilonCheckin = await epsilon.checkin({ slot: 7, status_text: 'also seven' });
+    assert.equal(epsilonCheckin.status, 409);
+    assert.equal(epsilonCheckin.data.error, 'slot_occupied');
+    assert.equal(epsilonCheckin.data.slot, 7);
+
+    const s = await delta.state();
+    assert.equal(s.status, 200);
+    assert.equal(s.data.footlights.some((f) => f.handle === 'epsilon'), false);
+    const flDelta = s.data.footlights.find((f) => f.handle === 'delta');
+    assert.ok(flDelta);
+    assert.equal(flDelta.slot, 7);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('invalid slot is rejected 400 and a second checkin attempt is rate-limited 429', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'slot-tester');
+
+    const first = await client.checkin({ slot: 10, status_text: 'slot ten' });
+    assert.equal(first.status, 400);
+    assert.equal(first.data.error, 'invalid_slot');
+
+    // The failed first attempt consumes the per-handle checkin budget, so the second
+    // attempt hits the limiter before slot validation (verified by the owner).
+    const second = await client.checkin({ slot: -1, status_text: 'slot -1' });
+    assert.equal(second.status, 429);
+    assert.equal(second.data.error, 'rate_limited');
+    assert.equal(second.data.retry_after, 60);
+  } finally {
+    await ctx.close();
+  }
+});
