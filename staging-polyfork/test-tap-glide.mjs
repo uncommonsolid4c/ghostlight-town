@@ -311,3 +311,145 @@ test('createPointerTracker handles mouse buttons, reset, unknown ids, multi-touc
   });
   assert.deepEqual(tracker.onPointerUp(21, 100, 100), { ended: true, shouldClick: false });
 });
+
+test('stepGlide handles Infinity and string dt, zero speed, and arriveDist 0', () => {
+  assert.deepEqual(stepGlide({ x: 3, z: -4 }, { x: 10, z: 0 }, Infinity), {
+    x: 3,
+    z: -4,
+    arrived: false,
+  });
+  assert.deepEqual(stepGlide({ x: 3, z: -4 }, { x: 10, z: 0 }, '0.5'), {
+    x: 3,
+    z: -4,
+    arrived: false,
+  });
+  assert.deepEqual(stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 1, { speed: 0 }), {
+    x: 0,
+    z: 0,
+    arrived: false,
+  });
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 5, z: 0 }, 1, { speed: 7.5, arriveDist: 0 }),
+    { x: 5, z: 0, arrived: true }
+  );
+  // 0.125 remainder does NOT snap with arriveDist: 0 (unlike the 0.3 default)
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 2.65, { speed: 7.5, arriveDist: 0 }),
+    { x: 19.875, z: 0, arrived: false }
+  );
+});
+
+test('stepOrbitGlide uses default speed 14 and radius 38, and ignores negative dt', () => {
+  assert.deepEqual(stepOrbitGlide({ x: 0, z: 0 }, { x: 0, z: 58 }, { x: 14, z: 0 }, 0.5), {
+    targetX: 7,
+    targetZ: 0,
+    cameraX: 7,
+    cameraZ: 58,
+    arrived: false,
+  });
+  assert.deepEqual(stepOrbitGlide({ x: 0, z: 0 }, { x: 5, z: 50 }, { x: 60, z: 0 }, 5), {
+    targetX: 38,
+    targetZ: 0,
+    cameraX: 43,
+    cameraZ: 50,
+    arrived: true,
+  });
+  assert.deepEqual(stepOrbitGlide({ x: 2, z: -3 }, { x: 10, z: 45 }, { x: 15, z: 5 }, -0.5), {
+    targetX: 2,
+    targetZ: -3,
+    cameraX: 10,
+    cameraZ: 45,
+    arrived: false,
+  });
+});
+
+test('createPointerTracker honors a custom dragThreshold and the 4px default', () => {
+  const custom = createPointerTracker({ dragThreshold: 10 });
+  custom.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(custom.onPointerMove(1, 108, 100), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(custom.onPointerUp(1, 108, 100), { ended: true, shouldClick: true });
+
+  const customDrag = createPointerTracker({ dragThreshold: 10 });
+  customDrag.onPointerDown(2, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(customDrag.onPointerMove(2, 111, 100), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: true,
+  });
+  assert.deepEqual(customDrag.onPointerUp(2, 100, 100), { ended: true, shouldClick: false });
+
+  const def = createPointerTracker();
+  def.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(def.onPointerMove(1, 105, 100), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: true,
+  });
+});
+
+test('createPointerTracker move during a pinch cancels glide and suppresses the tap', () => {
+  const tracker = createPointerTracker();
+  tracker.onPointerDown(1, 200, 200, { pointerType: 'touch' });
+  tracker.onPointerDown(2, 260, 200, { pointerType: 'touch' });
+  assert.deepEqual(tracker.onPointerMove(1, 205, 200), {
+    moved: true,
+    isPinch: true,
+    cancelGlide: true,
+  });
+  assert.deepEqual(tracker.onPointerUp(2, 260, 200), { ended: false, shouldClick: false });
+  assert.deepEqual(tracker.onPointerUp(1, 205, 200), { ended: true, shouldClick: false });
+
+  tracker.onPointerDown(3, 50, 50, { pointerType: 'touch' });
+  assert.deepEqual(tracker.onPointerUp(3, 50, 50), { ended: true, shouldClick: true });
+});
+
+test('createPointerTracker suppresses taps while the overlay is open at move and up', () => {
+  const tracker = createPointerTracker();
+  tracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(tracker.onPointerMove(1, 101, 101, { overlayHidden: false }), {
+    moved: false,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(tracker.onPointerUp(1, 101, 101, { overlayHidden: false }), {
+    ended: true,
+    shouldClick: false,
+  });
+
+  // Current behavior (pinned as-is): a move while the overlay is open does not mark a drag,
+  // so if the overlay closes before pointerup the tap still clicks.
+  const tracker2 = createPointerTracker();
+  tracker2.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  tracker2.onPointerMove(1, 101, 101, { overlayHidden: false });
+  assert.deepEqual(tracker2.onPointerUp(1, 101, 101, { overlayHidden: true }), {
+    ended: true,
+    shouldClick: true,
+  });
+});
+
+test('createPointerTracker reset mid-gesture clears the pointer and a third finger is a pinch', () => {
+  const tracker = createPointerTracker();
+  tracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  tracker.reset();
+  assert.equal(tracker.size, 0);
+  assert.deepEqual(tracker.onPointerUp(1, 100, 100), { ended: false, shouldClick: false });
+
+  tracker.onPointerDown(9, 10, 10, { pointerType: 'touch' });
+  assert.deepEqual(tracker.onPointerUp(9, 10, 10), { ended: true, shouldClick: true });
+
+  tracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  tracker.onPointerDown(2, 150, 100, { pointerType: 'touch' });
+  assert.deepEqual(tracker.onPointerDown(3, 300, 200, { pointerType: 'touch' }), {
+    started: true,
+    isPinch: true,
+    cancelGlide: true,
+  });
+  assert.equal(tracker.size, 3);
+  assert.deepEqual(tracker.onPointerUp(3, 300, 200), { ended: false, shouldClick: false });
+  assert.deepEqual(tracker.onPointerUp(2, 150, 100), { ended: false, shouldClick: false });
+  assert.deepEqual(tracker.onPointerUp(1, 100, 100), { ended: true, shouldClick: false });
+});
