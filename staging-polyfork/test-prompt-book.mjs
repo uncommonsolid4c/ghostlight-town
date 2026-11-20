@@ -307,3 +307,107 @@ test('renderPromptBook is idempotent across re-renders and stays verbatim in syn
     assert.equal(stagingFn, townFn, `${fnName} drifted from town-3d/town.js`);
   }
 });
+
+test('formatPromptBookEntries passes created_at through verbatim and preserves id 0', () => {
+  const formatted = formatPromptBookEntries([
+    { id: 0, handle: 'a', kind: 'say', body: 'x', created_at: '2026-11-20T00:00:00Z', role: 'muse' },
+    { id: 1, handle: 'b', kind: 'say', body: 'y', created_at: null, role: 'muse' },
+    { id: 2, handle: 'c', kind: 'say', body: 'z', role: 'muse' },
+  ]);
+
+  assert.equal(formatted[0].id, 0);
+  assert.equal(formatted[0].created_at, '2026-11-20T00:00:00Z');
+  assert.equal(formatted[1].created_at, 0);
+  assert.equal(formatted[2].created_at, 0);
+});
+
+test('renderPromptBook resolves reply_to 0 to the id-0 entry\'s handle', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  // id 0 is a real id here (entry.id != null includes 0), so replying to the
+  // first-ever line resolves instead of falling back to bare #0.
+  renderPromptBook(
+    container,
+    [
+      { id: 0, handle: 'zero', kind: 'say', body: 'first', role: 'muse' },
+      { id: 1, handle: 'one', kind: 'say', body: 'reply', role: 'muse', reply_to: 0 },
+    ],
+    doc,
+  );
+
+  const replyEl = container.children[1].children[0];
+  assert.equal(replyEl.className, 'pb-reply-to');
+  assert.equal(replyEl.textContent, '\u21a9 #0 @zero');
+});
+
+test('renderPromptBook resolves duplicate ids to the last entry\'s handle', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 5, handle: 'old', kind: 'say', body: 'a', role: 'muse' },
+      { id: 5, handle: 'new', kind: 'say', body: 'b', role: 'muse' },
+      { id: 6, handle: 'q', kind: 'say', body: 'c', role: 'muse', reply_to: 5 },
+    ],
+    doc,
+  );
+
+  const replyEl = container.children[2].children.find((c) => c.className === 'pb-reply-to');
+  assert.equal(replyEl.textContent, '\u21a9 #5 @new');
+});
+
+test('renderPromptBook renders an NPC emote with pill, emote class, and space separator', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [{ id: 7, handle: 'wick', kind: 'emote', body: 'trims a wick', role: 'npc' }],
+    doc,
+  );
+
+  const line = container.children[0];
+  assert.equal(line.className, 'pb-line pb-kind-emote');
+  assert.deepEqual(
+    line.children.map((c) => c.className),
+    ['pb-npc-pill', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(line.children[2].textContent, ' trims a wick');
+});
+
+test('renderPromptBook renders empty bodies as bare separators', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 8, handle: 'a', kind: 'say', body: '', role: 'muse' },
+      { id: 9, handle: 'b', kind: 'emote', body: '', role: 'muse' },
+    ],
+    doc,
+  );
+
+  const sayBody = container.children[0].children.find((c) => c.className === 'pb-body');
+  const emoteBody = container.children[1].children.find((c) => c.className === 'pb-body');
+  assert.equal(sayBody.textContent, ': ');
+  assert.equal(emoteBody.textContent, ' ');
+});
+
+test('renderPromptBook with omitted doc is a no-op in Node and format keeps unicode bodies verbatim', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  container.appendChild(doc.createElement('p'));
+
+  const result = renderPromptBook(container, [{ id: 1, handle: 'a', body: 'hi' }]);
+  assert.equal(result, undefined);
+  assert.equal(container.children.length, 1);
+
+  assert.equal(
+    formatPromptBookEntries([{ id: 1, handle: 'a', kind: 'say', body: 'line1\nline2 👻', role: 'muse' }])[0].body,
+    'line1\nline2 👻',
+  );
+});
