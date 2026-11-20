@@ -235,6 +235,148 @@ test('eventStateKey formats now, next-only, and empty keys', () => {
   assert.equal(eventStateKey(null, null), '');
 });
 
+test('selectCurrentEvent guards against non-array, empty, non-finite nowMs, and blank title', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  assert.equal(apiSelectCurrentEvent(null, T0), null);
+  assert.equal(apiSelectCurrentEvent('nope', T0), null);
+  assert.equal(apiSelectCurrentEvent([], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev()], NaN), null);
+  assert.equal(apiSelectCurrentEvent([ev()], Infinity), null);
+  assert.equal(apiSelectCurrentEvent([ev({ title: '  ' })], T0), null);
+});
+
+test('selectCurrentEvent handles start and end time boundaries', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const endMs = T0 + 60 * 60_000;
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+  const base = ev();
+  const later = ev({ title: 'Later', start_at: '2026-11-20T20:00:00Z' });
+
+  assert.deepEqual(apiSelectCurrentEvent([base], T0), { event: base, status: 'now' });
+  assert.deepEqual(apiSelectCurrentEvent([base], T0 - 1), { event: base, status: 'next' });
+  assert.equal(apiSelectCurrentEvent([base], endMs), null);
+  assert.equal(apiSelectCurrentEvent([base], endMs - 1)?.status, 'now');
+  assert.deepEqual(apiSelectCurrentEvent([base, later], endMs), { event: later, status: 'next' });
+});
+
+test('selectCurrentEvent picks earliest start among overlapping now events regardless of order', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+  const a = ev({ title: 'Early', start_at: '2026-11-20T17:30:00Z', duration_min: 120 });
+  const b = ev({ title: 'Late', start_at: '2026-11-20T18:00:00Z', duration_min: 60 });
+
+  assert.equal(apiSelectCurrentEvent([b, a], T0)?.event.title, 'Early');
+  assert.equal(apiSelectCurrentEvent([a, b], T0)?.event.title, 'Early');
+});
+
+test('selectCurrentEvent enforces validation edges and trims string fields', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  assert.equal(apiSelectCurrentEvent([ev({ duration_min: 14 })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ duration_min: 15 })], T0)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev({ duration_min: 241 })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ duration_min: 240 })], T0)?.status, 'now');
+
+  assert.equal(apiSelectCurrentEvent([ev({ blurb: 'x'.repeat(201) })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ blurb: 'x'.repeat(200) })], T0)?.status, 'now');
+
+  assert.equal(apiSelectCurrentEvent([ev({ title: 'x'.repeat(81) })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ title: 'x'.repeat(80) })], T0)?.status, 'now');
+
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: 'Milo' })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: 'a b' })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ start_at: 'not-a-date' })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ duration_min: '60' })], T0), null);
+
+  const trimmed = apiSelectCurrentEvent(
+    [ev({ title: '  Reading  ', host_handle: '  milo ', blurb: '  hi  ' })],
+    T0
+  );
+  assert.equal(trimmed?.event.title, 'Reading');
+  assert.equal(trimmed?.event.host_handle, 'milo');
+  assert.equal(trimmed?.event.blurb, 'hi');
+  assert.equal(trimmed?.event.location, 'Bandstand');
+});
+
+test('selectNowNext handles guards, now+later, and now-only', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+  const base = ev();
+  const later = ev({ title: 'Later', start_at: '2026-11-20T20:00:00Z' });
+
+  assert.deepEqual(selectNowNext(null, T0), { now: null, next: null });
+  assert.deepEqual(selectNowNext([base], NaN), { now: null, next: null });
+
+  const both = selectNowNext([base, later], T0);
+  assert.equal(both.now?.title, 'Reading');
+  assert.equal(both.next?.title, 'Later');
+
+  const nowOnly = selectNowNext([base], T0);
+  assert.equal(nowOnly.now?.title, 'Reading');
+  assert.equal(nowOnly.next, null);
+});
+
+test('eventStateKey prefers now when both now and next are present', () => {
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+  const nowEvent = ev();
+  const nextEvent = ev({ title: 'Later', start_at: '2026-11-20T20:00:00Z' });
+
+  assert.equal(eventStateKey(nowEvent, nextEvent), 'now|Reading|2026-11-20T18:00:00Z');
+  assert.equal(eventStateKey(null, nextEvent), 'next|Later|2026-11-20T20:00:00Z');
+  assert.equal(eventStateKey(null, null), '');
+});
+
 test('loadEventsFile validates entries and fails open on missing/malformed/bad-shape/null paths', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-load-events-'));
   try {
