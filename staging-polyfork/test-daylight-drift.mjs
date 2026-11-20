@@ -222,3 +222,83 @@ test('static hygiene: daylight-drift.mjs contains no campfire, fetch(, or Math.r
   assert.ok(!src.includes('fetch('), 'daylight-drift.mjs must not call fetch(');
   assert.ok(!src.includes('Math.random'), 'daylight-drift.mjs must not use Math.random');
 });
+
+test('night quantization: look.night writes only on >= 0.01 moves, with exact 0/1 endpoints forced', () => {
+  const look = { night: 1 };
+  const drift = buildDaylightDrift(look);
+
+  drift.update(1);
+  assert.equal(look.night, 1);
+
+  drift.update(59);
+  assert.equal(look.night, 0.9684148148148146);
+  assert.equal(look.night, daylightAt(60 / 1800).night);
+
+  const look2 = { night: 1 };
+  const drift2 = buildDaylightDrift(look2);
+  drift2.update(899);
+  assert.ok(Math.abs(look2.night - 0.000005177503429321106) < 1e-9);
+  drift2.update(1);
+  assert.equal(look2.night, 0);
+});
+
+test('clock discipline: bad dt never advances the clock and phase wraps', () => {
+  const drift = buildDaylightDrift({ night: 1 });
+
+  drift.update(0);
+  drift.update(-5);
+  drift.update(NaN);
+  drift.update('60');
+  drift.update(undefined);
+  assert.equal(drift.phase, 0);
+
+  drift.update(1800);
+  assert.equal(drift.phase, 0);
+
+  drift.update(900);
+  assert.equal(drift.phase, 0.5);
+
+  assert.deepEqual(daylightAt(NaN), daylightAt(0));
+});
+
+test('sky-dome gradient: vertex colors are linear-RGB gradient between horizon and sky', () => {
+  const look = makeStubLook();
+  const drift = buildDaylightDrift(look, {});
+  drift.update(450);
+
+  const arr = look.sky.geometry.attributes.color.array;
+  const topExpected = [0.274677, 0.396755, 0.686685];
+  const horExpected = [1, 0.584078, 0.456411];
+  const k = Math.pow(0.5, 0.55);
+
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(arr[c] - topExpected[c]) < 1e-6, `top channel ${c}: ${arr[c]}`);
+    assert.ok(Math.abs(arr[3 + c] - horExpected[c]) < 1e-6, `horizon channel ${c}: ${arr[3 + c]}`);
+    const midExpected = horExpected[c] + (topExpected[c] - horExpected[c]) * k;
+    assert.ok(Math.abs(arr[6 + c] - midExpected) < 1e-6, `mid channel ${c}: ${arr[6 + c]}`);
+  }
+});
+
+test('graceful degradation + fog fallback chain', () => {
+  const minimal = { night: 1 };
+  const minimalDrift = buildDaylightDrift(minimal);
+  const params = minimalDrift.update(0);
+  assert.equal(params.night, 1);
+
+  const sceneFog = { color: makeStubColor(), near: 0, far: 0 };
+  const sceneDrift = buildDaylightDrift(makeStubLook(), { scene: { fog: sceneFog } });
+  sceneDrift.update(450);
+  assert.equal(sceneFog.near, 102.4);
+  assert.equal(sceneFog.far, 281.6);
+  assert.equal(sceneFog.color.hex, KIT_DAWN.horizon);
+
+  const lookWithFog = { ...makeStubLook(), fog: { color: makeStubColor(), near: 0, far: 0 } };
+  const lookFogDrift = buildDaylightDrift(lookWithFog);
+  lookFogDrift.update(450);
+  assert.equal(lookWithFog.fog.near, 102.4);
+
+  const stars = { visible: false };
+  const starsDrift = buildDaylightDrift(makeStubLook(), { stars });
+  starsDrift.update(0);
+  assert.equal(stars.visible, true);
+});
