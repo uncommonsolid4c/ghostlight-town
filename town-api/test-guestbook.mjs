@@ -591,3 +591,222 @@ test('startup migration adds plot column to old guestbook schema and keeps exist
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('GET ordering newest-first returns strictly descending ids', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const ids = [];
+    for (let i = 1; i <= 3; i++) {
+      const res = await visitor.signGuestbook('guestbook', `Guest ${i}`, `Entry ${i}`);
+      assert.equal(res.status, 201);
+      const app = await admin.moderateGuestbook(res.data.id, 'approve');
+      assert.equal(app.status, 200);
+      ids.push(res.data.id);
+      ctx.advanceClock(1);
+    }
+
+    const getRes = await visitor.getGuestbook();
+    assert.equal(getRes.status, 200);
+    const gotIds = getRes.data.entries.map((e) => e.id);
+    assert.deepEqual(gotIds, [ids[2], ids[1], ids[0]]);
+    assert.ok(gotIds[0] > gotIds[1] && gotIds[1] > gotIds[2]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET limit param validates bad values, treats empty as default, and clamps 100 to 50', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const ids = [];
+    for (let i = 1; i <= 3; i++) {
+      const res = await visitor.signGuestbook('guestbook', `Visitor ${i}`, `Line ${i}`);
+      assert.equal(res.status, 201);
+      const app = await admin.moderateGuestbook(res.data.id, 'approve');
+      assert.equal(app.status, 200);
+      ids.push(res.data.id);
+      ctx.advanceClock(1);
+    }
+
+    for (const bad of ['0', '-1', 'abc', '1.5']) {
+      const res = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=${bad}`);
+      assert.equal(res.status, 400, `limit=${bad} should return 400`);
+      const data = await res.json();
+      assert.equal(data.error, 'invalid_limit');
+    }
+
+    const emptyRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=`);
+    assert.equal(emptyRes.status, 200);
+    const emptyData = await emptyRes.json();
+    assert.equal(emptyData.entries.length, 3);
+
+    const twoRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=2`);
+    assert.equal(twoRes.status, 200);
+    const twoData = await twoRes.json();
+    assert.deepEqual(twoData.entries.map((e) => e.id), [ids[2], ids[1]]);
+
+    const hundredRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=100`);
+    assert.equal(hundredRes.status, 200);
+    const hundredData = await hundredRes.json();
+    assert.equal(hundredData.entries.length, 3);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET 50-entry cap returns newest 50 of 55 seeded rows', async () => {
+  const ctx = await startTestServer();
+  try {
+    const baseTime = ctx.nowSec() - 100;
+    const stmt = ctx.db.prepare(
+      "INSERT INTO guestbook (kind, name, body, status, plot, created_at) VALUES ('guestbook', ?, ?, 'approved', NULL, ?)"
+    );
+    for (let i = 1; i <= 55; i++) {
+      stmt.run(`Guest ${i}`, `Message ${i}`, baseTime + i);
+    }
+
+    const res = await fetch(`${ctx.baseUrl}/api/town/guestbook`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.entries.length, 50);
+    assert.equal(data.entries[0].id, 55);
+    assert.equal(data.entries[49].id, 6);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('moderation auth rejects missing headers and non-operator signatures while keeping pending entry approvable', async () => {
+  const ctx = await startTestServer();
+  try {
+    const resident = await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const signRes = await visitor.signGuestbook('guestbook', 'Guest', 'Waiting for approval.');
+    assert.equal(signRes.status, 201);
+    const id = signRes.data.id;
+
+    const noAuth = await rawPost(ctx.baseUrl, '/api/town/admin/guestbook', { id, action: 'approve' });
+    assert.equal(noAuth.status, 401);
+    assert.equal(noAuth.data.error, 'missing_auth_headers');
+
+    const nonOp = await resident.moderateGuestbook(id, 'approve');
+    assert.equal(nonOp.status, 401);
+    assert.equal(nonOp.data.error, 'invalid_signature');
+
+    const opApprove = await admin.moderateGuestbook(id, 'approve');
+    assert.equal(opApprove.status, 200);
+    assert.deepEqual(opApprove.data, { id, status: 'approved' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('boundary sizes and types accept exact limits after trimming and reject numeric inputs without burning quota', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ipHeader = { 'X-Forwarded-For': '203.0.113.77' };
+
+    const numName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 12345, body: 'Hello!' },
+      ipHeader
+    );
+    assert.equal(numName.status, 400);
+    assert.equal(numName.data.error, 'invalid_name');
+
+    const numBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 67890 },
+      ipHeader
+    );
+    assert.equal(numBody.status, 400);
+    assert.equal(numBody.data.error, 'invalid_body');
+
+    const exactName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'a'.repeat(40), body: 'Valid body' },
+      ipHeader
+    );
+    assert.equal(exactName.status, 201);
+
+    const exactBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 'b'.repeat(500) },
+      ipHeader
+    );
+    assert.equal(exactBody.status, 201);
+
+    const paddedName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: `  ${'c'.repeat(40)}  `, body: 'Trimmed name' },
+      ipHeader
+    );
+    assert.equal(paddedName.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('filter composition combines kind, plot, and limit and keeps letters gate-only', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const p1 = await visitor.signGuestbook('guestbook', 'Guest 1', 'First porch note', 'wick');
+    assert.equal(p1.status, 201);
+    ctx.advanceClock(1);
+    const p2 = await visitor.signGuestbook('guestbook', 'Guest 2', 'Second porch note', 'wick');
+    assert.equal(p2.status, 201);
+    ctx.advanceClock(1);
+    const g1 = await visitor.signGuestbook('guestbook', 'Gate Guest', 'Gate note');
+    assert.equal(g1.status, 201);
+
+    await admin.moderateGuestbook(p1.data.id, 'approve');
+    await admin.moderateGuestbook(p2.data.id, 'approve');
+    await admin.moderateGuestbook(g1.data.id, 'approve');
+
+    const res = await fetch(`${ctx.baseUrl}/api/town/guestbook?kind=guestbook&plot=wick&limit=1`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.entries.length, 1);
+    assert.equal(data.entries[0].id, p2.data.id);
+
+    const lettersRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?kind=letter&plot=wick`);
+    assert.equal(lettersRes.status, 200);
+    const lettersData = await lettersRes.json();
+    assert.deepEqual(lettersData.entries, []);
+  } finally {
+    await ctx.close();
+  }
+});
