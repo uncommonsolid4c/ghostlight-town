@@ -28,6 +28,7 @@ import {
   updateStagingInnOccupancy,
   updateStagingNightlyCallCard,
 } from './inn-nightly-call.mjs?v=39';
+import { buildDaylightDrift } from './daylight-drift.mjs?v=40';
 import {
   loadEvents,
   selectCurrentEvent,
@@ -969,6 +970,11 @@ class StagingLive {
 async function init() {
   status('Lighting the night…');
   look = stage(renderer, scene, { time: 'night', shadowSpan: 120 });
+  // Stars: the 'night' preset leaves them off; the town's sky has stars.
+  // The daylight drift owns star opacity/visibility from here on.
+  const stars = scene.getObjectByName('sky')?.getObjectByName('stars');
+  if (stars) stars.visible = true;
+  const daylightDrift = buildDaylightDrift(look, { stars, scene });
 
   status('Growing the ground — campground terrain, span 2 (128 m)…');
   camp = await buildKit({
@@ -1180,10 +1186,6 @@ async function init() {
   // Apply night glow once before live polling starts so `camp.group.userData.nightSet`
   // is initialized and later frames in `loop()` do not overwrite state-driven Inn dimming.
   look.update();
-
-  // Stars: the 'night' preset leaves them off; the town's sky has stars.
-  const stars = scene.getObjectByName('sky')?.getObjectByName('stars');
-  if (stars) stars.visible = true;
 
   const liveStore = createStagingLiveStore();
   syncEmptyPadMarkers(scene, liveStore, {
@@ -1523,7 +1525,15 @@ async function init() {
     updateStagingWander(wanderFigures, dt, liveStore.avatars);
     updateNpcAnimations(npcStandIns, dt);
     controls.update();
+    const prevNight = look.night;
+    daylightDrift.update(dt);
     look.update(); // drives the night glow
+    // kit's setNight() resets every registered glowMat (including Tavern's
+    // uncloned 'rest' material) when look.night changes; re-apply state-driven
+    // Inn dimming whenever a quantized night step triggers lamps().
+    if (look.night !== prevNight && liveStore.lastState?.inn) {
+      updateStagingInnOccupancy(tavernGroup, liveStore.lastState.inn);
+    }
     renderer.render(scene, camera);
   })();
 }
