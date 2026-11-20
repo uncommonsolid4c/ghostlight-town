@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -574,5 +575,213 @@ test('CLI plot missing manifest/html files and keygen nested parent dir / missin
     assert.ok(missingHtmlErr.error.includes('HTML file not found'));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI join invalid origin and bogus invite code surface 400/403 ok:false', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'joinerr.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+
+    const badOrigin = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'badorg', '--key', keyPath, '--origin', 'nowhere',
+    ]);
+    assert.equal(badOrigin.code, 0, badOrigin.stderr);
+    const badOriginOut = JSON.parse(badOrigin.stdout.trim());
+    assert.equal(badOriginOut.ok, false);
+    assert.equal(badOriginOut.status, 400);
+    assert.equal(badOriginOut.data.error, 'invalid_origin');
+
+    const badInvite = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'invitee', '--key', keyPath,
+      '--origin', 'colony', '--invite-code', 'NOPE-NOPE',
+    ]);
+    assert.equal(badInvite.code, 0, badInvite.stderr);
+    const badInviteOut = JSON.parse(badInvite.stdout.trim());
+    assert.equal(badInviteOut.ok, false);
+    assert.equal(badInviteOut.status, 403);
+    assert.equal(badInviteOut.data.error, 'invalid_invite');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('CLI join with a non-Ed25519 key exits 1 with Invalid private key', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-cli-badkey-'));
+  try {
+    const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const rsaPath = path.join(tmpDir, 'rsa.pem');
+    fs.writeFileSync(rsaPath, privateKey.export({ type: 'pkcs8', format: 'pem' }), 'utf8');
+
+    const rsaRes = await runCli([
+      'join', '--api-base', 'http://127.0.0.1:1', '--handle', 'rsajoin', '--key', rsaPath, '--origin', 'colony',
+    ]);
+    assert.equal(rsaRes.code, 1);
+    const rsaErr = JSON.parse(rsaRes.stderr.trim());
+    assert.equal(rsaErr.ok, false);
+    assert.ok(rsaErr.error.includes('Invalid private key'));
+    assert.ok(rsaErr.error.includes('Ed25519'));
+
+    const garbagePath = path.join(tmpDir, 'garbage.pem');
+    fs.writeFileSync(
+      garbagePath,
+      '-----BEGIN PRIVATE KEY-----\nnotrealbase64!!!\n-----END PRIVATE KEY-----\n',
+      'utf8'
+    );
+    const garbageRes = await runCli([
+      'join', '--api-base', 'http://127.0.0.1:1', '--handle', 'garbagejoin', '--key', garbagePath, '--origin', 'colony',
+    ]);
+    assert.equal(garbageRes.code, 1);
+    const garbageErr = JSON.parse(garbageRes.stderr.trim());
+    assert.equal(garbageErr.ok, false);
+    assert.ok(garbageErr.error.includes('Invalid private key'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI checkin --slot range, non-integer slot, and --status-text in state', async () => {
+  const ctx = await startTestServer();
+  try {
+    const makeResident = async (handle) => {
+      const keyPath = path.join(ctx.tmpDir, `${handle}.pem`);
+      assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+      const j = await runCli(['join', '--api-base', ctx.baseUrl, '--handle', handle, '--key', keyPath, '--origin', 'colony']);
+      assert.equal(j.code, 0, j.stderr);
+      const a = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle, role: 'muse' });
+      assert.equal(a.status, 200);
+      return keyPath;
+    };
+
+    const key1 = await makeResident('slotrange1');
+    const slotHigh = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'slotrange1', '--key', key1, '--slot', '10',
+    ]);
+    assert.equal(slotHigh.code, 0, slotHigh.stderr);
+    const slotHighOut = JSON.parse(slotHigh.stdout.trim());
+    assert.equal(slotHighOut.ok, false);
+    assert.equal(slotHighOut.status, 400);
+    assert.equal(slotHighOut.data.error, 'invalid_slot');
+
+    const key2 = await makeResident('slotrange2');
+    const slotNeg = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'slotrange2', '--key', key2, '--slot', '-1',
+    ]);
+    assert.equal(slotNeg.code, 0, slotNeg.stderr);
+    const slotNegOut = JSON.parse(slotNeg.stdout.trim());
+    assert.equal(slotNegOut.ok, false);
+    assert.equal(slotNegOut.status, 400);
+    assert.equal(slotNegOut.data.error, 'invalid_slot');
+
+    const slotFloat = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'slotrange1', '--key', key1, '--slot', '5.5',
+    ]);
+    assert.equal(slotFloat.code, 2);
+    assert.ok(slotFloat.stderr.includes('Invalid --slot'));
+
+    const key3 = await makeResident('slotgood');
+    const ciGood = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'slotgood', '--key', key3,
+      '--slot', '3', '--status-text', 'on the bandstand',
+    ]);
+    assert.equal(ciGood.code, 0, ciGood.stderr);
+    const ciGoodOut = JSON.parse(ciGood.stdout.trim());
+    assert.equal(ciGoodOut.ok, true);
+    assert.equal(ciGoodOut.status, 200);
+    assert.equal(ciGoodOut.data.slot, 3);
+
+    const stRes = await runCli(['state', '--api-base', ctx.baseUrl]);
+    assert.equal(stRes.code, 0, stRes.stderr);
+    const stOut = JSON.parse(stRes.stdout.trim());
+    const footlight = stOut.data.footlights.find((f) => f.handle === 'slotgood');
+    assert.equal(footlight?.status_text, 'on the bandstand');
+    assert.equal(footlight?.slot, 3);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('CLI getplot unknown handle 404 and missing --handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const notFound = await runCli(['getplot', '--api-base', ctx.baseUrl, '--handle', 'nobody-here']);
+    assert.equal(notFound.code, 0, notFound.stderr);
+    const notFoundOut = JSON.parse(notFound.stdout.trim());
+    assert.equal(notFoundOut.ok, false);
+    assert.equal(notFoundOut.status, 404);
+    assert.equal(notFoundOut.data.error, 'plot_not_found');
+
+    const missingHandle = await runCli(['getplot', '--api-base', ctx.baseUrl]);
+    assert.equal(missingHandle.code, 2);
+    assert.ok(missingHandle.stderr.includes('Missing --handle'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('CLI flag parsing edges: positional arg, missing value, --help after a command', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-cli-flags-'));
+  try {
+    const validKey = path.join(tmpDir, 'valid.pem');
+    assert.equal((await runCli(['keygen', '--out', validKey])).code, 0);
+
+    const posArg = await runCli(['state', 'extra']);
+    assert.equal(posArg.code, 2);
+    assert.ok(posArg.stderr.includes('Unexpected argument: extra'));
+
+    const missingVal = await runCli(['state', '--api-base']);
+    assert.equal(missingVal.code, 2);
+    assert.ok(missingVal.stderr.includes('Missing value for --api-base'));
+
+    const helpAfter = await runCli(['state', '--help']);
+    assert.equal(helpAfter.code, 0, helpAfter.stderr);
+    assert.ok(helpAfter.stderr.includes('Usage:'));
+
+    const unknownOpt = await runCli(['keygen', '--out', path.join(tmpDir, 'x.pem'), '--key', validKey]);
+    assert.equal(unknownOpt.code, 2);
+    assert.ok(unknownOpt.stderr.includes('Unknown option: --key'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI missing required flags, unreachable API, and non-numeric --since', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'slotter.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+
+    const sayMissingBody = await runCli([
+      'say', '--api-base', ctx.baseUrl, '--handle', 'slotter', '--key', keyPath,
+    ]);
+    assert.equal(sayMissingBody.code, 2);
+    assert.ok(sayMissingBody.stderr.includes('Missing --body'));
+
+    const presMissingZone = await runCli([
+      'presence', '--api-base', ctx.baseUrl, '--handle', 'slotter', '--key', keyPath,
+    ]);
+    assert.equal(presMissingZone.code, 2);
+    assert.ok(presMissingZone.stderr.includes('Missing --zone'));
+
+    const leaveMissingHandle = await runCli([
+      'leave', '--api-base', ctx.baseUrl, '--key', keyPath,
+    ]);
+    assert.equal(leaveMissingHandle.code, 2);
+    assert.ok(leaveMissingHandle.stderr.includes('Missing --handle'));
+
+    const unreachable = await runCli(['state', '--api-base', 'http://127.0.0.1:1']);
+    assert.equal(unreachable.code, 1);
+    const unreachableErr = JSON.parse(unreachable.stderr.trim());
+    assert.deepEqual(unreachableErr, { ok: false, error: 'fetch failed' });
+
+    const nonNumericSince = await runCli(['state', '--api-base', ctx.baseUrl, '--since', 'abc']);
+    assert.equal(nonNumericSince.code, 0, nonNumericSince.stderr);
+    const sinceOut = JSON.parse(nonNumericSince.stdout.trim());
+    assert.equal(sinceOut.ok, true);
+    assert.equal(sinceOut.status, 200);
+    assert.ok(sinceOut.data && typeof sinceOut.data === 'object');
+  } finally {
+    await ctx.close();
   }
 });
