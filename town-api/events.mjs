@@ -27,7 +27,7 @@ function validateEventEntry(entry) {
   if (!HANDLE_RE.test(hostHandle)) return null;
 
   if (typeof entry.start_at !== 'string' || !entry.start_at.trim()) return null;
-  const startMs = Date.parse(entry.start_at);
+  const startMs = Date.parse(entry.start_at.trim());
   if (!Number.isFinite(startMs)) return null;
 
   if (
