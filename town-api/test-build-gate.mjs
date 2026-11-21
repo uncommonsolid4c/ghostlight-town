@@ -773,3 +773,200 @@ test('invalid slot is rejected 400 and a second checkin attempt is rate-limited 
     await ctx.close();
   }
 });
+
+test('join rejects invalid origin, over-long bio, and reused pubkey', async () => {
+  const ctx = await startTestServer();
+  try {
+    const badOriginClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'bad-origin',
+      ...generateKeypair(),
+    });
+    const badOriginRes = await badOriginClient.join({ origin: 'nowhere' });
+    assert.equal(badOriginRes.status, 400);
+    assert.equal(badOriginRes.data.error, 'invalid_origin');
+
+    const longBioClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'long-bio',
+      ...generateKeypair(),
+    });
+    const longBioRes = await longBioClient.join({ origin: 'musebook', bio: 'b'.repeat(501) });
+    assert.equal(longBioRes.status, 400);
+    assert.equal(longBioRes.data.error, 'bio_too_long');
+    assert.equal(longBioRes.data.max, 500);
+
+    const maxBioClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'max-bio',
+      ...generateKeypair(),
+    });
+    const maxBioRes = await maxBioClient.join({ origin: 'musebook', bio: 'b'.repeat(500) });
+    assert.equal(maxBioRes.status, 201);
+
+    const sharedKeys = generateKeypair();
+    const alpha = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alpha',
+      ...sharedKeys,
+    });
+    const alphaRes = await alpha.join({ origin: 'musebook' });
+    assert.equal(alphaRes.status, 201);
+
+    const beta = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'beta',
+      ...sharedKeys,
+    });
+    const betaRes = await beta.join({ origin: 'colony' });
+    assert.equal(betaRes.status, 409);
+    assert.equal(betaRes.data.error, 'pubkey_taken');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say rejects empty body, over-long body, and invalid kind, while 500-char body posts', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const emptyRes = await client.say('');
+    assert.equal(emptyRes.status, 400);
+    assert.equal(emptyRes.data.error, 'invalid_body');
+    assert.equal(emptyRes.data.max, 500);
+
+    const longRes = await client.say('x'.repeat(501));
+    assert.equal(longRes.status, 400);
+    assert.equal(longRes.data.error, 'invalid_body');
+
+    const badKindRes = await client.say('hello', 'shout');
+    assert.equal(badKindRes.status, 400);
+    assert.equal(badKindRes.data.error, 'invalid_kind');
+
+    const okRes = await client.say('x'.repeat(500));
+    assert.equal(okRes.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to links to a real line and rejects bad targets', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const firstRes = await client.say('First line.');
+    assert.equal(firstRes.status, 201);
+    const firstId = firstRes.data.id;
+    assert.ok(Number.isInteger(firstId));
+
+    const replyRes = await client.say('Replying.', 'say', firstId);
+    assert.equal(replyRes.status, 201);
+    assert.equal(replyRes.data.reply_to, firstId);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const entry = s.data.prompt_book.find((e) => e.id === replyRes.data.id);
+    assert.ok(entry);
+    assert.equal(entry.reply_to, firstId);
+
+    const missingRes = await client.say('Bad reply.', 'say', 99999);
+    assert.equal(missingRes.status, 400);
+    assert.equal(missingRes.data.error, 'invalid_reply_to');
+
+    const zeroRes = await client.say('Zero reply.', 'say', 0);
+    assert.equal(zeroRes.status, 400);
+    assert.equal(zeroRes.data.error, 'invalid_reply_to');
+  } finally {
+    await ctx.close();
+  }
+});
+
+const MANIFEST_B = {
+  cottage: 'cabin',
+  wall: '#c8b898',
+  roof: '#4a2d1b',
+  trim: '#3f5f5f',
+  signpost_text: 'Second Desk',
+  props: [{ kind: 'cat', x: -1.5, y: 0, z: 1.2, rot_y: 45 }],
+};
+
+test('second plot PUT overwrites the first and state.plots tracks it', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const put1 = await client.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(put1.status, 200);
+    const t1 = put1.data.plot_updated_at;
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.plots.gatekeeper, t1);
+
+    const put2 = await client.plot(MANIFEST_B, DESK_NOTE_HTML);
+    assert.equal(put2.status, 200);
+    const t2 = put2.data.plot_updated_at;
+    assert.ok(t2 >= t1);
+
+    const getRes = await client.getPlot('gatekeeper');
+    assert.equal(getRes.status, 200);
+    assert.equal(getRes.data.manifest.cottage, 'cabin');
+    assert.equal(getRes.data.manifest.signpost_text, 'Second Desk');
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.plots.gatekeeper, t2);
+    assert.ok(s2.data.state_seq > s1.data.state_seq);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('leave without a lit footlight still returns 200 and bumps state_seq', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+    const seq0 = s0.data.state_seq;
+
+    const leaveRes = await client.leave();
+    assert.equal(leaveRes.status, 200);
+    assert.equal(leaveRes.data.extinguished, true);
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.ok(s1.data.state_seq > seq0);
+    assert.equal(s1.data.footlights.some((f) => f.handle === 'gatekeeper'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('checkin status_text too-long is rejected before rate limiter and omitted defaults to empty string', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx);
+
+    const badRes = await client.checkin({ status_text: 'x'.repeat(121) });
+    assert.equal(badRes.status, 400);
+    assert.equal(badRes.data.error, 'status_text_too_long');
+    assert.equal(badRes.data.max, 120);
+
+    const okRes = await client.checkin();
+    assert.equal(okRes.status, 200);
+    assert.equal(okRes.data.slot, 0);
+    assert.equal(okRes.data.status_text, '');
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const fl = s.data.footlights.find((f) => f.handle === 'gatekeeper');
+    assert.ok(fl);
+    assert.equal(fl.status_text, '');
+  } finally {
+    await ctx.close();
+  }
+});
