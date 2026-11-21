@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolvePlotOverlayContent } from './town.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -189,5 +190,158 @@ test('each desk note has valid document structure, Georgia serif, 34rem width, s
 
     const sigMatches = html.match(/<p\s+class=["']sig["']>/gi) || [];
     assert.equal(sigMatches.length, 1, `${handle}: must have exactly one <p class="sig">`);
+  }
+});
+
+test('resolvePlotOverlayContent: invalid handles fall back to static without calling fetch', async () => {
+  const invalidHandles = [null, 123, '', 'Milo', 'a<b', 'a', 'ab cd', 'wick!'];
+  for (const handle of invalidHandles) {
+    let fetchCalls = 0;
+    const fetchFn = async () => {
+      fetchCalls += 1;
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.equal(fetchCalls, 0, `fetchFn must not be called for invalid handle ${String(handle)}`);
+    assert.equal(result.kind, 'static');
+    const expectedUrl =
+      'plots/' +
+      encodeURIComponent(typeof handle === 'string' ? handle : String(handle ?? '')) +
+      '/index.html';
+    assert.equal(result.url, expectedUrl);
+  }
+
+  const noFetchResult = await resolvePlotOverlayContent('wick');
+  assert.deepEqual(noFetchResult, { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('resolvePlotOverlayContent: API path with a stub fetch', async () => {
+  {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>hi</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', {
+      fetchFn,
+      apiBase: 'https://x.example/',
+    });
+    assert.deepEqual(result, { kind: 'api', html: '<p>hi</p>' });
+    assert.deepEqual(urls, ['https://x.example/api/town/plot?handle=wick']);
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: '   ' }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.equal(result.kind, 'static');
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: 42 }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.equal(result.kind, 'static');
+  }
+
+  {
+    const fetchFn = async () => ({ status: 404, json: async () => ({}) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.equal(result.kind, 'static');
+  }
+
+  {
+    const fetchFn = async () => {
+      throw new Error('network error');
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.equal(result.kind, 'static');
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => null });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.equal(result.kind, 'static');
+  }
+
+  {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 404, json: async () => ({}) };
+    };
+    const result = await resolvePlotOverlayContent('maren', {
+      fetchFn,
+      apiBase: 'https://y.example///',
+    });
+    assert.equal(result.kind, 'static');
+    assert.deepEqual(urls, ['https://y.example/api/town/plot?handle=maren']);
+  }
+});
+
+test('desk notes and their sources contain no embed/form/script-scheme vectors', async () => {
+  const bannedVectors = [
+    /<iframe\b/i,
+    /<object\b/i,
+    /<embed\b/i,
+    /<form\b/i,
+    /javascript:/i,
+    /data:text\/html/i,
+    /vbscript:/i,
+  ];
+
+  for (const handle of SEED_HANDLES) {
+    const destPath = path.join(PLOTS_DIR, handle, 'index.html');
+    const srcPath = path.join(SOURCE_PLOTS_DIR, handle, 'desk-note.html');
+    const [destHtml, srcHtml] = await Promise.all([
+      fs.readFile(destPath, 'utf8'),
+      fs.readFile(srcPath, 'utf8'),
+    ]);
+
+    for (const re of bannedVectors) {
+      assert.doesNotMatch(destHtml, re, `${handle}/index.html must not match ${re}`);
+      assert.doesNotMatch(srcHtml, re, `${handle}/desk-note.html must not match ${re}`);
+    }
+  }
+});
+
+test('each seed plot directory contains only index.html', async () => {
+  for (const handle of SEED_HANDLES) {
+    const entries = await fs.readdir(path.join(PLOTS_DIR, handle));
+    assert.deepEqual(entries, ['index.html']);
+  }
+});
+
+test('desk-note size and paragraph bounds', async () => {
+  for (const handle of SEED_HANDLES) {
+    const buf = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'));
+    assert.ok(buf.length > 500 && buf.length < 3000, `${handle} byte length ${buf.length} out of bounds`);
+    const pMatches = buf.toString('utf8').match(/<p\b/gi) || [];
+    assert.ok(pMatches.length >= 3 && pMatches.length <= 8, `${handle} <p> count ${pMatches.length} out of bounds`);
+  }
+});
+
+test('exact sig line and h1 border color per handle', async () => {
+  const expected = {
+    milo: {
+      sig: '<p class="sig">&mdash; Milo, Founder &amp; Chief Editor, Ghostlight Gazette</p>',
+      border: 'border-bottom: 1px solid #a8d8ea',
+    },
+    wick: {
+      sig: '<p class="sig">&mdash; Wick, Stagehand / Lamp-Trimmer</p>',
+      border: 'border-bottom: 1px solid #c8922e',
+    },
+    maren: {
+      sig: '<p class="sig">&mdash; Maren, Retired Typesetter</p>',
+      border: 'border-bottom: 1px solid #43505c',
+    },
+    tomas: {
+      sig: '<p class="sig">&mdash; Tomas, Props-Master / Tea-Urn Keeper</p>',
+      border: 'border-bottom: 1px solid #b5633a',
+    },
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    assert.ok(html.includes(expected[handle].sig), `${handle}: missing exact sig line`);
+    assert.ok(html.includes(expected[handle].border), `${handle}: missing exact h1 border declaration`);
   }
 });
