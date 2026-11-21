@@ -425,3 +425,157 @@ test('staging empty-pad literals match town.js buildEmptyPlotPad (drift guard)',
     assert.ok(stagingSrc.includes(lit), `staging-polyfork/empty-pad.mjs missing literal: ${lit}`);
   }
 });
+
+test('buildEmptyPadMarker produces expected group, slab, and signpost for every plot 2..8', () => {
+  const THREE = makeFakeThree();
+  const makeTextTexture = () => ({ isFakeTexture: true });
+
+  assert.equal(TOWN_LAYOUT.plots.length, 8);
+  for (const plot of TOWN_LAYOUT.plots.slice(1)) {
+    const n = plot.plotNumber;
+    const group = buildEmptyPadMarker(THREE, plot, 0, makeTextTexture);
+
+    assert.equal(group.name, `plot_pad_${n}`);
+    assert.deepEqual(group.userData, {
+      clickable: true,
+      kind: 'open_plot',
+      plotNumber: n,
+      label: `OPEN PLOT #${n}`,
+    });
+    assert.equal(group.rotation.y, plot.rotY);
+    assert.equal(group.children.length, 2);
+
+    const [slab, sign] = group.children;
+    assert.deepEqual(slab.geometry.args, [5.2, 0.18, 4.6]);
+    assert.equal(slab.material.color, '#6e7278');
+
+    assert.deepEqual(sign.geometry.args, [1.5, 0.75, 0.1]);
+    assert.equal(sign.name, `plot_${n}_signpost`);
+    assert.deepEqual(sign.userData, { signpostText: `OPEN PLOT #${n}` });
+  }
+});
+
+test('syncEmptyPadMarkers calls groundAt only when building missing or freed markers', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  let groundCalls = 0;
+  const opts = {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt: () => {
+      groundCalls++;
+      return 0;
+    },
+  };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(groundCalls, 7);
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(groundCalls, 7);
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 2 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(groundCalls, 7);
+
+  liveStore.plotAssignments.delete('wick');
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(groundCalls, 8);
+});
+
+test('syncEmptyPadMarkers removes all 7 markers when all plots 2..8 are assigned and rebuilds 1 when one is freed', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  const saved = new Map(liveStore.emptyPadMarkers);
+
+  const handles = ['h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8'];
+  handles.forEach((handle, idx) => {
+    liveStore.plotAssignments.set(handle, { plotNumber: idx + 2 });
+  });
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 0);
+  assert.equal(scene.children.length, 0);
+  for (const marker of saved.values()) {
+    assert.equal(marker.removedCount, 1);
+  }
+
+  liveStore.plotAssignments.delete('h5');
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 1);
+  assert.equal(scene.children.length, 1);
+  assert.equal(liveStore.emptyPadMarkers.has(5), true);
+  assert.notEqual(liveStore.emptyPadMarkers.get(5), saved.get(5));
+});
+
+test('syncEmptyPadMarkers preserves the other six marker instances when one plot is assigned', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  const snapshot = new Map(liveStore.emptyPadMarkers);
+  const addCallsBefore = scene.addCalls;
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 5 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(scene.addCalls, addCallsBefore);
+  assert.equal(liveStore.emptyPadMarkers.has(5), false);
+  for (let n = 2; n <= 8; n++) {
+    if (n === 5) continue;
+    assert.equal(liveStore.emptyPadMarkers.get(n), snapshot.get(n));
+  }
+});
+
+test('syncEmptyPadMarkers ignores string, missing, null, 0, and -1 plotNumber assignments', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = {
+    plotAssignments: new Map([
+      ['str', { plotNumber: '2' }],
+      ['missing', {}],
+      ['nil', { plotNumber: null }],
+      ['zero', { plotNumber: 0 }],
+      ['neg', { plotNumber: -1 }],
+    ]),
+    emptyPadMarkers: new Map(),
+  };
+
+  const count = syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt: () => 0,
+  });
+
+  assert.equal(count, 7);
+  assert.equal(scene.children.length, 7);
+  assert.equal(liveStore.emptyPadMarkers.has(2), true);
+});
+
+test('buildEmptyPadMarker aligns signpost and slab geometry within floating-point tolerance', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[1]; // plotNumber 2
+  const group = buildEmptyPadMarker(THREE, plot, 0, () => ({ isFakeTexture: true }));
+  const [slab, sign] = group.children;
+
+  assert.ok(
+    Math.abs((sign.position.z - sign.geometry.args[2] / 2) - slab.geometry.args[2] / 2) < 1e-9,
+    'sign near face should be flush with slab edge (2.3)'
+  );
+  assert.ok(
+    Math.abs((sign.position.y - sign.geometry.args[1] / 2) - 0.075) < 1e-9,
+    'sign bottom should sit 0.075 above ground'
+  );
+  assert.ok(
+    Math.abs((slab.position.y + slab.geometry.args[1] / 2) - 0.18) < 1e-9,
+    'slab top should sit at 0.18'
+  );
+
+  assert.equal(slab.position.x, 0);
+  assert.equal(slab.position.z, 0);
+  assert.equal(sign.position.x, 2.0);
+});
