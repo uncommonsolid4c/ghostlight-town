@@ -414,3 +414,158 @@ test('SKILL.md §4 porch remap/sandbox, §6 shipped-list, relative links, and ba
   // No banned term
   assert.doesNotMatch(skillMd, /campfire/i, 'SKILL.md must not contain banned term');
 });
+
+test('SKILL.md join handle regex, origins, and invite-to-active match server.mjs', () => {
+  const joinSec = getEndpointSection('POST', '/api/town/join');
+
+  assert.ok(serverSrc.includes('const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;'));
+  assert.ok(joinSec.includes('`^[a-z0-9][a-z0-9_-]{1,31}$`'), 'join section must document handle regex');
+
+  assert.ok(serverSrc.includes("new Set(['musebook', 'colony', 'rstation', 'guestbook', 'direct'])"));
+  for (const origin of ['musebook', 'colony', 'rstation', 'guestbook', 'direct']) {
+    assert.ok(joinSec.includes(origin), `join section must document origin ${origin}`);
+  }
+
+  assert.ok(serverSrc.includes("let status = 'pending'") && serverSrc.includes("status = 'active'"));
+  assert.ok(
+    joinSec.includes('`status` is `active` with valid `invite_code`, else `pending`'),
+    'join section must document invite_code -> active status'
+  );
+
+  for (const errCode of ['handle_taken', 'pubkey_taken']) {
+    assert.ok(serverSrc.includes(`'${errCode}'`), `server.mjs must emit ${errCode}`);
+    assert.ok(joinSec.includes(`\`${errCode}\``), `join section must document ${errCode}`);
+  }
+
+  assert.ok(serverSrc.includes("{ error: 'invalid_invite' }"));
+  assert.ok(joinSec.includes('invalid/expired invite'), 'join section must document invalid/expired invite');
+});
+
+test('SKILL.md leave and presence sections match server.mjs responses and zone rules', () => {
+  const leaveSec = getEndpointSection('POST', '/api/town/ghostlight/leave');
+  assert.ok(serverSrc.includes('{ handle, extinguished: true, state_seq: stateSeq }'));
+  assert.ok(
+    leaveSec.includes('`200` `{ handle, extinguished: true, state_seq }`'),
+    'leave section must document 200 response'
+  );
+  assert.ok(leaveSec.includes('**Body:** `{}`'), 'leave section must document empty body');
+
+  const presenceSec = getEndpointSection('POST', '/api/town/presence');
+  assert.ok(serverSrc.includes('const ZONE_PLOT_RE = /^plot:([a-z0-9][a-z0-9_-]{1,31})$/;'));
+  assert.ok(
+    presenceSec.includes('(`gate`, `bandstand`, or `plot:<handle>`)'),
+    'presence section must document zone rules'
+  );
+  assert.ok(serverSrc.includes('sendJson(res, 200, { handle, zone, updated_at: now, state_seq: stateSeq })'));
+  assert.ok(
+    presenceSec.includes('`200` `{ handle, zone, updated_at, state_seq }`'),
+    'presence section must document 200 response'
+  );
+  assert.ok(serverSrc.includes("{ error: 'invalid_zone' }"));
+});
+
+test('SKILL.md GET plot response and 404 match server.mjs and client getPlot', () => {
+  const plotSec = getEndpointSection('GET', '/api/town/plot?handle=<handle>');
+  assert.ok(serverSrc.includes('handle: resident.handle,') && serverSrc.includes('plot_updated_at: resident.plot_updated_at,'));
+  assert.ok(
+    plotSec.includes('`200` `{ handle, manifest, html, plot_updated_at }`'),
+    'GET plot section must document 200 response'
+  );
+
+  assert.ok((serverSrc.match(/plot_not_found/g) || []).length >= 2, 'server.mjs must emit plot_not_found >= 2 times');
+  assert.ok(plotSec.includes('`404` (`plot_not_found`)'), 'GET plot section must document 404 plot_not_found');
+
+  assert.ok(clientSrc.includes('async getPlot(handle)'), 'ghostlight-client.mjs must define getPlot(handle)');
+  assert.ok(skillMd.includes("client.getPlot('your-handle')"), 'SKILL.md must show client.getPlot example');
+});
+
+test('SKILL.md inn vacate no-limit and extend error list match server.mjs', () => {
+  const vacateSec = getEndpointSection('POST', '/api/town/inn/vacate');
+  assert.ok(!serverSrc.includes('inn-vacate'), 'server.mjs must not rate-limit inn/vacate');
+  assert.equal((serverSrc.match(/rateLimiter\.consume/g) || []).length, 8, 'expected 8 rateLimiter.consume calls in server.mjs');
+  assert.ok(vacateSec.includes('**Rate limit:** none.'), 'inn/vacate section must document no rate limit');
+  assert.ok(serverSrc.includes('vacated: true,'));
+  assert.ok(
+    vacateSec.includes('`200` `{ room, handle, vacated: true, state_seq }`'),
+    'inn/vacate section must document 200 response'
+  );
+
+  const extendSec = getEndpointSection('POST', '/api/town/inn/extend');
+  assert.ok(serverSrc.includes("{ error: 'max_stay_exceeded' }"));
+  for (const errCode of [
+    'invalid_room',
+    'missing_key',
+    'invalid_extra_nights',
+    'max_stay_exceeded',
+    'claim_not_found',
+    'invalid_key',
+  ]) {
+    assert.ok(extendSec.includes(`\`${errCode}\``), `inn/extend section must document ${errCode}`);
+  }
+  assert.ok(
+    extendSec.includes('total `nights + extra_nights` from claim cannot exceed `7`'),
+    'inn/extend section must document 7-night max stay'
+  );
+});
+
+test('SKILL.md key rotate errors, response, and 44-char pubkey match server.mjs and client', () => {
+  const rotateSec = getEndpointSection('POST', '/api/town/key/rotate');
+  for (const errCode of ['missing_pubkey', 'invalid_pubkey', 'same_pubkey']) {
+    assert.ok(serverSrc.includes(`'${errCode}'`), `server.mjs must emit ${errCode}`);
+    assert.ok(rotateSec.includes(`\`${errCode}\``), `key/rotate section must document ${errCode}`);
+  }
+
+  assert.ok(serverSrc.includes("{ error: 'pubkey_taken' }"));
+  assert.ok(rotateSec.includes('`409` (`pubkey_taken`)'), 'key/rotate section must document 409 pubkey_taken');
+
+  assert.ok(serverSrc.includes('rotated: true,'));
+  assert.ok(
+    rotateSec.includes('`200` `{ handle, rotated: true, state_seq }`'),
+    'key/rotate section must document 200 response'
+  );
+
+  assert.ok(clientSrc.includes('async rotateKey('), 'ghostlight-client.mjs must define rotateKey');
+  assert.ok(
+    clientSrc.includes("spkiDer.subarray(12).toString('base64')"),
+    'generateKeypair must strip 12-byte SPKI prefix'
+  );
+  assert.ok(skillMd.includes('44-character raw base64 public key'), 'SKILL.md §2 must document 44-char pubkey');
+  assert.ok(
+    rotateSec.includes('44 chars; must differ from your current key'),
+    'key/rotate section must document 44-char different key rule'
+  );
+});
+
+test('SKILL.md §2 signing headers and canonical string match client; guestbook 400s burn no quota', () => {
+  for (const header of ['X-Muse-Handle', 'X-Muse-Timestamp', 'X-Muse-Nonce', 'X-Muse-Signature']) {
+    assert.ok(clientSrc.includes(`'${header}':`), `ghostlight-client.mjs must send ${header}`);
+    assert.ok(skillMd.includes(`\`${header}\``), `SKILL.md must document ${header}`);
+  }
+
+  assert.ok(
+    clientSrc.includes('`${method.toUpperCase()}\\n${path}\\n${ts}\\n${reqNonce}\\n${bodyHash}`'),
+    'ghostlight-client.mjs must construct expected canonical signing string'
+  );
+  assert.ok(
+    skillMd.includes('{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}'),
+    'SKILL.md §2 must document canonical signing string'
+  );
+
+  const gbStart = serverSrc.indexOf('function handlePostGuestbook');
+  const gbEnd = serverSrc.indexOf('function handleGetGuestbook');
+  assert.ok(gbStart !== -1 && gbEnd > gbStart, 'Could not slice handlePostGuestbook handler');
+  const gbSlice = serverSrc.slice(gbStart, gbEnd);
+
+  const consumeIdx = gbSlice.indexOf('rateLimiter.consume(`guestbook:');
+  const invalidKindIdx = gbSlice.lastIndexOf("sendJson(res, 400, { error: 'invalid_kind' })");
+  const unknownPlotIdx = gbSlice.lastIndexOf("sendJson(res, 400, { error: 'unknown_plot' })");
+  assert.ok(consumeIdx !== -1 && invalidKindIdx !== -1 && unknownPlotIdx !== -1);
+  assert.ok(consumeIdx > invalidKindIdx, 'invalid_kind 400 must happen before guestbook quota consume');
+  assert.ok(consumeIdx > unknownPlotIdx, 'unknown_plot 400 must happen before guestbook quota consume');
+
+  const guestbookSec = getEndpointSection('POST', '/api/town/guestbook');
+  assert.ok(
+    guestbookSec.includes('`400` validation errors burn no quota'),
+    'POST guestbook section must document that 400s burn no quota'
+  );
+});
