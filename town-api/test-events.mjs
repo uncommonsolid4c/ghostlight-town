@@ -150,6 +150,39 @@ test('parity: town-api/events.mjs selectCurrentEvent matches staging-polyfork/ev
     location: 'bandstand',
     blurb: '',
   };
+  // Slice 236 follow-up: padded start_at must parse (trimmed) in both copies.
+  const paddedNowEv = {
+    title: 'Padded Now',
+    host_handle: 'milo',
+    start_at: '  2026-11-15T17:30:00Z  ',
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const paddedFutureEv = {
+    title: 'Padded Future',
+    host_handle: 'vera',
+    start_at: '\t2026-11-15T20:00:00Z\n',
+    duration_min: 45,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const paddedExactEv = {
+    title: 'Padded Exact',
+    host_handle: 'alice',
+    start_at: ' 2026-11-15T18:00:00Z ',
+    duration_min: 30,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const blankStartEv = {
+    title: 'Blank Start',
+    host_handle: 'milo',
+    start_at: '   ',
+    duration_min: 30,
+    location: 'bandstand',
+    blurb: '',
+  };
 
   const cases = [
     { events: invalidEntries, nowMs: baseMs },
@@ -161,6 +194,11 @@ test('parity: town-api/events.mjs selectCurrentEvent matches staging-polyfork/ev
     { events: [futureEv], nowMs: baseMs - 10_000 },
     { events: 'not-an-array', nowMs: baseMs },
     { events: [exactStartEv], nowMs: NaN },
+    { events: [paddedNowEv], nowMs: baseMs }, // padded start parses as now
+    { events: [paddedFutureEv], nowMs: baseMs }, // padded start parses as next
+    { events: [paddedExactEv, paddedFutureEv], nowMs: baseMs }, // padded exact start -> now
+    { events: [blankStartEv], nowMs: baseMs }, // whitespace-only start is invalid
+    { events: [blankStartEv, paddedNowEv], nowMs: baseMs }, // blank skipped, padded wins
   ];
 
   for (const c of cases) {
@@ -169,6 +207,16 @@ test('parity: town-api/events.mjs selectCurrentEvent matches staging-polyfork/ev
       bannerSelectCurrentEvent(c.events, c.nowMs)
     );
   }
+
+  // The returned event carries the trimmed start_at in both copies.
+  assert.equal(
+    apiSelectCurrentEvent([paddedNowEv], baseMs)?.event?.start_at,
+    '2026-11-15T17:30:00Z'
+  );
+  assert.equal(
+    bannerSelectCurrentEvent([paddedNowEv], baseMs)?.event?.start_at,
+    '2026-11-15T17:30:00Z'
+  );
 });
 
 test('selectNowNext returns now+next, only-next, none, ignores past, earliest start wins', () => {
