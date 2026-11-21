@@ -153,7 +153,7 @@ async function hashTree(dir, prefix = '', out = {}) {
   return out;
 }
 
-async function startFixtureServer(servedFiles, { apiStatus = 200, apiClose = false } = {}) {
+async function startFixtureServer(servedFiles, { apiStatus = 200, apiClose = false, fileStatus = {} } = {}) {
   let requestCount = 0;
   const server = http.createServer((req, res) => {
     requestCount += 1;
@@ -171,6 +171,11 @@ async function startFixtureServer(servedFiles, { apiStatus = 200, apiClose = fal
     const prefix = '/ghostlight-town/';
     if (urlPath.startsWith(prefix)) {
       const relPath = urlPath.slice(prefix.length);
+      if (Object.prototype.hasOwnProperty.call(fileStatus, relPath)) {
+        res.writeHead(fileStatus[relPath]);
+        res.end(servedFiles[relPath] ?? '');
+        return;
+      }
       if (Object.prototype.hasOwnProperty.call(servedFiles, relPath)) {
         res.writeHead(200);
         res.end(servedFiles[relPath]);
@@ -483,5 +488,218 @@ test('drift guard: staging-polyfork expected files match stage-deploy MANIFEST.j
     assert.deepEqual(expectedFiles, stagedFiles);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--api-base is honored (separate API host)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-apibase-'));
+  let base404Server;
+  let base200Server;
+  let api200Server;
+  let api404Server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    base404Server = await startFixtureServer(served, { apiStatus: 404 });
+    base200Server = await startFixtureServer(served, { apiStatus: 200 });
+    api200Server = await startFixtureServer({}, { apiStatus: 200 });
+    api404Server = await startFixtureServer({}, { apiStatus: 404 });
+
+    // (a) base API 404, --api-base returns 200 -> live
+    const resA = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', base404Server.baseUrl,
+      '--api-base', api200Server.baseUrl,
+      '--root', tmpDir,
+    ]);
+    assert.equal(resA.status, 0, `Expected exit 0, got ${resA.status}: ${resA.stderr}`);
+    const summaryA = JSON.parse(resA.stdout.trim());
+    assert.equal(summaryA.status, 'ok');
+    assert.equal(summaryA.api, 'live');
+
+    // (b) base API 404, --api-base returns 404 -> not-live
+    const resB = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', base404Server.baseUrl,
+      '--api-base', api404Server.baseUrl,
+      '--root', tmpDir,
+    ]);
+    assert.equal(resB.status, 0, `Expected exit 0, got ${resB.status}: ${resB.stderr}`);
+    const summaryB = JSON.parse(resB.stdout.trim());
+    assert.equal(summaryB.api, 'not-live');
+
+    // (c) base API 200, --api-base returns 404 -> --api-base wins -> not-live
+    const resC = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', base200Server.baseUrl,
+      '--api-base', api404Server.baseUrl,
+      '--root', tmpDir,
+    ]);
+    assert.equal(resC.status, 0, `Expected exit 0, got ${resC.status}: ${resC.stderr}`);
+    const summaryC = JSON.parse(resC.stdout.trim());
+    assert.equal(summaryC.api, 'not-live');
+  } finally {
+    if (base404Server) await base404Server.close();
+    if (base200Server) await base200Server.close();
+    if (api200Server) await api200Server.close();
+    if (api404Server) await api404Server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gazette/latest.json that cannot resolve an issue fails with mismatch', async () => {
+  const cases = [
+    { name: 'invalid JSON', content: '{not json', detailRe: /invalid JSON/ },
+    { name: 'empty issues', content: '{"latest":1,"issues":[]}', detailRe: /missing issue-\*\.html filename/ },
+    {
+      name: 'non-issue filename',
+      content: '{"latest":1,"issues":[{"n":1,"file":"notes.txt"}]}',
+      detailRe: /missing issue-\*\.html filename/,
+    },
+    { name: 'missing issues key', content: '{"latest":1}', detailRe: /missing issue-\*\.html filename/ },
+  ];
+
+  for (const c of cases) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-latest-bad-'));
+    let server;
+    try {
+      const served = await createFixtureTree(tmpDir);
+      served['gazette/latest.json'] = c.content;
+      server = await startFixtureServer(served);
+
+      const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+      assert.equal(res.status, 1, `${c.name}: expected exit 1, got ${res.status}`);
+      const summary = JSON.parse(res.stdout.trim());
+      assert.equal(summary.status, 'fail', c.name);
+      const fail = summary.failures.find(
+        (f) => f.file === 'gazette/latest.json' && f.problem === 'mismatch',
+      );
+      assert.ok(fail, `${c.name}: expected mismatch failure, got ${JSON.stringify(summary.failures)}`);
+      assert.match(fail.detail, c.detailRe, c.name);
+    } finally {
+      if (server) await server.close();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('latest pointing at an absent issue number falls back to issues[0]', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-latest-fallback-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['gazette/latest.json'] = JSON.stringify({
+      latest: 9,
+      issues: [{ n: 1, file: 'issue-001.html' }],
+    });
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'ok');
+    assert.deepEqual(summary.failures, []);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('latest.json pointing at an issue not in expected files is fetched live', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-latest-extra-'));
+  let serverMissing;
+  let serverPresent;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    const expectedCount = Object.keys(served).length;
+    served['gazette/latest.json'] = JSON.stringify({
+      latest: 4,
+      issues: [{ n: 4, file: 'issue-004.html', date: '2026-11-21', headline: 'Issue 4' }],
+    });
+
+    // (a) gazette/issue-004.html missing on server (404)
+    serverMissing = await startFixtureServer(served);
+    const resMissing = await runCheck(['--bundle', 'town-3d', '--base', serverMissing.baseUrl, '--root', tmpDir]);
+    assert.equal(resMissing.status, 1, `Expected exit 1, got ${resMissing.status}`);
+    const summaryMissing = JSON.parse(resMissing.stdout.trim());
+    assert.equal(summaryMissing.status, 'fail');
+    assert.equal(summaryMissing.checked, expectedCount);
+    const missFail = summaryMissing.failures.find(
+      (f) => f.file === 'gazette/issue-004.html' && f.problem === 'missing',
+    );
+    assert.ok(missFail, `Expected missing failure, got ${JSON.stringify(summaryMissing.failures)}`);
+
+    // (b) gazette/issue-004.html served with 200
+    served['gazette/issue-004.html'] = '<h1>Ghostlight Gazette #4</h1>\n';
+    serverPresent = await startFixtureServer(served);
+    const resPresent = await runCheck(['--bundle', 'town-3d', '--base', serverPresent.baseUrl, '--root', tmpDir]);
+    assert.equal(resPresent.status, 0, `Expected exit 0, got ${resPresent.status}: ${resPresent.stderr}`);
+    const summaryPresent = JSON.parse(resPresent.stdout.trim());
+    assert.equal(summaryPresent.status, 'ok');
+    assert.deepEqual(summaryPresent.failures, []);
+  } finally {
+    if (serverMissing) await serverMissing.close();
+    if (serverPresent) await serverPresent.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('non-200 non-404 file status fails with bad-status', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-500-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served, { fileStatus: { 'CREDITS.md': 500 } });
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'fail');
+    const badFail = summary.failures.find(
+      (f) => f.file === 'CREDITS.md' && f.problem === 'bad-status',
+    );
+    assert.ok(badFail, `Expected bad-status failure, got ${JSON.stringify(summary.failures)}`);
+    assert.equal(badFail.detail, 'HTTP 500');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('argument errors print JSON on stderr, exit 1, and unknown arg makes no network calls', async () => {
+  let server;
+  try {
+    server = await startFixtureServer({});
+
+    // (a) --bogus x
+    const resBogus = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', server.baseUrl,
+      '--root', REPO_ROOT,
+      '--bogus', 'x',
+    ]);
+    assert.equal(resBogus.status, 1);
+    assert.equal(resBogus.stdout, '');
+    const errBogus = JSON.parse(resBogus.stderr.trim());
+    assert.equal(typeof errBogus.error, 'string');
+    assert.match(errBogus.error, /Unknown argument: --bogus/);
+    assert.equal(server.getRequestCount(), 0);
+
+    // (b) --base with no following value
+    const resBase = await runCheck(['--base', '--root', '/tmp']);
+    assert.equal(resBase.status, 1);
+    assert.equal(resBase.stdout, '');
+    const errBase = JSON.parse(resBase.stderr.trim());
+    assert.equal(typeof errBase.error, 'string');
+    assert.match(errBase.error, /--base requires a URL argument/);
+
+    // (c) --api-base with no following value
+    const resApiBase = await runCheck(['--api-base']);
+    assert.equal(resApiBase.status, 1);
+    assert.equal(resApiBase.stdout, '');
+    const errApiBase = JSON.parse(resApiBase.stderr.trim());
+    assert.equal(typeof errApiBase.error, 'string');
+    assert.match(errApiBase.error, /--api-base requires a URL argument/);
+  } finally {
+    if (server) await server.close();
   }
 });
