@@ -500,3 +500,169 @@ test('build-digest.mjs exits 1 on missing state file and invalid --since format'
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('build-feed.mjs rejects unknown arguments and missing --out path (exit 1, stderr only)', async () => {
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [BUILD_FEED_PATH, '--bogus']),
+    (err) => err.code === 1 && err.stdout === '' && /Unknown argument: --bogus/.test(err.stderr)
+  );
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [BUILD_FEED_PATH, '--out']),
+    (err) => err.code === 1 && /Missing path after --out/.test(err.stderr)
+  );
+});
+
+test('gazette/feed.xml escapes apostrophes and sets lastBuildDate to newest issue pubDate', async () => {
+  const xml = await fs.readFile(FEED_PATH, 'utf8');
+  assert.ok(xml.includes('nobody&apos;s cottage'), 'channel description must escape apostrophe');
+  assert.ok(xml.includes('week&apos;s town news'), 'issue #3 description must escape apostrophe');
+  assert.ok(
+    xml.includes('<lastBuildDate>Wed, 18 Nov 2026 12:00:00 +0000</lastBuildDate>'),
+    'lastBuildDate must match newest issue pubDate'
+  );
+  assert.match(xml, /<item>\s*<title>The Town Reads Itself Aloud<\/title>/);
+});
+
+test('build-digest.mjs skips malformed lines, reports count on stderr, and keeps valid lines', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-malformed-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const outPath = path.join(tmpDir, 'digest.md');
+    const ts = Math.floor(Date.parse('2026-11-12T19:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { handle: 'alice', role: 'muse', kind: 'say', body: 'missing id', created_at: ts },
+          { id: 2, handle: '', role: 'muse', kind: 'say', body: 'empty handle', created_at: ts },
+          { id: 3, handle: 'bob', role: 'muse', kind: 'say', body: '   ', created_at: ts },
+          { id: 4, handle: 'carol', role: 'muse', kind: 'say', body: 'bad created_at', created_at: 'not-a-number' },
+          null,
+          { id: 5, handle: 'wick', role: 'npc', kind: 'say', body: 'the one valid line', created_at: ts },
+        ],
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+      '--out', outPath,
+    ]);
+
+    assert.equal(stderr, 'skipped 5 malformed line(s)\n');
+    assert.equal(stdout, 'digest: 1 line(s), 1 speaker(s)\n');
+
+    const digest = await fs.readFile(outPath, 'utf8');
+    assert.ok(digest.includes('the one valid line'), 'valid line must be kept');
+    assert.ok(!digest.includes('missing id'), 'missing id entry must be skipped');
+    assert.ok(!digest.includes('empty handle'), 'empty handle entry must be skipped');
+    assert.ok(!digest.includes('bad created_at'), 'bad created_at entry must be skipped');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs exits 1 when --since is after --until and when no --state is given', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-range-'));
+  try {
+    const validSnap = path.join(tmpDir, 'state.json');
+    await fs.writeFile(validSnap, JSON.stringify({ prompt_book: [] }));
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [
+        BUILD_DIGEST_PATH,
+        '--state', validSnap,
+        '--since', '2026-11-13',
+        '--until', '2026-11-12',
+      ]),
+      (err) => err.code === 1 && err.stdout === '' && /--since \(2026-11-13\) cannot be after --until \(2026-11-12\)/.test(err.stderr)
+    );
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [
+        BUILD_DIGEST_PATH,
+        '--since', '2026-11-12',
+        '--until', '2026-11-12',
+      ]),
+      (err) => err.code === 1 && /At least one --state <path> is required/.test(err.stderr)
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs reports an empty window with 0 speakers and no Speakers section', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-empty-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(snapPath, JSON.stringify({ prompt_book: [] }));
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.ok(
+      stdout.startsWith('# Prompt Book digest — 2026-11-12 to 2026-11-12 (town time)\n'),
+      'empty digest must start with window header'
+    );
+    assert.ok(stdout.includes('0 line(s) from 0 speaker(s) in the window.'));
+    assert.ok(stdout.includes('No lines in this window.'));
+    assert.ok(!stdout.includes('## Speakers'), 'empty digest must not include Speakers section');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs sorts lines by id across merged snapshots and speakers by count desc then handle asc', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-sort-'));
+  try {
+    const snapA = path.join(tmpDir, 'stateA.json');
+    const snapB = path.join(tmpDir, 'stateB.json');
+    const ts = Math.floor(Date.parse('2026-11-12T19:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snapA,
+      JSON.stringify({
+        prompt_book: [
+          { id: 3, handle: 'carol', role: 'muse', kind: 'say', body: 'third id first in file', created_at: ts + 120 },
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'first id last in file', created_at: ts },
+        ],
+      })
+    );
+    await fs.writeFile(
+      snapB,
+      JSON.stringify({
+        prompt_book: [
+          { id: 2, handle: 'bob', role: 'muse', kind: 'say', body: 'second id in other snapshot', created_at: ts + 60 },
+          { id: 4, handle: 'alice', role: 'muse', kind: 'say', body: 'alice second line', created_at: ts + 180 },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapA,
+      '--state', snapB,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.ok(stdout.includes('4 line(s) from 3 speaker(s) in the window.'));
+
+    const p1 = stdout.indexOf('first id last in file');
+    const p2 = stdout.indexOf('second id in other snapshot');
+    const p3 = stdout.indexOf('third id first in file');
+    const p4 = stdout.indexOf('alice second line');
+    assert.ok(p1 > 0 && p2 > p1 && p3 > p2 && p4 > p3, 'lines must appear in id order 1 < 2 < 3 < 4');
+
+    assert.match(stdout, /## Speakers\s+- alice: 2 line\(s\)\s+- bob: 1 line\(s\)\s+- carol: 1 line\(s\)/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
