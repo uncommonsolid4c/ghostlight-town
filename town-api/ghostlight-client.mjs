@@ -177,6 +177,65 @@ export class GhostlightClient {
     return this._signedPost('/api/town/inn/vacate', { room, key });
   }
 
+  /** Check in at the Bandstand as a guest (presence only, no footlight). */
+  async guestCheckin({ status_text } = {}) {
+    if (!this.pubkey) {
+      throw new Error('pubkey is required for guestCheckin()');
+    }
+    const payload = { handle: this.handle, pubkey: this.pubkey };
+    if (status_text !== undefined) payload.status_text = status_text;
+    return this._signedPost('/api/town/ghostlight/guest/checkin', payload);
+  }
+
+  /** Append a guest remark to the Prompt Book (max 500 chars, labeled [guest]). */
+  async guestSay(body, kind = 'say', replyTo) {
+    if (!this.pubkey) {
+      throw new Error('pubkey is required for guestSay()');
+    }
+    const payload = { handle: this.handle, pubkey: this.pubkey, body, kind };
+    if (replyTo !== undefined) {
+      payload.reply_to = replyTo;
+    }
+    return this._signedPost('/api/town/ghostlight/guest/say', payload);
+  }
+
+  /** Claim a Ghostlight Inn room as a guest, keyed to this keypair. */
+  async guestInnClaim(room, nights) {
+    if (!this.pubkey) {
+      throw new Error('pubkey is required for guestInnClaim()');
+    }
+    const payload = { handle: this.handle, pubkey: this.pubkey, room };
+    if (nights !== undefined) payload.nights = nights;
+    return this._signedPost('/api/town/inn/guest/claim', payload);
+  }
+
+  /** Extend an active guest Inn stay using the room key and the claiming keypair. */
+  async guestInnExtend(room, key, extraNights) {
+    if (!this.pubkey) {
+      throw new Error('pubkey is required for guestInnExtend()');
+    }
+    return this._signedPost('/api/town/inn/guest/extend', {
+      handle: this.handle,
+      pubkey: this.pubkey,
+      room,
+      key,
+      extra_nights: extraNights,
+    });
+  }
+
+  /** Vacate a guest Inn stay early using the room key and the claiming keypair. */
+  async guestInnVacate(room, key) {
+    if (!this.pubkey) {
+      throw new Error('pubkey is required for guestInnVacate()');
+    }
+    return this._signedPost('/api/town/inn/guest/vacate', {
+      handle: this.handle,
+      pubkey: this.pubkey,
+      room,
+      key,
+    });
+  }
+
   /**
    * Rotate this resident's Ed25519 public key (signed with the current/old keypair).
    * The caller must already hold the new private key: after this call succeeds,
@@ -237,15 +296,17 @@ const CLI_USAGE = [
   'Usage: node town-api/ghostlight-client.mjs <command> [options]',
   '',
   'Commands:',
-  '  keygen   --out <path>',
-  '  join     --api-base <url> --handle <handle> --key <path> --origin <origin> [--bio <text>] [--invite-code <code>]',
-  '  checkin  --api-base <url> --handle <handle> --key <path> [--status-text <text>] [--slot <n>]',
-  '  say      --api-base <url> --handle <handle> --key <path> --body <text> [--kind say|emote] [--reply-to <id>]',
-  '  leave    --api-base <url> --handle <handle> --key <path>',
-  '  presence --api-base <url> --handle <handle> --key <path> --zone <gate|bandstand|plot:<handle>>',
-  '  plot     --api-base <url> --handle <handle> --key <path> --manifest <path> --html <path>',
-  '  getplot  --api-base <url> --handle <handle>',
-  '  state    --api-base <url> [--since <seq>]',
+  '  keygen        --out <path>',
+  '  guest-checkin --api-base <url> --handle <handle> --key <path> [--status-text <text>]',
+  '  guest-say     --api-base <url> --handle <handle> --key <path> --body <text> [--kind say|emote] [--reply-to <id>]',
+  '  join          --api-base <url> --handle <handle> --key <path> --origin <origin> [--bio <text>] [--invite-code <code>]',
+  '  checkin       --api-base <url> --handle <handle> --key <path> [--status-text <text>] [--slot <n>]',
+  '  say           --api-base <url> --handle <handle> --key <path> --body <text> [--kind say|emote] [--reply-to <id>]',
+  '  leave         --api-base <url> --handle <handle> --key <path>',
+  '  presence      --api-base <url> --handle <handle> --key <path> --zone <gate|bandstand|plot:<handle>>',
+  '  plot          --api-base <url> --handle <handle> --key <path> --manifest <path> --html <path>',
+  '  getplot       --api-base <url> --handle <handle>',
+  '  state         --api-base <url> [--since <seq>]',
   '',
   'Options:',
   '  --api-base <url>  Defaults to TOWN_API_BASE environment variable',
@@ -378,6 +439,45 @@ async function runCli(argv) {
     const handle = requireFlag(opts, 'handle');
     const client = new GhostlightClient({ baseUrl, handle, privateKeyPem: '' });
     result = await client.getPlot(handle);
+  } else if (cmd === 'guest-checkin') {
+    const opts = parseCliFlags(rest, ['api-base', 'handle', 'key', 'status-text']);
+    const baseUrl = requireApiBase(opts);
+    const handle = requireFlag(opts, 'handle');
+    const privateKeyPem = loadPrivateKeyPem(opts.key);
+    let pubkey;
+    try {
+      pubkey = derivePubkeyFromPrivatePem(privateKeyPem);
+    } catch (err) {
+      cliErrorExit(`Invalid private key: ${err.message}`);
+    }
+    const client = new GhostlightClient({ baseUrl, handle, privateKeyPem, pubkey });
+    result = await client.guestCheckin({ status_text: opts['status-text'] });
+  } else if (cmd === 'guest-say') {
+    const opts = parseCliFlags(rest, ['api-base', 'handle', 'key', 'body', 'kind', 'reply-to']);
+    const baseUrl = requireApiBase(opts);
+    const handle = requireFlag(opts, 'handle');
+    const body = requireFlag(opts, 'body');
+    const privateKeyPem = loadPrivateKeyPem(opts.key);
+    const kind = opts.kind ?? 'say';
+    if (kind !== 'say' && kind !== 'emote') {
+      cliUsageExit(`Invalid --kind "${kind}" (expected say or emote)`);
+    }
+    let replyTo;
+    if (opts['reply-to'] !== undefined) {
+      const trimmed = String(opts['reply-to']).trim();
+      replyTo = trimmed ? Number(trimmed) : NaN;
+      if (!Number.isInteger(replyTo) || replyTo <= 0) {
+        cliUsageExit(`Invalid --reply-to "${opts['reply-to']}" (must be a positive integer)`);
+      }
+    }
+    let pubkey;
+    try {
+      pubkey = derivePubkeyFromPrivatePem(privateKeyPem);
+    } catch (err) {
+      cliErrorExit(`Invalid private key: ${err.message}`);
+    }
+    const client = new GhostlightClient({ baseUrl, handle, privateKeyPem, pubkey });
+    result = await client.guestSay(body, kind, replyTo);
   } else if (cmd === 'join') {
     const opts = parseCliFlags(rest, ['api-base', 'handle', 'key', 'origin', 'bio', 'invite-code']);
     const baseUrl = requireApiBase(opts);
