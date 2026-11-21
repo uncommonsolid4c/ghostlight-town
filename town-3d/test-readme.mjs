@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { collectSourceFilesFromTown3d, collectSourceFiles } from '../scripts/stage-deploy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const README_PATH = path.join(__dirname, 'README.md');
@@ -38,7 +39,7 @@ test('town-3d/README.md states the fallback-vs-staging role and shared 12-file /
   assert.match(readme, /staging-polyfork/i);
   assert.match(readme, /fallback/i);
   assert.match(readme, /\b12\b.*(?:shared|town-3d)/i);
-  assert.match(readme, /\b192-file\b/);
+  assert.match(readme, /\b193-file\b/);
   assert.match(readme, /town\.js\?v=16/);
 });
 
@@ -173,4 +174,133 @@ test('town-3d/README.md VALID_PROP_KINDS count and names match town-3d/town.js',
       `town-3d/README.md must list starter prop kind ${kind}`
     );
   }
+});
+
+test('town-3d/README.md fallback bundle count matches collectSourceFilesFromTown3d', async () => {
+  const readme = readReadme();
+  const { files, excluded } = await collectSourceFilesFromTown3d(__dirname);
+  assert.ok(
+    readme.includes(`${files.length}-file fallback bundle`),
+    `town-3d/README.md must state ${files.length}-file fallback bundle`
+  );
+  for (const file of files) {
+    const base = path.basename(file.relPath);
+    assert.ok(
+      readme.includes(`\`${base}\``),
+      `town-3d/README.md must mention collected file basename \`${base}\``
+    );
+  }
+  assert.ok(
+    !files.some((f) => f.relPath === 'models/pine.glb'),
+    'models/pine.glb must not be in collected files'
+  );
+  const pineExcluded = excluded.find((e) => e.path === 'models/pine.glb');
+  assert.ok(pineExcluded, 'models/pine.glb must be in excluded array');
+  assert.match(pineExcluded.reason, /uncommitted/i);
+});
+
+test('town-3d/README.md staging bundle count matches collectSourceFiles', async () => {
+  const readme = readReadme();
+  const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
+  assert.ok(
+    readme.includes(`${files.length}-file \`staging-polyfork\``),
+    `town-3d/README.md must state ${files.length}-file \`staging-polyfork\``
+  );
+});
+
+test('town-3d/README.md models section names every committed CC0 prop', async () => {
+  const readme = readReadme();
+  const modelsDir = path.join(__dirname, 'models');
+  const glbFiles = fs
+    .readdirSync(modelsDir)
+    .filter((name) => name.endsWith('.glb'))
+    .sort();
+  assert.equal(glbFiles.length, 8, 'town-3d/models/ must have 8 .glb files locally');
+  assert.ok(
+    readme.includes(`${glbFiles.length} \`.glb\` files locally`),
+    `town-3d/README.md must state ${glbFiles.length} \`.glb\` files locally`
+  );
+  const committed = glbFiles.filter((name) => name !== 'pine.glb');
+  assert.equal(committed.length, 7, 'committed CC0 props must be 7');
+  for (const prop of committed) {
+    assert.ok(
+      readme.includes(`\`${prop}\``),
+      `town-3d/README.md must name committed CC0 prop \`${prop}\``
+    );
+  }
+  const { excluded } = await collectSourceFilesFromTown3d(__dirname);
+  assert.ok(
+    excluded.some((e) => e.path === 'models/pine.glb'),
+    'models/pine.glb must appear in excluded array'
+  );
+});
+
+test('town-3d/README.md Behaviour functions exist in town.js', () => {
+  const readme = readReadme();
+  const behaviourMatch = readme.match(/## Behaviour\r?\n([\s\S]*?)(?:\r?\n## |\s*$)/);
+  assert.ok(behaviourMatch, 'town-3d/README.md must have a ## Behaviour section');
+  const behaviourSection = behaviourMatch[1];
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  const fns = [
+    'buildWanderState',
+    'formatFootlightStatusLines',
+    'commonWindowMaterial',
+    'formatPlotGuestbookTabLabel',
+    'resolvePlotGuestbookOverlayContent',
+    'buildNoticeBoardOverlayHtml',
+  ];
+  for (const fn of fns) {
+    assert.ok(
+      behaviourSection.includes(fn),
+      `town-3d/README.md Behaviour section must mention ${fn}`
+    );
+    assert.ok(
+      townJs.includes(fn),
+      `town-3d/town.js must contain ${fn}`
+    );
+  }
+});
+
+test('town-3d/README.md shipped-table files exist on disk', () => {
+  const expectedFiles = [
+    'town.js',
+    'concept-bandstand.js',
+    'concept-cottage.js',
+    'concept-ghost.js',
+    'index.html',
+    'move-in.html',
+    'inn/index.html',
+    'guestbook/index.html',
+    'plots/milo/index.html',
+    'plots/wick/index.html',
+    'plots/maren/index.html',
+    'plots/tomas/index.html',
+    'gazette/issue-001.html',
+    'gazette/issue-002.html',
+    'gazette/issue-003.html',
+    'gazette/latest.json',
+    'gazette/feed.xml',
+    'gazette/build-digest.mjs',
+    'gazette/build-feed.mjs',
+    'CREDITS.md',
+  ];
+  for (const relPath of expectedFiles) {
+    assert.ok(
+      fs.existsSync(path.join(__dirname, relPath)),
+      `town-3d/${relPath} must exist on disk`
+    );
+  }
+});
+
+test('town-3d/README.md town.js line count is within 100 of actual', () => {
+  const readme = readReadme();
+  const match = readme.match(/`town\.js`[^|\n]*\|[^|\n]*~([\d,]+)\s+lines/);
+  assert.ok(match, 'town-3d/README.md shipped table must state ~<n> lines for town.js');
+  const stated = Number(match[1].replaceAll(',', ''));
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  const actual = townJs.split('\n').length - 1;
+  assert.ok(
+    Math.abs(actual - stated) <= 100,
+    `town-3d/README.md town.js line count (${stated}) must be within 100 of actual (${actual})`
+  );
 });
