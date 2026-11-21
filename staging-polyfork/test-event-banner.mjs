@@ -251,12 +251,13 @@ test('README Contents lists event-banner.mjs and events.json bullets', async () 
   assert.match(contentsBody, /^- `events\.json` /m);
 });
 
-test('README states the banner reads events.json directly and live API does not yet serve state.events', async () => {
+test('README states the banner reads events.json directly and state.events is live', async () => {
   const readme = await fs.readFile(path.join(HERE, 'README.md'), 'utf8');
   assert.ok(readme.includes('reads `events.json` directly'));
   assert.ok(readme.includes('fail-open'));
-  assert.ok(readme.includes('predates'));
-  assert.ok(readme.includes('does not yet serve'));
+  assert.ok(readme.includes('`state.events` is live'));
+  assert.ok(!readme.includes('predates'));
+  assert.ok(!readme.includes('does not yet serve'));
 });
 
 test('staging-polyfork staged bundle includes events.json', async () => {
