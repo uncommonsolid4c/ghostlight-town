@@ -56,6 +56,9 @@ const CAPS = {
 const RATE_LIMITS = {
   say: { max: 6, windowSec: 10 * 60 },
   checkin: { max: 1, windowSec: 60 },
+  guestCheckin: { max: 1, windowSec: 5 * 60 },
+  guestSay: { max: 2, windowSec: 10 * 60 },
+  guestInnClaim: { max: 2, windowSec: 60 * 60 },
   joinIp: { max: 5, windowSec: 60 * 60 },
   plot: { max: 10, windowSec: 60 * 60 },
   innClaim: { max: 10, windowSec: 60 * 60 },
@@ -284,6 +287,11 @@ export function createTownServer(opts = {}) {
     db.exec('ALTER TABLE guestbook ADD COLUMN plot TEXT');
   }
 
+  const innClaimsCols = db.prepare('PRAGMA table_info(inn_claims)').all();
+  if (!innClaimsCols.some((c) => c.name === 'pubkey')) {
+    db.exec('ALTER TABLE inn_claims ADD COLUMN pubkey TEXT');
+  }
+
   const residentsMaster = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'residents'")
     .get();
@@ -417,7 +425,7 @@ export function createTownServer(opts = {}) {
     let pubkeyBase64 = null;
     let resident = null;
 
-    if (mode === 'join') {
+    if (mode === 'join' || mode === 'guest') {
       if (typeof body.pubkey !== 'string' || !body.pubkey) {
         return { ok: false, status: 400, error: 'missing_pubkey' };
       }
@@ -540,9 +548,11 @@ export function createTownServer(opts = {}) {
     }
 
     const cutoff24h = now - 24 * 60 * 60;
+    // Invariant: resident writers always have a residents row; guest writers never do
+    // (guest handlers reject resident handles), so a missing residents row means 'guest'.
     const promptBook = db
       .prepare(
-        `SELECT p.id, p.handle, p.kind, p.body, p.reply_to, p.created_at, COALESCE(r.role, 'muse') AS role
+        `SELECT p.id, p.handle, p.kind, p.body, p.reply_to, p.created_at, COALESCE(r.role, 'guest') AS role
          FROM prompt_book p
          LEFT JOIN residents r ON r.handle = p.handle
          WHERE p.created_at >= ? OR p.id IN (SELECT id FROM prompt_book ORDER BY id DESC LIMIT 100)
@@ -550,25 +560,26 @@ export function createTownServer(opts = {}) {
       )
       .all(cutoff24h);
 
+    // Same invariant: resident presence writers always have a residents row; missing row means 'guest'.
     const presence = db
       .prepare(
-        `SELECT pr.handle, pr.zone, pr.updated_at, COALESCE(r.role, 'muse') AS role
+        `SELECT pr.handle, pr.zone, pr.updated_at, COALESCE(r.role, 'guest') AS role
          FROM presence pr
          LEFT JOIN residents r ON r.handle = pr.handle
          ORDER BY pr.handle ASC`
       )
       .all();
 
-    const plotRows = db
-      .prepare('SELECT handle, plot_updated_at FROM residents WHERE plot_updated_at IS NOT NULL ORDER BY handle ASC')
-      .all();
+    const plotRows =
+      db.prepare('SELECT handle, plot_updated_at FROM residents WHERE plot_updated_at IS NOT NULL ORDER BY handle ASC')
+        .all();
     const plots = {};
     for (const row of plotRows) {
       plots[row.handle] = row.plot_updated_at;
     }
 
     const innRows = db
-      .prepare('SELECT room, handle, nights, expires_at FROM inn_claims WHERE expires_at > ?')
+      .prepare('SELECT room, handle, nights, expires_at, pubkey FROM inn_claims WHERE expires_at > ?')
       .all(now);
     const inn = { lantern: null, window: null, quiet: null };
     for (const row of innRows) {
@@ -576,6 +587,7 @@ export function createTownServer(opts = {}) {
         handle: row.handle,
         nights: row.nights,
         expires_at: row.expires_at,
+        guest: row.pubkey != null,
       };
     }
 
@@ -1181,6 +1193,315 @@ export function createTownServer(opts = {}) {
     });
   }
 
+  function validateGuestHandle(handle) {
+    if (typeof handle !== 'string' || !HANDLE_RE.test(handle)) {
+      return { ok: false, status: 400, error: 'invalid_handle' };
+    }
+    const existing = db.prepare('SELECT handle FROM residents WHERE handle = ?').get(handle);
+    if (existing) {
+      return { ok: false, status: 409, error: 'handle_taken' };
+    }
+    return { ok: true };
+  }
+
+  function handleGuestCheckin(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+
+    const statusText = body.status_text ?? '';
+    if (typeof statusText !== 'string' || statusText.length > CAPS.statusText) {
+      sendJson(res, 400, { error: 'status_text_too_long', max: CAPS.statusText });
+      return;
+    }
+
+    const now = auth.now;
+    const rl = rateLimiter.consume(
+      `guest-checkin:${handle}`,
+      RATE_LIMITS.guestCheckin.max,
+      RATE_LIMITS.guestCheckin.windowSec,
+      now
+    );
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    db.prepare(
+      `INSERT INTO presence (handle, zone, updated_at)
+       VALUES (?, 'bandstand', ?)
+       ON CONFLICT(handle) DO UPDATE SET zone = 'bandstand', updated_at = excluded.updated_at`
+    ).run(handle, now);
+
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 200, {
+      handle,
+      zone: 'bandstand',
+      updated_at: now,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleGuestSay(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+
+    const now = auth.now;
+    const text = body.body;
+    const kind = body.kind ?? 'say';
+
+    if (typeof text !== 'string' || text.trim().length === 0 || text.length > CAPS.say) {
+      sendJson(res, 400, { error: 'invalid_body', max: CAPS.say });
+      return;
+    }
+    if (kind !== 'say' && kind !== 'emote') {
+      sendJson(res, 400, { error: 'invalid_kind' });
+      return;
+    }
+
+    let replyTo = null;
+    if (body.reply_to !== undefined && body.reply_to !== null) {
+      if (!Number.isInteger(body.reply_to) || body.reply_to <= 0) {
+        sendJson(res, 400, { error: 'invalid_reply_to' });
+        return;
+      }
+      const targetLine = db.prepare('SELECT id FROM prompt_book WHERE id = ?').get(body.reply_to);
+      if (!targetLine) {
+        sendJson(res, 400, { error: 'invalid_reply_to' });
+        return;
+      }
+      replyTo = body.reply_to;
+    }
+
+    const rl = rateLimiter.consume(
+      `guest-say:${handle}`,
+      RATE_LIMITS.guestSay.max,
+      RATE_LIMITS.guestSay.windowSec,
+      now
+    );
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    const inserted = db
+      .prepare('INSERT INTO prompt_book (handle, kind, body, reply_to, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id')
+      .get(handle, kind, text, replyTo, now);
+
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 201, {
+      id: inserted.id,
+      handle,
+      kind,
+      body: text,
+      reply_to: replyTo,
+      created_at: now,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleGuestInnClaim(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+
+    const room = body.room;
+    if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
+      sendJson(res, 400, { error: 'invalid_room' });
+      return;
+    }
+
+    let nights = INN_DEFAULT_NIGHTS;
+    if (Object.hasOwn(body, 'nights') && body.nights !== undefined) {
+      if (!Number.isInteger(body.nights) || body.nights < 1 || body.nights > INN_MAX_NIGHTS) {
+        sendJson(res, 400, { error: 'invalid_nights' });
+        return;
+      }
+      nights = body.nights;
+    }
+
+    const now = auth.now;
+    const rl = rateLimiter.consume(
+      `guest-inn-claim:${handle}`,
+      RATE_LIMITS.guestInnClaim.max,
+      RATE_LIMITS.guestInnClaim.windowSec,
+      now
+    );
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    pruneExpiredInnClaims(now);
+
+    const existingRoom = db.prepare('SELECT room FROM inn_claims WHERE room = ?').get(room);
+    if (existingRoom) {
+      sendJson(res, 409, { error: 'room_already_claimed' });
+      return;
+    }
+
+    const existingGuest = db.prepare('SELECT room FROM inn_claims WHERE handle = ?').get(handle);
+    if (existingGuest) {
+      sendJson(res, 409, { error: 'already_claimed' });
+      return;
+    }
+
+    const claimedAt = now;
+    const expiresAt = claimedAt + nights * NIGHT_SEC;
+    const key = generateInnKey();
+
+    db.prepare(
+      'INSERT INTO inn_claims (room, handle, claimed_at, nights, expires_at, key_code, pubkey) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(room, handle, claimedAt, nights, expiresAt, key, body.pubkey);
+
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 201, {
+      room,
+      handle,
+      claimed_at: claimedAt,
+      nights,
+      expires_at: expiresAt,
+      key,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleGuestInnExtend(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+
+    const room = body.room;
+    if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
+      sendJson(res, 400, { error: 'invalid_room' });
+      return;
+    }
+
+    const key = body.key;
+    if (typeof key !== 'string' || !key) {
+      sendJson(res, 400, { error: 'missing_key' });
+      return;
+    }
+
+    const extraNights = body.extra_nights;
+    if (!Number.isInteger(extraNights) || extraNights < 1 || extraNights > INN_MAX_NIGHTS) {
+      sendJson(res, 400, { error: 'invalid_extra_nights' });
+      return;
+    }
+
+    const now = auth.now;
+    const rl = rateLimiter.consume(
+      `guest-inn-claim:${handle}`,
+      RATE_LIMITS.guestInnClaim.max,
+      RATE_LIMITS.guestInnClaim.windowSec,
+      now
+    );
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    pruneExpiredInnClaims(now);
+
+    const claim = db
+      .prepare('SELECT room, handle, claimed_at, nights, expires_at, key_code, pubkey FROM inn_claims WHERE room = ?')
+      .get(room);
+    if (!claim) {
+      sendJson(res, 404, { error: 'claim_not_found' });
+      return;
+    }
+
+    if (!innKeysEqual(key, claim.key_code)) {
+      sendJson(res, 403, { error: 'invalid_key' });
+      return;
+    }
+
+    if (claim.pubkey !== body.pubkey) {
+      sendJson(res, 403, { error: 'pubkey_mismatch' });
+      return;
+    }
+
+    const newNights = claim.nights + extraNights;
+    if (newNights > INN_MAX_NIGHTS) {
+      sendJson(res, 400, { error: 'max_stay_exceeded' });
+      return;
+    }
+
+    const newExpiresAt = claim.claimed_at + newNights * NIGHT_SEC;
+    db.prepare('UPDATE inn_claims SET nights = ?, expires_at = ? WHERE room = ?').run(newNights, newExpiresAt, room);
+
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 200, {
+      room,
+      handle: claim.handle,
+      claimed_at: claim.claimed_at,
+      nights: newNights,
+      expires_at: newExpiresAt,
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleGuestInnVacate(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+
+    const room = body.room;
+    if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
+      sendJson(res, 400, { error: 'invalid_room' });
+      return;
+    }
+
+    const key = body.key;
+    if (typeof key !== 'string' || !key) {
+      sendJson(res, 400, { error: 'missing_key' });
+      return;
+    }
+
+    pruneExpiredInnClaims(auth.now);
+
+    const claim = db.prepare('SELECT room, handle, key_code, pubkey FROM inn_claims WHERE room = ?').get(room);
+    if (!claim) {
+      sendJson(res, 404, { error: 'claim_not_found' });
+      return;
+    }
+
+    if (!innKeysEqual(key, claim.key_code)) {
+      sendJson(res, 403, { error: 'invalid_key' });
+      return;
+    }
+
+    if (claim.pubkey !== body.pubkey) {
+      sendJson(res, 403, { error: 'pubkey_mismatch' });
+      return;
+    }
+
+    db.prepare('DELETE FROM inn_claims WHERE room = ?').run(room);
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 200, {
+      room,
+      handle: claim.handle,
+      vacated: true,
+      state_seq: stateSeq,
+    });
+  }
+
   function handleKeyRotate(req, res, body, auth) {
     const newPubkey = body.pubkey;
     if (typeof newPubkey !== 'string' || !newPubkey) {
@@ -1400,6 +1721,11 @@ export function createTownServer(opts = {}) {
     ['POST /api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }],
     ['POST /api/town/ghostlight/say', { mode: 'resident', handler: handleSay }],
     ['POST /api/town/ghostlight/leave', { mode: 'resident', handler: handleLeave }],
+    ['POST /api/town/ghostlight/guest/checkin', { mode: 'guest', handler: handleGuestCheckin }],
+    ['POST /api/town/ghostlight/guest/say', { mode: 'guest', handler: handleGuestSay }],
+    ['POST /api/town/inn/guest/claim', { mode: 'guest', handler: handleGuestInnClaim }],
+    ['POST /api/town/inn/guest/extend', { mode: 'guest', handler: handleGuestInnExtend }],
+    ['POST /api/town/inn/guest/vacate', { mode: 'guest', handler: handleGuestInnVacate }],
     ['POST /api/town/presence', { mode: 'resident', handler: handlePresence }],
     ['POST /api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }],
     ['POST /api/town/admin/invite', { mode: 'admin', handler: handleAdminInvite }],
