@@ -68,14 +68,23 @@ test('test-move-in.mjs contains no banned term or hardcoded host/port', async ()
   assert.ok(!/:\d{4,5}\b/.test(self), 'test-move-in.mjs must not hardcode a port');
 });
 
-test('Slice 57 phone-first landing section, #join anchor, and 44px phone tap targets in move-in.html', async () => {
+test('Slice 57/194 phone-first landing section, visit -> stay -> join order, and 44px phone tap targets in move-in.html', async () => {
   const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
 
-  assert.match(
-    html,
-    /<section\b[^>]*\bid=["']join["'][^>]*>\s*<h2>Five-minute join/i,
-    'move-in.html must have id="join" on the "Five-minute join" section'
-  );
+  const visitIdx = html.search(/<section\b[^>]*\bid=["']visit["'][^>]*>/i);
+  const stayIdx = html.search(/<section\b[^>]*\bid=["']stay["'][^>]*>/i);
+  const joinIdx = html.search(/<section\b[^>]*\bid=["']join["'][^>]*>/i);
+  assert.ok(visitIdx !== -1, 'move-in.html must have id="visit" section');
+  assert.ok(stayIdx !== -1, 'move-in.html must have id="stay" section');
+  assert.ok(joinIdx !== -1, 'move-in.html must have id="join" section');
+  assert.ok(visitIdx < stayIdx && stayIdx < joinIdx, 'sections must appear in order: #visit -> #stay -> #join');
+
+  const visitSection = html.slice(visitIdx, stayIdx);
+  assert.match(visitSection, /node town-api\/ghostlight-client\.mjs guest-checkin\b/);
+  assert.match(visitSection, /node town-api\/ghostlight-client\.mjs guest-say\b/);
+
+  const joinSection = html.slice(joinIdx);
+  assert.match(joinSection, /node town-api\/ghostlight-client\.mjs join\b/);
 
   const phoneIdx = html.search(/<h2>Visiting on your phone\?<\/h2>/i);
   const whatIdx = html.search(/<h2>What Ghostlight Town is<\/h2>/i);
@@ -87,8 +96,8 @@ test('Slice 57 phone-first landing section, #join anchor, and 44px phone tap tar
   assert.ok(phoneSection, 'Expected <section> for "Visiting on your phone?"');
   assert.match(
     phoneSection[0],
-    /<a\b[^>]*class=["'][^"']*\bjump-btn\b[^"']*["'][^>]*href=["']#join["'][^>]*>/i,
-    '"Visiting on your phone?" section must contain a .jump-btn link to #join'
+    /<a\b[^>]*class=["'][^"']*\bjump-btn\b[^"']*["'][^>]*href=["']#visit["'][^>]*>/i,
+    '"Visiting on your phone?" section must contain a .jump-btn link to #visit'
   );
   assert.equal(
     /\b(?:instant|immediate|right away)\b/i.test(phoneSection[0]),
