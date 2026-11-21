@@ -434,3 +434,147 @@ test('pending resident cannot rotate: 403 resident_not_active', async () => {
     await ctx.close();
   }
 });
+
+test('join precedence: handle_taken beats pubkey_taken and invalid_origin beats pubkey_taken', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: bobKeys } = await createResident(ctx, 'bob');
+
+    const sameHandleClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...bobKeys });
+    const handleRes = await sameHandleClient.join({ origin: 'musebook' });
+    assert.equal(handleRes.status, 409);
+    assert.equal(handleRes.data.error, 'handle_taken');
+
+    const badOriginClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...bobKeys });
+    const originRes = await badOriginClient.join({ origin: 'nowhere' });
+    assert.equal(originRes.status, 400);
+    assert.equal(originRes.data.error, 'invalid_origin');
+
+    const daveClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'dave', ...bobKeys });
+    const joinRes = await daveClient.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 409);
+    assert.deepEqual(joinRes.data, { error: 'pubkey_taken' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join 409 writes no key_history row for the rejected handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: bobKeys } = await createResident(ctx, 'bob');
+
+    const carolClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...bobKeys });
+    const joinRes = await carolClient.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 409);
+    assert.equal(joinRes.data.error, 'pubkey_taken');
+
+    const carolCount = ctx.db.prepare('SELECT COUNT(*) AS c FROM key_history WHERE handle = ?').get('carol').c;
+    assert.equal(carolCount, 0);
+
+    const bobCount = ctx.db.prepare('SELECT COUNT(*) AS c FROM key_history WHERE handle = ?').get('bob').c;
+    assert.equal(bobCount, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate to a pending resident key returns 409 and pending owner keeps the key', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
+    const { client: bob, keys: bobKeys } = await createResident(ctx, 'bob', { approved: false });
+
+    const rotRes = await alice.rotateKey(bobKeys.pubkey);
+    assert.equal(rotRes.status, 409);
+    assert.deepEqual(rotRes.data, { error: 'pubkey_taken' });
+
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, aliceKeys.pubkey);
+
+    const rotHistory = ctx.db
+      .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
+      .all('alice');
+    assert.equal(rotHistory.length, 0);
+
+    const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'bob' });
+    assert.equal(appRes.status, 200);
+
+    const bobCheckin = await bob.checkin('still bob');
+    assert.equal(bobCheckin.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('suspended resident cannot rotate: 403 resident_not_active', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
+    ctx.db.prepare('UPDATE residents SET status = ? WHERE handle = ?').run('suspended', 'alice');
+    const fresh = generateKeypair();
+
+    const rotRes = await alice.rotateKey(fresh.pubkey);
+    assert.equal(rotRes.status, 403);
+    assert.deepEqual(rotRes.data, { error: 'resident_not_active', resident_status: 'suspended' });
+
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, aliceKeys.pubkey);
+
+    const rotHistory = ctx.db
+      .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
+      .all('alice');
+    assert.equal(rotHistory.length, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('muted resident can rotate: 200', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    ctx.db.prepare('UPDATE residents SET status = ? WHERE handle = ?').run('muted', 'alice');
+    const fresh = generateKeypair();
+
+    const rotRes = await alice.rotateKey(fresh.pubkey);
+    assert.equal(rotRes.status, 200);
+    assert.equal(rotRes.data.rotated, true);
+
+    const oldCheckin = await alice.checkin('old key');
+    assert.equal(oldCheckin.status, 401);
+
+    const freshClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...fresh });
+    const newCheckin = await freshClient.checkin('new key');
+    assert.equal(newCheckin.status, 200);
+
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, fresh.pubkey);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join with a freed key succeeds after the owner rotates away', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: oldKeys } = await createResident(ctx, 'alice');
+    const fresh = generateKeypair();
+
+    const rotRes = await alice.rotateKey(fresh.pubkey);
+    assert.equal(rotRes.status, 200);
+
+    const carolClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...oldKeys });
+    const joinRes = await carolClient.join({ origin: 'colony' });
+    assert.equal(joinRes.status, 201);
+    assert.equal(joinRes.data.handle, 'carol');
+
+    const carolRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('carol');
+    assert.equal(carolRow.pubkey, oldKeys.pubkey);
+
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, fresh.pubkey);
+  } finally {
+    await ctx.close();
+  }
+});
