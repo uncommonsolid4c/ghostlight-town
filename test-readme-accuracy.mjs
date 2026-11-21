@@ -1,7 +1,7 @@
 /**
  * Drift-guard test for README.md against PLAN.md, staging-polyfork/index.html,
  * town-api/server.mjs, town-api/plot-validation.mjs, town-api/ghostlight-client.mjs,
- * and town-npc/characters.mjs (Slice 129).
+ * town-3d/concept-bandstand.js, and town-npc/characters.mjs (Slice 129, strengthened Slice 197).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHARACTERS } from './town-npc/characters.mjs';
-import { collectSourceFiles } from './scripts/stage-deploy.mjs';
+import { collectSourceFiles, collectSourceFilesFromTown3d } from './scripts/stage-deploy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = __dirname;
@@ -174,4 +174,121 @@ test('README.md intro Gazette twice-weekly cadence matches PLAN.md', () => {
   const intro = readmeMd.slice(0, firstH2);
   assert.ok(intro.includes('twice a week'), 'README.md intro must state Gazette runs twice a week');
   assert.ok(planMd.includes('twice a week'), 'PLAN.md must state Gazette runs twice a week');
+});
+
+test('PLAN.md §4 Performance budget staged town-3d file count and bytes match the real collector', async () => {
+  const noteMatch = planMd.match(/this budget covers `town-3d\/`, the (\d+)-file procedural fallback;/);
+  assert.ok(noteMatch, 'PLAN.md §4 note must state town-3d/ fallback file count');
+  const initLoadMatch = planMd.match(/\*\*Initial load < 1\.5 MB total \(`town-3d\/` fallback, ([\d,]+) bytes staged\):\*\*/);
+  assert.ok(initLoadMatch, 'PLAN.md §4 Initial load line must state town-3d/ fallback staged bytes');
+
+  const { files } = await collectSourceFilesFromTown3d(path.join(REPO_ROOT, 'town-3d'));
+  const stagedBytes = files.reduce((sum, f) => sum + fs.statSync(f.srcPath).size, 0);
+
+  assert.equal(Number(noteMatch[1]), files.length, `PLAN.md §4 note town-3d count (${noteMatch[1]}) must equal collector (${files.length})`);
+  assert.equal(
+    Number(initLoadMatch[1].replace(/,/g, '')),
+    stagedBytes,
+    `PLAN.md §4 Initial load staged bytes (${initLoadMatch[1]}) must equal collector (${stagedBytes})`
+  );
+});
+
+test('PLAN.md §4 Performance budget staged staging-polyfork bundle matches the real collector', async () => {
+  const bundleMatch = planMd.match(/whose staged bundle is (\d+) files \/ ([\d,]+) bytes\.\)\*/);
+  assert.ok(bundleMatch, 'PLAN.md §4 note must state staging-polyfork staged bundle file count and bytes');
+
+  const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
+  const stagedBytes = files.reduce((sum, f) => sum + fs.statSync(f.srcPath).size, 0);
+
+  assert.equal(Number(bundleMatch[1]), files.length, `PLAN.md §4 staging-polyfork count (${bundleMatch[1]}) must equal collector (${files.length})`);
+  assert.equal(
+    Number(bundleMatch[2].replace(/,/g, '')),
+    stagedBytes,
+    `PLAN.md §4 staging-polyfork staged bytes (${bundleMatch[2]}) must equal collector (${stagedBytes})`
+  );
+});
+
+test('README.md ## Repo Map listed artifacts all exist', () => {
+  const repoMapSec = getSection(readmeMd, 'Repo Map');
+  const linkTargets = [...repoMapSec.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map((m) => m[1].trim());
+  assert.ok(linkTargets.length > 0, 'README.md ## Repo Map must contain markdown links');
+  for (const target of linkTargets) {
+    assert.ok(fs.existsSync(path.join(REPO_ROOT, target)), `Repo Map target "${target}" must exist`);
+  }
+
+  const repoMapArtifacts = [
+    { entry: 'staging-polyfork/', artifact: 'staging-polyfork/index.html' },
+    { entry: 'staging-polyfork/README.md', artifact: 'staging-polyfork/README.md' },
+    { entry: 'town-3d/', artifact: 'town-3d/gazette/latest.json' },
+    { entry: 'town-3d/', artifact: 'town-3d/plots/milo/index.html' },
+    { entry: 'town-api/', artifact: 'town-api/server.mjs' },
+    { entry: 'town-npc/', artifact: 'town-npc/characters.mjs' },
+    { entry: 'stage-deploy.mjs', artifact: 'scripts/stage-deploy.mjs' },
+    { entry: 'check-live.mjs', artifact: 'scripts/check-live.mjs' },
+    { entry: 'CONCEPT.md', artifact: 'CONCEPT.md' },
+    { entry: 'concept/', artifact: 'concept/town-clearing-wide.webp' },
+  ];
+  for (const { entry, artifact } of repoMapArtifacts) {
+    assert.ok(repoMapSec.includes(entry), `README.md ## Repo Map must list "${entry}"`);
+    assert.ok(fs.existsSync(path.join(REPO_ROOT, artifact)), `Repo Map artifact "${artifact}" must exist`);
+  }
+});
+
+test('README.md ## The Gathering Place octagonal bandstand and brass footlight match concept-bandstand.js', () => {
+  const gatheringSec = getSection(readmeMd, 'The Gathering Place');
+  assert.ok(gatheringSec.includes('octagonal'), 'README.md ## The Gathering Place must state octagonal');
+  assert.ok(gatheringSec.includes('brass footlight'), 'README.md ## The Gathering Place must state brass footlight');
+
+  const bandstandSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/concept-bandstand.js'), 'utf8');
+  assert.match(bandstandSrc, /octagon/i, 'town-3d/concept-bandstand.js must contain octagon');
+  assert.match(bandstandSrc, /brass/i, 'town-3d/concept-bandstand.js must contain brass');
+});
+
+test('README.md ## Status Town API capabilities match town.json endpoints', () => {
+  const statusSec = getSection(readmeMd, 'Status');
+  for (const capability of ['state', 'join', 'check-in', 'Prompt Book', 'plots']) {
+    assert.ok(statusSec.includes(capability), `README.md ## Status Town API bullet must name "${capability}"`);
+  }
+
+  const endpoints = townJson.endpoints;
+  assert.ok(Array.isArray(endpoints), 'town.json must have an endpoints array');
+  const expectedEndpoints = [
+    ['GET', '/api/town/state'],
+    ['POST', '/api/town/join'],
+    ['POST', '/api/town/ghostlight/checkin'],
+    ['POST', '/api/town/ghostlight/say'],
+    ['PUT', '/api/town/plot'],
+  ];
+  for (const [method, endpointPath] of expectedEndpoints) {
+    assert.ok(
+      endpoints.some((entry) => entry.method === method && entry.path === endpointPath),
+      `town.json endpoints must contain ${method} ${endpointPath}`
+    );
+  }
+});
+
+test('README.md ## Seed Neighbors parentheticals trace to town-npc/characters.mjs', () => {
+  const npcSec = getSection(readmeMd, 'Seed Neighbors');
+  const charactersSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-npc/characters.mjs'), 'utf8');
+  const charactersLower = charactersSrc.toLowerCase();
+
+  const wickMatch = npcSec.match(/- \*\*Wick\*\*[\s\S]*?(?=\n- \*\*|$)/);
+  assert.ok(wickMatch, 'README.md ## Seed Neighbors must have a Wick entry');
+  const wickLower = wickMatch[0].replace(/\s+/g, ' ').toLowerCase();
+  assert.ok(wickLower.includes('bulb') && charactersLower.includes('bulb'), 'Wick entry and characters.mjs must both mention bulb');
+  assert.ok(charactersLower.includes('bandstand steps'), 'town-npc/characters.mjs must mention bandstand steps for Wick');
+
+  const marenMatch = npcSec.match(/- \*\*Maren\*\*[\s\S]*?(?=\n- \*\*|$)/);
+  assert.ok(marenMatch, 'README.md ## Seed Neighbors must have a Maren entry');
+  const marenLower = marenMatch[0].replace(/\s+/g, ' ').toLowerCase();
+  for (const phrase of ['newsstand', 'prompt book']) {
+    assert.ok(marenLower.includes(phrase) && charactersLower.includes(phrase), `Maren entry and characters.mjs must both mention "${phrase}"`);
+  }
+
+  const tomasMatch = npcSec.match(/- \*\*Tomas\*\*[\s\S]*?(?=\n- \*\*|$)/);
+  assert.ok(tomasMatch, 'README.md ## Seed Neighbors must have a Tomas entry');
+  assert.ok(
+    tomasMatch[0].replace(/\s+/g, ' ').toLowerCase().includes('samovar') && charactersLower.includes('samovar'),
+    'Tomas entry and characters.mjs must both mention samovar'
+  );
 });
