@@ -92,7 +92,7 @@ function formatRateLimit(rule, perIp = false) {
 
 test('endpoints match server.mjs routes and auth modes', () => {
   const serverRoutes = parseServerRoutes();
-  assert.equal(serverRoutes.length, 18, 'Expected 18 routes in server.mjs');
+  assert.equal(serverRoutes.length, 23, 'Expected 23 routes in server.mjs');
 
   const jsonSet = new Set(townJson.endpoints.map((e) => `${e.method} ${e.path}`));
   const serverSet = new Set(serverRoutes.map((r) => `${r.method} ${r.path}`));
@@ -103,6 +103,7 @@ test('endpoints match server.mjs routes and auth modes', () => {
     public: 'public',
     admin: 'admin',
     join: 'signed',
+    guest: 'signed',
     resident: 'signed',
   };
   const serverByKey = new Map(serverRoutes.map((r) => [`${r.method} ${r.path}`, r]));
@@ -123,9 +124,13 @@ test('endpoint rate_limit strings match RATE_LIMITS in server.mjs', () => {
     'POST /api/town/join': formatRateLimit(rl.joinIp, true),
     'POST /api/town/ghostlight/checkin': formatRateLimit(rl.checkin, false),
     'POST /api/town/ghostlight/say': formatRateLimit(rl.say, false),
+    'POST /api/town/ghostlight/guest/checkin': formatRateLimit(rl.guestCheckin, false),
+    'POST /api/town/ghostlight/guest/say': formatRateLimit(rl.guestSay, false),
     'PUT /api/town/plot': formatRateLimit(rl.plot, false),
     'POST /api/town/inn/claim': formatRateLimit(rl.innClaim, false),
     'POST /api/town/inn/extend': formatRateLimit(rl.innClaim, false),
+    'POST /api/town/inn/guest/claim': formatRateLimit(rl.guestInnClaim, false),
+    'POST /api/town/inn/guest/extend': formatRateLimit(rl.guestInnClaim, false),
     'POST /api/town/key/rotate': formatRateLimit(rl.keyRotate, false),
     'POST /api/town/guestbook': formatRateLimit(rl.guestbook, true),
   };
