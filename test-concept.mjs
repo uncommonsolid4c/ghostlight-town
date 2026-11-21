@@ -310,3 +310,226 @@ test('CONCEPT.md footlight placard colors and Inn mug-sign removal / fallback si
     'town-3d/town.js fallback must keep the GHOSTLIGHT INN signpost'
   );
 });
+
+function collectShippedJsMjs(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name.startsWith('kit-') || entry.name === 'models') continue;
+      collectShippedJsMjs(full, out);
+    } else if (/\.(mjs|js)$/.test(entry.name) && !entry.name.startsWith('test-')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+function extractSection(conceptText, heading) {
+  const lines = conceptText.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  assert.notEqual(start, -1, `CONCEPT.md must have a ${heading} section`);
+  const end = lines.findIndex((line, idx) => idx > start && line.startsWith('## '));
+  return lines.slice(start + 1, end === -1 ? lines.length : end).join('\n');
+}
+
+test("CONCEPT.md Don'ts campfire exclusion is enforced in staging.js scatter pool", () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const dontsText = extractSection(conceptText, "## Don'ts");
+  assert.ok(
+    dontsText.includes('No campfire — retired with Musebook.'),
+    "CONCEPT.md ## Don'ts must forbid campfire"
+  );
+  assert.ok(
+    dontsText.includes('The ghostlight is the gathering light.'),
+    "CONCEPT.md ## Don'ts must name the ghostlight as the gathering light"
+  );
+
+  const shippedFiles = [
+    ...collectShippedJsMjs(path.join(__dirname, 'town-3d')),
+    ...collectShippedJsMjs(path.join(__dirname, 'staging-polyfork')),
+  ];
+  const hits = [];
+  for (const file of shippedFiles) {
+    const rel = path.relative(__dirname, file);
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/campfire/i.test(lines[i])) {
+        hits.push(`${rel}:${i + 1}`);
+      }
+    }
+  }
+  assert.equal(hits.length, 2, `Expected exactly 2 campfire hits in shipped sources, got ${hits.join(', ')}`);
+  assert.ok(
+    hits.every((h) => h.startsWith('staging-polyfork/staging.js:98')),
+    `Both campfire hits must be in staging-polyfork/staging.js:98x, got ${hits.join(', ')}`
+  );
+
+  const stagingJs = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'staging.js'), 'utf8');
+  assert.ok(stagingJs.includes("'stone-ring-campfire'"), 'staging.js must skip stone-ring-campfire');
+  assert.ok(
+    fs.existsSync(path.join(__dirname, 'staging-polyfork', 'kit-campground', 'stone-ring-campfire.mjs')),
+    'vendored kit-campground/stone-ring-campfire.mjs must exist on disk'
+  );
+  assert.equal(
+    /place\(StoneRingCampfire|createStoneRingCampfire|stone-ring-campfire-8a0c6f/.test(stagingJs),
+    false,
+    'staging.js must never place the vendored stone-ring-campfire module'
+  );
+});
+
+test('CONCEPT.md Palette interior accents match NPC plot manifests', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const paletteText = extractSection(conceptText, '## Palette');
+  assert.ok(paletteText.includes('wick brass `#c8922e` (trim)'));
+  assert.ok(paletteText.includes('maren slate `#43505c` (roof)'));
+  assert.ok(paletteText.includes('tomas terracotta `#b5633a` (roof)'));
+
+  const readManifest = (handle) =>
+    JSON.parse(fs.readFileSync(path.join(__dirname, 'town-npc', 'plots', handle, 'manifest.json'), 'utf8'));
+
+  assert.equal(readManifest('wick').trim, '#c8922e');
+  assert.equal(readManifest('maren').roof, '#43505c');
+  assert.equal(readManifest('tomas').roof, '#b5633a');
+});
+
+test('CONCEPT.md Plots stone pads and OPEN PLOT signpost match empty-pad.mjs', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const formsText = extractSection(conceptText, '## Forms');
+  for (const token of ['`#6e7278`', '`OPEN PLOT #N`', '`#3b2b1d`', '`#7d5a3c`']) {
+    assert.ok(formsText.includes(token), `CONCEPT.md ## Forms must contain ${token}`);
+  }
+
+  const emptyPad = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'empty-pad.mjs'), 'utf8');
+  assert.ok(emptyPad.includes('label: `OPEN PLOT #${plot.plotNumber}`'));
+  assert.ok(emptyPad.includes('signpostText: `OPEN PLOT #${plot.plotNumber}`'));
+  assert.ok(emptyPad.includes("color: '#6e7278'"));
+  assert.ok(emptyPad.includes("bg: '#3b2b1d'"));
+  assert.ok(emptyPad.includes("border: '#7d5a3c'"));
+});
+
+test('CONCEPT.md starter porch and seed door-side props match builders', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const formsText = extractSection(conceptText, '## Forms');
+  for (const token of [
+    '`lantern`',
+    '`planter`',
+    '`#4d3522`',
+    '`#1f3f26`',
+    '`oil_lamp`',
+    '`#9a7b3e`',
+    '`#fff1c9`',
+    '`#ffcf70`',
+    '`typewriter`',
+    '`#6b492b`',
+    '`#2b2f33`',
+    '`#d8d2c5`',
+    '`teapot`',
+    '`#8f6b47`',
+  ]) {
+    assert.ok(formsText.includes(token), `CONCEPT.md ## Forms must contain ${token}`);
+  }
+
+  const cottageProps = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'cottage-props.mjs'), 'utf8');
+  assert.ok(cottageProps.includes("case 'lantern':"));
+  assert.ok(cottageProps.includes("case 'planter':"));
+  const planterStart = cottageProps.indexOf("case 'planter':");
+  const planterEnd = cottageProps.indexOf('default:', planterStart);
+  const planterBody = cottageProps.slice(planterStart, planterEnd);
+  assert.ok(planterBody.includes("'#4d3522'"), 'planter builder must use #4d3522 soil');
+  assert.ok(planterBody.includes("'#1f3f26'"), 'planter builder must use #1f3f26 foliage');
+
+  const interiorRoom = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'interior-room.mjs'), 'utf8');
+  const sliceBuilder = (name) => {
+    const start = interiorRoom.indexOf(`export function ${name}(`);
+    assert.notEqual(start, -1, `interior-room.mjs must export ${name}`);
+    const next = interiorRoom.indexOf('\nexport function ', start + 1);
+    return interiorRoom.slice(start, next === -1 ? interiorRoom.length : next);
+  };
+
+  const oilLampBody = sliceBuilder('buildProceduralOilLamp');
+  for (const hex of ["'#9a7b3e'", "'#fff1c9'", "'#ffcf70'"]) {
+    assert.ok(oilLampBody.includes(hex), `buildProceduralOilLamp must use ${hex}`);
+  }
+
+  const typewriterBody = sliceBuilder('buildProceduralTypewriter');
+  for (const hex of ["'#6b492b'", "'#2b2f33'", "'#d8d2c5'"]) {
+    assert.ok(typewriterBody.includes(hex), `buildProceduralTypewriter must use ${hex}`);
+  }
+
+  const teapotBody = sliceBuilder('buildProceduralTeapot');
+  assert.ok(teapotBody.includes("'#8f6b47'"), "buildProceduralTeapot must use '#8f6b47'");
+});
+
+test('CONCEPT.md Notice Board and Event Banner color wiring matches source', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const formsText = extractSection(conceptText, '## Forms');
+  for (const hex of [
+    '#6b492b',
+    '#3b2b1d',
+    '#7d5a3c',
+    '#f5efe0',
+    '#8b6a4b',
+    '#2e2218',
+    '#f2e6cf',
+    '#b59449',
+    '#2b1e14',
+  ]) {
+    assert.ok(formsText.includes(hex), `CONCEPT.md ## Forms must contain ${hex}`);
+  }
+
+  const stagingJs = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'staging.js'), 'utf8');
+  const nbStart = stagingJs.indexOf('function buildNoticeBoard(THREE)');
+  assert.notEqual(nbStart, -1, 'staging.js must define buildNoticeBoard');
+  const afterNb = stagingJs.slice(nbStart + 'function buildNoticeBoard(THREE)'.length);
+  const nextTopLevel = afterNb.search(/\n(?:function |const )/);
+  const nbBody = nextTopLevel === -1 ? afterNb : afterNb.slice(0, nextTopLevel);
+  for (const hex of ["'#6b492b'", "'#3b2b1d'", "'#7d5a3c'", "'#f5efe0'", "'#8b6a4b'", "'#2e2218'"]) {
+    assert.ok(nbBody.includes(hex), `buildNoticeBoard must contain ${hex}`);
+  }
+
+  const eventBanner = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'event-banner.mjs'), 'utf8');
+  assert.ok(eventBanner.includes("bg: '#f2e6cf'"));
+  assert.ok(eventBanner.includes("border: '#b59449'"));
+  assert.ok(eventBanner.includes("fg: '#2b1e14'"));
+});
+
+test('CONCEPT.md Mood, Rule, roof-brown OPEN, and 90-hex scoped recount hold', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const moodText = extractSection(conceptText, '## Mood');
+  assert.match(moodText, /Quiet, small, hand-built/);
+  assert.match(moodText, /1999 web page you can\s+walk around in/);
+  assert.match(moodText, /burns in an empty house by design/);
+
+  const ruleText = extractSection(conceptText, '## The rule');
+  assert.match(ruleText, /No new color, form, or material enters the town without a line here\s+first/);
+  assert.match(ruleText, /contractor defaults are not decisions/);
+
+  const paletteText = extractSection(conceptText, '## Palette');
+  assert.match(paletteText, /OPEN: contractor default, repaint undecided/);
+
+  const dontsText = extractSection(conceptText, "## Don'ts");
+  assert.match(dontsText, /90 such hexes ship as of this slice/);
+
+  const shippedFiles = [
+    ...collectShippedJsMjs(path.join(__dirname, 'town-3d')),
+    ...collectShippedJsMjs(path.join(__dirname, 'staging-polyfork')),
+  ];
+  const shippedHexes = new Set();
+  for (const file of shippedFiles) {
+    const content = fs.readFileSync(file, 'utf8');
+    for (const match of content.matchAll(/#[0-9a-fA-F]{6}\b/g)) {
+      shippedHexes.add(match[0].toLowerCase());
+    }
+  }
+
+  const formsText = extractSection(conceptText, '## Forms');
+  const sheetHexes = new Set();
+  for (const match of `${paletteText}\n${formsText}`.matchAll(/#[0-9a-fA-F]{6}\b/g)) {
+    sheetHexes.add(match[0].toLowerCase());
+  }
+
+  const unlistedHexes = [...shippedHexes].filter((h) => !sheetHexes.has(h));
+  assert.equal(shippedHexes.size, 116, `Expected 116 shipped hexes, got ${shippedHexes.size}`);
+  assert.equal(sheetHexes.size, 26, `Expected 26 in-sheet hexes, got ${sheetHexes.size}`);
+  assert.equal(unlistedHexes.length, 90, `Expected 90 unlisted hexes, got ${unlistedHexes.length}`);
+});
