@@ -367,3 +367,122 @@ test('LAYOUT.json non-_terrain row fields (rx/ry/rz, s, params) are well-typed',
     }
   }
 });
+
+test('CREDITS.txt has one .glb credit line per PARTS.json key', () => {
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const credits = readKitFile(kit, 'CREDITS.txt');
+    const keys = Object.keys(partsJson);
+    const glbLines = credits.split(/\r?\n/).filter((line) => line.includes('.glb'));
+
+    assert.equal(glbLines.length, keys.length, `${kit}/CREDITS.txt .glb line count must match PARTS.json`);
+    for (const key of keys) {
+      assert.ok(credits.includes(`${key}.glb`), `${kit}/CREDITS.txt must credit ${key}.glb`);
+    }
+  }
+});
+
+test('every PARTS.json knob spec string ends with " (default)"', () => {
+  const defaultRe = / \([^)]*\)$/;
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    for (const [partKey, entry] of Object.entries(partsJson)) {
+      for (const [knobName, spec] of Object.entries(entry.knobs || {})) {
+        assert.equal(typeof spec, 'string', `${kit} PARTS[${partKey}].knobs.${knobName} must be a string`);
+        assert.match(spec, defaultRe, `${kit} PARTS[${partKey}].knobs.${knobName} must end with ' (default)'`);
+      }
+    }
+  }
+});
+
+test('PARTS.json colors arrays are well-formed where present', () => {
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    for (const [partKey, entry] of Object.entries(partsJson)) {
+      if (entry.colors === undefined) continue;
+      assert.ok(
+        Array.isArray(entry.colors) && entry.colors.length > 0,
+        `${kit} PARTS[${partKey}].colors must be a non-empty array`
+      );
+      for (const zone of entry.colors) {
+        assert.equal(typeof zone, 'string', `${kit} PARTS[${partKey}].colors entries must be strings`);
+        assert.ok(zone.length > 0, `${kit} PARTS[${partKey}].colors entries must be non-empty`);
+      }
+      assert.equal(
+        new Set(entry.colors).size,
+        entry.colors.length,
+        `${kit} PARTS[${partKey}].colors must not contain duplicates`
+      );
+    }
+  }
+});
+
+test('kit.json night-entry parts have a lit zone and PARTS.json lit arrays are well-formed', () => {
+  for (const kit of KITS) {
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+
+    for (let i = 0; i < kitJson.night.length; i++) {
+      for (const part of kitJson.night[i].parts) {
+        assert.ok(
+          partsJson[part].lit !== undefined,
+          `${kit} night[${i}] part '${part}' must have a lit field in PARTS.json`
+        );
+      }
+    }
+
+    for (const [partKey, entry] of Object.entries(partsJson)) {
+      if (entry.lit === undefined) continue;
+      assert.ok(
+        Array.isArray(entry.lit) && entry.lit.length > 0,
+        `${kit} PARTS[${partKey}].lit must be a non-empty array`
+      );
+      for (const zone of entry.lit) {
+        assert.equal(typeof zone, 'string', `${kit} PARTS[${partKey}].lit entries must be strings`);
+        assert.ok(zone.length > 0, `${kit} PARTS[${partKey}].lit entries must be non-empty`);
+      }
+    }
+  }
+});
+
+test('PARTS.json rig is a non-empty string array where present', () => {
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    for (const [partKey, entry] of Object.entries(partsJson)) {
+      if (entry.rig === undefined) continue;
+      assert.ok(
+        Array.isArray(entry.rig) && entry.rig.length > 0,
+        `${kit} PARTS[${partKey}].rig must be a non-empty array`
+      );
+      for (const bone of entry.rig) {
+        assert.equal(typeof bone, 'string', `${kit} PARTS[${partKey}].rig entries must be strings`);
+        assert.ok(bone.length > 0, `${kit} PARTS[${partKey}].rig entries must be non-empty`);
+      }
+    }
+  }
+});
+
+test('LAYOUT.json optional s is uniform and optional anim appears in _internal/clips.mjs', () => {
+  for (const kit of KITS) {
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    const clipsSrc = readKitFile(kit, '_internal/clips.mjs');
+
+    for (let i = 0; i < layoutJson.length; i++) {
+      const row = layoutJson[i];
+      if (row.s !== undefined) {
+        assert.ok(
+          row.s[0] === row.s[1] && row.s[1] === row.s[2],
+          `${kit} LAYOUT[${i}].s must be uniform [v, v, v]`
+        );
+      }
+      if (row.anim !== undefined) {
+        assert.equal(typeof row.anim, 'string', `${kit} LAYOUT[${i}].anim must be a string`);
+        assert.ok(row.anim.length > 0, `${kit} LAYOUT[${i}].anim must be non-empty`);
+        assert.ok(
+          clipsSrc.includes(row.anim),
+          `${kit} LAYOUT[${i}].anim '${row.anim}' must appear in _internal/clips.mjs`
+        );
+      }
+    }
+  }
+});
