@@ -653,3 +653,268 @@ test('guest inn claim expires: state prunes the room after expiry', async () => 
     await ctx.close();
   }
 });
+
+test('guest say needs no checkin: 500-char boundary posts, invalid bodies consume no quota, state_seq rises', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'solo-sayer', ...keys });
+
+    const s1 = await guest.guestSay('x'.repeat(500));
+    assert.equal(s1.status, 201);
+    assert.equal(s1.data.body.length, 500);
+    const seq1 = s1.data.state_seq;
+
+    const empty = await guest.guestSay('');
+    assert.equal(empty.status, 400);
+    assert.equal(empty.data.error, 'invalid_body');
+
+    const tooLong = await guest.guestSay('y'.repeat(501));
+    assert.equal(tooLong.status, 400);
+    assert.equal(tooLong.data.error, 'invalid_body');
+    assert.equal(tooLong.data.max, 500);
+
+    const s2 = await guest.guestSay('ok');
+    assert.equal(s2.status, 201);
+    assert.ok(s2.data.state_seq > seq1);
+
+    const s3 = await guest.guestSay('third');
+    assert.equal(s3.status, 429);
+    assert.equal(s3.data.error, 'rate_limited');
+
+    const st = await guest.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.presence.some((p) => p.handle === 'solo-sayer'), false);
+    assert.equal(st.data.footlights.some((f) => f.handle === 'solo-sayer'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest checkin status_text edges: non-string rejected, null accepted, re-checkin refreshes updated_at', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'statusedge', ...keys });
+
+    const badType = await signedPost(ctx, 'statusedge', keys, '/api/town/ghostlight/guest/checkin', {
+      handle: 'statusedge',
+      pubkey: keys.pubkey,
+      status_text: 123,
+    });
+    assert.equal(badType.status, 400);
+    assert.equal(badType.data.error, 'status_text_too_long');
+    assert.equal(badType.data.max, 120);
+
+    const c1 = await guest.guestCheckin({ status_text: null });
+    assert.equal(c1.status, 200);
+
+    ctx.advanceClock(301);
+
+    const c2 = await signedPost(ctx, 'statusedge', keys, '/api/town/ghostlight/guest/checkin', {
+      handle: 'statusedge',
+      pubkey: keys.pubkey,
+      status_text: 'still here',
+    });
+    assert.equal(c2.status, 200);
+    assert.equal(c2.data.updated_at, c1.data.updated_at + 301);
+
+    const st = await guest.state();
+    assert.equal(st.status, 200);
+    const pres = st.data.presence.find((p) => p.handle === 'statusedge');
+    assert.ok(pres);
+    assert.deepEqual(Object.keys(pres).sort(), ['handle', 'role', 'updated_at', 'zone']);
+    assert.equal(pres.updated_at, c2.data.updated_at);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest handle is not key-bound: second keypair checks in after the window; rate limit is per-handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys1 = generateKeypair();
+    const keys2 = generateKeypair();
+    const guest1 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'shared-handle', ...keys1 });
+    const guest2 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'shared-handle', ...keys2 });
+
+    const c1 = await guest1.guestCheckin();
+    assert.equal(c1.status, 200);
+
+    const c2 = await guest2.guestCheckin();
+    assert.equal(c2.status, 429);
+    assert.equal(c2.data.error, 'rate_limited');
+
+    ctx.advanceClock(301);
+
+    const c3 = await signedPost(ctx, 'shared-handle', keys2, '/api/town/ghostlight/guest/checkin', {
+      handle: 'shared-handle',
+      pubkey: keys2.pubkey,
+    });
+    assert.equal(c3.status, 200);
+
+    const st = await guest1.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.presence.filter((p) => p.handle === 'shared-handle').length, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest inn claim: fractional/string nights rejected free; resident-held room 409s consume the bucket', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'nightsguest', ...keys });
+
+    const frac = await guest.guestInnClaim('window', 2.5);
+    assert.equal(frac.status, 400);
+    assert.equal(frac.data.error, 'invalid_nights');
+
+    const strNights = await signedPost(ctx, 'nightsguest', keys, '/api/town/inn/guest/claim', {
+      handle: 'nightsguest',
+      pubkey: keys.pubkey,
+      room: 'window',
+      nights: '3',
+    });
+    assert.equal(strNights.status, 400);
+    assert.equal(strNights.data.error, 'invalid_nights');
+
+    const okClaim = await guest.guestInnClaim('window', 2);
+    assert.equal(okClaim.status, 201);
+
+    const { client: alder } = await createResident(ctx, 'alder');
+    const resClaim = await alder.claimInnRoom('lantern', 2);
+    assert.equal(resClaim.status, 201);
+
+    const roomKeys = generateKeypair();
+    const roomGuest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'roomguest', ...roomKeys });
+
+    const taken1 = await roomGuest.guestInnClaim('lantern', 1);
+    assert.equal(taken1.status, 409);
+    assert.equal(taken1.data.error, 'room_already_claimed');
+
+    const taken2 = await roomGuest.guestInnClaim('lantern', 1);
+    assert.equal(taken2.status, 409);
+    assert.equal(taken2.data.error, 'room_already_claimed');
+
+    const limited = await roomGuest.guestInnClaim('quiet', 1);
+    assert.equal(limited.status, 429);
+    assert.equal(limited.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest inn extend boundary: exactly 7 nights succeeds, the 8th exceeds; invalid extra_nights free', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'extendguest', ...keys });
+
+    const claim = await guest.guestInnClaim('lantern', 3);
+    assert.equal(claim.status, 201);
+    const { key, claimed_at } = claim.data;
+
+    const frac = await signedPost(ctx, 'extendguest', keys, '/api/town/inn/guest/extend', {
+      handle: 'extendguest',
+      pubkey: keys.pubkey,
+      room: 'lantern',
+      key,
+      extra_nights: 2.5,
+    });
+    assert.equal(frac.status, 400);
+    assert.equal(frac.data.error, 'invalid_extra_nights');
+
+    const strExtra = await signedPost(ctx, 'extendguest', keys, '/api/town/inn/guest/extend', {
+      handle: 'extendguest',
+      pubkey: keys.pubkey,
+      room: 'lantern',
+      key,
+      extra_nights: '2',
+    });
+    assert.equal(strExtra.status, 400);
+    assert.equal(strExtra.data.error, 'invalid_extra_nights');
+
+    const extOk = await guest.guestInnExtend('lantern', key, 4);
+    assert.equal(extOk.status, 200);
+    assert.equal(extOk.data.nights, 7);
+    assert.equal(extOk.data.expires_at, claimed_at + 7 * NIGHT_SEC);
+
+    ctx.advanceClock(3601);
+
+    const extOver = await signedPost(ctx, 'extendguest', keys, '/api/town/inn/guest/extend', {
+      handle: 'extendguest',
+      pubkey: keys.pubkey,
+      room: 'lantern',
+      key,
+      extra_nights: 1,
+    });
+    assert.equal(extOver.status, 400);
+    assert.equal(extOver.data.error, 'max_stay_exceeded');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest inn vacate frees the room: extend 404s, re-claim gets a fresh key, old key is dead', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'vacguest', ...keys });
+
+    const claim1 = await guest.guestInnClaim('lantern', 2);
+    assert.equal(claim1.status, 201);
+    const k1 = claim1.data.key;
+
+    const vac = await guest.guestInnVacate('lantern', k1);
+    assert.equal(vac.status, 200);
+    assert.equal(vac.data.vacated, true);
+
+    const st1 = await guest.state();
+    assert.equal(st1.status, 200);
+    assert.equal(st1.data.inn.lantern, null);
+
+    const extDead = await signedPost(ctx, 'vacguest', keys, '/api/town/inn/guest/extend', {
+      handle: 'vacguest',
+      pubkey: keys.pubkey,
+      room: 'lantern',
+      key: k1,
+      extra_nights: 1,
+    });
+    assert.equal(extDead.status, 404);
+    assert.equal(extDead.data.error, 'claim_not_found');
+
+    ctx.advanceClock(3601);
+
+    const claim2 = await signedPost(ctx, 'vacguest', keys, '/api/town/inn/guest/claim', {
+      handle: 'vacguest',
+      pubkey: keys.pubkey,
+      room: 'lantern',
+      nights: 1,
+    });
+    assert.equal(claim2.status, 201);
+    const k2 = claim2.data.key;
+    assert.notEqual(k2, k1);
+
+    ctx.advanceClock(3601);
+
+    const extOldKey = await signedPost(ctx, 'vacguest', keys, '/api/town/inn/guest/extend', {
+      handle: 'vacguest',
+      pubkey: keys.pubkey,
+      room: 'lantern',
+      key: k1,
+      extra_nights: 1,
+    });
+    assert.equal(extOldKey.status, 403);
+    assert.equal(extOldKey.data.error, 'invalid_key');
+
+    const st2 = await guest.state();
+    assert.equal(st2.status, 200);
+    assert.equal(st2.data.inn.lantern.handle, 'vacguest');
+    assert.equal(st2.data.inn.lantern.nights, 1);
+    assert.equal(st2.data.inn.lantern.guest, true);
+  } finally {
+    await ctx.close();
+  }
+});
