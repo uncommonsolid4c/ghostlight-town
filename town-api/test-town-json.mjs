@@ -395,3 +395,121 @@ test('block key sets are closed (no silent additions or drops)', () => {
     'headers',
   ]);
 });
+
+test('inn_rooms and contact block key sets are closed', () => {
+  assert.deepEqual(Object.keys(townJson.inn_rooms), [
+    'rooms',
+    'nights_min',
+    'nights_max',
+    'nights_default',
+    'max_total_nights',
+    'key_policy',
+  ]);
+  for (const room of townJson.inn_rooms.rooms) {
+    assert.deepEqual(Object.keys(room), ['id', 'name']);
+  }
+  const roomIds = new Set(townJson.inn_rooms.rooms.map((r) => r.id));
+  assert.equal(townJson.inn_rooms.rooms.length, 3);
+  assert.equal(roomIds.size, 3);
+
+  assert.deepEqual(Object.keys(townJson.contact), [
+    'owner',
+    'owner_handle',
+    'gazette',
+  ]);
+});
+
+test('endpoint summaries carry the guest/key/guestbook behavior phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+
+  const expectedPhrases = [
+    ['POST /api/town/ghostlight/guest/checkin', ['presence only', 'no footlight']],
+    ['POST /api/town/ghostlight/guest/say', ['[guest]', '500-char cap']],
+    ['POST /api/town/key/rotate', ['old key stops working']],
+    ['GET /api/town/guestbook', ['kind=guestbook|letter', 'limit=1..50']],
+    ['POST /api/town/ghostlight/leave', ['Extinguish']],
+    ['POST /api/town/presence', ['plot:<handle>']],
+    ['POST /api/town/inn/guest/claim', ['12-character room key']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('handle_pattern behaves at its boundaries', () => {
+  const re = new RegExp(townJson.handle_pattern);
+
+  for (const valid of ['milo', 'lampmoth', 'a-1', 'x'.repeat(32)]) {
+    assert.match(valid, re, `Expected handle_pattern to accept ${JSON.stringify(valid)}`);
+  }
+
+  for (const invalid of ['Milo', 'a', 'x'.repeat(33), 'a b', 'a.b', '']) {
+    assert.doesNotMatch(invalid, re, `Expected handle_pattern to reject ${JSON.stringify(invalid)}`);
+  }
+});
+
+test('live_note pins the live date and both URLs', () => {
+  assert.ok(
+    townJson.live_note.startsWith(`Live since 2026-11-13 at ${townJson.base_url}`),
+    'live_note must start with Live since 2026-11-13 at base_url'
+  );
+  assert.ok(
+    townJson.live_note.includes('dev_base_url'),
+    'live_note must include dev_base_url'
+  );
+});
+
+test('endpoint method counts and the null rate_limit set', () => {
+  const counts = { GET: 0, POST: 0, PUT: 0 };
+  for (const ep of townJson.endpoints) {
+    counts[ep.method] = (counts[ep.method] || 0) + 1;
+  }
+  assert.deepEqual(counts, { GET: 3, POST: 19, PUT: 1 });
+  assert.equal(townJson.endpoints.length, 23);
+
+  const nullRateLimits = townJson.endpoints
+    .filter((ep) => ep.rate_limit === null)
+    .map((ep) => `${ep.method} ${ep.path}`)
+    .sort();
+
+  assert.deepEqual(nullRateLimits, [
+    'GET /api/town/guestbook',
+    'GET /api/town/plot',
+    'GET /api/town/state',
+    'POST /api/town/admin/approve',
+    'POST /api/town/admin/delete-line',
+    'POST /api/town/admin/guestbook',
+    'POST /api/town/admin/invite',
+    'POST /api/town/ghostlight/leave',
+    'POST /api/town/inn/guest/vacate',
+    'POST /api/town/inn/vacate',
+    'POST /api/town/presence',
+  ]);
+
+  const adminEndpoints = townJson.endpoints.filter((ep) =>
+    ep.path.startsWith('/api/town/admin/')
+  );
+  assert.ok(adminEndpoints.length > 0, 'Expected admin endpoints');
+  for (const ep of adminEndpoints) {
+    assert.equal(ep.rate_limit, null, `${ep.method} ${ep.path} must have null rate_limit`);
+    assert.equal(ep.auth, 'admin', `${ep.method} ${ep.path} must have admin auth`);
+  }
+});
+
+test('every origin appears in SKILL.md', () => {
+  assert.equal(townJson.origins.length, 5);
+  for (const origin of townJson.origins) {
+    assert.ok(
+      skillSrc.includes(origin),
+      `SKILL.md must mention origin ${JSON.stringify(origin)}`
+    );
+  }
+});
