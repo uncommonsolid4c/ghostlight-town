@@ -283,3 +283,163 @@ test('staging-polyfork/README.md ## Contents test files match disk and run-tests
     assert.ok(listedTests.has(fileName), `Registered suite "${fileName}" in run-tests.mjs is missing from ## Contents`);
   }
 });
+
+test('staging-polyfork/README.md lamp posts, pines, and pine triangle counts match staging.js and parts/', () => {
+  const lampArrMatch = stagingJs.match(
+    /for\s*\(const\s*\[x,\s*z,\s*s\]\s*of\s*(\[\[[^\n]+\]\])\)\s*\{\s*place\(LampPost,\s*\{\s*scale:\s*s\s*\},\s*x,\s*z/
+  );
+  assert.ok(lampArrMatch, 'Could not parse LampPost placement array in staging.js');
+  const lamps = JSON.parse(lampArrMatch[1]);
+  assert.equal(lamps.length, 4, 'Expected 4 lamp posts in staging.js');
+  assert.deepEqual(lamps, [
+    [-3.2, 26.2, 1.8],
+    [3.2, 26.2, 1.8],
+    [-8.5, 17.5, 1.4],
+    [8.5, 6.5, 1.4],
+  ]);
+
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  assert.ok(buildingsSec.includes('(±3.2, 26.2) scale 1.8'), '## Buildings must state lamp posts (±3.2, 26.2) scale 1.8');
+  assert.ok(buildingsSec.includes('(−8.5, 17.5), (8.5, 6.5) scale 1.4'), '## Buildings must state lamp posts (−8.5, 17.5), (8.5, 6.5) scale 1.4');
+
+  const pineCountMatch = stagingJs.match(/while\s*\(counts\.pines\s*<\s*(\d+)/);
+  const pineRadiusMatch = stagingJs.match(/r\s*=\s*(\d+)\s*\+\s*rnd\(\)\s*\*\s*(\d+)/);
+  const pineScaleMatch = stagingJs.match(/tree\.scale\.setScalar\(([\d.]+)\s*\+\s*rnd\(\)\s*\*\s*([\d.]+)\)/);
+  assert.ok(pineCountMatch && pineRadiusMatch && pineScaleMatch, 'Could not parse pine loop parameters in staging.js');
+
+  const pineCount = Number(pineCountMatch[1]);
+  const rMin = Number(pineRadiusMatch[1]);
+  const rMax = rMin + Number(pineRadiusMatch[2]);
+  const sMin = Number(pineScaleMatch[1]);
+  const sMax = Number((sMin + Number(pineScaleMatch[2])).toFixed(2));
+
+  assert.ok(buildingsSec.includes(`Pines: ${pineCount} trees`), `## Buildings Pines line must state ${pineCount} trees`);
+  assert.ok(buildingsSec.includes(`radius ${rMin}–${rMax} m`), `## Buildings Pines line must state radius ${rMin}–${rMax} m`);
+  assert.ok(buildingsSec.includes(`scale ${sMin}–${sMax}`), `## Buildings Pines line must state scale ${sMin}–${sMax}`);
+
+  const tallPineSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'parts/tall-pine-tree-ab4108.mjs'), 'utf8');
+  const youngPineSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'parts/young-pine-0d7695.mjs'), 'utf8');
+  const tallTris = tallPineSrc.match(/SPECS\s+(\d+)\s+triangles/);
+  const youngTris = youngPineSrc.match(/SPECS\s+(\d+)\s+triangles/);
+  assert.ok(tallTris && youngTris, 'Could not parse SPECS triangle counts in parts/*.mjs');
+
+  const contentsSec = getSection(readmeMd, 'Contents').replace(/\s+/g, ' ');
+  assert.ok(
+    contentsSec.includes(`\`tall-pine-tree-ab4108.mjs\` (${tallTris[1]} tris)`),
+    `## Contents must state tall-pine-tree-ab4108.mjs (${tallTris[1]} tris)`
+  );
+  assert.ok(
+    contentsSec.includes(`\`young-pine-0d7695.mjs\` (${youngTris[1]} tris)`),
+    `## Contents must state young-pine-0d7695.mjs (${youngTris[1]} tris)`
+  );
+});
+
+test('staging-polyfork/README.md daylight drift 30-minute cycle matches daylight-drift.mjs', async () => {
+  const { DAYLIGHT_DRIFT_CONFIG } = await import('./daylight-drift.mjs');
+  const driftSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'daylight-drift.mjs'), 'utf8');
+
+  assert.equal(DAYLIGHT_DRIFT_CONFIG.cycleSeconds, 30 * 60, 'DAYLIGHT_DRIFT_CONFIG.cycleSeconds must be 30 * 60');
+  assert.deepEqual(
+    DAYLIGHT_DRIFT_CONFIG.keyframes.map((k) => k.name),
+    ['night', 'dawn', 'overcast', 'dawn', 'night'],
+    'DAYLIGHT_DRIFT_CONFIG.keyframes must follow night -> dawn -> overcast -> dawn -> night'
+  );
+  assert.match(driftSrc, /capped well below noon/i, 'daylight-drift.mjs header must document below-noon cap');
+
+  const terrainSec = getSection(readmeMd, 'Terrain (as built — no fallbacks needed)').replace(/\s+/g, ' ');
+  assert.ok(terrainSec.includes('30-minute clock'), '## Terrain must state 30-minute clock');
+  assert.ok(
+    terrainSec.includes('night → dawn → overcast → dawn → night'),
+    '## Terrain must state night → dawn → overcast → dawn → night'
+  );
+  assert.ok(terrainSec.includes('capped below noon'), '## Terrain must state below-noon cap');
+});
+
+test('staging-polyfork/README.md prompt-book.mjs bullet covers [NPC] and [guest] pills', async () => {
+  const { renderPromptBook } = await import('./prompt-book.mjs');
+  const makeEl = (tag) => {
+    const el = { tag, className: '', textContent: '', children: [] };
+    el.appendChild = (c) => { el.children.push(c); };
+    el.removeChild = (c) => { el.children = el.children.filter((x) => x !== c); };
+    Object.defineProperty(el, 'firstChild', { get: () => el.children[0] || null });
+    return el;
+  };
+  const doc = { createElement: makeEl };
+  const container = makeEl('div');
+  renderPromptBook(container, [
+    { id: 1, handle: 'wick', role: 'npc', kind: 'say', body: 'Hello' },
+    { id: 2, handle: 'visitor', role: 'guest', kind: 'say', body: 'Hi' },
+  ], doc);
+
+  assert.equal(container.children.length, 2);
+  assert.equal(container.children[0].children[0].className, 'pb-npc-pill');
+  assert.equal(container.children[0].children[0].textContent, '[NPC]');
+  assert.equal(container.children[1].children[0].className, 'pb-guest-pill');
+  assert.equal(container.children[1].children[0].textContent, '[guest]');
+
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const pbBullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`prompt-book.mjs`'));
+  assert.ok(pbBullet, '## Contents must have a prompt-book.mjs bullet');
+  assert.ok(pbBullet.includes('[NPC]') && pbBullet.includes('.pb-npc-pill'), 'prompt-book.mjs bullet must mention [NPC] (.pb-npc-pill)');
+  assert.ok(pbBullet.includes('[guest]') && pbBullet.includes('.pb-guest-pill'), 'prompt-book.mjs bullet must mention [guest] (.pb-guest-pill)');
+});
+
+test('staging-polyfork/README.md Known limits states state.events is live matching town-api/server.mjs', () => {
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
+  assert.match(
+    serverSrc,
+    /events:\s*\{\s*now:\s*nowEvent,\s*next:\s*nextEvent\s*\}/,
+    'town-api/server.mjs must include events: { now: nowEvent, next: nextEvent } in state'
+  );
+
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups');
+  const eventBullet = limitsSec.split(/\r?\n- /).find((b) => b.includes('Event banner reads `events.json` directly'));
+  assert.ok(eventBullet, '## Known limits must have the Event banner bullet');
+  const normBullet = eventBullet.replace(/\s+/g, ' ');
+  assert.ok(!/not live yet/i.test(normBullet), 'Event banner bullet must not claim state.events is "not live yet"');
+  assert.ok(!/does not yet serve/i.test(normBullet), 'Event banner bullet must not claim server "does not yet serve" events');
+  assert.ok(
+    /`state\.events`\s+is\s+live/i.test(normBullet) || /`state\.events`[^.]*\bis live\b/i.test(normBullet),
+    'Event banner bullet must state state.events is live'
+  );
+  assert.ok(normBullet.includes('TOWN_EVENTS_PATH'), 'Event banner bullet must keep TOWN_EVENTS_PATH');
+});
+
+test('staging-polyfork/README.md Nightly Call card wrap (22) and event banner default (30) match sources', () => {
+  const innSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'inn-nightly-call.mjs'), 'utf8');
+  const bannerSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'event-banner.mjs'), 'utf8');
+
+  assert.match(innSrc, /splitNightlyCallLines\(topic,\s*22\)/, 'inn-nightly-call.mjs must wrap Nightly Call topic at 22');
+  assert.match(innSrc, /width:\s*1024,\s*\n\s*height:\s*512/, 'inn-nightly-call.mjs card must be 1024x512');
+  assert.match(innSrc, /longest 53 chars.*wraps to at most 3 lines/s, 'inn-nightly-call.mjs doc must state longest 53 chars wraps to at most 3 lines');
+  assert.match(innSrc, /export function splitNightlyCallLines\(topic,\s*maxLineLen\s*=\s*30\)/, 'splitNightlyCallLines default must be 30');
+  assert.match(bannerSrc, /splitNightlyCallLines\(title\)/, 'event-banner.mjs must call splitNightlyCallLines(title) with no second arg');
+
+  const contentsSec = getSection(readmeMd, 'Contents').replace(/\s+/g, ' ');
+  const innBullet = contentsSec.split(' - ').find((b) => b.startsWith('`inn-nightly-call.mjs`'));
+  assert.ok(innBullet, '## Contents must have an inn-nightly-call.mjs bullet');
+  assert.ok(innBullet.includes('22 chars'), 'inn-nightly-call.mjs bullet must state 22 chars wrap');
+  assert.ok(innBullet.includes('53-char'), 'inn-nightly-call.mjs bullet must state 53-char longest topic');
+  assert.ok(innBullet.includes('at most 3 lines'), 'inn-nightly-call.mjs bullet must state at most 3 lines');
+  assert.ok(innBullet.includes('`30` is the event banner\'s 768px default'), 'inn-nightly-call.mjs bullet must state 30 is the event banner 768px default');
+});
+
+test('staging-polyfork/README.md Verification and Controls claims match staging.js and index.html', () => {
+  assert.match(stagingJs, /window\.__stagingReady\s*=\s*true;/, 'staging.js must set window.__stagingReady = true on success');
+  assert.match(stagingJs, /window\.__stagingError\s*=/, 'staging.js must set window.__stagingError on failure');
+
+  const verifySec = getSection(readmeMd, 'Verification done locally (no browser here — no visual check claimed)').replace(/\s+/g, ' ');
+  assert.ok(verifySec.includes('`window.__stagingReady` is set true on success'), '## Verification must state window.__stagingReady');
+  assert.ok(verifySec.includes('`window.__stagingError` carries the failure message'), '## Verification must state window.__stagingError');
+
+  assert.match(
+    indexHtml,
+    /window\.matchMedia\('\(pointer: coarse\)'\)\.matches[\s\S]*controlsHint\.textContent\s*=/,
+    'index.html must swap #controls-hint textContent for (pointer: coarse)'
+  );
+  const controlsSec = getSection(readmeMd, 'Controls').replace(/\s+/g, ' ');
+  assert.ok(
+    controlsSec.includes('Coarse-pointer devices swap the footer `#controls-hint` to touch-first copy'),
+    '## Controls must state coarse-pointer #controls-hint swap'
+  );
+});
