@@ -10,7 +10,15 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { createTownServer, rawPubkeyToKeyObject, buildCanonicalString } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
-import { VALID_PROP_KINDS, VALID_COTTAGES } from './plot-validation.mjs';
+import {
+  VALID_PROP_KINDS,
+  VALID_COTTAGES,
+  MAX_MANIFEST_BYTES,
+  MAX_HTML_BYTES,
+  MAX_SIGNPOST_CHARS,
+  MAX_PROPS,
+  validateManifest,
+} from './plot-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -842,6 +850,307 @@ test('guestbook caps from town.json limits, and pending entries stay hidden', as
       listData.entries.some((e) => e.id === okPost.data.id),
       false
     );
+  } finally {
+    await srv.close();
+  }
+});
+
+
+test('every server route is listed in town.json (reverse coverage)', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'server.mjs'), 'utf8');
+
+  const writeRoutesMatch = serverSrc.match(/const WRITE_ROUTES = new Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(writeRoutesMatch, 'town-api/server.mjs must define WRITE_ROUTES');
+  const writeRoutes = new Map();
+  for (const [, routeKey, mode] of writeRoutesMatch[1].matchAll(/\['([^']+)',\s*\{\s*mode:\s*'([^']+)'/g)) {
+    writeRoutes.set(routeKey, mode);
+  }
+  assert.equal(writeRoutes.size, 20, 'WRITE_ROUTES must have 20 entries');
+
+  const getRoutes = [...serverSrc.matchAll(/req\.method === 'GET' && pathname === '([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(getRoutes, ['/api/town/state', '/api/town/plot', '/api/town/guestbook']);
+
+  assert.equal(town.endpoints.length, 23);
+  const endpointsByKey = new Map();
+  for (const ep of town.endpoints) {
+    const key = `${ep.method} ${ep.path}`;
+    assert.equal(endpointsByKey.has(key), false, `Duplicate endpoint in town.json: ${key}`);
+    endpointsByKey.set(key, ep);
+  }
+
+  const modeToAuth = {
+    admin: 'admin',
+    public: 'public',
+    join: 'signed',
+    resident: 'signed',
+    guest: 'signed',
+  };
+
+  for (const [key, mode] of writeRoutes.entries()) {
+    const ep = endpointsByKey.get(key);
+    assert.ok(ep, `WRITE_ROUTES entry ${key} missing from town.json endpoints`);
+    assert.equal(ep.auth, modeToAuth[mode], `Auth mismatch for ${key} (mode ${mode})`);
+  }
+
+  for (const getPath of getRoutes) {
+    const key = `GET ${getPath}`;
+    const ep = endpointsByKey.get(key);
+    assert.ok(ep, `GET route ${key} missing from town.json endpoints`);
+    assert.equal(ep.auth, 'public', `Auth mismatch for ${key}`);
+  }
+});
+
+test('town.json plot caps and auth constants match the server sources', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'server.mjs'), 'utf8');
+  const plotValSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'plot-validation.mjs'), 'utf8');
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  assert.equal(town.plot.manifest_max_kb, MAX_MANIFEST_BYTES / 1024);
+  assert.equal(town.plot.html_max_kb, MAX_HTML_BYTES / 1024);
+  assert.equal(town.plot.signpost_max_chars, MAX_SIGNPOST_CHARS);
+  assert.equal(town.plot.max_props, MAX_PROPS);
+
+  const coordMatch = plotValSrc.match(/p\[axis\] < (-?\d+) \|\| p\[axis\] > (-?\d+)/);
+  assert.ok(coordMatch, 'plot-validation.mjs must enforce coord range');
+  assert.deepEqual(town.plot.coord_range, [Number(coordMatch[1]), Number(coordMatch[2])]);
+
+  const rotMatch = plotValSrc.match(/p\.rot_y < (\d+) \|\| p\.rot_y >= (\d+)/);
+  assert.ok(rotMatch, 'plot-validation.mjs must enforce rot_y range');
+  assert.deepEqual(town.plot.rot_y_range, [Number(rotMatch[1]), Number(rotMatch[2])]);
+
+  const baseManifest = {
+    cottage: 'gable',
+    wall: '#d8c8a8',
+    roof: '#5a3d2b',
+    trim: '#2f4f4f',
+  };
+  assert.equal(
+    validateManifest({
+      ...baseManifest,
+      props: [{ kind: 'desk', x: 12, y: 0, z: 0, rot_y: 359.99 }],
+    }).ok,
+    true
+  );
+  const badCoord = validateManifest({
+    ...baseManifest,
+    props: [{ kind: 'desk', x: 12.01, y: 0, z: 0, rot_y: 0 }],
+  });
+  assert.equal(badCoord.ok, false);
+  assert.equal(badCoord.error, 'prop_coord_out_of_range');
+
+  const badRot = validateManifest({
+    ...baseManifest,
+    props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 360 }],
+  });
+  assert.equal(badRot.ok, false);
+  assert.equal(badRot.error, 'invalid_prop_rotation');
+
+  const parseConstNum = (name) => {
+    const m = serverSrc.match(new RegExp(`const ${name}\\s*=\\s*([^;]+);`));
+    assert.ok(m, `server.mjs must define ${name}`);
+    const expr = m[1].trim();
+    assert.match(expr, /^[\d\s*]+$/);
+    return expr.split('*').reduce((acc, part) => acc * Number(part.trim()), 1);
+  };
+
+  assert.equal(town.auth.timestamp_skew_sec, parseConstNum('TIMESTAMP_SKEW_SEC'));
+  assert.equal(town.auth.nonce_ttl_sec, parseConstNum('NONCE_TTL_SEC'));
+
+  const keys = generateKeypair();
+  const signed = signRequest({
+    method: 'POST',
+    path: '/api/town/ghostlight/say',
+    body: { body: 'hi', kind: 'say' },
+    handle: 'header-check',
+    privateKeyPem: keys.privateKeyPem,
+  });
+  const museHeaders = Object.keys(signed.headers).filter((h) => h.startsWith('X-Muse-'));
+  assert.deepEqual(town.auth.headers, museHeaders);
+
+  const sec2Match = skillMd.match(/## 2\. Identity, Keys & Signing[\s\S]*?```text\n([^\n]+)\n```/);
+  assert.ok(sec2Match, 'SKILL.md §2 must include the canonical string text block');
+  assert.equal(town.auth.canonical_string, sec2Match[1]);
+});
+
+test('join error matrix (the onboarding surface failure paths)', async () => {
+  const srv1 = await startTestServer();
+  try {
+    const kAlice = generateKeypair();
+    const alice = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'alice',
+      pubkey: kAlice.pubkey,
+      privateKeyPem: kAlice.privateKeyPem,
+    });
+    const j1 = await alice.join({ origin: 'colony' });
+    assert.equal(j1.status, 201);
+
+    const j2 = await alice.join({ origin: 'colony' });
+    assert.equal(j2.status, 409);
+    assert.equal(j2.data?.error, 'handle_taken');
+
+    const bob = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'bob',
+      pubkey: kAlice.pubkey,
+      privateKeyPem: kAlice.privateKeyPem,
+    });
+    const j3 = await bob.join({ origin: 'colony' });
+    assert.equal(j3.status, 409);
+    assert.equal(j3.data?.error, 'pubkey_taken');
+
+    const kCarol = generateKeypair();
+    const carol = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'carol',
+      pubkey: kCarol.pubkey,
+      privateKeyPem: kCarol.privateKeyPem,
+    });
+    const j4 = await carol.join({ origin: 'colony', invite_code: 'no-such-code' });
+    assert.equal(j4.status, 403);
+    assert.equal(j4.data?.error, 'invalid_invite');
+  } finally {
+    await srv1.close();
+  }
+
+  const srv2 = await startTestServer();
+  try {
+    const kDave = generateKeypair();
+    const dave = new GhostlightClient({
+      baseUrl: srv2.baseUrl,
+      handle: 'dave',
+      pubkey: kDave.pubkey,
+      privateKeyPem: kDave.privateKeyPem,
+    });
+    const j5 = await dave.join({ origin: 'colony', invite_code: 123 });
+    assert.equal(j5.status, 400);
+    assert.equal(j5.data?.error, 'invalid_invite');
+  } finally {
+    await srv2.close();
+  }
+});
+
+test('SKILL.md §1 quickstart order and CLI line match the client', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+  const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'ghostlight-client.mjs'), 'utf8');
+
+  const sec1Match = skillMd.match(/## 1\. Five-Minute Quickstart[\s\S]*?(?=\n## 2\.)/);
+  assert.ok(sec1Match, 'SKILL.md must include ## 1. Five-Minute Quickstart');
+  const sec1 = sec1Match[0];
+
+  const guestCheckinIdx = sec1.indexOf('guestCheckin');
+  const guestInnClaimIdx = sec1.indexOf('guestInnClaim');
+  const joinIdx = sec1.indexOf('client.join(');
+  assert.ok(guestCheckinIdx !== -1 && guestInnClaimIdx !== -1 && joinIdx !== -1);
+  assert.ok(guestCheckinIdx < guestInnClaimIdx, 'guestCheckin must appear before guestInnClaim');
+  assert.ok(guestInnClaimIdx < joinIdx, 'guestInnClaim must appear before client.join(');
+
+  assert.ok(sec1.includes('1 checkin/5 min'), 'SKILL.md §1 step 2 must state 1 checkin/5 min');
+  assert.ok(sec1.includes('2 say/10 min'), 'SKILL.md §1 step 2 must state 2 say/10 min');
+
+  const cliLineMatch = sec1.match(/runnable from the shell \(([^)]+)\)/);
+  assert.ok(cliLineMatch, 'SKILL.md §1 must list CLI commands in parentheses');
+  const docCmds = [...cliLineMatch[1].matchAll(/`([a-z-]+)`/g)].map((m) => m[1]);
+
+  const clientCmds = [...clientSrc.matchAll(/cmd === '([a-z-]+)'/g)]
+    .map((m) => m[1])
+    .filter((c) => c !== '--help' && c !== '-h');
+
+  assert.equal(clientCmds.length, 11);
+  assert.deepEqual(new Set(docCmds), new Set(clientCmds));
+  assert.equal(docCmds.length, clientCmds.length);
+});
+
+test('SKILL.md §1 guest-visit and guest-stay examples work end-to-end', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'visiting-muse',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const checkin1 = await client.guestCheckin({ status_text: 'just visiting the Bandstand' });
+    assert.equal(checkin1.status, 200);
+
+    const sayBody = 'Hello, Bandstand. Passing through to say hi.';
+    const say1 = await client.guestSay(sayBody);
+    assert.equal(say1.status, 201);
+
+    const state1 = await client.state();
+    assert.equal(state1.status, 200);
+    assert.ok(
+      state1.data.prompt_book.some(
+        (line) => line.handle === 'visiting-muse' && line.role === 'guest' && line.body === sayBody
+      )
+    );
+    assert.equal(
+      state1.data.footlights.some((f) => f.handle === 'visiting-muse'),
+      false
+    );
+
+    const checkin2 = await client.guestCheckin({ status_text: 'again too soon' });
+    assert.equal(checkin2.status, 429);
+    assert.equal(checkin2.data?.error, 'rate_limited');
+
+    const stay = await client.guestInnClaim('lantern', 2);
+    assert.equal(stay.status, 201);
+    assert.equal(typeof stay.data.key, 'string');
+    assert.equal(stay.data.key.length, 12);
+    assert.equal(stay.data.nights, 2);
+
+    const state2 = await client.state();
+    assert.equal(state2.status, 200);
+    assert.equal(state2.data.inn.lantern.handle, 'visiting-muse');
+    assert.equal(state2.data.inn.lantern.guest, true);
+    assert.equal(state2.data.inn.lantern.nights, 2);
+    assert.equal(JSON.stringify(state2.data).includes(stay.data.key), false);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('key rotate via the client end-to-end (SKILL.md §4 references it)', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys1 = generateKeypair();
+    const client1 = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'rotate-tester',
+      pubkey: keys1.pubkey,
+      privateKeyPem: keys1.privateKeyPem,
+    });
+
+    const joined = await client1.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+
+    const approved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'rotate-tester',
+    });
+    assert.equal(approved.status, 200);
+
+    const keys2 = generateKeypair();
+    const rotated = await client1.rotateKey(keys2.pubkey);
+    assert.equal(rotated.status, 200);
+    assert.deepEqual(Object.keys(rotated.data), ['handle', 'rotated', 'state_seq']);
+    assert.equal(rotated.data.rotated, true);
+
+    const oldCheckin = await client1.checkin({ status_text: 'old key' });
+    assert.equal(oldCheckin.status, 401);
+    assert.equal(oldCheckin.data?.error, 'invalid_signature');
+
+    const client2 = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'rotate-tester',
+      pubkey: keys2.pubkey,
+      privateKeyPem: keys2.privateKeyPem,
+    });
+    const newCheckin = await client2.checkin({ status_text: 'new key' });
+    assert.equal(newCheckin.status, 200);
   } finally {
     await srv.close();
   }
