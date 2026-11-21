@@ -169,3 +169,106 @@ test('PLAN.md §12.6 Phase 2 completion and §9 Q1/Q2/Q5 match repo state', () =
   assert.ok(q5Match[0].includes(miloManifest.roof), 'PLAN.md §9 Q5 must match milo manifest roof color');
   assert.ok(q5Match[0].replace(/\s+/g, ' ').includes(miloManifest.signpost_text), 'PLAN.md §9 Q5 must match milo manifest signpost_text');
 });
+
+test("PLAN.md §11 Q6–Q9 preserve Werther's 2026-11-12 decisions", () => {
+  const tail = readPlanTailSections();
+  const sec11Match = tail.match(/## 11\. Decisions[\s\S]*?(?=\n---)/);
+  assert.ok(sec11Match, 'PLAN.md must contain §11');
+  const sec11 = sec11Match[0];
+
+  assert.ok(sec11.includes('Q6 — 3D bet: yes, straight to 3D'), 'PLAN.md §11 must record Q6 straight to 3D');
+  for (const candidate of ['night market', 'bathhouse', 'lighthouse', 'train platform', 'library reading room']) {
+    assert.ok(sec11.includes(candidate), `PLAN.md §11 Q6 must list candidate: ${candidate}`);
+  }
+
+  assert.ok(sec11.includes('i5 6th gen, 32GB RAM, Nvidia GPU, 1TB'), 'PLAN.md §11 Q7 must record second home server specs');
+  assert.ok(sec11.includes('No access arranged yet'), 'PLAN.md §11 Q7 must note No access arranged yet');
+  assert.match(sec11, /MacBook\s+remains the front door/, 'PLAN.md §11 Q7 must note MacBook remains the front door');
+
+  assert.ok(sec11.includes('Q8 — NPC budget: fine'), 'PLAN.md §11 must record Q8 NPC budget: fine');
+  assert.ok(sec11.includes('Q9 — public by default: fine'), 'PLAN.md §11 must record Q9 public by default: fine');
+});
+
+test('PLAN.md §11 next-step line records Argon review DONE, verdict, and gathering place', () => {
+  const tail = readPlanTailSections();
+  const sec11Match = tail.match(/## 11\. Decisions[\s\S]*?(?=\n---)/);
+  assert.ok(sec11Match, 'PLAN.md must contain §11');
+  const sec11 = sec11Match[0];
+
+  assert.match(sec11, /\*\*Next step[\s\S]*?Gemini 4\s+Argon — \*\*DONE 2026-11-12\*\*/, 'PLAN.md §11 next-step line must record Argon review DONE 2026-11-12');
+  assert.ok(sec11.includes('GO WITH CHANGES'), 'PLAN.md §11 next-step line must record verdict GO WITH CHANGES');
+  assert.ok(sec11.includes('Ghostlight Bandstand'), 'PLAN.md §11 next-step line must name Ghostlight Bandstand');
+
+  const argonReviewPath = path.join(__dirname, 'session', 'argon-review.txt');
+  assert.ok(fs.existsSync(argonReviewPath), 'session/argon-review.txt must exist');
+  const argonReview = fs.readFileSync(argonReviewPath, 'utf8');
+  assert.ok(argonReview.includes('GO WITH CHANGES'), 'session/argon-review.txt must contain GO WITH CHANGES');
+});
+
+test('PLAN.md §12.1 records six brainstormed candidates and Ghostlight Bandstand decision', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+
+  for (const candidate of ['bandstand', 'press porch', 'night ferry slip', 'whistle-stop platform', 'cedar steam-well', 'midnight kiosk']) {
+    assert.ok(sec121.includes(candidate), `PLAN.md §12.1 must name candidate: ${candidate}`);
+  }
+  assert.match(sec121, /press-porch idea survives in miniature\s+as the typesetter's Prompt Desk/, 'PLAN.md §12.1 must record Prompt Desk survival');
+  assert.match(sec121, /gathering place is \*\*not\*\*/, 'PLAN.md §12.1 must negate the old gathering place');
+  assert.match(sec121, /DECIDED: the Ghostlight Bandstand/, 'PLAN.md §12.1 must record DECIDED: the Ghostlight Bandstand');
+});
+
+test('PLAN.md §12.1 Now-side mechanical mapping matches schema.sql, server.mjs, and town.json', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+
+  assert.ok(sec121.includes('`prompt_book` (SQLite table `prompt_book`)'), 'PLAN.md §12.1 must map prompt_book SQLite table');
+  assert.ok(sec121.includes('/api/town/ghostlight/{checkin,say,leave}'), 'PLAN.md §12.1 must map /api/town/ghostlight/{checkin,say,leave}');
+  assert.ok(sec121.includes('one of 10 brass footlight'), 'PLAN.md §12.1 must map one of 10 brass footlight');
+  assert.ok(sec121.includes('same 45-min TTL'), 'PLAN.md §12.1 must map same 45-min TTL');
+
+  const schemaSql = fs.readFileSync(path.join(__dirname, 'town-api', 'schema.sql'), 'utf8');
+  assert.match(schemaSql, /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+prompt_book\b/, 'town-api/schema.sql must define prompt_book table');
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  for (const route of ['/api/town/ghostlight/checkin', '/api/town/ghostlight/say', '/api/town/ghostlight/leave']) {
+    assert.ok(serverMjs.includes(route), `town-api/server.mjs must contain route ${route}`);
+  }
+  assert.ok(serverMjs.includes('body.slot > 9'), 'town-api/server.mjs must enforce 10 footlight slots (body.slot > 9)');
+  assert.ok(serverMjs.includes('FOOTLIGHT_TTL_SEC = 45 * 60'), 'town-api/server.mjs must define FOOTLIGHT_TTL_SEC = 45 * 60');
+
+  const townJson = JSON.parse(fs.readFileSync(TOWN_JSON_PATH, 'utf8'));
+  assert.equal(townJson.limits.footlight_ttl_sec, 2700, 'town.json limits.footlight_ttl_sec must equal 2700');
+});
+
+test('PLAN.md §12.3 records Build Gate vs Social Gate split and town-api/test-build-gate.mjs exists', () => {
+  const tail = readPlanTailSections();
+  const sec123Match = tail.match(/### 12\.3[\s\S]*?(?=\n### 12\.4)/);
+  assert.ok(sec123Match, 'PLAN.md must contain §12.3');
+  const sec123 = sec123Match[0];
+
+  assert.match(sec123, /\*Build Gate\*\s*\(day 6/, 'PLAN.md §12.3 must record Build Gate (day 6)');
+  assert.match(sec123, /`ghostlight-client`\s+CLI to join\/check-in\/say\/edit-plot/, 'PLAN.md §12.3 must name ghostlight-client CLI');
+  assert.match(sec123, /\*Social\s+Gate\*\s+\(7 days post-launch\):\s+2–3 real external muses claim plots/, 'PLAN.md §12.3 must record Social Gate (7 days post-launch)');
+  assert.ok(sec123.includes('quoted in Gazette #2'), 'PLAN.md §12.3 must mention quoted in Gazette #2');
+  assert.match(sec123, /Phase 1\s+unlocks on the Social Gate/, 'PLAN.md §12.3 must state Phase 1 unlocks on the Social Gate');
+  assert.match(sec123, /the Build Gate is what declares Phase\s+0 built/, 'PLAN.md §12.3 must state Build Gate declares Phase 0 built');
+  assert.match(sec123, /6–8\s+Milo-days for Phase 0/, 'PLAN.md §12.3 must state 6–8 Milo-days for Phase 0');
+
+  assert.ok(fs.existsSync(path.join(__dirname, 'town-api', 'test-build-gate.mjs')), 'town-api/test-build-gate.mjs must exist');
+});
+
+test('PLAN.md §12.6 records Social Gate status and 30-min cadence', () => {
+  const tail = readPlanTailSections();
+  const sec126Match = tail.match(/### 12\.6[\s\S]*$/);
+  assert.ok(sec126Match, 'PLAN.md must contain §12.6');
+  const sec126 = sec126Match[0];
+
+  assert.ok(sec126.includes('Social Gate — unmet'), 'PLAN.md §12.6 must record Social Gate — unmet');
+  assert.ok(sec126.includes('1 of 2–3 real muses — `lampmoth`'), 'PLAN.md §12.6 must record 1 of 2–3 real muses — `lampmoth`');
+  assert.ok(sec126.includes('within 7 days of opening (~Nov 20)'), 'PLAN.md §12.6 must record within 7 days of opening (~Nov 20)');
+  assert.match(sec126, /The 30-min cadence\s+does NOT reduce yet/, 'PLAN.md §12.6 must record The 30-min cadence does NOT reduce yet');
+});
