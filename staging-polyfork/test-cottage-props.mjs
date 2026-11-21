@@ -510,3 +510,204 @@ test('Slice 93: buildProp builds lantern and planter groups with worked child ge
 
   assert.equal(buildProp(THREE, { kind: 'fountain', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }), null);
 });
+
+test('buildProp builds bookshelf, rug, typewriter, and poster_frame with expected geometry, position, rotation, name, and color', () => {
+  const THREE = makeFakeThree();
+
+  const bookshelf = buildProp(THREE, { kind: 'bookshelf', x: 0.5, y: 0, z: 2.2, rot_y: 90, color: '#5a4332' });
+  assert.ok(bookshelf);
+  assert.equal(bookshelf.name, 'prop_bookshelf');
+  assert.equal(bookshelf.geometry.type, 'BoxGeometry');
+  assert.deepEqual(bookshelf.geometry.args, [0.9, 1.4, 0.35]);
+  assert.equal(bookshelf.position.x, 0.5);
+  assert.ok(Math.abs(bookshelf.position.y - 0.88) < 1e-12);
+  assert.equal(bookshelf.position.z, 2.2);
+  assert.ok(Math.abs(bookshelf.rotation.y - Math.PI / 2) < 1e-12);
+  assert.equal(bookshelf.material.color, '#5a4332');
+
+  const rug = buildProp(THREE, { kind: 'rug', x: -0.4, y: 0, z: 2.2, rot_y: 0, color: '#a83232' });
+  assert.ok(rug);
+  assert.equal(rug.name, 'prop_rug');
+  assert.equal(rug.geometry.type, 'BoxGeometry');
+  assert.deepEqual(rug.geometry.args, [1.6, 0.04, 1.1]);
+  assert.equal(rug.position.x, -0.4);
+  assert.ok(Math.abs(rug.position.y - 0.20) < 1e-12);
+  assert.equal(rug.position.z, 2.2);
+  assert.equal(rug.rotation.y, 0);
+  assert.equal(rug.material.color, '#a83232');
+
+  const typewriter = buildProp(THREE, { kind: 'typewriter', x: 0.9, y: 0.72, z: 2.2, rot_y: 270, color: '#222222' });
+  assert.ok(typewriter);
+  assert.equal(typewriter.name, 'prop_typewriter');
+  assert.equal(typewriter.geometry.type, 'BoxGeometry');
+  assert.deepEqual(typewriter.geometry.args, [0.36, 0.18, 0.3]);
+  assert.equal(typewriter.position.x, 0.9);
+  assert.ok(Math.abs(typewriter.position.y - 0.99) < 1e-12);
+  assert.equal(typewriter.position.z, 2.2);
+  assert.ok(Math.abs(typewriter.rotation.y - (270 * Math.PI) / 180) < 1e-12);
+  assert.equal(typewriter.material.color, '#222222');
+
+  const poster = buildProp(THREE, { kind: 'poster_frame', x: -1.1, y: 0.3, z: 2.2, rot_y: 180, color: '#f5efe0' });
+  assert.ok(poster);
+  assert.equal(poster.name, 'prop_poster_frame');
+  assert.equal(poster.geometry.type, 'BoxGeometry');
+  assert.deepEqual(poster.geometry.args, [0.7, 0.9, 0.06]);
+  assert.equal(poster.position.x, -1.1);
+  assert.ok(Math.abs(poster.position.y - 1.38) < 1e-12);
+  assert.equal(poster.position.z, 2.2);
+  assert.ok(Math.abs(poster.rotation.y - Math.PI) < 1e-12);
+  assert.equal(poster.material.color, '#f5efe0');
+});
+
+test('buildProp validation boundaries: null/non-object/missing kind, coordinate edges, rot_y edges, color fallback variants', () => {
+  const THREE = makeFakeThree();
+
+  assert.equal(buildProp(THREE, null), null);
+  assert.equal(buildProp(THREE, undefined), null);
+  assert.equal(buildProp(THREE, 'desk'), null);
+  assert.equal(buildProp(THREE, { x: 0, y: 0, z: 0, rot_y: 0, color: '#ffffff' }), null);
+  assert.equal(buildProp(THREE, { kind: null, x: 0, y: 0, z: 0, rot_y: 0, color: '#ffffff' }), null);
+
+  assert.ok(buildProp(THREE, { kind: 'desk', x: 12, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }));
+  assert.ok(buildProp(THREE, { kind: 'desk', x: -12, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }));
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 12.0001, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }), null);
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: Number.NaN, z: 2.2, rot_y: 0, color: '#ffffff' }), null);
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: '2.2', rot_y: 0, color: '#ffffff' }), null);
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, color: '#ffffff' }), null);
+
+  const maxRot = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 359.9, color: '#ffffff' });
+  assert.ok(maxRot);
+  assert.ok(Math.abs(maxRot.rotation.y - (359.9 * Math.PI) / 180) < 1e-12);
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: -0.1, color: '#ffffff' }), null);
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: Number.NaN, color: '#ffffff' }), null);
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: '90', color: '#ffffff' }), null);
+
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ABCDEF' }).material.color, '#ABCDEF');
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#abc' }).material.color, '#8a6240');
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0 }).material.color, '#8a6240');
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '' }).material.color, '#8a6240');
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: null }).material.color, '#8a6240');
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: 123 }).material.color, '#8a6240');
+});
+
+test('safeColor, HEX_COLOR_RE, and VALID_PROP_KINDS exact membership', async () => {
+  const { HEX_COLOR_RE, safeColor } = await import('./cottage-props.mjs');
+
+  assert.equal(safeColor('#aabbcc', '#8a6240'), '#aabbcc');
+  assert.equal(safeColor('#AABBCC', '#8a6240'), '#AABBCC');
+  assert.equal(safeColor('#abc', '#8a6240'), '#8a6240');
+  assert.equal(safeColor('red', '#8a6240'), '#8a6240');
+  assert.equal(safeColor(null, '#8a6240'), '#8a6240');
+  assert.equal(safeColor(42, '#8a6240'), '#8a6240');
+  assert.equal(safeColor('#aabbccdd', '#8a6240'), '#8a6240');
+  assert.equal(safeColor('#12345g', '#8a6240'), '#8a6240');
+
+  assert.equal(HEX_COLOR_RE.test('#123456'), true);
+  assert.equal(HEX_COLOR_RE.test('#ABCDEF'), true);
+  assert.equal(HEX_COLOR_RE.test('#12345'), false);
+  assert.equal(HEX_COLOR_RE.test('123456'), false);
+  assert.equal(HEX_COLOR_RE.test('#gggggg'), false);
+  assert.equal(HEX_COLOR_RE.test('#1234567'), false);
+
+  assert.equal(VALID_PROP_KINDS.size, 9);
+  for (const kind of ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter']) {
+    assert.equal(VALID_PROP_KINDS.has(kind), true, `expected ${kind} in VALID_PROP_KINDS`);
+  }
+  assert.equal(VALID_PROP_KINDS.has('piano'), false);
+  assert.equal(VALID_PROP_KINDS.has('fountain'), false);
+});
+
+test('attachPlotProps / attachPorchDeck / attachPorchTrim null and empty edges, plus double-attach', () => {
+  const THREE = makeFakeThree();
+
+  assert.equal(attachPlotProps(THREE, null, MILO_PLOT_PROPS), 0);
+
+  for (const badList of [null, [], [null, undefined, 'x']]) {
+    const cottage = new THREE.Group();
+    assert.equal(attachPlotProps(THREE, cottage, badList), 0);
+    assert.equal(cottage.children.length, 0);
+  }
+
+  assert.equal(attachPorchDeck(THREE, null), null);
+  assert.equal(attachPorchTrim(THREE, null), null);
+
+  const deckGroup = new THREE.Group();
+  attachPorchDeck(THREE, deckGroup);
+  attachPorchDeck(THREE, deckGroup);
+  assert.equal(deckGroup.children.length, 2);
+  for (const child of deckGroup.children) {
+    assert.equal(child.name, 'cottage_porch_deck');
+  }
+
+  const trimGroup = new THREE.Group();
+  attachPorchTrim(THREE, trimGroup);
+  attachPorchTrim(THREE, trimGroup);
+  assert.equal(trimGroup.children.length, 2);
+  for (const child of trimGroup.children) {
+    assert.equal(child.name, 'cottage_porch_trim');
+  }
+});
+
+test('porch-remap pass-through edges and group-prop material sharing', () => {
+  const THREE = makeFakeThree();
+
+  const farEdge = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 3.45, rot_y: 0, color: '#7a5230' });
+  assert.ok(farEdge);
+  assert.equal(farEdge.position.z, 3.45);
+  assert.ok(Math.abs(farEdge.position.y - 0.54) < 1e-12);
+
+  const rangeMax = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 12, rot_y: 0, color: '#7a5230' });
+  assert.ok(rangeMax);
+  assert.equal(rangeMax.position.z, 12);
+  assert.ok(Math.abs(rangeMax.position.y - 0.54) < 1e-12);
+
+  const stackHigh = buildProp(THREE, { kind: 'desk', x: 0, y: 1.5, z: 2.2, rot_y: 0, color: '#7a5230' });
+  assert.ok(stackHigh);
+  assert.ok(Math.abs(stackHigh.position.y - 2.04) < 1e-12);
+
+  const stackNeg = buildProp(THREE, { kind: 'desk', x: 0, y: -0.18, z: 2.2, rot_y: 0, color: '#7a5230' });
+  assert.ok(stackNeg);
+  assert.ok(Math.abs(stackNeg.position.y - 0.36) < 1e-12);
+
+  const nearPass = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.06, rot_y: 0, color: '#7a5230' });
+  assert.ok(nearPass);
+  assert.equal(nearPass.position.z, 2.06);
+
+  const lantern = buildProp(THREE, { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#6b492b' });
+  assert.ok(lantern);
+  assert.equal(lantern.children[0].material, lantern.children[2].material);
+  assert.notEqual(lantern.children[1].material, lantern.children[0].material);
+  assert.equal(lantern.rotation.y, 0);
+
+  const planter = buildProp(THREE, { kind: 'planter', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#7a5230' });
+  assert.ok(planter);
+  const box = planter.children.find((c) => c.name === 'prop_planter_box');
+  const soil = planter.children.find((c) => c.name === 'prop_planter_soil');
+  const foliages = planter.children.filter((c) => c.name === 'prop_planter_foliage');
+  assert.equal(box.material.color, '#7a5230');
+  assert.notEqual(soil.material, box.material);
+  assert.equal(foliages.length, 3);
+  assert.equal(foliages[0].material, foliages[1].material);
+  assert.equal(foliages[1].material, foliages[2].material);
+  assert.notEqual(foliages[0].material, box.material);
+});
+
+test('staging.js wires attachPorchDeck at both cottage sites, in order', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+
+  const cDeck = stagingSrc.indexOf('attachPorchDeck(THREE, cottage);');
+  const cTrim = stagingSrc.indexOf('attachPorchTrim(THREE, cottage);');
+  const cProps = stagingSrc.indexOf('attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);');
+  assert.ok(cDeck !== -1, 'missing attachPorchDeck(THREE, cottage);');
+  assert.ok(cTrim !== -1, 'missing attachPorchTrim(THREE, cottage);');
+  assert.ok(cProps !== -1, 'missing attachPlotProps(THREE, cottage, ...);');
+  assert.ok(cDeck < cTrim && cTrim < cProps, 'cottage porch wiring order must be deck < trim < props');
+
+  const mProps = stagingSrc.indexOf('attachPlotProps(THREE, milosCottage, MILO_PLOT_PROPS);');
+  const mDeck = stagingSrc.indexOf('attachPorchDeck(THREE, milosCottage);');
+  const mTrim = stagingSrc.indexOf('attachPorchTrim(THREE, milosCottage);');
+  assert.ok(mProps !== -1, 'missing attachPlotProps(THREE, milosCottage, MILO_PLOT_PROPS);');
+  assert.ok(mDeck !== -1, 'missing attachPorchDeck(THREE, milosCottage);');
+  assert.ok(mTrim !== -1, 'missing attachPorchTrim(THREE, milosCottage);');
+  assert.ok(mProps < mDeck && mDeck < mTrim, 'milosCottage porch wiring order must be props < deck < trim');
+});
