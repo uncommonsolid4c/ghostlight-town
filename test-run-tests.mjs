@@ -293,3 +293,165 @@ test('skip JSON precedence: buried with exit 0 skips, with exit 1 errors', async
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('exit 0 with a fail>0 summary still counts the failure and exits 1', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-fail-exit0-'));
+  try {
+    const stub = path.join(tmpDir, 'stub.mjs');
+    fs.writeFileSync(
+      stub,
+      [
+        "console.log('ℹ tests 3');",
+        "console.log('ℹ pass 2');",
+        "console.log('ℹ fail 1');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['stub.mjs']),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1 when summary has fail>0, got ${res.code}`);
+    assert.match(res.stdout, /^stub\.mjs pass=2 fail=1 skipped=0$/m);
+    assert.match(res.stdout, /^TOTAL pass=2 fail=1 skipped=0 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('parses a node:test summary printed to stderr only', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-stderr-'));
+  try {
+    const stub = path.join(tmpDir, 'stub.mjs');
+    fs.writeFileSync(
+      stub,
+      [
+        "process.stderr.write('ℹ tests 4\\n');",
+        "process.stderr.write('ℹ pass 4\\n');",
+        "process.stderr.write('ℹ fail 0\\n');",
+        "process.stderr.write('ℹ skipped 0\\n');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['stub.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0 for stderr summary, got ${res.code}`);
+    assert.match(res.stdout, /^stub\.mjs pass=4 fail=0 skipped=0$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('last summary wins when a suite prints two summary blocks', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-two-summaries-'));
+  try {
+    const stub = path.join(tmpDir, 'stub.mjs');
+    fs.writeFileSync(
+      stub,
+      [
+        "console.log('ℹ tests 9');",
+        "console.log('ℹ pass 9');",
+        "console.log('ℹ fail 9');",
+        "console.log('ℹ skipped 9');",
+        "console.log('ℹ tests 2');",
+        "console.log('ℹ pass 2');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['stub.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0 when last summary has fail=0, got ${res.code}`);
+    assert.match(res.stdout, /^stub\.mjs pass=2 fail=0 skipped=0$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('a non-skip status JSON line is not a skip', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-nonskip-json-'));
+  try {
+    const stub = path.join(tmpDir, 'stub.mjs');
+    fs.writeFileSync(
+      stub,
+      [
+        'console.log(JSON.stringify({ status: "ok" }));',
+        "console.log('{not json');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['stub.mjs']),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1 for non-skip status JSON, got ${res.code}`);
+    assert.match(res.stdout, /^stub\.mjs ERROR \(exit 0, no parseable summary\)$/m);
+    assert.match(res.stdout, /^TOTAL pass=0 fail=1 skipped=0 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('error tail is capped at the last 5 lines', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-tail-'));
+  try {
+    const stub = path.join(tmpDir, 'stub.mjs');
+    const lines = Array.from({ length: 8 }, (_, i) => `console.log('plain line ${i + 1}');`);
+    fs.writeFileSync(stub, lines.join('\n'), 'utf8');
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['stub.mjs']),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1 for plain lines without summary, got ${res.code}`);
+    const tailLines = res.stdout.split(/\r?\n/).filter((l) => l.startsWith('  | '));
+    assert.equal(tailLines.length, 5, `Expected 5 tail lines, got ${tailLines.length}`);
+    assert.equal(tailLines[0], '  | plain line 4');
+    assert.equal(tailLines[4], '  | plain line 8');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('GHOSTLIGHT_TEST_ROOT override resolves suites from the override root', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-root-'));
+  try {
+    const stub = path.join(tmpDir, 'stub-root.mjs');
+    fs.writeFileSync(
+      stub,
+      [
+        "console.log('ℹ tests 1');",
+        "console.log('ℹ pass 1');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['stub-root.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0 for override root, got ${res.code}`);
+    assert.match(res.stdout, /^stub-root\.mjs pass=1 fail=0 skipped=0$/m);
+    assert.match(res.stdout, /^TOTAL pass=1 fail=0 skipped=0 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
