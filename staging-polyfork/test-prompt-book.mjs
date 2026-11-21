@@ -411,3 +411,134 @@ test('renderPromptBook with omitted doc is a no-op in Node and format keeps unic
     'line1\nline2 👻',
   );
 });
+
+test('renderPromptBook renders the [guest] pill for guest role, say vs emote vs system', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 1, handle: 'vis', kind: 'say', body: 'hello', role: 'guest' },
+      { id: 2, handle: 'vis', kind: 'emote', body: 'waves', role: 'guest' },
+      { id: 3, handle: 'vis', kind: 'system', body: 'arrived', role: 'guest' },
+    ],
+    doc,
+  );
+
+  assert.equal(container.children.length, 3);
+
+  const [sayLine, emoteLine, sysLine] = container.children;
+  assert.equal(sayLine.className, 'pb-line pb-kind-say');
+  assert.deepEqual(
+    sayLine.children.map((c) => c.className),
+    ['pb-guest-pill', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(sayLine.children[0].textContent, '[guest]');
+  assert.equal(sayLine.children[2].textContent, ': hello');
+
+  assert.equal(emoteLine.className, 'pb-line pb-kind-emote');
+  assert.equal(emoteLine.children[0].textContent, '[guest]');
+  assert.equal(emoteLine.children[2].textContent, ' waves');
+
+  assert.equal(sysLine.className, 'pb-line pb-kind-system');
+  assert.equal(sysLine.children[0].className, 'pb-guest-pill');
+});
+
+test('formatPromptBookEntries keeps role guest and kind emote, normalizes missing/empty/null kind to say, and keeps empty handle', () => {
+  const f = formatPromptBookEntries([
+    { id: 1, handle: 'g', kind: 'emote', body: 'x', role: 'guest' },
+    { id: 2, handle: 'h', body: 'y', role: 'muse' },
+    { id: 3, handle: '', kind: '', body: 'z', role: 'muse' },
+    { id: 4, handle: 'i', kind: null, body: 'w', role: 'muse' },
+  ]);
+
+  assert.equal(f[0].role, 'guest');
+  assert.equal(f[0].kind, 'emote');
+  assert.equal(f[1].kind, 'say');
+  assert.equal(f[2].kind, 'say');
+  assert.equal(f[2].handle, '');
+  assert.equal(f[3].kind, 'say');
+});
+
+test('renderPromptBook resolves a forward reply_to when target entry appears after the reply', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 1, handle: 'early', kind: 'say', body: 'reply first', role: 'muse', reply_to: 2 },
+      { id: 2, handle: 'later', kind: 'say', body: 'target second', role: 'muse' },
+    ],
+    doc,
+  );
+
+  const replyEl = container.children[0].children.find((c) => c.className === 'pb-reply-to');
+  assert.equal(replyEl.textContent, '\u21a9 #2 @later');
+});
+
+test('renderPromptBook never resolves string ids as reply targets and keeps negative reply_to bare', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: '5', handle: 'str', kind: 'say', body: 'a', role: 'muse' },
+      { id: 6, handle: 'q', kind: 'say', body: 'b', role: 'muse', reply_to: 5 },
+    ],
+    doc,
+  );
+
+  const strReplyEl = container.children[1].children.find((c) => c.className === 'pb-reply-to');
+  assert.equal(strReplyEl.textContent, '\u21a9 #5');
+
+  const negFormatted = formatPromptBookEntries([{ id: 1, handle: 'a', kind: 'say', body: 'x', reply_to: -1 }]);
+  assert.equal(negFormatted[0].reply_to, -1);
+
+  const negContainer = doc.makeContainer();
+  renderPromptBook(negContainer, [{ id: 1, handle: 'a', kind: 'say', body: 'x', reply_to: -1 }], doc);
+  const negReplyEl = negContainer.children[0].children.find((c) => c.className === 'pb-reply-to');
+  assert.equal(negReplyEl.textContent, '\u21a9 #-1');
+});
+
+test('formatPromptBookEntries caps positionally so 120 reversed-id entries keep the last 100 positions', () => {
+  const entries = Array.from({ length: 120 }, (_, i) => ({
+    id: 120 - i,
+    handle: `m-${120 - i}`,
+    kind: 'say',
+    body: `n${120 - i}`,
+    role: 'muse',
+  }));
+  const f = formatPromptBookEntries(entries);
+
+  assert.equal(f.length, 100);
+  assert.equal(f[0].id, 100);
+  assert.equal(f[99].id, 1);
+  assert.equal(f[0].handle, 'm-100');
+});
+
+test('renderPromptBook renders null/empty entries as unknown lines and keeps empty-string handle empty', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(container, [null, {}], doc);
+  assert.equal(container.children.length, 2);
+  for (const line of container.children) {
+    assert.equal(line.className, 'pb-line pb-kind-say');
+    assert.equal(line.children.find((c) => c.className === 'pb-handle').textContent, 'unknown');
+    assert.equal(line.children.find((c) => c.className === 'pb-body').textContent, ': ');
+  }
+
+  const emptyHandleContainer = doc.makeContainer();
+  renderPromptBook(
+    emptyHandleContainer,
+    [{ id: 1, handle: '', kind: 'say', body: 'hi', role: 'muse' }],
+    doc,
+  );
+  assert.equal(
+    emptyHandleContainer.children[0].children.find((c) => c.className === 'pb-handle').textContent,
+    '',
+  );
+});
