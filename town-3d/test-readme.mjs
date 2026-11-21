@@ -34,7 +34,7 @@ test('town-3d/README.md names every shipped .js file in town-3d/', () => {
   }
 });
 
-test('town-3d/README.md states the fallback-vs-staging role and shared 12-file / 192-file bundle split', () => {
+test('town-3d/README.md states the fallback-vs-staging role and shared 12-file / 193-file bundle split', () => {
   const readme = readReadme();
   assert.match(readme, /staging-polyfork/i);
   assert.match(readme, /fallback/i);
