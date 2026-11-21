@@ -122,6 +122,7 @@ test('inn claim happy path, state exposure, default nights, and state_seq', asyn
       handle: 'alice',
       nights: 2,
       expires_at: claimRes.data.expires_at,
+      guest: false,
     });
     assert.equal(s1.data.inn.window, null);
     assert.equal(s1.data.inn.quiet, null);
