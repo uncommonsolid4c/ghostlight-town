@@ -6,8 +6,12 @@ import path from 'node:path';
 import {
   validateManifest,
   validateHtml,
+  decodeHtmlEntities,
+  MAX_MANIFEST_BYTES,
+  MAX_HTML_BYTES,
   MAX_SIGNPOST_CHARS,
   MAX_PROPS,
+  VALID_COTTAGES,
   VALID_PROP_KINDS,
 } from '../town-api/plot-validation.mjs';
 import { CHARACTERS } from './characters.mjs';
@@ -305,4 +309,325 @@ test('desk-note structure across all four notes: doctype, lang, styles, headings
     backgrounds.size >= 3,
     `expected at least 3 distinct background hexes, got ${backgrounds.size}`
   );
+});
+
+const PROP = { kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 };
+const BASE = {
+  cottage: 'gable',
+  wall: '#a8d8ea',
+  roof: '#5a4332',
+  trim: '#f5efe0',
+  signpost_text: 'Hi',
+  props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 }],
+};
+
+test('validateManifest rejects malformed manifests with named errors', () => {
+  assert.deepEqual(validateManifest(null), { ok: false, error: 'invalid_manifest' });
+  assert.deepEqual(validateManifest([]), { ok: false, error: 'invalid_manifest' });
+  assert.deepEqual(validateManifest('x'), { ok: false, error: 'invalid_manifest' });
+
+  assert.deepEqual(validateManifest({ ...BASE, bogus: 1 }), {
+    ok: false,
+    error: 'unknown_manifest_key',
+    key: 'bogus',
+  });
+  assert.deepEqual(validateManifest({ ...BASE, cottage: 'hut' }), {
+    ok: false,
+    error: 'invalid_cottage',
+  });
+
+  assert.deepEqual(validateManifest({ ...BASE, wall: '#fff' }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+  assert.deepEqual(validateManifest({ ...BASE, roof: 42 }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'roof',
+  });
+  const noTrim = { ...BASE };
+  delete noTrim.trim;
+  assert.deepEqual(validateManifest(noTrim), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'trim',
+  });
+  assert.equal(validateManifest({ ...BASE, wall: '#A8D8EA' }).ok, true);
+
+  assert.deepEqual(validateManifest({ ...BASE, signpost_text: 'a'.repeat(121) }), {
+    ok: false,
+    error: 'invalid_signpost_text',
+    max: MAX_SIGNPOST_CHARS,
+  });
+  assert.equal(validateManifest({ ...BASE, signpost_text: 'a'.repeat(120) }).ok, true);
+  assert.deepEqual(validateManifest({ ...BASE, signpost_text: 42 }), {
+    ok: false,
+    error: 'invalid_signpost_text',
+    max: MAX_SIGNPOST_CHARS,
+  });
+
+  assert.deepEqual(validateManifest({ ...BASE, props: 'desk' }), {
+    ok: false,
+    error: 'invalid_props',
+  });
+
+  const oversize = {
+    ...BASE,
+    props: Array.from({ length: 12 }, () => ({ ...PROP, junk: 'x'.repeat(2000) })),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(oversize), 'utf8') > MAX_MANIFEST_BYTES);
+  assert.deepEqual(validateManifest(oversize), {
+    ok: false,
+    error: 'manifest_too_large',
+    max: MAX_MANIFEST_BYTES,
+  });
+});
+
+test('validateManifest rejects bad props with named errors and honors boundaries', () => {
+  assert.deepEqual(validateManifest({ ...BASE, props: [null] }), {
+    ok: false,
+    error: 'invalid_prop',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [[]] }), {
+    ok: false,
+    error: 'invalid_prop',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, junk: 1 }] }), {
+    ok: false,
+    error: 'unknown_prop_key',
+    key: 'junk',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, kind: 'sofa' }] }), {
+    ok: false,
+    error: 'invalid_prop_kind',
+    index: 0,
+  });
+
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, x: 12.01 }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'x',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, y: -12.01 }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'y',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, z: Number.NaN }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'z',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, x: '0' }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'x',
+    index: 0,
+  });
+  assert.equal(
+    validateManifest({ ...BASE, props: [{ ...PROP, x: 12, y: -12, z: 12 }] }).ok,
+    true
+  );
+
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, rot_y: 360 }] }), {
+    ok: false,
+    error: 'invalid_prop_rotation',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, rot_y: -0.5 }] }), {
+    ok: false,
+    error: 'invalid_prop_rotation',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, rot_y: Number.NaN }] }), {
+    ok: false,
+    error: 'invalid_prop_rotation',
+    index: 0,
+  });
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, rot_y: 0 }] }).ok, true);
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, rot_y: 359.99 }] }).ok, true);
+
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, color: '#zzzzzz' }] }), {
+    ok: false,
+    error: 'invalid_prop_color',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, color: 42 }] }), {
+    ok: false,
+    error: 'invalid_prop_color',
+    index: 0,
+  });
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, color: '#123ABC' }] }).ok, true);
+
+  assert.equal(
+    validateManifest({ ...BASE, props: Array.from({ length: 12 }, () => ({ ...PROP })) }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: Array.from({ length: 13 }, () => ({ ...PROP })) }),
+    { ok: false, error: 'too_many_props', max: MAX_PROPS }
+  );
+});
+
+test('validateManifest normalizes defaults and passes prop colors through', () => {
+  assert.deepEqual(
+    validateManifest({
+      cottage: 'gable',
+      wall: '#ffffff',
+      roof: '#000000',
+      trim: '#111111',
+    }),
+    {
+      ok: true,
+      manifest: {
+        cottage: 'gable',
+        wall: '#ffffff',
+        roof: '#000000',
+        trim: '#111111',
+        signpost_text: '',
+        props: [],
+      },
+    }
+  );
+
+  const colored = validateManifest({ ...BASE, props: [{ ...PROP, color: '#123ABC' }] });
+  assert.equal(colored.ok, true);
+  assert.deepEqual(colored.manifest.props, [
+    { kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: '#123ABC' },
+  ]);
+
+  const wick = readManifest('wick');
+  const wickResult = validateManifest(wick);
+  assert.equal(wickResult.ok, true);
+  assert.deepEqual(wickResult.manifest, {
+    cottage: wick.cottage,
+    wall: wick.wall,
+    roof: wick.roof,
+    trim: wick.trim,
+    signpost_text: wick.signpost_text,
+    props: wick.props,
+  });
+});
+
+test('decodeHtmlEntities decodes numeric and named entities', () => {
+  assert.equal(decodeHtmlEntities('&#106;avascript'), 'javascript');
+  assert.equal(decodeHtmlEntities('&#x6a;'), 'j');
+  assert.equal(decodeHtmlEntities('&#X4A;'), 'J');
+  assert.equal(decodeHtmlEntities('&#106'), 'j');
+  assert.equal(decodeHtmlEntities('&amp;&lt;&gt;&quot;&apos;'), '&<>"\'');
+  assert.equal(decodeHtmlEntities('&AMP;'), '&');
+  assert.equal(decodeHtmlEntities('&colon;'), ':');
+  assert.equal(decodeHtmlEntities('&bogus;'), '&bogus;');
+  assert.equal(decodeHtmlEntities('&#0;'), '&#0;');
+  assert.equal(decodeHtmlEntities('&#x110000;'), '&#x110000;');
+  assert.equal(decodeHtmlEntities('&lt;script&gt;'), '<script>');
+  assert.equal(decodeHtmlEntities('plain'), 'plain');
+});
+
+test('validateHtml rejects forbidden tags, handlers, unsafe URIs and CSS in desk notes', () => {
+  const forbiddenTags = [
+    ['<script>alert(1)</script>', 'script'],
+    ['<iframe src="x"></iframe>', 'iframe'],
+    ['<form action="/x">', 'form'],
+    ['<object data="x"></object>', 'object'],
+    ['<embed src="x">', 'embed'],
+    ['<link rel="stylesheet" href="x.css">', 'link'],
+    ['<base href="/">', 'base'],
+    ['<title>x</title>', 'title'],
+    ['<meta charset="utf-8">', 'meta'],
+  ];
+  for (const [html, tag] of forbiddenTags) {
+    assert.deepEqual(validateHtml(html), {
+      ok: false,
+      error: 'unsafe_html',
+      reason: `forbidden_tag:${tag}`,
+    });
+  }
+
+  assert.deepEqual(
+    validateHtml('<meta name="viewport" content="width=device-width, initial-scale=1.0">'),
+    { ok: true }
+  );
+  assert.deepEqual(
+    validateHtml('<meta name="viewport" content="width=device-width, initial-scale=1.0" data-x="1">'),
+    { ok: false, error: 'unsafe_html', reason: 'forbidden_tag:meta' }
+  );
+  assert.deepEqual(
+    validateHtml('<meta content="width=device-width, initial-scale=1.0" name="viewport">'),
+    { ok: true }
+  );
+
+  const unsafeCases = [
+    ['<p onclick="x()">x</p>', 'forbidden_attr:onclick'],
+    ['<a href="&#106;avascript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="&#X6A;avascript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="vbscript:x">x</a>', 'vbscript_uri'],
+    ['<a href="//evil.com">x</a>', 'external_uri'],
+    ['<a href="data:text/html;base64,x">x</a>', 'disallowed_data_uri'],
+    ['<div style="background:url(evil.png)">x</div>', 'css_url'],
+    ['<div style="width:expression(alert(1))">x</div>', 'css_expression'],
+    ['<style>div{background:url(x)}</style>', 'css_url'],
+  ];
+  for (const [html, reason] of unsafeCases) {
+    assert.deepEqual(validateHtml(html), {
+      ok: false,
+      error: 'unsafe_html',
+      reason,
+    });
+  }
+
+  assert.deepEqual(
+    validateHtml('<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">'),
+    { ok: true }
+  );
+
+  assert.deepEqual(validateHtml('x'.repeat(MAX_HTML_BYTES + 1)), {
+    ok: false,
+    error: 'html_too_large',
+    max: MAX_HTML_BYTES,
+  });
+  assert.deepEqual(validateHtml('x'.repeat(MAX_HTML_BYTES)), { ok: true });
+
+  for (const bad of [undefined, 42, null]) {
+    assert.deepEqual(validateHtml(bad), { ok: false, error: 'missing_html' });
+  }
+});
+
+test('seed plot files respect the byte caps and prop ranges', () => {
+  for (const handle of ['wick', 'maren', 'tomas', 'milo']) {
+    const manifestBytes = fs.statSync(path.join(PLOTS_DIR, handle, 'manifest.json')).size;
+    const htmlBytes = fs.statSync(path.join(PLOTS_DIR, handle, 'desk-note.html')).size;
+    assert.ok(manifestBytes <= MAX_MANIFEST_BYTES, `${handle} manifest exceeds MAX_MANIFEST_BYTES`);
+    assert.ok(htmlBytes <= MAX_HTML_BYTES, `${handle} desk-note.html exceeds MAX_HTML_BYTES`);
+
+    const manifest = readManifest(handle);
+    assert.ok(VALID_COTTAGES.has(manifest.cottage), `${handle} invalid cottage ${manifest.cottage}`);
+    for (const field of ['wall', 'roof', 'trim']) {
+      assert.match(manifest[field], HEX_COLOR_RE, `${handle} invalid ${field}`);
+    }
+    const signpost = manifest.signpost_text ?? '';
+    assert.ok(signpost.length <= MAX_SIGNPOST_CHARS, `${handle} signpost_text too long`);
+    assert.ok(Array.isArray(manifest.props), `${handle} props must be an array`);
+    assert.ok(manifest.props.length <= MAX_PROPS, `${handle} too many props`);
+
+    for (const prop of manifest.props) {
+      assert.ok(VALID_PROP_KINDS.has(prop.kind), `${handle} unknown prop kind ${prop.kind}`);
+      for (const axis of ['x', 'y', 'z']) {
+        assert.equal(typeof prop[axis], 'number');
+        assert.ok(prop[axis] >= -12 && prop[axis] <= 12, `${handle} prop ${axis} out of range`);
+      }
+      assert.equal(typeof prop.rot_y, 'number');
+      assert.ok(prop.rot_y >= 0 && prop.rot_y < 360, `${handle} prop rot_y out of range`);
+      if (prop.color !== undefined) {
+        assert.match(prop.color, HEX_COLOR_RE, `${handle} prop color invalid`);
+      }
+    }
+  }
 });
