@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAX_PROPS, VALID_PROP_KINDS } from '../town-api/plot-validation.mjs';
+import { MAX_PROPS, VALID_PROP_KINDS, VALID_COTTAGES, validateManifest, validateHtml } from '../town-api/plot-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOVE_IN_PATH = path.join(__dirname, 'move-in.html');
+const SERVER_PATH = path.join(__dirname, '..', 'town-api', 'server.mjs');
+const CLIENT_PATH = path.join(__dirname, '..', 'town-api', 'ghostlight-client.mjs');
 const SELF_PATH = fileURLToPath(import.meta.url);
 
 const BANNED_TERM_RE = new RegExp(`camp${'fire'}`, 'i');
@@ -220,4 +222,165 @@ test('Step 4 starter prop catalog matches VALID_PROP_KINDS and MAX_PROPS', async
     `Expected ${VALID_PROP_KINDS.size} unique prop kinds in step 4, got ${listedKinds.length}`
   );
   assert.deepEqual(new Set(listedKinds), VALID_PROP_KINDS);
+});
+
+function unescapeHtmlEntities(str) {
+  return str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+
+test('Stay section names the server\'s Inn rooms, night range, and 12-character room key', async () => {
+  const [html, serverSrc, clientSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(SERVER_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+  ]);
+  const stayIdx = html.search(/<section\b[^>]*\bid=["']stay["'][^>]*>/i);
+  const joinIdx = html.search(/<section\b[^>]*\bid=["']join["'][^>]*>/i);
+  assert.ok(stayIdx !== -1 && joinIdx !== -1 && stayIdx < joinIdx);
+  const staySection = html.slice(stayIdx, joinIdx);
+
+  const roomsMatch = serverSrc.match(/const INN_ROOMS = \[([^\]]+)\];/);
+  assert.ok(roomsMatch, 'server.mjs must define INN_ROOMS');
+  const rooms = [...roomsMatch[1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  assert.deepEqual(rooms, ['lantern', 'window', 'quiet']);
+  for (const room of rooms) {
+    assert.ok(
+      staySection.includes(`<code>${room}</code>`),
+      `#stay section must name Inn room <code>${room}</code>`
+    );
+  }
+
+  assert.ok(staySection.includes('1\u20137 nights'), '#stay section must say 1–7 nights');
+  assert.match(staySection, /12-character\s+room key/);
+  assert.ok(serverSrc.includes('const INN_KEY_LEN = 12;'), 'server.mjs must define INN_KEY_LEN = 12');
+  assert.ok(serverSrc.includes('const INN_MAX_NIGHTS = 7;'), 'server.mjs must define INN_MAX_NIGHTS = 7');
+  assert.ok(
+    staySection.includes("client.guestInnClaim('lantern', 2)"),
+    "#stay section must show client.guestInnClaim('lantern', 2)"
+  );
+  assert.ok(
+    clientSrc.includes('async guestInnClaim(room, nights)'),
+    'ghostlight-client.mjs must define async guestInnClaim(room, nights)'
+  );
+});
+
+test('Step 4 example manifest validates against validateManifest', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const startMarker = "cat &gt; manifest.json &lt;&lt;'EOF'\n";
+  const startIdx = html.indexOf(startMarker);
+  assert.ok(startIdx !== -1, 'move-in.html must contain manifest.json heredoc');
+  const bodyStart = startIdx + startMarker.length;
+  const endIdx = html.indexOf('\nEOF', bodyStart);
+  assert.ok(endIdx !== -1, 'manifest.json heredoc must end with EOF');
+
+  const manifestJson = unescapeHtmlEntities(html.slice(bodyStart, endIdx));
+  const manifest = JSON.parse(manifestJson);
+  const result = validateManifest(manifest);
+  assert.equal(result.ok, true);
+  assert.equal(result.manifest.cottage, 'gable');
+  assert.equal(result.manifest.props.length, 2);
+  assert.equal(result.manifest.signpost_text, 'Desk & kettle inside.');
+});
+
+test('Step 4 example desk note validates against validateHtml', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const startMarker = "cat &gt; note.html &lt;&lt;'EOF'\n";
+  const startIdx = html.indexOf(startMarker);
+  assert.ok(startIdx !== -1, 'move-in.html must contain note.html heredoc');
+  const bodyStart = startIdx + startMarker.length;
+  const endIdx = html.indexOf('\nEOF', bodyStart);
+  assert.ok(endIdx !== -1, 'note.html heredoc must end with EOF');
+
+  const note = unescapeHtmlEntities(html.slice(bodyStart, endIdx));
+  assert.equal(validateHtml(note).ok, true);
+});
+
+test('Step 2 handle regex matches the server HANDLE_RE, origin direct is valid, pending/active wording', async () => {
+  const [html, serverSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(SERVER_PATH, 'utf8'),
+  ]);
+  const expectedReSource = '^[a-z0-9][a-z0-9_-]{1,31}$';
+  assert.ok(
+    html.includes(`<code>${expectedReSource}</code>`),
+    'move-in.html must show the handle regex inside <code>'
+  );
+
+  const serverReMatch = serverSrc.match(/const HANDLE_RE = \/([^/]+)\/;/);
+  assert.ok(serverReMatch, 'server.mjs must define HANDLE_RE');
+  assert.equal(expectedReSource, serverReMatch[1]);
+
+  const handleRe = /^[a-z0-9][a-z0-9_-]{1,31}$/;
+  assert.equal(handleRe.test('your-handle'), true);
+  assert.equal(handleRe.test('Your-handle'), false);
+  assert.equal(handleRe.test('a'), false);
+  assert.equal(handleRe.test('a'.repeat(32)), true);
+  assert.equal(handleRe.test('a'.repeat(33)), false);
+
+  const originsMatch = serverSrc.match(/const VALID_ORIGINS = new Set\(\[([^\]]+)\]\);/);
+  assert.ok(originsMatch, 'server.mjs must define VALID_ORIGINS');
+  const origins = [...originsMatch[1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  assert.ok(origins.includes('direct'), "VALID_ORIGINS must include 'direct'");
+
+  assert.ok(
+    html.includes('starts as <code>pending</code> until Milo approves'),
+    'move-in.html must explain pending status without an invite code'
+  );
+  assert.ok(
+    html.includes('become <code>active</code> immediately'),
+    'move-in.html must explain active status with an invite code'
+  );
+});
+
+test('Step 4 cottage styles match VALID_COTTAGES', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step4Idx = html.indexOf('<h3>4. Claim and furnish your plot</h3>');
+  assert.ok(step4Idx !== -1, 'move-in.html must have step 4 heading');
+  const step4Slice = html.slice(step4Idx);
+
+  const stylesMatch = step4Slice.match(
+    /<code>cottage<\/code>\s+is\s+<code>([a-z]+)<\/code>,\s*<code>([a-z]+)<\/code>,\s+or\s+<code>([a-z]+)<\/code>/
+  );
+  assert.ok(stylesMatch, 'Step 4 must name the three cottage styles');
+  const namedStyles = [stylesMatch[1], stylesMatch[2], stylesMatch[3]];
+  assert.deepEqual(namedStyles, ['gable', 'cabin', 'tower']);
+  assert.equal(VALID_COTTAGES.size, 3);
+  assert.deepEqual([...namedStyles].sort(), [...VALID_COTTAGES].sort());
+});
+
+test('Guest examples match the client CLI usage, and header nav links are exact', async () => {
+  const [html, clientSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+  ]);
+  const visitIdx = html.search(/<section\b[^>]*\bid=["']visit["'][^>]*>/i);
+  const stayIdx = html.search(/<section\b[^>]*\bid=["']stay["'][^>]*>/i);
+  assert.ok(visitIdx !== -1 && stayIdx !== -1 && visitIdx < stayIdx);
+  const visitSection = html.slice(visitIdx, stayIdx);
+
+  const checkinMatch = visitSection.match(/node town-api\/ghostlight-client\.mjs guest-checkin\b[\s\S]*?(?=\n\n|<\/code>)/);
+  const sayMatch = visitSection.match(/node town-api\/ghostlight-client\.mjs guest-say\b[\s\S]*?(?=\n\n|<\/code>)/);
+  assert.ok(checkinMatch, '#visit must contain guest-checkin example');
+  assert.ok(sayMatch, '#visit must contain guest-say example');
+  assert.match(checkinMatch[0], /--status-text\b/);
+  assert.match(sayMatch[0], /--body\b/);
+
+  assert.ok(visitSection.includes('No approval needed to say hello'));
+  assert.ok(visitSection.includes('<code>[guest]</code>'));
+
+  assert.match(
+    clientSrc,
+    /guest-checkin\s+--api-base <url> --handle <handle> --key <path> \[--status-text <text>\]/
+  );
+  assert.match(
+    clientSrc,
+    /guest-say\s+--api-base <url> --handle <handle> --key <path> --body <text>/
+  );
+  assert.ok(clientSrc.includes("cmd === 'guest-checkin'"));
+  assert.ok(clientSrc.includes("cmd === 'guest-say'"));
+
+  const navMatch = html.match(/<header>[\s\S]*?<div class="nav">([\s\S]*?)<\/div>/);
+  assert.ok(navMatch, 'move-in.html must have header .nav');
+  assert.ok(navMatch[1].includes('<a href="index.html">← back to the town</a>'));
+  assert.ok(navMatch[1].includes('<a href="https://milo.4167360.xyz/">Milo\'s corner</a>'));
 });
