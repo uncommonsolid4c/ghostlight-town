@@ -592,3 +592,338 @@ test('PUT /api/town/plot rejects malformed bodies (null/array manifest, missing 
     await ctx.close();
   }
 });
+
+test('validateManifest field and shape errors', () => {
+  assert.equal(validateManifest({ ...VALID_MANIFEST, wall: '#D8C8A8' }).ok, true);
+
+  const { wall: _w, ...noWall } = VALID_MANIFEST;
+  assert.deepEqual(validateManifest(noWall), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, wall: 0xd8c8a8 }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, cottage: 'GABLE' }), {
+    ok: false,
+    error: 'invalid_cottage',
+  });
+  const { cottage: _c, ...noCottage } = VALID_MANIFEST;
+  assert.deepEqual(validateManifest(noCottage), {
+    ok: false,
+    error: 'invalid_cottage',
+  });
+
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, signpost_text: 42 }), {
+    ok: false,
+    error: 'invalid_signpost_text',
+    max: 120,
+  });
+
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, props: 'desk' }), {
+    ok: false,
+    error: 'invalid_props',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, props: [null] }), {
+    ok: false,
+    error: 'invalid_prop',
+    index: 0,
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, props: [[]] }), {
+    ok: false,
+    error: 'invalid_prop',
+    index: 0,
+  });
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: [{ x: 0, y: 0, z: 0, rot_y: 0 }] }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: [{ kind: 'desk', y: 0, z: 0, rot_y: 0 }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: '#fff' }],
+    }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 }],
+    }),
+    {
+      ok: true,
+      manifest: {
+        cottage: 'gable',
+        wall: '#d8c8a8',
+        roof: '#5a3d2b',
+        trim: '#2f4f4f',
+        signpost_text: 'Welcome to Alice’s Desk',
+        props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 }],
+      },
+    }
+  );
+});
+
+test('validateManifest coord/rotation boundaries and size ordering', () => {
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: -12, z: 0, rot_y: 0 }],
+    }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 12.0001, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'y', index: 0 }
+  );
+
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: -12, rot_y: 0 }],
+    }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 12.0001, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'z', index: 0 }
+  );
+
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: -1 }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: NaN }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: '180' }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: NaN, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      cottage: 'castle',
+      signpost_text: 'a'.repeat(17 * 1024),
+    }),
+    { ok: false, error: 'manifest_too_large', max: 16384 }
+  );
+});
+
+test('validateHtml URI obfuscation and URI-attr coverage', () => {
+  assert.deepEqual(validateHtml('<a href="JAVASCRIPT:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="java\tscript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="javascript&colon;alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="jav&Tab;ascript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<button formaction="javascript:alert(1)">x</button>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<table background="https://evil.example/x.png">x</table>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<q cite="javascript:alert(1)">x</q>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<div data="javascript:alert(1)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="HTTPS://evil.example/x">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<video poster="https://evil.example/x.png"></video>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="notes/page.html">x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<a href="VBSCRIPT:msgbox(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'vbscript_uri',
+  });
+});
+
+test('validateHtml style-block, comment, and unterminated-tag edges', () => {
+  assert.deepEqual(validateHtml('<div style="background:javascript:alert(1)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<style>/* hide */ body { background: url(evil.png); }</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<style>p { color: red; }</style><p>x</p>'), { ok: true });
+  assert.deepEqual(validateHtml('<!-- <script>alert(1)'), { ok: true });
+  assert.deepEqual(validateHtml('<script'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:script',
+  });
+  assert.deepEqual(validateHtml(''), { ok: true });
+  assert.deepEqual(validateHtml('<!-- just a note -->'), { ok: true });
+  assert.deepEqual(validateHtml('<style>div { width: expr/**/ession(alert(1)); }</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('</style><p>x</p>'), { ok: true });
+});
+
+test('failed PUTs do not consume quota or bump state_seq; limits are per-resident', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createApprovedResident(ctx, 'alice');
+    const { client: bob } = await createApprovedResident(ctx, 'bob');
+
+    const s0 = await alice.state();
+    assert.equal(s0.status, 200);
+    const seq0 = s0.data.state_seq;
+
+    for (let i = 0; i < 10; i++) {
+      const badPut = await alice.plot({ ...VALID_MANIFEST, cottage: 'castle' }, '<p>hi</p>');
+      assert.equal(badPut.status, 400);
+    }
+
+    const sAfterFail = await alice.state();
+    assert.equal(sAfterFail.status, 200);
+    assert.equal(sAfterFail.data.state_seq, seq0);
+
+    for (let i = 1; i <= 10; i++) {
+      const goodPut = await alice.plot(VALID_MANIFEST, `<p>Save #${i}</p>`);
+      assert.equal(goodPut.status, 200);
+    }
+
+    const eleventh = await alice.plot(VALID_MANIFEST, '<p>Save #11</p>');
+    assert.equal(eleventh.status, 429);
+    assert.equal(eleventh.data.error, 'rate_limited');
+    assert.equal(Number.isInteger(eleventh.data.retry_after) && eleventh.data.retry_after >= 1, true);
+
+    const bobPut = await bob.plot(VALID_MANIFEST, '<p>bob first</p>');
+    assert.equal(bobPut.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('PUT stores the normalized manifest; plots are isolated; GET handle validation; empty html', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: carol } = await createApprovedResident(ctx, 'carol');
+    const { client: dave } = await createApprovedResident(ctx, 'dave');
+
+    const minimalManifest = {
+      cottage: 'cabin',
+      wall: '#aabbcc',
+      roof: '#112233',
+      trim: '#445566',
+    };
+    const carolPut = await carol.plot(minimalManifest, '<p>carol note</p>');
+    assert.equal(carolPut.status, 200);
+
+    const storedManifest = JSON.parse(
+      fs.readFileSync(path.join(ctx.plotsDir, 'carol', 'manifest.json'), 'utf8')
+    );
+    assert.deepEqual(storedManifest, {
+      cottage: 'cabin',
+      wall: '#aabbcc',
+      roof: '#112233',
+      trim: '#445566',
+      signpost_text: '',
+      props: [],
+    });
+
+    const davePut = await dave.plot(VALID_MANIFEST, '<p>dave note</p>');
+    assert.equal(davePut.status, 200);
+
+    const carolGet = await carol.getPlot('carol');
+    assert.equal(carolGet.status, 200);
+    assert.equal(carolGet.data.html, '<p>carol note</p>');
+
+    const stateRes = await carol.state();
+    assert.equal(stateRes.status, 200);
+    assert.ok(stateRes.data.plots.carol);
+    assert.ok(stateRes.data.plots.dave);
+
+    const noHandleRes = await fetch(`${ctx.baseUrl}/api/town/plot`);
+    assert.equal(noHandleRes.status, 400);
+    assert.equal((await noHandleRes.json()).error, 'invalid_handle');
+
+    for (const badHandle of ['ALICE', 'a', 'a/b', 'alice..x', 'a b']) {
+      const badRes = await fetch(
+        `${ctx.baseUrl}/api/town/plot?handle=${encodeURIComponent(badHandle)}`
+      );
+      assert.equal(badRes.status, 400);
+      assert.equal((await badRes.json()).error, 'invalid_handle');
+    }
+
+    const carolEmptyPut = await carol.plot(minimalManifest, '');
+    assert.equal(carolEmptyPut.status, 200);
+
+    const carolEmptyGet = await carol.getPlot('carol');
+    assert.equal(carolEmptyGet.status, 200);
+    assert.equal(carolEmptyGet.data.html, '');
+  } finally {
+    await ctx.close();
+  }
+});
