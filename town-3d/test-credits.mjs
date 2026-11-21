@@ -316,3 +316,136 @@ test('CREDITS.md is discoverable from town-3d/README.md and Poly Pizza IDs and U
   assert.equal(new Set(ids).size, entries.length, 'credited Poly Pizza IDs must be pairwise distinct');
   assert.equal(new Set(pages).size, entries.length, 'credited Page URLs must be pairwise distinct');
 });
+
+
+test('PROP_PLACEMENTS pins exact coordinates, rotY, targetSize, and scaleAxis for all 8 model placements', () => {
+  const expected = {
+    gate_lantern_left: { x: -3.2, y: 0, z: 26.2, rotY: 0, targetSize: 2.2, scaleAxis: 'y' },
+    gate_lantern_right: { x: 3.2, y: 0, z: 26.2, rotY: 0, targetSize: 2.2, scaleAxis: 'y' },
+    bandstand_bench: {
+      x: -6.2,
+      y: 0,
+      z: 5.5,
+      rotY: +Math.atan2(6.2, -5.5).toFixed(4),
+      targetSize: 1.8,
+      scaleAxis: 'length',
+    },
+    newsstand_lantern: { x: 0.65, y: 1.03, z: 0.78, rotY: 0, targetSize: 0.35, scaleAxis: 'y' },
+    newsstand_street_light: { x: 7.8, y: 0, z: 15.2, rotY: 0, targetSize: 3.0, scaleAxis: 'y' },
+    newsstand_bookshelf: {
+      x: 4.6,
+      y: 0,
+      z: 15.0,
+      rotY: +Math.atan2(-4.6, -15.0).toFixed(4),
+      targetSize: 1.6,
+      scaleAxis: 'y',
+    },
+    wick_oil_lamp: { x: 14.41, y: 0, z: -6.05, rotY: -1.1733, targetSize: 0.9, scaleAxis: 'y' },
+    tomas_teapot: { x: 2.06, y: 0, z: -15.49, rotY: -0.1322, targetSize: 0.9, scaleAxis: 'y' },
+  };
+
+  const modelPlacements = PROP_PLACEMENTS.filter((p) => typeof p.model === 'string');
+  assert.deepEqual(
+    new Set(modelPlacements.map((p) => p.id)),
+    new Set(Object.keys(expected)),
+    'model placement ids must match the 8 pinned placements'
+  );
+
+  for (const [id, exp] of Object.entries(expected)) {
+    const placement = modelPlacements.find((p) => p.id === id);
+    assert.ok(placement, `missing placement ${id}`);
+    assert.equal(placement.x, exp.x, `${id} x mismatch`);
+    assert.equal(placement.y, exp.y, `${id} y mismatch`);
+    assert.equal(placement.z, exp.z, `${id} z mismatch`);
+    assert.equal(placement.rotY, exp.rotY, `${id} rotY mismatch`);
+    assert.equal(placement.targetSize, exp.targetSize, `${id} targetSize mismatch`);
+    assert.equal(placement.scaleAxis, exp.scaleAxis, `${id} scaleAxis mismatch`);
+  }
+});
+
+test('credited GLBs are self-contained with no external URI in buffers or images', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+  const expectedImageCounts = new Map([
+    ['post-lantern.glb', 1],
+    ['lantern.glb', 1],
+    ['bench.glb', 1],
+    ['street-light.glb', 0],
+    ['bookshelf.glb', 1],
+    ['oil-lamp.glb', 0],
+    ['teapot.glb', 1],
+  ]);
+
+  for (const file of creditedFiles) {
+    const buf = await fs.readFile(path.join(MODELS_DIR, file));
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.subarray(20, 20 + jsonLen).toString('utf8'));
+
+    assert.ok(Array.isArray(gltf.buffers) && gltf.buffers.length === 1, `${file} must have exactly 1 buffer`);
+    for (const buffer of gltf.buffers) {
+      assert.equal('uri' in buffer, false, `${file} buffer must not have a uri property`);
+    }
+
+    const images = gltf.images ?? [];
+    assert.equal(images.length, expectedImageCounts.get(file), `${file} image count mismatch`);
+    for (const image of images) {
+      assert.equal('uri' in image, false, `${file} image must not have a uri property`);
+    }
+  }
+});
+
+test('town.js procedural fallback dispatch covers all 7 credited kinds', async () => {
+  const townJs = await fs.readFile(path.join(__dirname, 'town.js'), 'utf8');
+  const kinds = ['post-lantern', 'lantern', 'bench', 'street-light', 'bookshelf', 'oil-lamp', 'teapot'];
+  for (const kind of kinds) {
+    assert.ok(
+      townJs.includes(`kind === '${kind}'`),
+      `town.js buildProceduralProp must dispatch kind === '${kind}'`
+    );
+  }
+});
+
+test('CREDITS.md entry order equals the pinned EXPECTED_TUPLES order', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const entries = parseCreditEntries(creditsMd);
+  assert.deepEqual(
+    entries.map((e) => e.displayName),
+    EXPECTED_TUPLES.map(([name]) => name)
+  );
+});
+
+test('town-3d/README.md names all 7 credited model filenames and disk holds exactly 8 GLBs', async () => {
+  const [creditsMd, readmeMd, diskEntries] = await Promise.all([
+    fs.readFile(CREDITS_PATH, 'utf8'),
+    fs.readFile(README_PATH, 'utf8'),
+    fs.readdir(MODELS_DIR),
+  ]);
+
+  const creditedFiles = parseCreditedModels(creditsMd);
+  for (const file of creditedFiles) {
+    assert.ok(readmeMd.includes(file), `town-3d/README.md must mention ${file}`);
+  }
+
+  const diskGlbs = diskEntries.filter((name) => name.endsWith('.glb')).sort();
+  const expectedGlbs = [...creditedFiles, 'pine.glb'].sort();
+  assert.equal(diskGlbs.length, 8, 'town-3d/models/ must hold exactly 8 .glb files');
+  assert.deepEqual(diskGlbs, expectedGlbs);
+});
+
+test('PROP_PLACEMENTS rotation/height bounds and CREDITS.md title pin', async () => {
+  for (const placement of PROP_PLACEMENTS) {
+    if (typeof placement.rotY === 'number') {
+      assert.ok(
+        placement.rotY >= -Math.PI && placement.rotY <= Math.PI,
+        `${placement.id} rotY (${placement.rotY}) must be in [-Math.PI, Math.PI]`
+      );
+    }
+    if (typeof placement.y === 'number') {
+      assert.ok(placement.y >= 0, `${placement.id} y (${placement.y}) must be >= 0`);
+    }
+  }
+
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const firstLine = creditsMd.split(/\r?\n/, 1)[0];
+  assert.equal(firstLine, '# 3D Model Credits (`town-3d`)');
+});
