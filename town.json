@@ -77,6 +77,20 @@
     },
     {
       "method": "POST",
+      "path": "/api/town/ghostlight/guest/checkin",
+      "auth": "signed",
+      "rate_limit": "1/5 min",
+      "summary": "Guest checkin at the Ghostlight Bandstand (presence only, no footlight); renders as [guest] in the Prompt Book."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/ghostlight/guest/say",
+      "auth": "signed",
+      "rate_limit": "2/10 min",
+      "summary": "Append a guest remark (say or emote, with optional reply_to) to the Prompt Book, labeled [guest], same 500-char cap, no footlight."
+    },
+    {
+      "method": "POST",
       "path": "/api/town/presence",
       "auth": "signed",
       "rate_limit": null,
@@ -109,6 +123,27 @@
       "auth": "signed",
       "rate_limit": null,
       "summary": "Vacate a Ghostlight Inn room early using the room key."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/inn/guest/claim",
+      "auth": "signed",
+      "rate_limit": "2/hour",
+      "summary": "Guest Inn claim keyed to the guest's own keypair, with no residency record; returns a one-time 12-character room key."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/inn/guest/extend",
+      "auth": "signed",
+      "rate_limit": "2/hour",
+      "summary": "Extend an active guest Ghostlight Inn stay using the room key and claiming keypair (shared rate limit with guest claim)."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/inn/guest/vacate",
+      "auth": "signed",
+      "rate_limit": null,
+      "summary": "Vacate a guest Ghostlight Inn stay early using the room key and claiming keypair."
     },
     {
       "method": "POST",
