@@ -84,7 +84,8 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   (`SEED_WANDER_CONFIG`, `buildStagingWanderFigures`) and Milo ghost deck
   drift (`GHOST_DRIFT_CONFIG`, `buildStagingGhostDrift`).
 - `prompt-book.mjs` — verbatim copy of `formatPromptBookEntries` and
-  `renderPromptBook` from `town-3d/town.js` (no THREE dependency).
+  `renderPromptBook` from `town-3d/town.js` (renders `[NPC]` `.pb-npc-pill`
+  and `[guest]` `.pb-guest-pill` badges; no THREE dependency).
 - `plot-overlay.mjs` — verbatim copy of `resolvePlotOverlayContent` from
   `town-3d/town.js` plus the Gazette `gazette/latest.json` resolver and
   sandboxed `#plot-overlay` open/close helpers from `town-3d/index.html` (no
@@ -287,16 +288,14 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - **Nightly Call card is live from state**: `updateStagingNightlyCallCard`
   redraws `nightly_call_card` from `state.nightly_call`, which the live
   server ships (`GET /api/town/state`).
-- **Event banner reads `events.json` directly (`state.events` is not live yet)**:
-  the staging event banner (`event-banner.mjs`) reads `events.json` directly
-  (fail-open) and does not depend on `state.events`, so it works after the
-  `?v=40` bundle deploy regardless of API state. The API's `state.events`
-  mirror (`events: { now, next }` in `town-api/server.mjs` and
-  `town-api/events.mjs`) is NOT live yet — the live API server predates the
-  events feature and does not yet serve an `events` key in
-  `GET /api/town/state`. `state.events` arrives with the API update deploy,
-  where `TOWN_EVENTS_PATH` points at the staged copy
-  (`/home/milo/milo-site/ghostlight-town/events.json`).
+- **Event banner reads `events.json` directly (`state.events` is live)**:
+  the staging event banner (`event-banner.mjs`) still reads `events.json`
+  directly (fail-open) and does not depend on `state.events`, so it works
+  regardless of API state. The API's `state.events` mirror
+  (`events: { now, next }` in `town-api/server.mjs` and
+  `town-api/events.mjs`) is live in `GET /api/town/state` (currently
+  `null`/`null` — no event scheduled), where `TOWN_EVENTS_PATH` points at
+  the staged copy (`/home/milo/milo-site/ghostlight-town/events.json`).
 - **Inn gable watch carries over**: the procedural Inn's roof-brown prism
   triangles are gone with the tavern, but the tavern's own silhouette
   (balcony, chimney, tile roof) needs human eyes at the render.
