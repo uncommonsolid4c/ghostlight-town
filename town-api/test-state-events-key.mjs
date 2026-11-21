@@ -647,3 +647,237 @@ test('GET /api/town/state returns 304 for repeated read with since=state_seq whi
     await ctx.close();
   }
 });
+
+test('GET /api/town/state accepts a padded start_at and trims it', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const trimmedStart = isoAt(baseNow, -900);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Padded Start',
+          host_handle: 'milo',
+          start_at: '  ' + trimmedStart + '  ',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Padded Start');
+    assert.equal(body.events.now.start_at, trimmedStart);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state host annotation clears after the window ends', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Short Reading',
+          host_handle: 'host',
+          start_at: isoAt(baseNow, 60),
+          duration_min: 15,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+
+    const before = await ctx.getState();
+    assert.equal(before.status, 200);
+    assert.equal(before.body.events.next.title, 'Short Reading');
+    const beforeHost = before.body.footlights.find((r) => r.handle === 'host');
+    assert.ok(beforeHost);
+    assert.equal(beforeHost.status_text, 'my own words');
+    assert.equal(beforeHost.event, undefined);
+
+    ctx.advanceClock(61);
+    const during = await ctx.getState();
+    assert.equal(during.status, 200);
+    assert.equal(during.body.events.now.title, 'Short Reading');
+    const duringHost = during.body.footlights.find((r) => r.handle === 'host');
+    assert.ok(duringHost);
+    assert.equal(duringHost.status_text, 'Short Reading');
+    assert.equal(duringHost.event, true);
+
+    ctx.advanceClock(900);
+    const after = await ctx.getState();
+    assert.equal(after.status, 200);
+    assert.equal(after.body.events.now, null);
+    const afterHost = after.body.footlights.find((r) => r.handle === 'host');
+    assert.ok(afterHost);
+    assert.equal(afterHost.status_text, 'my own words');
+    assert.equal(afterHost.event, undefined);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state annotates only the earliest-start host among overlapping now events', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Early Long',
+          host_handle: 'hosta',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 120,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Late Short',
+          host_handle: 'hostb',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    await registerAndCheckin(ctx, 'hosta', 'aaa', 0);
+    await registerAndCheckin(ctx, 'hostb', 'bbb', 1);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Early Long');
+    const rowA = body.footlights.find((r) => r.handle === 'hosta');
+    const rowB = body.footlights.find((r) => r.handle === 'hostb');
+    assert.ok(rowA);
+    assert.ok(rowB);
+    assert.equal(rowA.status_text, 'Early Long');
+    assert.equal(rowA.event, true);
+    assert.equal(rowB.status_text, 'bbb');
+    assert.equal(rowB.event, undefined);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state gives an expired footlight no annotation', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Long Evening',
+          host_handle: 'host',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 240,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    ctx.advanceClock(2701);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Long Evening');
+    assert.equal(body.footlights.length, 0);
+    assert.equal(body.footlights.some((r) => r.event === true), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state guestbook_by_plot counts approved entries only', async () => {
+  const ctx = await startStateServer();
+
+  try {
+    await registerResident(ctx, 'wick');
+    await registerResident(ctx, 'maren');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl });
+
+    ctx.advanceClock(-3601);
+    const wickR = await visitor.signGuestbook('guestbook', 'Guest R', 'Rejected note', 'wick');
+    const wickP = await visitor.signGuestbook('guestbook', 'Guest P', 'Pending note', 'wick');
+    const wickA = await visitor.signGuestbook('guestbook', 'Guest A', 'Approved note', 'wick');
+
+    ctx.advanceClock(3601);
+    const marenC = await visitor.signGuestbook('guestbook', 'Guest C', 'Maren note', 'maren');
+
+    assert.equal(wickR.status, 201);
+    assert.equal(wickP.status, 201);
+    assert.equal(wickA.status, 201);
+    assert.equal(marenC.status, 201);
+
+    const modR = await ctx.admin.moderateGuestbook(wickR.data.id, 'reject');
+    const modA = await ctx.admin.moderateGuestbook(wickA.data.id, 'approve');
+    const modC = await ctx.admin.moderateGuestbook(marenC.data.id, 'approve');
+    assert.equal(modR.status, 200);
+    assert.equal(modA.status, 200);
+    assert.equal(modC.status, 200);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.deepEqual(body.guestbook_by_plot, { wick: 1, maren: 1 });
+    assert.deepEqual(body.guestbook, { signed: 0, letters: 0 });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state gives a guest host no annotation and no crash', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Guest Hour',
+          host_handle: 'visitor1',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const guest = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'visitor1',
+      ...generateKeypair(),
+    });
+    const checkRes = await guest.guestCheckin({ status_text: 'just visiting' });
+    assert.equal(checkRes.status, 200);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Guest Hour');
+    assert.equal(body.footlights.length, 0);
+    const presenceRow = body.presence.find((r) => r.handle === 'visitor1');
+    assert.ok(presenceRow);
+    assert.equal(presenceRow.role, 'guest');
+  } finally {
+    await ctx.close();
+  }
+});
