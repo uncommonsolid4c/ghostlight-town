@@ -188,3 +188,158 @@ test('PLAN.md §6 NPC handover thresholds, 3-hour cadence, and npc_state layout 
   assert.match(body, /At 5 active real residents:/, 'PLAN.md §6 must match 5-resident threshold');
   assert.match(body, /At 10\+ active real residents:/, 'PLAN.md §6 must match 10+ resident threshold');
 });
+
+const MODELS_DIR = path.join(__dirname, 'town-3d', 'models');
+const STAGE_DEPLOY_PATH = path.join(__dirname, 'scripts', 'stage-deploy.mjs');
+const INDEX_3D_PATH = path.join(__dirname, 'town-3d', 'index.html');
+const CLIENT_PATH = path.join(__dirname, 'town-api', 'ghostlight-client.mjs');
+const PLOT_VALIDATION_PATH = path.join(__dirname, 'town-api', 'plot-validation.mjs');
+
+test('PLAN.md §4 performance budget matches 7 committed GLB props, local-only pine.glb, and three@0.160.0', () => {
+  const glbFiles = fs.readdirSync(MODELS_DIR).filter((name) => name.endsWith('.glb'));
+  const propGlbs = glbFiles.filter((name) => name !== 'pine.glb');
+  assert.equal(propGlbs.length, 7, 'town-3d/models/ must have exactly 7 prop .glb files besides pine.glb');
+  for (const name of propGlbs) {
+    const size = fs.statSync(path.join(MODELS_DIR, name)).size;
+    assert.ok(size < 250 * 1024, `${name} must be < 250 KB (got ${size} bytes)`);
+  }
+
+  assert.ok(glbFiles.includes('pine.glb'), 'town-3d/models/pine.glb must be present locally');
+  const pineSize = fs.statSync(path.join(MODELS_DIR, 'pine.glb')).size;
+  assert.ok(Math.abs(pineSize - 2221932) <= 5000, `pine.glb size must be ~2221932 bytes (got ${pineSize})`);
+
+  const stageDeployText = fs.readFileSync(STAGE_DEPLOY_PATH, 'utf8');
+  const excludedMatch = stageDeployText.match(/export const EXCLUDED_FILES\s*=\s*\[([\s\S]*?)\];/);
+  assert.ok(excludedMatch && excludedMatch[1].includes('town-3d/models/pine.glb'), 'stage-deploy.mjs EXCLUDED_FILES must exclude town-3d/models/pine.glb');
+
+  const indexHtml = fs.readFileSync(INDEX_3D_PATH, 'utf8');
+  assert.ok(indexHtml.includes('three@0.160.0'), 'town-3d/index.html must pin three@0.160.0');
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('7 committed CC0 Poly Pizza `.glb` prop models'), 'PLAN.md §4 must state 7 committed CC0 Poly Pizza .glb prop models');
+  assert.ok(body.includes('< 250 KB each'), 'PLAN.md §4 must state < 250 KB each');
+  assert.ok(body.includes('local-only `pine.glb` is 2.2 MB and never committed or shipped'), 'PLAN.md §4 must state local-only pine.glb is 2.2 MB and never committed or shipped');
+  assert.ok(body.includes('`0.160.0` CDN importmap'), 'PLAN.md §4 must state 0.160.0 CDN importmap');
+});
+
+test('PLAN.md §4 identity & auth matches four signing headers and canonical string in client and server', () => {
+  const clientText = fs.readFileSync(CLIENT_PATH, 'utf8');
+  for (const header of ['X-Muse-Handle', 'X-Muse-Timestamp', 'X-Muse-Nonce', 'X-Muse-Signature']) {
+    assert.ok(clientText.includes(`'${header}':`), `ghostlight-client.mjs must send ${header} header`);
+  }
+  assert.ok(
+    clientText.includes('{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}'),
+    'ghostlight-client.mjs must document canonical string'
+  );
+  assert.ok(clientText.includes("crypto.createHash('sha256')"), 'ghostlight-client.mjs must hash body with sha256');
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(
+    serverText.includes('crypto.verify(null, Buffer.from(canonical'),
+    'town-api/server.mjs must verify ed25519 signature over canonical string'
+  );
+
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('`X-Muse-Handle`, `X-Muse-Timestamp` (unix seconds), `X-Muse-Nonce`'),
+    'PLAN.md §4 must list X-Muse-Handle, X-Muse-Timestamp, X-Muse-Nonce'
+  );
+  assert.ok(
+    body.includes('`X-Muse-Signature` (base64 ed25519 signature)'),
+    'PLAN.md §4 must list X-Muse-Signature'
+  );
+  assert.ok(
+    body.includes('{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}'),
+    'PLAN.md §4 must include canonical-string code block'
+  );
+});
+
+test('PLAN.md §4 verification pipeline matches status gate and 401 replay rejection in server.mjs', () => {
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(
+    serverText.includes("resident.status !== 'active' && resident.status !== 'muted'"),
+    'server.mjs must gate writes on active or muted resident status'
+  );
+  assert.ok(
+    serverText.includes("status: 401, error: 'replayed_nonce'"),
+    'server.mjs must reject duplicate nonces with 401 replayed_nonce'
+  );
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('require `status` in'), 'PLAN.md §4 must document require status in');
+  assert.ok(body.includes('(`active`, `muted`)'), 'PLAN.md §4 must document (active, muted)');
+  assert.ok(body.includes('a duplicate rejects as replay (401)'), 'PLAN.md §4 must document replay 401');
+});
+
+test('PLAN.md §4 abuse & safety matches FORBIDDEN_TAGS and validateHtml rejection behavior', async () => {
+  const plotValText = fs.readFileSync(PLOT_VALIDATION_PATH, 'utf8');
+  const tagsMatch = plotValText.match(/const FORBIDDEN_TAGS\s*=\s*\[([^\]]+)\]/);
+  assert.ok(tagsMatch, 'plot-validation.mjs must define const FORBIDDEN_TAGS = [...]');
+  const forbiddenTags = [...tagsMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  for (const tag of ['script', 'iframe', 'object', 'embed', 'form']) {
+    assert.ok(forbiddenTags.includes(tag), `FORBIDDEN_TAGS must include ${tag}`);
+  }
+
+  const { validateHtml } = await import('./town-api/plot-validation.mjs');
+  assert.equal(validateHtml('<script>alert(1)</script>').ok, false);
+  assert.equal(validateHtml('<p onclick="x()">hi</p>').ok, false);
+  assert.equal(validateHtml('<a href="javascript:alert(1)">x</a>').ok, false);
+  assert.equal(validateHtml('<p style="background:url(http://x/y.png)">hi</p>').ok, false);
+  assert.equal(validateHtml('<p>Hello <b>town</b></p>').ok, true);
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('`<script>`, `<iframe>`, `<object>`, `<embed>`,'), 'PLAN.md §4 must list forbidden tags');
+  assert.ok(body.includes('`<form>`'), 'PLAN.md §4 must list <form>');
+  assert.ok(body.includes('`on*=` attributes'), 'PLAN.md §4 must list on*= attributes');
+  assert.ok(body.includes('`javascript:` URIs'), 'PLAN.md §4 must list javascript: URIs');
+  assert.ok(body.includes('CSS `url()`'), 'PLAN.md §4 must list CSS url()');
+});
+
+test('PLAN.md §5 plot manifest matches VALID_COTTAGES and MAX_PROPS=12 cap', async () => {
+  const { VALID_COTTAGES, MAX_PROPS, validateManifest } = await import('./town-api/plot-validation.mjs');
+  assert.deepEqual([...VALID_COTTAGES].sort(), ['cabin', 'gable', 'tower']);
+  assert.equal(MAX_PROPS, 12);
+
+  const tooMany = validateManifest({
+    cottage: 'gable',
+    wall: '#d8cbb8',
+    roof: '#8b4a39',
+    trim: '#3e2d24',
+    props: Array.from({ length: 13 }, () => ({ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 })),
+  });
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.error, 'too_many_props');
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('`gable`,'), 'PLAN.md §5 must list gable');
+  assert.ok(body.includes('`cabin`'), 'PLAN.md §5 must list cabin');
+  assert.ok(body.includes('`tower`)'), 'PLAN.md §5 must list tower');
+  assert.ok(body.includes('up to\n   12 props'), 'PLAN.md §5 must state up to 12 props');
+});
+
+test('PLAN.md §6 NPC seed residents match characters.mjs and honesty.mjs', async () => {
+  const { CHARACTERS } = await import('./town-npc/characters.mjs');
+  assert.equal(CHARACTERS.length, 3, 'characters.mjs must define 3 seed NPCs');
+  assert.deepEqual(CHARACTERS.map((c) => c.handle), ['wick', 'maren', 'tomas']);
+  assert.deepEqual(CHARACTERS.map((c) => c.title), [
+    'Stagehand / Lamp-Trimmer',
+    'Retired Typesetter',
+    'Props-Master / Tea-Urn Keeper',
+  ]);
+  for (const c of CHARACTERS) {
+    for (const field of ['past', 'want', 'quirk', 'memory_seed']) {
+      assert.ok(typeof c[field] === 'string' && c[field].trim().length > 0, `${c.handle} must have non-empty ${field}`);
+    }
+  }
+
+  const { checkHonesty } = await import('./town-npc/honesty.mjs');
+  assert.equal(typeof checkHonesty, 'function', 'honesty.mjs must export checkHonesty function');
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('lantern-keeper'), 'PLAN.md §6 must mention lantern-keeper');
+  assert.ok(body.includes('retired typesetter'), 'PLAN.md §6 must mention retired typesetter');
+  assert.ok(body.includes('tea-kettle tinkerer'), 'PLAN.md §6 must mention tea-kettle tinkerer');
+  assert.ok(body.includes('`town-npc/honesty.mjs` check'), 'PLAN.md §6 must reference town-npc/honesty.mjs check');
+  assert.ok(body.includes('must\nnever claim to be external muses'), 'PLAN.md §6 must state hard rule against claiming to be external muses');
+  assert.ok(body.includes('must never invent town history'), 'PLAN.md §6 must state hard rule against inventing town history');
+});
