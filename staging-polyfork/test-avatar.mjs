@@ -499,3 +499,183 @@ test('avatar.mjs copied declarations stay verbatim with town-3d/town.js', () => 
     );
   }
 });
+
+function withRecordingDocument(fn) {
+  const prevDoc = globalThis.document;
+  const calls = [];
+  globalThis.document = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      return {
+        width: 0,
+        height: 0,
+        getContext(kind) {
+          assert.equal(kind, '2d');
+          const ctx = {
+            fillStyle: '',
+            strokeStyle: '',
+            lineWidth: 1,
+            font: '',
+            textAlign: '',
+            textBaseline: '',
+            fillRect(x, y, w, h) {
+              calls.push(['fillRect', ctx.fillStyle, x, y, w, h]);
+            },
+            strokeRect(x, y, w, h) {
+              calls.push(['strokeRect', ctx.strokeStyle, ctx.lineWidth, x, y, w, h]);
+            },
+            fillText(text, x, y) {
+              calls.push(['fillText', ctx.font, ctx.fillStyle, text, x, y]);
+            },
+          };
+          return ctx;
+        },
+      };
+    },
+  };
+  try {
+    return fn(calls);
+  } finally {
+    if (prevDoc === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = prevDoc;
+    }
+  }
+}
+
+test('TOWN_LAYOUT all eight plot coordinates match the angle formula', () => {
+  const startAngle = 0.42 * Math.PI;
+  const endAngle = 1.58 * Math.PI;
+  for (let i = 0; i < 8; i++) {
+    const angle = startAngle + (i / 7) * (endAngle - startAngle);
+    const plot = TOWN_LAYOUT.plots[i];
+    assert.equal(plot.x, +(Math.sin(angle) * 18.5).toFixed(3));
+    assert.equal(plot.z, +(Math.cos(angle) * 18.5).toFixed(3));
+    assert.equal(plot.y, 0);
+    assert.equal(plot.plotNumber, i + 1);
+  }
+});
+
+test('createAvatarCapsule structure, roughness, and texture flags', () => {
+  const THREE = createFakeTHREE();
+  const capsule = createAvatarCapsule(THREE, { handle: 'sol' });
+  assert.equal(capsule.children.length, 3);
+  assert.equal(capsule.children[0].material.roughness, 0.7);
+  assert.equal(capsule.children[1].material.roughness, 0.75);
+  const spriteMat = capsule.children[2].material;
+  assert.equal(spriteMat.transparent, true);
+  assert.equal(spriteMat.map.needsUpdate, true);
+  assert.equal(spriteMat.map.canvas.width, 384);
+  assert.equal(spriteMat.map.canvas.height, 96);
+});
+
+test('createAvatarCapsule badge texture draws bg, border, and centered badge text', () => {
+  const THREE = createFakeTHREE();
+  withRecordingDocument((calls) => {
+    createAvatarCapsule(THREE, { handle: 'wick', role: 'npc' });
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 96],
+      ['strokeRect', '#ffbe55', 8, 8, 8, 368, 80],
+      ['fillText', 'bold 30px monospace', '#ffbe55', '[NPC] wick', 192, 48],
+    ]);
+
+    calls.length = 0;
+    createAvatarCapsule(THREE, { handle: 'sol' });
+    const textCall = calls.find((c) => c[0] === 'fillText');
+    assert.ok(textCall);
+    assert.equal(textCall[2], '#9be0ff');
+    assert.equal(textCall[3], '[MUSE] sol');
+  });
+});
+
+test('pickBandstandSpot overflow exact coordinates and empty-spots fallback', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set();
+  for (let i = 0; i < 10; i++) {
+    pickBandstandSpot(spots, used, null);
+  }
+
+  const slot10 = pickBandstandSpot(spots, used, null);
+  assert.equal(slot10.slot, 10);
+  assert.equal(slot10.x, +(Math.sin(0.15) * 6.6).toFixed(4));
+  assert.equal(slot10.z, +(Math.cos(0.15) * 6.6).toFixed(4));
+  assert.equal(slot10.y, 0);
+  assert.equal(slot10.nametagLift, 0);
+
+  const slot11 = pickBandstandSpot(spots, used, null);
+  assert.equal(slot11.slot, 11);
+  assert.equal(slot11.x, +(Math.sin((1 / 10) * Math.PI * 2 + 0.15) * 6.6).toFixed(4));
+  assert.equal(slot11.nametagLift, 0.5);
+  assert.equal(slot11.rotY, +Math.atan2(-slot11.x, -slot11.z).toFixed(4));
+
+  const emptyFallback = pickBandstandSpot([], new Set(), null);
+  assert.equal(emptyFallback.slot, 0);
+  assert.equal(emptyFallback.y, 0);
+  assert.equal(emptyFallback.x, +(Math.sin(0.15) * 5.7).toFixed(4));
+  assert.equal(emptyFallback.z, +(Math.cos(0.15) * 5.7).toFixed(4));
+});
+
+test('getPlotTargetPosition edges: undefined index, indices 5 and 6, negative index', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const p0 = getPlotTargetPosition(plot1, 0);
+  assert.deepEqual(getPlotTargetPosition(plot1), p0);
+
+  const sideX = Math.cos(plot1.rotY);
+  const sideZ = -Math.sin(plot1.rotY);
+  const p5 = getPlotTargetPosition(plot1, 5);
+  const p6 = getPlotTargetPosition(plot1, 6);
+  for (const p of [p5, p6]) {
+    assert.equal(p.y, 0);
+    assert.equal(p.rotY, plot1.rotY);
+  }
+  const proj5 = (p5.x - p0.x) * sideX + (p5.z - p0.z) * sideZ;
+  const proj6 = (p6.x - p0.x) * sideX + (p6.z - p0.z) * sideZ;
+  assert.ok(Math.abs(proj5 - 2.7) < 0.01, `expected index 5 lateral +2.7, got ${proj5}`);
+  assert.ok(Math.abs(proj6 + 2.7) < 0.01, `expected index 6 lateral -2.7, got ${proj6}`);
+
+  assert.deepEqual(getPlotTargetPosition(plot1, -1), p0);
+});
+
+test('setAvatarStatusText edges: non-string status, undefined map, role-undefined badge, 23-char status', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument((drawnTexts) => {
+    const npc1 = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    const initialMap = npc1.userData.nametagSprite.material.map;
+
+    for (const bad of [42, {}, true]) {
+      setAvatarStatusText(THREE, npc1, bad);
+      assert.equal(npc1.userData.statusText, null);
+      assert.equal(npc1.userData.nametagSprite.material.map, initialMap);
+    }
+
+    setAvatarStatusText(THREE, npc1, '  On watch  ');
+    assert.equal(npc1.userData.statusText, 'On watch');
+    setAvatarStatusText(THREE, npc1, 42);
+    assert.equal(npc1.userData.statusText, null);
+    assert.equal(npc1.userData.nametagSprite.material.map.canvas.height, 96);
+
+    const npc2 = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    npc2.userData.nametagSprite.material.map = undefined;
+    setAvatarStatusText(THREE, npc2, 'Tea is on');
+    assert.ok(npc2.userData.nametagSprite.material.map);
+    assert.equal(npc2.userData.statusText, 'Tea is on');
+
+    const noRole = createAvatarCapsule(THREE, { handle: 'anon' });
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, noRole, 'Hello');
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[MUSE] anon', 'Hello']);
+
+    const len23 = '12345678901234567890123';
+    assert.equal(len23.length, 23);
+    setAvatarStatusText(THREE, noRole, len23);
+    assert.equal(noRole.userData.statusText, len23);
+    assert.equal(noRole.userData.statusText.includes('…'), false);
+  });
+});
