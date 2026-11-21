@@ -485,3 +485,227 @@ test('staging.js wires buildStagingGhostDrift into wanderFigures while keeping g
   assert.ok(buildGhostIdx > buildWanderIdx, 'buildStagingGhostDrift must be called after buildStagingWanderFigures');
   assert.ok(pushGhostIdx > buildGhostIdx, 'ghostDrift must be pushed into wanderFigures');
 });
+
+test('buildStagingWanderFigures skips stand-ins without a group and accepts a plain-object standIns map', () => {
+  const groundAt = (x, z) => +(0.25 + x * 0.01 - z * 0.005).toFixed(4);
+  const bandstandGroundY = groundAt(0, 0);
+  const bandstandSpots = makeFakeBandstandSpots();
+  const newsstandFront = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+
+  const plainFigures = buildStagingWanderFigures({
+    standIns: {
+      wick: { group: makeFakeGroup(4.16, 0, 4.99), home: { x: 4.16, z: 4.99 }, anim: null },
+    },
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY,
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  assert.equal(plainFigures.length, 1);
+  assert.equal(plainFigures[0].handle, 'wick');
+
+  const twoFigures = buildStagingWanderFigures({
+    standIns: new Map([
+      ['wick', { group: makeFakeGroup(4.16, 0, 4.99), home: { x: 4.16, z: 4.99 }, anim: null }],
+      ['tomas', { group: makeFakeGroup(0.76, 0, -6.46), home: { x: 0.76, z: -6.46 }, anim: null }],
+    ]),
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY,
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  assert.equal(twoFigures.length, 2);
+  assert.deepEqual(twoFigures.map((f) => f.handle), ['wick', 'tomas']);
+
+  const noGroupFigures = buildStagingWanderFigures({
+    standIns: new Map([['wick', { anim: null }]]),
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY,
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  assert.equal(noGroupFigures.length, 0);
+
+  const nullFigures = buildStagingWanderFigures({
+    standIns: null,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY,
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  assert.equal(nullFigures.length, 0);
+});
+
+test('getStagingNewsstandFrontPosition edge cases', () => {
+  const coincident = getStagingNewsstandFrontPosition({
+    newsstand: { x: 1, z: 2 },
+    bandstand: { x: 1, z: 2 },
+  });
+  assert.deepEqual(coincident, { x: 1, y: 0, z: 2 });
+
+  const odd = getStagingNewsstandFrontPosition({
+    newsstand: { x: 0.123456, z: -0.987654 },
+    bandstand: { x: 3.333333, z: 4.444444 },
+  });
+  assert.equal(odd.y, 0);
+  assert.equal(odd.x, +odd.x.toFixed(4));
+  assert.equal(odd.z, +odd.z.toFixed(4));
+  assert.deepEqual(odd, { x: 1.1409, y: 0, z: 0.7342 });
+});
+
+test('Turn smoothing: small dt rotates partway, dt = 0.25 snaps fully, no rotation when already above the target in xz', () => {
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const figure = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 2, y: 0, z: 0, rotY: Math.PI / 2, linger: 14, label: 'bandstand' },
+      { x: 2, y: 0, z: 2, linger: 12, label: 'newsstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([figure], 0.1, new Map());
+  assert.ok(Math.abs(group.rotation.y - (Math.PI / 2) * (1 - Math.exp(-1))) < 1e-9);
+  assert.ok(Math.abs(group.position.x - 0.05) < 1e-9);
+
+  updateStagingWander([figure], 0.25, new Map());
+  assert.ok(Math.abs(group.rotation.y - Math.PI / 2) < 1e-9);
+
+  const hoverGroup = makeFakeGroup(0, 5, 0, 1.25);
+  const hoverFigure = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group: hoverGroup,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 12, label: 'home' },
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 16, label: 'bandstand' },
+      { x: 3, y: 0, z: 3, linger: 10, label: 'newsstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([hoverFigure], 1.0, new Map());
+  assert.equal(hoverGroup.rotation.y, 1.25);
+  assert.ok(Math.abs(hoverGroup.position.y - 4.5) < 1e-9);
+});
+
+test('Full loop wrap-around: newsstand linger expiry -> home -> bandstand', () => {
+  const locoCalls = [];
+  const group = makeFakeGroup(2, 0, 2, 0);
+  const figure = {
+    handle: 'wick',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(speed) } },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 2, rotY: Math.PI, linger: 14, label: 'bandstand' },
+      { x: 2, y: 0, z: 2, linger: 12, label: 'newsstand' },
+    ],
+    targetIndex: 2,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([figure], 0.1, new Map());
+  assert.equal(figure.state, 'lingering');
+  assert.equal(figure.lingerRemaining, 12);
+  assert.deepEqual(locoCalls, [0]);
+
+  updateStagingWander([figure], 12, new Map());
+  assert.equal(figure.targetIndex, 0);
+  assert.equal(figure.state, 'walking');
+
+  updateStagingWander([figure], Math.hypot(2, 2) / 0.5 + 0.01, new Map());
+  assert.equal(figure.state, 'lingering');
+  assert.equal(figure.lingerRemaining, 10);
+  assert.equal(group.position.x, 0);
+  assert.equal(group.position.z, 0);
+
+  updateStagingWander([figure], 10, new Map());
+  assert.equal(figure.targetIndex, 1);
+  assert.equal(figure.state, 'walking');
+  assert.equal(figure.lingerRemaining, 0);
+});
+
+test('updateStagingWander guards: non-array figures, missing liveAvatars, .has-less liveAvatars, standIn without anim', () => {
+  assert.doesNotThrow(() => updateStagingWander(null, 1.0, new Map()));
+  assert.doesNotThrow(() => updateStagingWander(undefined, 1.0, new Map()));
+  assert.doesNotThrow(() => updateStagingWander('not-an-array', 1.0, new Map()));
+
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const figure = {
+    handle: 'tomas',
+    standIn: {},
+    group,
+    speed: 0.6,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 9, label: 'home' },
+      { x: 3, y: 0, z: 0, rotY: 0, linger: 12, label: 'bandstand' },
+      { x: 3, y: 0, z: 3, linger: 15, label: 'newsstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([figure], 1.0, undefined);
+  assert.ok(Math.abs(group.position.x - 0.6) < 1e-9);
+
+  updateStagingWander([figure], 1.0, {});
+  assert.ok(Math.abs(group.position.x - 1.2) < 1e-9);
+
+  updateStagingWander([figure], Math.hypot(3 - 1.2, 0) / 0.6 + 0.01, new Map());
+  assert.equal(figure.state, 'lingering');
+  assert.equal(figure.lingerRemaining, 12);
+});
+
+test('Ghost yield restore keeps rotation when the home waypoint has no rotY', () => {
+  const spots = makeFakeBandstandSpots();
+  const ghost = makeFakeGroup(-1.0, 0.6, 2.0, 0.5);
+  const fig = buildStagingGhostDrift({ ghost, bandstandSpots: spots });
+  fig.targetIndex = 2;
+  fig.state = 'lingering';
+  fig.lingerRemaining = 4;
+
+  const liveAvatars = new Map([['milo', {}]]);
+  updateStagingWander([fig], 0.5, liveAvatars);
+  assert.equal(ghost.visible, false);
+  assert.equal(fig.yielded, true);
+
+  liveAvatars.delete('milo');
+  updateStagingWander([fig], 0.5, liveAvatars);
+  assert.equal(ghost.visible, true);
+  assert.equal(ghost.rotation.y, 0.5);
+  assert.equal(ghost.position.x, spots[0].x);
+  assert.equal(ghost.position.y, 0.6);
+  assert.equal(ghost.position.z, spots[0].z);
+  assert.equal(fig.targetIndex, 1);
+  assert.equal(fig.state, 'walking');
+  assert.equal(fig.lingerRemaining, 0);
+});
