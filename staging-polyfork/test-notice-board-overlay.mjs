@@ -311,3 +311,181 @@ test('openNoticeBoardOverlay keeps pre-visible overlay visible and overwrites st
   assert.equal(iframeEl.srcdoc, html);
   assert.equal(html, expectedHtml);
 });
+
+test('NOTICE_BOARD_PAPERS 3D data stays structured: unique names, symmetric x offsets, line counts', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'notice-board-overlay.mjs'), 'utf8');
+  const papersMatch = stagingSrc.match(/const NOTICE_BOARD_PAPERS = \[([\s\S]*?)\];/);
+  assert.ok(papersMatch, 'notice-board-overlay.mjs must define NOTICE_BOARD_PAPERS');
+
+  const entries = [...papersMatch[1].matchAll(
+    /\['(notice_board_paper_\w+)',\s*(-?[\d.]+),\s*\[((?:'[^']*',?\s*)+)\]\]/g,
+  )];
+  assert.equal(entries.length, 3);
+
+  const names = entries.map((m) => m[1]);
+  const xOffsets = entries.map((m) => Number(m[2]));
+  const entryLines = entries.map((m) => [...m[3].matchAll(/'([^']*)'/g)].map((lm) => lm[1]));
+
+  assert.deepEqual(names, [
+    'notice_board_paper_gazette',
+    'notice_board_paper_inn',
+    'notice_board_paper_gate',
+  ]);
+  assert.deepEqual(xOffsets, [-0.6, 0, 0.6]);
+  assert.deepEqual(entryLines.map((lines) => lines.length), [4, 4, 5]);
+  for (const lines of entryLines) {
+    assert.ok(lines.length >= 4, 'each notice entry must have at least 4 lines');
+  }
+
+  const html = buildNoticeBoardOverlayHtml();
+  const bodies = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => m[1]);
+  assert.deepEqual(bodies, entryLines.map((lines) => lines.slice(1).join(' ')));
+});
+
+test('buildNoticeBoardOverlayHtml shell is exact: one of each tag, no blank lines, no trailing newline', () => {
+  const html = buildNoticeBoardOverlayHtml();
+
+  for (const tag of [
+    '<html lang="en">',
+    '<head>',
+    '</head>',
+    '<body>',
+    '</body>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+    '<title>',
+    '</title>',
+  ]) {
+    assert.equal(html.split(tag).length - 1, 1, `expected exactly one ${tag}`);
+  }
+
+  assert.equal(/\n\n/.test(html), false, 'overlay HTML must contain no blank lines');
+  assert.ok(html.endsWith('</html>') && !html.endsWith('\n'));
+
+  for (const [, body] of html.matchAll(/<p>([\s\S]*?)<\/p>/g)) {
+    assert.equal(body, body.trim());
+    assert.equal(/  /.test(body), false, 'notice body must contain no double spaces');
+  }
+  for (const [, title] of html.matchAll(/<h2>([\s\S]*?)<\/h2>/g)) {
+    assert.equal(title, title.trim());
+  }
+});
+
+test('openNoticeBoardOverlay applies DOM mutations in order: title, sandbox, remove src, srcdoc, unhide', () => {
+  const order = [];
+  const overlayEl = {
+    set hidden(_v) {
+      order.push('hidden');
+    },
+  };
+  const titleEl = {
+    set textContent(_v) {
+      order.push('title');
+    },
+  };
+  const iframeEl = {
+    setAttribute(k, _v) {
+      order.push(`setAttribute:${k}`);
+    },
+    removeAttribute(k) {
+      order.push(`removeAttribute:${k}`);
+    },
+    set srcdoc(_v) {
+      order.push('srcdoc');
+    },
+  };
+
+  const html = openNoticeBoardOverlay({ overlayEl, titleEl, iframeEl });
+  assert.deepEqual(order, [
+    'title',
+    'setAttribute:sandbox',
+    'removeAttribute:src',
+    'srcdoc',
+    'hidden',
+  ]);
+  assert.equal(typeof html, 'string');
+  assert.equal(html, buildNoticeBoardOverlayHtml());
+});
+
+test('openNoticeBoardOverlay(undefined) returns null; null throws TypeError; onBeforeOpen return value ignored', () => {
+  assert.equal(openNoticeBoardOverlay(undefined), null);
+  assert.throws(() => openNoticeBoardOverlay(null), TypeError);
+
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+  const html = openNoticeBoardOverlay({
+    overlayEl,
+    titleEl,
+    iframeEl,
+    onBeforeOpen: () => 'ignored-value',
+  });
+
+  assert.equal(typeof html, 'string');
+  assert.equal(overlayEl.hidden, false);
+  assert.equal(titleEl.textContent, 'Notice Board');
+  assert.equal(iframeEl.srcdoc, html);
+});
+
+test("openNoticeBoardOverlay overwrites a stale sandbox value and calls removeAttribute('src') exactly once", () => {
+  const attrs = new Map();
+  const setAttrs = [];
+  const removed = [];
+  const overlayEl = { hidden: true };
+  const titleEl = { textContent: '' };
+  const iframeEl = {
+    _src: '',
+    _srcdoc: '',
+    setAttribute(k, v) {
+      const val = String(v);
+      attrs.set(k, val);
+      setAttrs.push([k, val]);
+    },
+    getAttribute(k) {
+      return attrs.has(k) ? attrs.get(k) : null;
+    },
+    removeAttribute(k) {
+      attrs.delete(k);
+      removed.push(k);
+      if (k === 'src') this._src = undefined;
+      if (k === 'srcdoc') this._srcdoc = undefined;
+    },
+    set src(v) {
+      this._src = v;
+      attrs.set('src', v);
+    },
+    get src() {
+      return this._src;
+    },
+    set srcdoc(v) {
+      this._srcdoc = v;
+      attrs.set('srcdoc', v);
+    },
+    get srcdoc() {
+      return this._srcdoc;
+    },
+  };
+
+  iframeEl.setAttribute('sandbox', 'allow-scripts');
+  iframeEl.src = 'stale.html';
+  setAttrs.length = 0;
+
+  openNoticeBoardOverlay({ overlayEl, titleEl, iframeEl });
+
+  assert.equal(iframeEl.getAttribute('sandbox'), '');
+  assert.deepEqual(setAttrs, [['sandbox', '']]);
+  assert.deepEqual(removed, ['src']);
+  assert.equal(iframeEl.getAttribute('src'), null);
+});
+
+test('buildNoticeBoardOverlayHtml style block has exactly the four pinned rules in order; exactly three em-dashes', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(styleMatch, 'overlay HTML must include a <style> block');
+  const css = styleMatch[1];
+
+  assert.equal((css.match(/\{/g) || []).length, 4);
+  const selectors = [...css.matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim());
+  assert.deepEqual(selectors, ['body', 'h1', 'h2', '.notice p']);
+
+  assert.equal((html.match(/—/g) || []).length, 3);
+  assert.equal(/[‘’“”]/.test(html), false, 'overlay HTML must contain no curly quotes');
+});
