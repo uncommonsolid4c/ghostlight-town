@@ -797,13 +797,14 @@ export function createCottage(THREE, manifest = {}, options = {}) {
 }
 
 /**
- * Create a simple capsule avatar with a floating [MUSE] or [NPC] nametag sprite.
+ * Create a simple capsule avatar with a floating [MUSE], [guest], or [NPC] nametag sprite.
  */
 export function createAvatarCapsule(THREE, { handle = 'muse', role = 'muse', nametagLift = 0 } = {}) {
-  const isNpc = role === 'npc';
+  const normalizedRole = role === 'npc' ? 'npc' : role === 'guest' ? 'guest' : 'muse';
+  const isNpc = normalizedRole === 'npc';
   const group = new THREE.Group();
   group.name = `avatar_${handle}`;
-  group.userData = { handle, role: isNpc ? 'npc' : 'muse', nametagLift };
+  group.userData = { handle, role: normalizedRole, nametagLift };
 
   const bodyColor = isNpc ? '#d49a45' : '#6cb4d8';
   const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.7 });
@@ -816,7 +817,7 @@ export function createAvatarCapsule(THREE, { handle = 'muse', role = 'muse', nam
   head.position.set(0, 1.2, 0);
   group.add(head);
 
-  const badge = isNpc ? `[NPC] ${handle}` : `[MUSE] ${handle}`;
+  const badge = isNpc ? `[NPC] ${handle}` : normalizedRole === 'guest' ? `[guest] ${handle}` : `[MUSE] ${handle}`;
   const fg = isNpc ? '#ffbe55' : '#9be0ff';
   const tex = makeTextTexture(THREE, [badge], {
     width: 384,
@@ -853,8 +854,9 @@ export function setAvatarStatusText(THREE, avatar, statusText) {
   }
 
   const handle = avatar.userData.handle || 'muse';
-  const isNpc = avatar.userData.role === 'npc';
-  const badge = isNpc ? `[NPC] ${handle}` : `[MUSE] ${handle}`;
+  const role = avatar.userData.role;
+  const isNpc = role === 'npc';
+  const badge = isNpc ? `[NPC] ${handle}` : role === 'guest' ? `[guest] ${handle}` : `[MUSE] ${handle}`;
   const fg = isNpc ? '#ffbe55' : '#9be0ff';
 
   const lines = nextStatus ? [badge, nextStatus] : [badge];
@@ -1818,7 +1820,7 @@ export function formatPromptBookEntries(promptBook) {
     body: typeof entry?.body === 'string' ? entry.body : '',
     reply_to: Number.isInteger(entry?.reply_to) ? entry.reply_to : null,
     created_at: entry?.created_at ?? 0,
-    role: entry?.role === 'npc' ? 'npc' : 'muse',
+    role: entry?.role === 'npc' ? 'npc' : entry?.role === 'guest' ? 'guest' : 'muse',
   }));
 }
 
@@ -1854,6 +1856,11 @@ export function renderPromptBook(containerEl, promptBook, doc = globalThis.docum
       const pill = doc.createElement('span');
       pill.className = 'pb-npc-pill';
       pill.textContent = '[NPC]';
+      line.appendChild(pill);
+    } else if (entry.role === 'guest') {
+      const pill = doc.createElement('span');
+      pill.className = 'pb-guest-pill';
+      pill.textContent = '[guest]';
       line.appendChild(pill);
     }
 
@@ -2652,7 +2659,7 @@ export function applyState(town, state = {}, options = {}) {
 
   for (const row of presenceRows) {
     if (!row?.handle) continue;
-    const role = row.role === 'npc' ? 'npc' : 'muse';
+    const role = row.role === 'npc' ? 'npc' : row.role === 'guest' ? 'guest' : 'muse';
     const target = targets.get(row.handle);
     const existing = live.avatars.get(row.handle);
     let avatar;
