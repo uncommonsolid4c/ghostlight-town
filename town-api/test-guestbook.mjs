@@ -810,3 +810,286 @@ test('filter composition combines kind, plot, and limit and keeps letters gate-o
     await ctx.close();
   }
 });
+
+test('invalid posts do not burn the 3-per-hour quota; X-Forwarded-For bucket is keyed on the first IP', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ipHeader = { 'X-Forwarded-For': '203.0.113.90' };
+
+    const emptyName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: '   ', body: 'Hello!' },
+      ipHeader
+    );
+    assert.equal(emptyName.status, 400);
+    assert.equal(emptyName.data.error, 'invalid_name');
+
+    const emptyBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: '   ' },
+      ipHeader
+    );
+    assert.equal(emptyBody.status, 400);
+    assert.equal(emptyBody.data.error, 'invalid_body');
+
+    const urlBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 'see http://x.co' },
+      ipHeader
+    );
+    assert.equal(urlBody.status, 400);
+    assert.equal(urlBody.data.error, 'urls_not_allowed');
+
+    for (let i = 1; i <= 3; i++) {
+      const ok = await rawPost(
+        ctx.baseUrl,
+        '/api/town/guestbook',
+        { kind: 'guestbook', name: `G${i}`, body: `Line ${i}` },
+        ipHeader
+      );
+      assert.equal(ok.status, 201, `valid sign #${i} should succeed`);
+    }
+
+    const r4 = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'G4', body: 'Line 4' },
+      ipHeader
+    );
+    assert.equal(r4.status, 429);
+    assert.equal(r4.data.error, 'rate_limited');
+    assert.ok(Number.isInteger(r4.data.retry_after) && r4.data.retry_after > 0);
+
+    const sameFirstIp = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'G5', body: 'Line 5' },
+      { 'X-Forwarded-For': '203.0.113.90, 198.51.100.2' }
+    );
+    assert.equal(sameFirstIp.status, 429);
+    assert.equal(sameFirstIp.data.error, 'rate_limited');
+
+    const otherFirstIp = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'G6', body: 'Line 6' },
+      { 'X-Forwarded-For': '198.51.100.2' }
+    );
+    assert.equal(otherFirstIp.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('URL check is body-only and scheme-specific', async () => {
+  const ctx = await startTestServer();
+  try {
+    const urlName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'http://evil', body: 'Hello!' },
+      { 'X-Forwarded-For': '203.0.113.101' }
+    );
+    assert.equal(urlName.status, 201);
+
+    const bareWww = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 'visit www.example.com today' },
+      { 'X-Forwarded-For': '203.0.113.102' }
+    );
+    assert.equal(bareWww.status, 201);
+
+    const ftpUrl = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 'grab ftp://files.example.com/x' },
+      { 'X-Forwarded-For': '203.0.113.103' }
+    );
+    assert.equal(ftpUrl.status, 201);
+
+    const upperHttp = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 'see HTTP://EXAMPLE.COM' },
+      { 'X-Forwarded-For': '203.0.113.104' }
+    );
+    assert.equal(upperHttp.status, 400);
+    assert.equal(upperHttp.data.error, 'urls_not_allowed');
+
+    const letterHttps = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'letter', name: 'Alice', body: 'link https://x.co/page here' },
+      { 'X-Forwarded-For': '203.0.113.104' }
+    );
+    assert.equal(letterHttps.status, 400);
+    assert.equal(letterHttps.data.error, 'urls_not_allowed');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('moderation invalid_id edges: 0, -1, 1.5, string, missing; id checked before action', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const signRes = await visitor.signGuestbook('guestbook', 'Alice', 'Pending note.');
+    assert.equal(signRes.status, 201);
+    const id = signRes.data.id;
+
+    for (const badId of [0, -1, 1.5, '3', null]) {
+      const res = await admin.moderateGuestbook(badId, 'approve');
+      assert.equal(res.status, 400, `id=${JSON.stringify(badId)} should return 400`);
+      assert.equal(res.data.error, 'invalid_id');
+    }
+
+    const missingId = await admin._signedPost('/api/town/admin/guestbook', { action: 'approve' });
+    assert.equal(missingId.status, 400);
+    assert.equal(missingId.data.error, 'invalid_id');
+
+    const idBeforeAction = await admin.moderateGuestbook(0, 'archive');
+    assert.equal(idBeforeAction.status, 400);
+    assert.equal(idBeforeAction.data.error, 'invalid_id');
+
+    const approved = await admin.moderateGuestbook(id, 'approve');
+    assert.equal(approved.status, 200);
+    assert.deepEqual(approved.data, { id, status: 'approved' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('per-plot reject stays hidden, bumps nothing, and 409 carries the rejected status', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const s0 = await visitor.state();
+    assert.equal(s0.status, 200);
+    const seq0 = s0.data.state_seq;
+
+    const signRes = await visitor.signGuestbook('guestbook', 'Guest', 'Porch note.', 'wick');
+    assert.equal(signRes.status, 201);
+    const id = signRes.data.id;
+
+    const rejRes = await admin.moderateGuestbook(id, 'reject');
+    assert.equal(rejRes.status, 200);
+    assert.deepEqual(rejRes.data, { id, status: 'rejected' });
+
+    const s1 = await visitor.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.state_seq, seq0);
+    assert.deepEqual(s1.data.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(s1.data.guestbook_by_plot, {});
+
+    const plotGet = await visitor.getGuestbook(undefined, 'wick');
+    assert.equal(plotGet.status, 200);
+    assert.deepEqual(plotGet.data.entries, []);
+
+    const reReject = await admin.moderateGuestbook(id, 'reject');
+    assert.equal(reReject.status, 409);
+    assert.equal(reReject.data.error, 'already_decided');
+    assert.equal(reReject.data.status, 'rejected');
+
+    const approveAfterReject = await admin.moderateGuestbook(id, 'approve');
+    assert.equal(approveAfterReject.status, 409);
+    assert.equal(approveAfterReject.data.error, 'already_decided');
+    assert.equal(approveAfterReject.data.status, 'rejected');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('same-created_at tie-break orders by id DESC', async () => {
+  const ctx = await startTestServer();
+  try {
+    const baseTime = ctx.nowSec() - 100;
+    const stmt = ctx.db.prepare(
+      "INSERT INTO guestbook (kind, name, body, status, plot, created_at) VALUES ('guestbook', ?, ?, 'approved', NULL, ?)"
+    );
+    for (let i = 1; i <= 3; i++) {
+      stmt.run(`Guest ${i}`, `Message ${i}`, baseTime);
+    }
+
+    const res = await fetch(`${ctx.baseUrl}/api/town/guestbook`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.deepEqual(data.entries.map((e) => e.id), [3, 2, 1]);
+    assert.equal(data.entries[0].name, 'Guest 3');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('explicit plot:null signs at the gate; empty ?kind= means no filter; whitespace ?kind= is invalid', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const gateNull = await rawPost(ctx.baseUrl, '/api/town/guestbook', {
+      kind: 'guestbook',
+      name: 'Gate Fan',
+      body: 'Lovely gate!',
+      plot: null,
+    });
+    assert.equal(gateNull.status, 201);
+
+    const letterRes = await visitor.signGuestbook('letter', 'Reader', 'To the editor.');
+    assert.equal(letterRes.status, 201);
+
+    const app1 = await admin.moderateGuestbook(gateNull.data.id, 'approve');
+    assert.equal(app1.status, 200);
+    const app2 = await admin.moderateGuestbook(letterRes.data.id, 'approve');
+    assert.equal(app2.status, 200);
+
+    const s = await visitor.state();
+    assert.equal(s.status, 200);
+    assert.deepEqual(s.data.guestbook, { signed: 1, letters: 1 });
+    assert.deepEqual(s.data.guestbook_by_plot, {});
+
+    const gateAll = await visitor.getGuestbook();
+    assert.equal(gateAll.status, 200);
+    assert.equal(gateAll.data.entries.length, 2);
+    const gbEntry = gateAll.data.entries.find((e) => e.kind === 'guestbook');
+    assert.ok(gbEntry);
+    assert.equal(gbEntry.name, 'Gate Fan');
+
+    const wickGet = await visitor.getGuestbook(undefined, 'wick');
+    assert.equal(wickGet.status, 200);
+    assert.deepEqual(wickGet.data.entries, []);
+
+    const emptyKindRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?kind=`);
+    assert.equal(emptyKindRes.status, 200);
+    const emptyKindData = await emptyKindRes.json();
+    assert.equal(emptyKindData.entries.length, 2);
+
+    const wsKindRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?kind=%20%20`);
+    assert.equal(wsKindRes.status, 400);
+    const wsKindData = await wsKindRes.json();
+    assert.equal(wsKindData.error, 'invalid_kind');
+  } finally {
+    await ctx.close();
+  }
+});
