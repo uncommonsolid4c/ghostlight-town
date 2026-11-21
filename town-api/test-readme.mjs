@@ -247,3 +247,219 @@ test('town-api/README.md rate limits, size caps, and retention match server.mjs 
   assert.ok(readme.includes(`\`key/rotate\` \`${rotateRl.max}/h\``) && rotateRl.windowSec === 3600);
   assert.ok(readme.includes(`\`guestbook\` \`${guestbookRl.max}/h\` per IP`) && guestbookRl.windowSec === 3600);
 });
+
+test('town-api/README.md Endpoint map lists every town.json route and names eight groups', () => {
+  const readme = readReadme();
+  const townJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'town.json'), 'utf8'));
+  const endpoints = townJson.endpoints;
+  assert.equal(endpoints.length, 23);
+  assert.equal(endpoints.filter((e) => e.method === 'GET').length, 3);
+  assert.equal(endpoints.filter((e) => e.method === 'POST').length, 19);
+  assert.equal(endpoints.filter((e) => e.method === 'PUT').length, 1);
+
+  const sectionMatch = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /);
+  assert.ok(sectionMatch, 'Endpoint map section must exist');
+  const section = sectionMatch[1];
+
+  assert.ok(section.includes('eight groups:'), 'Endpoint map must name eight groups');
+  const groupBullets = [...section.matchAll(/^- \*\*[^*]+\*\*/gm)];
+  assert.equal(groupBullets.length, 8, 'Endpoint map must have 8 bold group bullets');
+
+  for (const ep of endpoints) {
+    const escapedPath = ep.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\`${ep.method} ${escapedPath}(\\?[^\`]*)?\``);
+    assert.match(section, re, `Endpoint map must list ${ep.method} ${ep.path}`);
+  }
+});
+
+test('town-api/README.md Startup migrations match server.mjs', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const sectionMatch = readme.match(/## Startup migrations\s+([\s\S]*?)\n## /);
+  assert.ok(sectionMatch, 'Startup migrations section must exist');
+  const section = sectionMatch[1];
+
+  assert.ok(section.includes('`residents.role`'));
+  assert.ok(section.includes('`prompt_book.reply_to`'));
+  assert.ok(section.includes('`guestbook.plot`'));
+  assert.ok(section.includes('`residents`'));
+
+  assert.ok(
+    serverSrc.includes(
+      "ALTER TABLE residents ADD COLUMN role TEXT NOT NULL DEFAULT 'muse' CHECK (role IN ('muse', 'npc'))"
+    ),
+    'server.mjs must add residents.role with muse/npc CHECK'
+  );
+  assert.ok(
+    serverSrc.includes('ALTER TABLE prompt_book ADD COLUMN reply_to INTEGER'),
+    'server.mjs must add prompt_book.reply_to as INTEGER'
+  );
+  assert.ok(
+    serverSrc.includes('ALTER TABLE guestbook ADD COLUMN plot TEXT'),
+    'server.mjs must add guestbook.plot as TEXT'
+  );
+  assert.ok(
+    serverSrc.includes("!residentsMaster.sql.includes(\"'direct'\")") &&
+      serverSrc.includes('CREATE TABLE residents_new'),
+    "server.mjs must rebuild residents when stored CREATE TABLE SQL lacks 'direct'"
+  );
+});
+
+test('town-api/README.md Ed25519 auth wire format matches server.mjs and ghostlight-client.mjs', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+
+  const headers = [
+    ['X-Muse-Handle', 'x-muse-handle'],
+    ['X-Muse-Timestamp', 'x-muse-timestamp'],
+    ['X-Muse-Nonce', 'x-muse-nonce'],
+    ['X-Muse-Signature', 'x-muse-signature'],
+  ];
+  for (const [wireName, lowerName] of headers) {
+    assert.ok(readme.includes(`\`${wireName}\``), `README must document ${wireName}`);
+    assert.ok(
+      serverSrc.includes(`req.headers['${lowerName}']`),
+      `server.mjs must read req.headers['${lowerName}']`
+    );
+    assert.ok(
+      clientSrc.includes(`'${wireName}':`),
+      `ghostlight-client.mjs must send '${wireName}'`
+    );
+  }
+
+  const canonical = '{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}';
+  assert.ok(readme.includes(canonical), 'README must document canonical string');
+  assert.ok(serverSrc.includes(canonical), 'server.mjs must comment canonical string');
+  assert.ok(clientSrc.includes(canonical), 'ghostlight-client.mjs must comment canonical string');
+
+  const spkiHex = '302a300506032b6570032100';
+  assert.equal(spkiHex.length, 24, 'SPKI prefix hex must be 24 chars (12 bytes)');
+  assert.ok(readme.includes(`\`${spkiHex}\``), 'README must document SPKI prefix hex');
+  assert.ok(serverSrc.includes(spkiHex), 'server.mjs must define SPKI prefix hex');
+  assert.ok(clientSrc.includes(spkiHex), 'ghostlight-client.mjs must define SPKI prefix hex');
+});
+
+test('town-api/README.md CLI quickstart lists every command ghostlight-client.mjs dispatches', () => {
+  const readme = readReadme();
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+
+  const usageMatch = clientSrc.match(/const CLI_USAGE = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(usageMatch, 'CLI_USAGE must exist in ghostlight-client.mjs');
+  const cmds = [...usageMatch[1].matchAll(/'  ([a-z-]+)\s+--/g)].map((m) => m[1]);
+  assert.deepEqual(cmds, [
+    'keygen',
+    'guest-checkin',
+    'guest-say',
+    'join',
+    'checkin',
+    'say',
+    'leave',
+    'presence',
+    'plot',
+    'getplot',
+    'state',
+  ]);
+
+  const quickstartMatch = readme.match(
+    /## `ghostlight-client\.mjs` CLI quickstart\s+```bash\n([\s\S]*?)\n```/
+  );
+  assert.ok(quickstartMatch, 'CLI quickstart bash block must exist');
+  const quickstart = quickstartMatch[1];
+
+  for (const cmd of cmds) {
+    assert.ok(
+      quickstart.includes(`ghostlight-client.mjs ${cmd}`),
+      `CLI quickstart must list command ${cmd}`
+    );
+    assert.ok(
+      clientSrc.includes(`cmd === '${cmd}'`),
+      `ghostlight-client.mjs must dispatch command ${cmd}`
+    );
+  }
+});
+
+test('town-api/README.md Backups section matches backup.mjs and backup-plots.mjs', () => {
+  const readme = readReadme();
+  const backupSrc = fs.readFileSync(path.join(__dirname, 'backup.mjs'), 'utf8');
+  const backupPlotsSrc = fs.readFileSync(path.join(__dirname, 'backup-plots.mjs'), 'utf8');
+
+  assert.ok(readme.includes('`town-YYYYMMDD-HHMMSS.db`'));
+  assert.ok(readme.includes('`plots-YYYYMMDD-HHMMSS/`'));
+  assert.ok(readme.includes('(rejecting symlinks)'));
+
+  assert.ok(backupSrc.includes('const base = `town-${timestamp}`;'));
+  assert.ok(backupSrc.includes('let candidate = `${base}.db`;'));
+  assert.ok(backupPlotsSrc.includes('const base = `plots-${timestamp}`;'));
+
+  for (const [label, src] of [
+    ['backup.mjs', backupSrc],
+    ['backup-plots.mjs', backupPlotsSrc],
+  ]) {
+    assert.ok(src.includes('getUTCFullYear()'), `${label} must use UTC year`);
+    assert.ok(src.includes("padStart(2, '0')"), `${label} must zero-pad timestamp fields`);
+    assert.ok(
+      src.includes('return `${y}${m}${d}-${hh}${mm}${ss}`;'),
+      `${label} must format timestamp as YYYYMMDD-HHMMSS`
+    );
+  }
+
+  const tablesMatch = backupSrc.match(/export const SCHEMA_TABLES = \[([\s\S]*?)\];/);
+  assert.ok(tablesMatch, 'SCHEMA_TABLES must exist in backup.mjs');
+  const codeTables = [...tablesMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const expectedTables = [
+    'residents',
+    'invitations',
+    'prompt_book',
+    'footlights',
+    'presence',
+    'key_history',
+    'meta',
+  ];
+  assert.deepEqual(codeTables, expectedTables);
+
+  const readmeTablesMatch = readme.match(/across the 7 core schema tables \(([^)]+)\)/);
+  assert.ok(readmeTablesMatch, 'README must list the 7 core schema tables');
+  const readmeTables = [...readmeTablesMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  assert.deepEqual(readmeTables, codeTables);
+
+  assert.ok(backupPlotsSrc.includes('function copyTreeNoSymlinks('));
+  assert.match(
+    backupPlotsSrc,
+    /if \(lstat\.isSymbolicLink\(\)\) \{\s*throw new Error\(`Symlink found/
+  );
+});
+
+test('town-api/README.md Rate limits line covers guest limits matching server.mjs', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  const rateVal = (key) => {
+    const m = serverSrc.match(new RegExp(`${key}:\\s*\\{\\s*max:\\s*(\\d+),\\s*windowSec:\\s*([^}]+)\\}`));
+    assert.ok(m, `Missing RATE_LIMITS.${key} in server.mjs`);
+    return {
+      max: Number(m[1]),
+      windowSec: Function(`"use strict"; return (${m[2]});`)(),
+    };
+  };
+
+  const guestCheckinRl = rateVal('guestCheckin');
+  const guestSayRl = rateVal('guestSay');
+  const guestInnRl = rateVal('guestInnClaim');
+
+  assert.equal(guestCheckinRl.max, 1);
+  assert.equal(guestCheckinRl.windowSec, 300);
+  assert.equal(guestSayRl.max, 2);
+  assert.equal(guestSayRl.windowSec, 600);
+  assert.equal(guestInnRl.max, 2);
+  assert.equal(guestInnRl.windowSec, 3600);
+  assert.equal(
+    serverSrc.includes('guestInnExtend'),
+    false,
+    'server.mjs must not have a separate guestInnExtend bucket'
+  );
+
+  assert.ok(readme.includes('`guest-checkin` `1/5 min`'));
+  assert.ok(readme.includes('`guest-say` `2/10 min`'));
+  assert.ok(readme.includes('`inn/guest/claim` & `inn/guest/extend` `2/h`'));
+});
