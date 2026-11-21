@@ -264,3 +264,142 @@ test('vendored anim-idle.json times are strictly increasing 0..2.5 and all track
     }
   }
 });
+
+test('attach-failure warning text is label-specific and carries the error message', async () => {
+  const origWarn = console.warn;
+  try {
+    const idleWarnings = [];
+    console.warn = (...args) => idleWarnings.push(args.join(' '));
+    const idleResult = await attachIdleAnimation({}, { name: 'bad-idle' }, {
+      animateFn: async () => {
+        throw new Error('missing Mixamo bones');
+      },
+    });
+    assert.equal(idleResult, null);
+    assert.equal(idleWarnings.length, 1);
+    assert.ok(idleWarnings[0].includes('[npc-animation]'));
+    assert.ok(idleWarnings[0].includes('Idle clip'));
+    assert.ok(idleWarnings[0].includes('failed to attach'));
+    assert.ok(idleWarnings[0].includes('stand-in stays still'));
+    assert.ok(idleWarnings[0].includes('missing Mixamo bones'));
+
+    const npcWarnings = [];
+    console.warn = (...args) => npcWarnings.push(args.join(' '));
+    const npcResult = await attachNpcAnimation({}, { name: 'bad-npc' }, {
+      animateFn: async () => {
+        throw new Error('no Walk clip');
+      },
+    });
+    assert.equal(npcResult, null);
+    assert.equal(npcWarnings.length, 1);
+    assert.ok(npcWarnings[0].includes('[npc-animation]'));
+    assert.ok(npcWarnings[0].includes('Idle/Walk clips'));
+    assert.ok(npcWarnings[0].includes('no Walk clip'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('attachIdleAnimation warns with the thrown value itself when a non-Error is thrown', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = await attachIdleAnimation({}, { name: 'plain-err' }, {
+      animateFn: async () => {
+        throw 'plain failure';
+      },
+    });
+    assert.equal(result, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('plain failure'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('THREE argument is ignored and animateFn return value is passed through verbatim', async () => {
+  const handle = { update() {} };
+  const group = { name: 'wick' };
+
+  assert.equal(await attachIdleAnimation(null, group, { animateFn: async () => handle }), handle);
+  assert.equal(await attachNpcAnimation(undefined, group, { animateFn: async () => handle }), handle);
+  assert.equal(await attachIdleAnimation({}, group, { animateFn: async () => undefined }), undefined);
+  assert.equal(await attachNpcAnimation({}, group, { animateFn: async () => 0 }), 0);
+});
+
+test('updateNpcAnimations passes dt through exactly in call order', () => {
+  const recorded = [];
+  const standIns = new Map([
+    ['wick', { anim: { update: (dt) => recorded.push(dt) } }],
+  ]);
+
+  updateNpcAnimations(standIns, 0);
+  updateNpcAnimations(standIns, -0.5);
+  updateNpcAnimations(standIns, 1);
+  updateNpcAnimations(standIns, 0.016);
+
+  assert.deepEqual(recorded, [0, -0.5, 1, 0.016]);
+});
+
+test('updateNpcAnimations accepts Set and generator inputs and warns per throwing handle', () => {
+  const origWarn = console.warn;
+  try {
+    const setWarnings = [];
+    const goodCalls = [];
+    console.warn = (...args) => setWarnings.push(args.join(' '));
+    const standInSet = new Set([
+      { anim: { update: () => { throw new Error('first boom'); } } },
+      { anim: { update: (dt) => goodCalls.push(dt) } },
+      { anim: { update: () => { throw new Error('second boom'); } } },
+    ]);
+    updateNpcAnimations(standInSet, 0.016);
+    assert.deepEqual(goodCalls, [0.016]);
+    assert.equal(setWarnings.length, 2);
+    assert.ok(setWarnings[0].includes('first boom'));
+    assert.ok(setWarnings[1].includes('second boom'));
+
+    const genCalls = [];
+    function* genStandIns() {
+      yield { anim: { update: (dt) => genCalls.push(dt) } };
+    }
+    updateNpcAnimations(genStandIns(), 0.033);
+    assert.deepEqual(genCalls, [0.033]);
+
+    const plainWarnings = [];
+    console.warn = (...args) => plainWarnings.push(args.join(' '));
+    const plainMap = new Map([
+      ['bad', { anim: { update: () => { throw 'plain boom'; } } }],
+    ]);
+    updateNpcAnimations(plainMap, 0.016);
+    assert.equal(plainWarnings.length, 1);
+    assert.ok(plainWarnings[0].includes('plain boom'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('vendored anim-idle.json quaternions are unit-length and staging.js uses only Idle/Walk', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-idle.json');
+  const data = JSON.parse(fs.readFileSync(clipPath, 'utf8'));
+  for (const [bone, values] of Object.entries(data.tracks)) {
+    for (let i = 0; i < values.length; i += 4) {
+      const norm = Math.hypot(values[i], values[i + 1], values[i + 2], values[i + 3]);
+      assert.ok(
+        Math.abs(norm - 1) <= 1e-3,
+        `track ${bone} quaternion at ${i / 4} has norm ${norm} outside 1e-3 of 1`
+      );
+    }
+  }
+
+  const stagingSrc = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(
+    stagingSrc.includes("import { attachNpcAnimation, updateNpcAnimations } from './npc-animation.mjs';"),
+    'staging.js must import attachNpcAnimation and updateNpcAnimations from ./npc-animation.mjs'
+  );
+  assert.equal(stagingSrc.includes('attachIdleAnimation('), false, 'staging.js must not call attachIdleAnimation(');
+  assert.ok(
+    stagingSrc.includes('attachNpcAnimation(THREE, standIn.group, { animateFn: animate })'),
+    'staging.js must pass real Polyfork animate as animateFn'
+  );
+});
