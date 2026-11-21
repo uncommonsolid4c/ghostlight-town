@@ -492,3 +492,291 @@ test('say reply_to: reply still works after target author leaves', async () => {
     await ctx.close();
   }
 });
+
+test('say body validation: empty, whitespace, over-500, and non-string bodies are 400 invalid_body and do not consume quota', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const emptyRes = await alice.say('');
+    assert.equal(emptyRes.status, 400);
+    assert.equal(emptyRes.data.error, 'invalid_body');
+    assert.equal(emptyRes.data.max, 500);
+
+    const wsRes = await alice.say('   ');
+    assert.equal(wsRes.status, 400);
+    assert.equal(wsRes.data.error, 'invalid_body');
+
+    const overRes = await alice.say('x'.repeat(501));
+    assert.equal(overRes.status, 400);
+    assert.equal(overRes.data.error, 'invalid_body');
+
+    const nonStrRes = await alice.say(123);
+    assert.equal(nonStrRes.status, 400);
+    assert.equal(nonStrRes.data.error, 'invalid_body');
+
+    const boundaryRes = await alice.say('x'.repeat(500));
+    assert.equal(boundaryRes.status, 201);
+
+    for (let i = 1; i <= 5; i++) {
+      const okRes = await alice.say(`Valid line ${i}`);
+      assert.equal(okRes.status, 201);
+    }
+
+    const rlRes = await alice.say('Seventh valid line');
+    assert.equal(rlRes.status, 429);
+    assert.equal(rlRes.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say kind validation: invalid kind is 400 invalid_kind, emote reply is accepted, and failures do not consume quota', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const shoutRes = await maren.say('Too loud', 'shout');
+    assert.equal(shoutRes.status, 400);
+    assert.equal(shoutRes.data.error, 'invalid_kind');
+
+    const emptyKindRes = await maren.say('No kind', '');
+    assert.equal(emptyKindRes.status, 400);
+    assert.equal(emptyKindRes.data.error, 'invalid_kind');
+
+    const upperKindRes = await maren.say('Wrong case', 'SAY');
+    assert.equal(upperKindRes.status, 400);
+    assert.equal(upperKindRes.data.error, 'invalid_kind');
+
+    const emoteRes = await maren.say('tends the wick', 'emote');
+    assert.equal(emoteRes.status, 201);
+    assert.equal(emoteRes.data.kind, 'emote');
+
+    const replyEmoteRes = await lampmoth.say('nods quietly', 'emote', emoteRes.data.id);
+    assert.equal(replyEmoteRes.status, 201);
+    assert.equal(replyEmoteRes.data.kind, 'emote');
+    assert.equal(replyEmoteRes.data.reply_to, emoteRes.data.id);
+
+    for (let i = 1; i <= 5; i++) {
+      const okRes = await maren.say(`Follow-up line ${i}`);
+      assert.equal(okRes.status, 201);
+    }
+
+    const rlRes = await maren.say('Seventh say by maren');
+    assert.equal(rlRes.status, 429);
+    assert.equal(rlRes.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: reply to a line outside the state window still works and only the reply surfaces', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const now = Math.floor(Date.now() / 1000);
+
+    const oldRow = ctx.db
+      .prepare("INSERT INTO prompt_book (handle, kind, body, reply_to, created_at) VALUES ('maren', 'say', 'Two days old', NULL, ?) RETURNING id")
+      .get(now - 2 * 86400);
+
+    const insertFiller = ctx.db.prepare(
+      "INSERT INTO prompt_book (handle, kind, body, reply_to, created_at) VALUES ('maren', 'say', ?, NULL, ?)"
+    );
+    for (let i = 0; i < 100; i++) {
+      insertFiller.run(`Filler ${i}`, now);
+    }
+
+    const beforeState = await maren.state();
+    assert.equal(beforeState.status, 200);
+    assert.equal(beforeState.data.prompt_book.some((e) => e.id === oldRow.id), false);
+
+    const replyRes = await maren.say('Replying to old line.', 'say', oldRow.id);
+    assert.equal(replyRes.status, 201);
+    assert.equal(replyRes.data.reply_to, oldRow.id);
+
+    const afterState = await maren.state();
+    assert.equal(afterState.status, 200);
+    const replyEntry = afterState.data.prompt_book.find((e) => e.id === replyRes.data.id);
+    assert.ok(replyEntry);
+    assert.equal(replyEntry.reply_to, oldRow.id);
+    assert.equal(afterState.data.prompt_book.some((e) => e.id === oldRow.id), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: reply to a system line and to a suspended author\'s line is accepted; suspended author cannot say', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: tomas } = await createResident(ctx, 'tomas');
+    const now = Math.floor(Date.now() / 1000);
+
+    const sysRow = ctx.db
+      .prepare("INSERT INTO prompt_book (handle, kind, body, reply_to, created_at) VALUES ('maren', 'system', 'The lanterns are lit.', NULL, ?) RETURNING id")
+      .get(now);
+
+    const sysReply = await maren.say('Replying to system line.', 'say', sysRow.id);
+    assert.equal(sysReply.status, 201);
+    assert.equal(sysReply.data.reply_to, sysRow.id);
+
+    const tomasLine = await tomas.say('A line before suspension.');
+    assert.equal(tomasLine.status, 201);
+
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = 'tomas'").run();
+
+    const tomasReply = await maren.say('Replying to suspended author.', 'say', tomasLine.data.id);
+    assert.equal(tomasReply.status, 201);
+    assert.equal(tomasReply.data.reply_to, tomasLine.data.id);
+
+    const suspendedSay = await tomas.say('Speaking while suspended.');
+    assert.equal(suspendedSay.status, 403);
+    assert.equal(suspendedSay.data.error, 'resident_not_active');
+    assert.equal(suspendedSay.data.resident_status, 'suspended');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say refreshes a lit footlight TTL but does not relight an expired one', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+
+    const checkinRes = await maren.checkin({ status_text: 'At the bandstand' });
+    assert.equal(checkinRes.status, 200);
+
+    const state1 = await maren.state();
+    assert.equal(state1.status, 200);
+    assert.ok(state1.data.footlights.some((f) => f.handle === 'maren'));
+
+    const before = Math.floor(Date.now() / 1000);
+    ctx.db.prepare('UPDATE footlights SET expires_at = ? WHERE handle = ?').run(before + 60, 'maren');
+
+    const say1 = await maren.say('Keeping the light.');
+    assert.equal(say1.status, 201);
+
+    const state2 = await maren.state();
+    assert.equal(state2.status, 200);
+    const after = Math.floor(Date.now() / 1000);
+    const fl = state2.data.footlights.find((f) => f.handle === 'maren');
+    assert.ok(fl);
+    assert.ok(fl.expires_at > before + 60, `expected expires_at > ${before + 60}, got ${fl.expires_at}`);
+    assert.ok(
+      fl.expires_at >= before + 2600 && fl.expires_at <= after + 2700,
+      `expected expires_at in [${before + 2600}, ${after + 2700}], got ${fl.expires_at}`
+    );
+
+    ctx.db
+      .prepare('UPDATE footlights SET expires_at = ? WHERE handle = ?')
+      .run(Math.floor(Date.now() / 1000) - 10, 'maren');
+
+    const say2 = await maren.say('Light is out, still speaking.');
+    assert.equal(say2.status, 201);
+
+    const state3 = await maren.state();
+    assert.equal(state3.status, 200);
+    assert.equal(state3.data.footlights.some((f) => f.handle === 'maren'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest say with reply_to posts as [guest] and CLI guest-say --kind/--reply-to validation', async () => {
+  const ctx = await startTestServer();
+  const keyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-cli-guest-say-'));
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const topRes = await maren.say('Open floor for guests.');
+    assert.equal(topRes.status, 201);
+    const topId = topRes.data.id;
+
+    const guestKeys1 = generateKeypair();
+    const visitor1 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor1', ...guestKeys1 });
+
+    const g1 = await visitor1.guestSay('Hello from a guest.', 'say', topId);
+    assert.equal(g1.status, 201);
+    assert.equal(g1.data.reply_to, topId);
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const guestEntry = stateRes.data.prompt_book.find((e) => e.id === g1.data.id);
+    assert.ok(guestEntry);
+    assert.equal(guestEntry.role, 'guest');
+    assert.equal(guestEntry.reply_to, topId);
+
+    const g2 = await visitor1.guestSay('waves', 'emote', topId);
+    assert.equal(g2.status, 201);
+    assert.equal(g2.data.kind, 'emote');
+    assert.equal(g2.data.reply_to, topId);
+
+    const gBad = await visitor1.guestSay('Reply to nothing.', 'say', 99999);
+    assert.equal(gBad.status, 400);
+    assert.equal(gBad.data.error, 'invalid_reply_to');
+
+    const keyPath1 = path.join(keyDir, 'visitor1.pem');
+    fs.writeFileSync(keyPath1, guestKeys1.privateKeyPem, { mode: 0o600 });
+
+    const badKind = await runCliAsync([
+      'guest-say',
+      '--api-base',
+      ctx.baseUrl,
+      '--handle',
+      'visitor1',
+      '--key',
+      keyPath1,
+      '--body',
+      'Bad kind',
+      '--kind',
+      'shout',
+    ]);
+    assert.equal(badKind.status, 2);
+
+    const badReply = await runCliAsync([
+      'guest-say',
+      '--api-base',
+      ctx.baseUrl,
+      '--handle',
+      'visitor1',
+      '--key',
+      keyPath1,
+      '--body',
+      'Bad reply',
+      '--reply-to',
+      'abc',
+    ]);
+    assert.equal(badReply.status, 2);
+
+    const guestKeys2 = generateKeypair();
+    const keyPath2 = path.join(keyDir, 'visitor2.pem');
+    fs.writeFileSync(keyPath2, guestKeys2.privateKeyPem, { mode: 0o600 });
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        'guest-say',
+        '--api-base',
+        ctx.baseUrl,
+        '--handle',
+        'visitor2',
+        '--key',
+        keyPath2,
+        '--body',
+        'CLI guest reply',
+        '--reply-to',
+        String(topId),
+      ],
+      { encoding: 'utf8' }
+    );
+    const parsed = JSON.parse(stdout.trim());
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.status, 201);
+    assert.equal(parsed.data.reply_to, topId);
+  } finally {
+    fs.rmSync(keyDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
