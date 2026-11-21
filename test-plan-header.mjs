@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { collectSourceFilesFromTown3d } from './scripts/stage-deploy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLAN_PATH = path.join(__dirname, 'PLAN.md');
@@ -15,6 +16,8 @@ const RUN_TESTS_PATH = path.join(__dirname, 'run-tests.mjs');
 const TOWN3D_HTML_PATH = path.join(__dirname, 'town-3d', 'index.html');
 const STAGING_HTML_PATH = path.join(__dirname, 'staging-polyfork', 'index.html');
 const STAGE_TEST_PATH = path.join(__dirname, 'scripts', 'test-stage-deploy.mjs');
+const CHECK_LIVE_PATH = path.join(__dirname, 'scripts', 'check-live.mjs');
+const TOWN3D_DIR = path.join(__dirname, 'town-3d');
 const RETIRED_TERM = 'camp' + 'fire';
 
 function readPlanHeader() {
@@ -126,8 +129,8 @@ test('PLAN.md header TOTAL snapshot matches latest §8 entry and run-tests.mjs s
 
 test('PLAN.md header town-3d/ fallback town.js?v= matches town-3d/index.html', () => {
   const { statusLine } = readPlanHeader();
-  const headerVMatch = statusLine.match(/`town\.js\?v=(\d+)`\s*\/\s*24 files/);
-  assert.ok(headerVMatch, 'PLAN.md **Status:** must state `town.js?v=<N>` / 24 files');
+  const headerVMatch = statusLine.match(/`town\.js\?v=(\d+)`\s*\/\s*\d+ files/);
+  assert.ok(headerVMatch, 'PLAN.md **Status:** must state `town.js?v=<N>` / <count> files');
 
   const town3dHtml = fs.readFileSync(TOWN3D_HTML_PATH, 'utf8');
   const htmlVMatch = town3dHtml.match(/\.\/town\.js\?v=(\d+)/);
@@ -219,4 +222,113 @@ test('PLAN.md **Planned with:** and **Owner:** header lines pin model, session, 
   assert.ok(ownerLine, 'PLAN.md must have an **Owner:** header line');
   assert.ok(ownerLine.includes('Milo'), 'PLAN.md **Owner:** must name Milo');
   assert.ok(ownerLine.includes('Werther'), 'PLAN.md **Owner:** must name Werther');
+});
+
+test('PLAN.md header live staging.js?v= agrees with README Status and latest §8 live-check record', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const headerMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
+  assert.ok(headerMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
+
+  const readmeStatus = readReadmeStatusSection();
+  const readmeMatch = readmeStatus.match(/serving `staging\.js\?v=(\d+)`/);
+  assert.ok(readmeMatch, 'README.md ## Status must state serving `staging.js?v=<N>`');
+
+  const sec8 = readSection8(planText);
+  const sec8Matches = [...sec8.matchAll(/live\s+`?\?v=(\d+)/g)];
+  assert.ok(sec8Matches.length > 0, 'PLAN.md §8 must contain at least one live `?v=<N>` record');
+  const latestSec8V = sec8Matches[sec8Matches.length - 1][1];
+
+  assert.equal(headerMatch[1], readmeMatch[1], 'PLAN.md header live staging.js?v= must match README.md ## Status');
+  assert.equal(headerMatch[1], latestSec8V, 'PLAN.md header live staging.js?v= must match latest §8 live-check record');
+});
+
+test('PLAN.md header town-3d/ fallback file count equals real stage-deploy count', async () => {
+  const { statusLine } = readPlanHeader();
+  const countMatch = statusLine.match(/`town\.js\?v=\d+`\s*\/\s*(\d+)\s+files/);
+  assert.ok(countMatch, 'PLAN.md **Status:** must state `town.js?v=<N>` / <count> files');
+  const headerCount = Number(countMatch[1]);
+
+  const { files } = await collectSourceFilesFromTown3d(TOWN3D_DIR);
+  assert.equal(
+    headerCount,
+    files.length,
+    `PLAN.md **Status:** town-3d file count (${headerCount}) must equal collectSourceFilesFromTown3d count (${files.length})`
+  );
+  assert.ok(
+    files.some((f) => f.relPath === 'guestbook/index.html'),
+    'town-3d staged file list must include guestbook/index.html'
+  );
+});
+
+test('PLAN.md header TOTAL is green and skipped=3 is exactly the three env-gated suites', () => {
+  const { statusLine } = readPlanHeader();
+  const totalMatch = statusLine.match(/TOTAL pass=(\d+) fail=(\d+) skipped=(\d+) suites=(\d+)/);
+  assert.ok(totalMatch, 'PLAN.md **Status:** must include TOTAL pass=... fail=... skipped=... suites=...');
+  const pass = Number(totalMatch[1]);
+  const fail = Number(totalMatch[2]);
+  const skipped = Number(totalMatch[3]);
+
+  assert.equal(fail, 0, 'PLAN.md **Status:** TOTAL fail must be 0');
+  assert.ok(pass > 0, 'PLAN.md **Status:** TOTAL pass must be > 0');
+  assert.equal(skipped, 3, 'PLAN.md **Status:** TOTAL skipped must be 3');
+
+  const runTestsSrc = fs.readFileSync(RUN_TESTS_PATH, 'utf8');
+  const suitesBlock = runTestsSrc.match(/const TEST_SUITES = \[([\s\S]*?)\];/);
+  assert.ok(suitesBlock, 'run-tests.mjs must define TEST_SUITES');
+  const listedSuites = [...suitesBlock[1].matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
+
+  const envGated = [
+    { rel: 'town-api/test-live-proxy.mjs', pattern: /status:\s*'skip'/ },
+    { rel: 'town-api/test-live-proxy-inn.mjs', pattern: /status:\s*'skip'/ },
+    { rel: 'town-npc/test-real-brain.mjs', pattern: /\bskip\s*:/ },
+  ];
+  for (const { rel, pattern } of envGated) {
+    assert.ok(listedSuites.includes(rel), `run-tests.mjs TEST_SUITES must list ${rel}`);
+    const src = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    assert.match(src, pattern, `${rel} must contain its skip mechanism`);
+  }
+});
+
+test('PLAN.md header slice date matches the latest §8 entry date', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const headerDateMatch = statusLine.match(/built through slice \d+\s*\((\d{4}-\d{2}-\d{2})\)/);
+  assert.ok(headerDateMatch, 'PLAN.md **Status:** must state built through slice <N> (<YYYY-MM-DD>)');
+
+  const { latestLine } = readLatestSliceEntry(planText);
+  const sec8DateMatch = latestLine.match(/(\d{4}-\d{2}-\d{2})/);
+  assert.ok(sec8DateMatch, 'Latest §8 entry must include a YYYY-MM-DD date');
+  assert.equal(headerDateMatch[1], sec8DateMatch[1], 'PLAN.md header slice date must match latest §8 entry date');
+});
+
+test('PLAN.md header live URL agrees with README Status and check-live.mjs DEFAULT_BASE', () => {
+  const { statusLine } = readPlanHeader();
+  const headerUrlMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=\d+`\s*\(`(https:\/\/[^`]+)`/);
+  assert.ok(headerUrlMatch, 'PLAN.md **Status:** must include live URL in backticks');
+
+  const readmeStatus = readReadmeStatusSection();
+  const readmeUrlMatch = readmeStatus.match(/\*\*3D clearing:\*\* live at <(https:\/\/[^>]+)>/);
+  assert.ok(readmeUrlMatch, 'README.md ## Status 3D clearing bullet must include live URL');
+
+  const checkLiveSrc = fs.readFileSync(CHECK_LIVE_PATH, 'utf8');
+  const baseMatch = checkLiveSrc.match(/const DEFAULT_BASE = '([^']+)';/);
+  assert.ok(baseMatch, 'scripts/check-live.mjs must define DEFAULT_BASE');
+
+  assert.equal(headerUrlMatch[1], readmeUrlMatch[1], 'PLAN.md header live URL must match README.md ## Status');
+  assert.ok(
+    headerUrlMatch[1].startsWith(`${baseMatch[1]}/ghostlight-town/`),
+    `PLAN.md header live URL must start with ${baseMatch[1]}/ghostlight-town/`
+  );
+});
+
+test('PLAN.md header deploy-candidate pin agrees with README Status', () => {
+  const { statusLine } = readPlanHeader();
+  const headerCandMatch = statusLine.match(/`(\?v=\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
+  assert.ok(headerCandMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
+
+  const readmeStatus = readReadmeStatusSection();
+  const readmeCandMatch = readmeStatus.match(/`(\?v=\d+)`\s*\/\s*(\d+)-file\s+bundle\s+is\s+the\s+next\s+repo-only\s+deploy\s+candidate/);
+  assert.ok(readmeCandMatch, 'README.md ## Status must state `?v=<N>` / <count>-file bundle deploy candidate');
+
+  assert.equal(headerCandMatch[1], readmeCandMatch[1], 'Deploy-candidate ?v= must match between PLAN.md and README.md');
+  assert.equal(headerCandMatch[2], readmeCandMatch[2], 'Deploy-candidate file count must match between PLAN.md and README.md');
 });
