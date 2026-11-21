@@ -444,3 +444,208 @@ test('three backups in the same second get distinct -2 and -3 suffixes', async (
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+function formatUtcTimestampLocal(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const y = date.getUTCFullYear();
+  const m = pad(date.getUTCMonth() + 1);
+  const d = pad(date.getUTCDate());
+  const hh = pad(date.getUTCHours());
+  const mm = pad(date.getUTCMinutes());
+  const ss = pad(date.getUTCSeconds());
+  return `${y}${m}${d}-${hh}${mm}${ss}`;
+}
+
+test('-h is identical to --help, and --help short-circuits by argument order', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const resHelp = await runBackupPlotsCli(['--help']);
+    assert.equal(resHelp.code, 0);
+    const resShort = await runBackupPlotsCli(['-h']);
+    assert.equal(resShort.code, 0);
+    assert.equal(resShort.stdout, resHelp.stdout);
+    assert.match(resHelp.stdout, /--plots-dir/);
+    assert.match(resHelp.stdout, /--out-dir/);
+    assert.match(resShort.stdout, /--plots-dir/);
+    assert.match(resShort.stdout, /--out-dir/);
+
+    const plotsDir = path.join(tmpDir, 'plots');
+    seedPlotsDir(plotsDir);
+    const resFlagBeforeHelp = await runBackupPlotsCli(['--plots-dir', plotsDir, '--help']);
+    assert.equal(resFlagBeforeHelp.code, 0);
+    assert.match(resFlagBeforeHelp.stdout, /--plots-dir/);
+
+    const resBogusBeforeHelp = await runBackupPlotsCli(['--bogus', '--help']);
+    assert.equal(resBogusBeforeHelp.code, 1);
+    assert.equal(resBogusBeforeHelp.stdout.trim(), '');
+    const errLines = resBogusBeforeHelp.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1);
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, 'Unknown argument: --bogus');
+
+    const resHelpBeforeBogus = await runBackupPlotsCli(['--help', '--bogus']);
+    assert.equal(resHelpBeforeBogus.code, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('TOWN_PLOTS_DIR env default is used, and an explicit --plots-dir flag overrides it', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const envDir = path.join(tmpDir, 'env-plots');
+    const flagDir = path.join(tmpDir, 'flag-plots');
+    const outDir1 = path.join(tmpDir, 'out-env');
+    const outDir2 = path.join(tmpDir, 'out-flag');
+
+    seedPlotsDir(envDir);
+    fs.mkdirSync(path.join(envDir, 'envonly'), { recursive: true });
+    fs.writeFileSync(path.join(envDir, 'envonly', 'x.txt'), 'env', 'utf8');
+    seedPlotsDir(flagDir);
+
+    const resEnv = await runBackupPlotsCli(['--out-dir', outDir1], { TOWN_PLOTS_DIR: envDir });
+    assert.equal(resEnv.code, 0, `Expected exit 0, got ${resEnv.code}: ${resEnv.stderr}`);
+    const payloadEnv = JSON.parse(resEnv.stdout.trim());
+    assert.deepEqual(payloadEnv.handles, ['alpha', 'envonly', 'zeta']);
+    assert.equal(payloadEnv.files, 6);
+
+    const resFlag = await runBackupPlotsCli(['--plots-dir', flagDir, '--out-dir', outDir2], {
+      TOWN_PLOTS_DIR: envDir,
+    });
+    assert.equal(resFlag.code, 0, `Expected exit 0, got ${resFlag.code}: ${resFlag.stderr}`);
+    const payloadFlag = JSON.parse(resFlag.stdout.trim());
+    assert.deepEqual(payloadFlag.handles, ['alpha', 'zeta']);
+    assert.equal(payloadFlag.files, 5);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('the snapshot timestamp is the current UTC second', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'backups');
+    seedPlotsDir(plotsDir);
+
+    const before = Date.now();
+    const res = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    const after = Date.now();
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const match = payload.backup.match(/^plots-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+    assert.ok(match, `Unexpected backup name: ${payload.backup}`);
+    const [, y, m, d, hh, mm, ss] = match;
+    const tsMs = Date.UTC(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
+    assert.ok(tsMs >= before - 1000 && tsMs <= after + 1000, `tsMs ${tsMs} outside [${before - 1000}, ${after + 1000}]`);
+    assert.ok(Math.abs(tsMs - Date.now()) <= 2000, `tsMs ${tsMs} too far from now`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--plots-dir and --out-dir being the same path exits 1 with a JSON error and creates no snapshot', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    seedPlotsDir(plotsDir);
+    const beforeEntries = fs.readdirSync(plotsDir);
+
+    const res = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', plotsDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1);
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, 'Output directory and plots directory must not contain each other');
+    assert.equal(errPayload.plotsDir, plotsDir);
+    assert.equal(errPayload.outDir, plotsDir);
+    assert.deepEqual(fs.readdirSync(plotsDir), beforeEntries);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup fidelity: a binary file, a 3-level nested file, and an empty handle dir all survive exactly', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'backups');
+    const seeded = seedPlotsDir(plotsDir);
+
+    fs.writeFileSync(path.join(plotsDir, 'alpha', 'blob.bin'), crypto.randomBytes(1024));
+    fs.mkdirSync(path.join(plotsDir, 'gamma', 'deep', 'deeper'), { recursive: true });
+    fs.writeFileSync(path.join(plotsDir, 'gamma', 'deep', 'deeper', 'note.txt'), 'nested note', 'utf8');
+    fs.mkdirSync(path.join(plotsDir, 'delta'), { recursive: true });
+
+    const res = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.files, 7);
+    assert.deepEqual(payload.handles, ['alpha', 'delta', 'gamma', 'zeta']);
+
+    const snapshotDir = path.join(outDir, payload.backup);
+    assert.equal(
+      sha256File(path.join(snapshotDir, 'alpha', 'blob.bin')),
+      sha256File(path.join(plotsDir, 'alpha', 'blob.bin'))
+    );
+    assert.equal(
+      sha256File(path.join(snapshotDir, 'gamma', 'deep', 'deeper', 'note.txt')),
+      sha256File(path.join(plotsDir, 'gamma', 'deep', 'deeper', 'note.txt'))
+    );
+    const deltaSnap = path.join(snapshotDir, 'delta');
+    assert.ok(fs.existsSync(deltaSnap));
+    assert.ok(fs.statSync(deltaSnap).isDirectory());
+    assert.deepEqual(fs.readdirSync(deltaSnap), []);
+
+    for (const relPath of Object.keys(seeded)) {
+      assert.equal(
+        sha256File(path.join(snapshotDir, relPath)),
+        sha256File(path.join(plotsDir, relPath)),
+        `sha256 mismatch for ${relPath}`
+      );
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('pre-created snapshot dirs with the current timestamp force the -2 suffix', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-plots-backup-'));
+  try {
+    const plotsDir = path.join(tmpDir, 'plots');
+    const outDir = path.join(tmpDir, 'backups');
+    seedPlotsDir(plotsDir);
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const msIntoSecond = Date.now() % 1000;
+    if (msIntoSecond > 250) {
+      await new Promise((r) => setTimeout(r, 1000 - msIntoSecond + 15));
+    }
+
+    const now = new Date();
+    const ts0 = formatUtcTimestampLocal(now);
+    const ts1 = formatUtcTimestampLocal(new Date(now.getTime() + 1000));
+    const pre0 = path.join(outDir, `plots-${ts0}`);
+    const pre1 = path.join(outDir, `plots-${ts1}`);
+    fs.mkdirSync(pre0);
+    fs.mkdirSync(pre1);
+
+    const res = await runBackupPlotsCli(['--plots-dir', plotsDir, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.ok(payload.backup.endsWith('-2'), `Expected -2 suffix, got ${payload.backup}`);
+    assert.equal(payload.files, 5);
+    assert.ok(fs.existsSync(path.join(outDir, payload.backup, 'alpha', 'manifest.json')));
+    assert.equal(fs.readdirSync(pre0).length, 0);
+    assert.equal(fs.readdirSync(pre1).length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
