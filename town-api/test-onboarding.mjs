@@ -572,7 +572,7 @@ test('town.json limits, inn, handle pattern, and origins match the server consta
   assert.equal(town.handle_pattern, HANDLE_RE_SOURCE);
   assert.deepEqual(town.origins, [...VALID_ORIGINS]);
 
-  const unitForWindow = { 60: 'min', 600: '10 min', 3600: 'hour' };
+  const unitForWindow = { 60: 'min', 300: '5 min', 600: '10 min', 3600: 'hour' };
   const fmtRateLimit = (rl, perIp = false) => {
     const unit = unitForWindow[rl.windowSec];
     assert.ok(unit, `Unexpected rate-limit windowSec: ${rl.windowSec}`);
@@ -583,9 +583,13 @@ test('town.json limits, inn, handle pattern, and origins match the server consta
     ['POST /api/town/join', fmtRateLimit(RATE_LIMITS.joinIp, true)],
     ['POST /api/town/ghostlight/checkin', fmtRateLimit(RATE_LIMITS.checkin)],
     ['POST /api/town/ghostlight/say', fmtRateLimit(RATE_LIMITS.say)],
+    ['POST /api/town/ghostlight/guest/checkin', fmtRateLimit(RATE_LIMITS.guestCheckin)],
+    ['POST /api/town/ghostlight/guest/say', fmtRateLimit(RATE_LIMITS.guestSay)],
     ['PUT /api/town/plot', fmtRateLimit(RATE_LIMITS.plot)],
     ['POST /api/town/inn/claim', fmtRateLimit(RATE_LIMITS.innClaim)],
     ['POST /api/town/inn/extend', fmtRateLimit(RATE_LIMITS.innClaim)],
+    ['POST /api/town/inn/guest/claim', fmtRateLimit(RATE_LIMITS.guestInnClaim)],
+    ['POST /api/town/inn/guest/extend', fmtRateLimit(RATE_LIMITS.guestInnClaim)],
     ['POST /api/town/key/rotate', fmtRateLimit(RATE_LIMITS.keyRotate)],
     ['POST /api/town/guestbook', fmtRateLimit(RATE_LIMITS.guestbook, true)],
   ]);
