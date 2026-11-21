@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -51,12 +52,12 @@ async function startTestServer() {
   };
 }
 
-function runRegisterCli(args, cwd = os.tmpdir()) {
+function runRegisterCli(args, cwd = os.tmpdir(), env = {}) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
       [REGISTER_SCRIPT, ...args],
-      { cwd, env: { ...process.env, TOWN_API_BASE: '', TOWN_OPERATOR_KEY: '' } },
+      { cwd, env: { ...process.env, TOWN_API_BASE: '', TOWN_OPERATOR_KEY: '', ...env } },
       (err, stdout, stderr) => {
         resolve({
           code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
@@ -476,5 +477,196 @@ test('already-joined-but-unapproved resident registers as existing and strips tr
   } finally {
     await ctx.close();
     fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('env fallbacks work, and flags override env', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const env = {
+      TOWN_API_BASE: ctx.baseUrl,
+      TOWN_OPERATOR_KEY: ctx.operatorKeyPath,
+    };
+    const res = await runRegisterCli(['--state-dir', stateDir, '--npc', 'wick'], os.tmpdir(), env);
+    assert.equal(res.code, 0, res.stderr);
+
+    const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].handle, 'wick');
+    assert.equal(lines[0].joined, 'created');
+    assert.equal(lines[0].approved, 'created');
+    assert.equal(lines[0].plot, 'ok');
+
+    const residents = readResidents(ctx.dbPath);
+    assert.equal(residents.length, 1);
+    assert.equal(residents[0].role, 'npc');
+    assert.equal(residents[0].status, 'active');
+
+    const overrideRes = await runRegisterCli(
+      [
+        '--api-base',
+        'http://127.0.0.1:1',
+        '--state-dir',
+        stateDir,
+        '--operator-key',
+        ctx.operatorKeyPath,
+        '--npc',
+        'maren',
+      ],
+      os.tmpdir(),
+      env
+    );
+    assert.equal(overrideRes.code, 1);
+    const errObj = JSON.parse(overrideRes.stderr.trim());
+    assert.equal(errObj.ok, false);
+    assert.equal(errObj.error, 'API unreachable: fetch failed');
+    assert.equal(errObj.api_base, 'http://127.0.0.1:1');
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('probe HTTP failure fails cleanly with JSON error and creates no state dir', async () => {
+  const ctx = await startTestServer();
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      `${ctx.baseUrl}/wrong`,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.equal(errObj.ok, false);
+    assert.equal(errObj.error, 'API probe failed with HTTP 404');
+    assert.equal(errObj.status, 404);
+    assert.equal(errObj.api_base, `${ctx.baseUrl}/wrong`);
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('default --state-dir is ./npc_state under cwd', async () => {
+  const ctx = await startTestServer();
+  const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-cwd-'));
+  try {
+    const res = await runRegisterCli(
+      ['--api-base', ctx.baseUrl, '--operator-key', ctx.operatorKeyPath, '--npc', 'maren'],
+      cwdDir
+    );
+    assert.equal(res.code, 0, res.stderr);
+
+    const keyPath = path.join(cwdDir, 'npc_state', 'maren', 'key.pem');
+    const pubkeyPath = path.join(cwdDir, 'npc_state', 'maren', 'pubkey.txt');
+    assert.ok(fs.existsSync(keyPath));
+    assert.ok(fs.existsSync(pubkeyPath));
+    assert.equal(fs.readFileSync(pubkeyPath, 'utf8').trim().length, 44);
+    assert.equal(fs.statSync(keyPath).mode & 0o777, 0o600);
+  } finally {
+    await ctx.close();
+    fs.rmSync(cwdDir, { recursive: true, force: true });
+  }
+});
+
+test('partial idempotency: wick first, then all three; output shape pinned', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const first = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+
+    const second = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(second.stdout.includes('BEGIN'), false);
+    assert.equal(second.stdout.includes('PRIVATE'), false);
+
+    const lines = second.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(lines.length, 3);
+    assert.deepEqual(
+      lines.map((l) => l.handle),
+      ['wick', 'maren', 'tomas']
+    );
+    assert.equal(lines[0].joined, 'existing');
+    assert.equal(lines[0].approved, 'existing');
+    assert.equal(lines[1].joined, 'created');
+    assert.equal(lines[1].approved, 'created');
+    assert.equal(lines[2].joined, 'created');
+    assert.equal(lines[2].approved, 'created');
+
+    const expectedKeys = ['handle', 'joined', 'approved', 'plot', 'pubkey'].sort();
+    for (const row of lines) {
+      assert.equal(row.plot, 'ok');
+      assert.deepEqual(Object.keys(row).sort(), expectedKeys);
+    }
+
+    const residents = readResidents(ctx.dbPath);
+    assert.equal(residents.length, 3);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('flag with no value is a usage error', async () => {
+  for (const flag of ['--npc', '--api-base', '--operator-key']) {
+    const res = await runRegisterCli([flag]);
+    assert.equal(res.code, 1);
+    assert.ok(
+      res.stderr.includes(`Unknown or incomplete argument: ${flag}`),
+      `unexpected stderr for ${flag}: ${res.stderr}`
+    );
+  }
+});
+
+test('RSA operator key fails at approve: 401 invalid_signature, no residents', async () => {
+  const ctx = await startTestServer();
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const rsaKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const rsaKeyPath = path.join(ctx.tmpDir, 'rsa-operator.pem');
+  fs.writeFileSync(rsaKeyPath, rsaKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      rsaKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.deepEqual(errObj, { ok: false, error: 'invalid_signature', status: 401, handle: 'wick' });
+    assert.deepEqual(readResidents(ctx.dbPath), []);
+    assert.ok(fs.existsSync(path.join(stateDir, 'wick', 'key.pem')));
+  } finally {
+    await ctx.close();
   }
 });
