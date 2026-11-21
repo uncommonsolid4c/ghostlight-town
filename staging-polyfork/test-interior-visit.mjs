@@ -583,3 +583,246 @@ test('interior-visit.mjs contains no campfire term, fetch(, Math.random, or DOM 
   assert.equal(src.includes('Math.random'), false, 'Must not contain Math.random');
   assert.equal(/\b(document|window)\b/.test(src), false, 'Must not access DOM globals');
 });
+
+test('isDoorHit named door wins outside the rect, walk stops at the cottage root, and missing point', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  cottage.userData = { clickable: true, kind: 'cottage', handle: 'ada' };
+
+  const door = new THREE.Group();
+  door.name = 'door';
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 0.1), {});
+  leaf.name = 'door-leaf';
+  door.add(leaf);
+  cottage.add(door);
+
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 3.2), {});
+  wall.name = 'cottage-wall';
+  cottage.add(wall);
+
+  // Named door / door-leaf wins even when hit.point is far outside the local rect
+  assert.equal(isDoorHit(cottage, { object: leaf, point: makeVec3(5, 9, 9) }), true);
+  assert.equal(isDoorHit(cottage, { object: door, point: makeVec3(5, 9, 9) }), true);
+
+  // Detached door subtree (never added to cottage): the ancestor-name check does
+  // not verify attachment; staging.js only ever raycasts the cottage's own
+  // subtree, so this is a documented seam, not a bug.
+  const detachedDoor = new THREE.Group();
+  detachedDoor.name = 'door';
+  const detachedLeaf = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 0.1), {});
+  detachedLeaf.name = 'door-leaf';
+  detachedDoor.add(detachedLeaf);
+  const stubCottage = { userData: { handle: 'ada' } };
+  assert.equal(isDoorHit(stubCottage, { object: detachedLeaf, point: { x: 5, y: 1, z: 1.7 } }), true);
+
+  // Ancestor walk stops at the cottage root
+  const outerDoorParent = new THREE.Group();
+  outerDoorParent.name = 'door';
+  outerDoorParent.add(cottage);
+  assert.equal(isDoorHit(cottage, { object: wall, point: makeVec3(5, 1, 1.7) }), false);
+
+  // Missing hit.point: named door wins, non-door fails, non-door with in-rect point passes
+  assert.equal(isDoorHit(cottage, { object: leaf }), true);
+  assert.equal(isDoorHit(cottage, { object: wall }), false);
+  assert.equal(isDoorHit(cottage, { object: wall, point: makeVec3(0, 1, 1.6) }), true);
+});
+
+test('isDoorHit local-rect exact boundaries for kit and Milo cottages', () => {
+  const kitStub = { userData: { handle: 'ada' } };
+  const hitObj = {};
+
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0.6, y: 1, z: 1.6 } }), true);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: -0.6, y: 1, z: 1.6 } }), true);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0.61, y: 1, z: 1.6 } }), false);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: -0.61, y: 1, z: 1.6 } }), false);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 0, z: 1.6 } }), true);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 2.1, z: 1.6 } }), true);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 2.11, z: 1.6 } }), false);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: -0.01, z: 1.6 } }), false);
+
+  // IEEE-754 float seam: 1.60 - 0.2 evaluates to 1.4000000000000001 in doubles,
+  // so literal 1.40 sits 1 ULP below the computed threshold and returns false.
+  const kitZ = 1.60 - 0.2;
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 1, z: 1.40 } }), false);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 1, z: kitZ } }), true);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 1, z: kitZ - 1e-9 } }), false);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 1, z: 1.39 } }), false);
+
+  const miloStub = { userData: { handle: 'milo' } };
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1, z: 1.50 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1, z: 1.49 } }), false);
+  assert.equal(isDoorHit(kitStub, { object: hitObj, point: { x: 0, y: 1, z: 1.49 } }), true);
+});
+
+test('rayHitsInteriorDoor plane and boundary edges plus degenerate inputs', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.5, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(rayHitsInteriorDoor(room, { x: -0.5, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.51, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), false);
+
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 0, z: 0.9 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 2.0, z: 0.9 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 2.01, z: 0.9 }, { x: 0, y: 0, z: 1 }), false);
+
+  // Origin on plane (t = 0) and beyond plane (t < 0)
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 1.44 }, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 1.5 }, { x: 0, y: 0, z: 1 }), false);
+
+  // Degenerate and non-unit inputs
+  assert.equal(rayHitsInteriorDoor(room, { x: NaN, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: Infinity }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1e-10 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 2 }), true);
+
+  // Rising ray overshoots lintel (hit y = 1.9 + 0.54 = 2.44 > 2.0)
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.9, z: 0.9 }, { x: 0, y: 1, z: 1 }), false);
+
+  // Rotated 180 deg: world +z points into room -z
+  const rotatedRoom = buildInteriorRoom(THREE);
+  rotatedRoom.rotation.y = Math.PI;
+  assert.equal(rayHitsInteriorDoor(rotatedRoom, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), false);
+});
+
+test('lookBy yaw accumulates across calls, drag-left mirrors, diagonal clamps pitch, and lookAt call counts', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const cottage = new THREE.Group();
+  cottage.userData = { handle: 'milo' };
+
+  assert.equal(visit.enter(cottage), true);
+  assert.equal(camera.lookAtCalls.length, 1);
+
+  assert.equal(visit.lookBy(100, 0), true);
+  assert.equal(visit.lookBy(100, 0), true);
+  assert.equal(camera.lookAtCalls.length, 3);
+
+  const dist = Math.sqrt(5);
+  const pitch0 = Math.asin(-0.4 / dist);
+  const expectedYawOnlyX = -Math.sin(-1.0) * Math.cos(pitch0) * dist;
+  const expectedYawOnlyY = 1.55 + Math.sin(pitch0) * dist;
+  const expectedYawOnlyZ = 0.9 - Math.cos(-1.0) * Math.cos(pitch0) * dist;
+
+  let localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - expectedYawOnlyX) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - expectedYawOnlyY) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - expectedYawOnlyZ) < 1e-6);
+
+  // Exit and re-enter; drag-left mirrors drag-right; exit calls no lookAt
+  assert.equal(visit.exit(), true);
+  camera.lookAtCalls.length = 0;
+  assert.equal(visit.enter(cottage), true);
+  assert.equal(visit.lookBy(-100, 0), true);
+  assert.equal(camera.lookAtCalls.length, 2);
+
+  localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(localTarget.x > -1.1 && localTarget.x < -1.0, `expected target.x in (-1.1, -1.0), got ${localTarget.x}`);
+
+  assert.equal(visit.exit(), true);
+  assert.equal(camera.lookAtCalls.length, 2);
+
+  // Re-enter and drag diagonally with pitch clamped to +0.6
+  assert.equal(visit.enter(cottage), true);
+  assert.equal(visit.lookBy(200, -20000), true);
+
+  const clampedPitch = 0.6;
+  const expectedDiagX = -Math.sin(-1.0) * Math.cos(clampedPitch) * dist;
+  const expectedDiagY = 1.55 + Math.sin(clampedPitch) * dist;
+  const expectedDiagZ = 0.9 - Math.cos(-1.0) * Math.cos(clampedPitch) * dist;
+
+  localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - expectedDiagX) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - expectedDiagY) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - expectedDiagZ) < 1e-6);
+});
+
+test('enter and exit edge cases: null cottage, missing deps, rotation-less cottage, omitted optional deps, double exit, re-enter moves room', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  assert.equal(visit.enter(null), false);
+  assert.equal(visit.enter(undefined), false);
+  assert.equal(visit.isInside(), false);
+
+  const cottage = new THREE.Group();
+  cottage.userData = { handle: 'milo' };
+
+  assert.equal(createInteriorVisit({ room: undefined, camera, controls }).enter(cottage), false);
+  assert.equal(createInteriorVisit({ room, camera: undefined, controls }).enter(cottage), false);
+  assert.equal(createInteriorVisit({ room, camera, controls: undefined }).enter(cottage), false);
+
+  // Rotation-less cottage resets room.rotation.y to 0
+  room.rotation.y = 0.9;
+  const stubCottage = { userData: { handle: 'ada' }, position: makeVec3(3, 0.5, -4) };
+  assert.equal(visit.enter(stubCottage), true);
+  assert.equal(room.rotation.y, 0);
+  assert.equal(room.position.x, 3);
+  assert.equal(visit.exit(), true);
+
+  // Omitted optional deps (setVisible, setPalette, setDressing)
+  const freshRoom = buildInteriorRoom(THREE);
+  const backWall = freshRoom.children.find((m) => m.name === 'interior_wall_back');
+  const bareVisit = createInteriorVisit({ room: freshRoom, camera, controls });
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+
+  assert.equal(bareVisit.enter(wick), true);
+  assert.equal(freshRoom.visible, false);
+  assert.equal(backWall.material.color, '#f5efe0');
+  assert.equal(bareVisit.exit(), true);
+  assert.equal(bareVisit.exit(), false);
+
+  // Full-dep visit: enter wick, exit, then re-enter milo at new pose
+  const fullBackWall = room.children.find((m) => m.name === 'interior_wall_back');
+  assert.equal(visit.enter(wick), true);
+  assert.equal(fullBackWall.material.color, '#c8922e');
+  assert.equal(visit.exit(), true);
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0.25, 4.6);
+  milo.rotation.y = Math.PI / 2;
+  assert.equal(visit.enter(milo), true);
+  assert.equal(room.position.x, 17.92);
+  assert.equal(room.position.z, 4.6);
+  assert.equal(fullBackWall.material.color, '#a8d8ea');
+  assert.equal(visit.exit(), true);
+});
+
+test('exported interior constants are frozen with exact values', async () => {
+  const { INTERIOR_EYE_LOCAL, INTERIOR_TARGET_LOCAL } = await import('./interior-visit.mjs');
+
+  assert.deepEqual(INTERIOR_EYE_LOCAL, { x: 0, y: 1.55, z: 0.9 });
+  assert.deepEqual(INTERIOR_TARGET_LOCAL, { x: 0, y: 1.15, z: -1.3 });
+  assert.equal(Object.isFrozen(INTERIOR_EYE_LOCAL), true);
+  assert.equal(Object.isFrozen(INTERIOR_TARGET_LOCAL), true);
+
+  assert.equal(INTERIOR_LOOK_SENSITIVITY, 0.005);
+  assert.equal(INTERIOR_PITCH_LIMIT, 0.6);
+
+  const dist = Math.hypot(0, 1.15 - 1.55, -1.3 - 0.9);
+  assert.ok(Math.abs(dist - Math.sqrt(5)) < 1e-12);
+  const pitch0 = Math.asin((1.15 - 1.55) / Math.sqrt(5));
+  assert.ok(Math.abs(pitch0 - -0.1798534997924783) < 1e-12);
+});
