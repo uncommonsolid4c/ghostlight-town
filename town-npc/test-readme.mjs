@@ -259,3 +259,179 @@ test('town-npc/README.md operator key is a file path, never a raw key value', ()
     'register.mjs must reject raw key values passed to --operator-key'
   );
 });
+
+test('town-npc/README.md Files-table Role column names real source artifacts', () => {
+  const readme = readReadme();
+  const expectedArtifacts = {
+    'characters.mjs': ['CHARACTERS', 'getStatusText', 'buildSystemPrompt'],
+    'stepback.mjs': ['decideTurn', 'selectReplierForLine', 'findAddressedLines'],
+    'honesty.mjs': ['checkHonesty', 'MAX_SAY_LEN'],
+    'keygen.mjs': ['key.pem', 'pubkey.txt'],
+    'register.mjs': ["role: 'npc'", 'plots'],
+    'run.mjs': ['runTurn', 'trimMemory', 'getPartOfDay', 'buildTurnPrompt'],
+    'run-all.mjs': ['stagger', 'CHARACTERS'],
+  };
+
+  for (const [file, tokens] of Object.entries(expectedArtifacts)) {
+    const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    for (const token of tokens) {
+      assert.ok(src.includes(token), `${file} must contain source artifact ${token}`);
+    }
+    const row = readme.split('\n').find((line) => line.startsWith(`| \`${file}\` |`));
+    assert.ok(row, `town-npc/README.md Files table must have a row for ${file}`);
+    assert.ok(
+      tokens.some((token) => row.includes(token)),
+      `town-npc/README.md Files-table row for ${file} must name at least one of: ${tokens.join(', ')}`
+    );
+  }
+});
+
+test('town-npc/README.md closing links resolve and PLAN.md has §6', () => {
+  const readme = readReadme();
+  const skillPath = path.join(REPO_ROOT, 'SKILL.md');
+  const planPath = path.join(REPO_ROOT, 'PLAN.md');
+
+  assert.ok(fs.existsSync(skillPath), '../SKILL.md must exist at repo root');
+  assert.ok(fs.existsSync(planPath), '../PLAN.md must exist at repo root');
+
+  const plan = fs.readFileSync(planPath, 'utf8');
+  assert.ok(plan.includes('## 6. NPC seed residents'), 'PLAN.md must contain ## 6. NPC seed residents');
+
+  const closingLines = readme.trim().split('\n').slice(-2).join(' ');
+  assert.ok(
+    closingLines.includes('[`../SKILL.md`](../SKILL.md)'),
+    'town-npc/README.md closing line must link [`../SKILL.md`](../SKILL.md)'
+  );
+  assert.ok(
+    closingLines.includes('[`../PLAN.md`](../PLAN.md) §6'),
+    'town-npc/README.md closing line must link [`../PLAN.md`](../PLAN.md) §6'
+  );
+});
+
+test('town-npc/README.md one-replier-per-line is deterministic with no Math.random', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('at most one neighbor'), 'README must state at most one neighbor');
+  assert.ok(readme.includes('deterministic rotation'), 'README must state deterministic rotation');
+  assert.ok(readme.includes('no `Math.random`'), 'README must state no `Math.random`');
+
+  const stepbackSrc = fs.readFileSync(path.join(__dirname, 'stepback.mjs'), 'utf8');
+  assert.match(stepbackSrc, /export function selectReplierForLine\(/, 'stepback.mjs must export selectReplierForLine');
+  assert.ok(stepbackSrc.includes('plot:'), 'stepback.mjs must contain plot: presence reference');
+
+  const shippedFiles = [
+    'stepback.mjs',
+    'run.mjs',
+    'run-all.mjs',
+    'characters.mjs',
+    'honesty.mjs',
+    'keygen.mjs',
+    'register.mjs',
+  ];
+  for (const file of shippedFiles) {
+    const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    assert.ok(!src.includes('Math.random'), `${file} must not contain Math.random`);
+  }
+});
+
+test('town-npc/README.md honesty gate internals match honesty.mjs', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('denylist phrases'), 'README must state denylist phrases');
+  assert.ok(readme.includes('fabricated-attribution'), 'README must state fabricated-attribution');
+  assert.ok(readme.includes('dropped and never posted'), 'README must state dropped and never posted');
+
+  const honestySrc = fs.readFileSync(path.join(__dirname, 'honesty.mjs'), 'utf8');
+  assert.match(
+    honestySrc,
+    /export const HONESTY_DENYLIST = \[\s*[^\]\s]/,
+    'honesty.mjs must export a non-empty HONESTY_DENYLIST array literal'
+  );
+  assert.match(honestySrc, /export function checkHonesty\(/, 'honesty.mjs must export checkHonesty');
+  assert.match(honestySrc, /function extractAttributions\(/, 'honesty.mjs must define extractAttributions');
+  assert.ok(honestySrc.includes('unverified_attribution'), 'honesty.mjs must contain unverified_attribution');
+});
+
+test('town-npc/README.md register flow and state-dir layout match register.mjs, keygen.mjs, and run.mjs', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('`/api/town/state`'), 'README step 1 must state `/api/town/state`');
+  assert.ok(readme.includes('never overwrites an existing one'), 'README step 1 must state never overwrites an existing one');
+  assert.ok(readme.includes("approves `role: 'npc'`"), "README step 1 must state approves `role: 'npc'`");
+  assert.ok(readme.includes('PUTs `plots/<handle>/`'), 'README step 1 must state PUTs `plots/<handle>/`');
+
+  const registerSrc = fs.readFileSync(path.join(__dirname, 'register.mjs'), 'utf8');
+  assert.ok(
+    registerSrc.includes('fetch(`${apiBase}/api/town/state`)'),
+    'register.mjs must probe fetch(`${apiBase}/api/town/state`)'
+  );
+  assert.ok(registerSrc.includes('client.join({ origin:'), 'register.mjs must call client.join({ origin:');
+  assert.ok(
+    registerSrc.includes("body: { handle, role: 'npc' }"),
+    "register.mjs must approve with body: { handle, role: 'npc' }"
+  );
+  assert.ok(registerSrc.includes('client.plot(manifest, html)'), 'register.mjs must call client.plot(manifest, html)');
+  assert.ok(registerSrc.includes('plot PUT failed'), 'register.mjs must include plot PUT failed message');
+  assert.ok(
+    registerSrc.includes('ensureKeypair({ handle, stateDir, allowExisting: true })'),
+    'register.mjs must reuse keypair via ensureKeypair({ handle, stateDir, allowExisting: true })'
+  );
+
+  const keygenSrc = fs.readFileSync(path.join(__dirname, 'keygen.mjs'), 'utf8');
+  assert.ok(keygenSrc.includes('Keypair already exists for'), 'keygen.mjs must throw with Keypair already exists for');
+  assert.ok(keygenSrc.includes('(pass --force to overwrite)'), 'keygen.mjs must include (pass --force to overwrite)');
+  assert.ok(
+    keygenSrc.includes("fs.writeFileSync(keyPath, privateKeyPem, { encoding: 'utf8', mode: 0o600 })"),
+    'keygen.mjs must write key.pem with mode 0o600'
+  );
+  assert.ok(keygenSrc.includes("'key.pem'"), "keygen.mjs must contain 'key.pem'");
+  assert.ok(keygenSrc.includes("'pubkey.txt'"), "keygen.mjs must contain 'pubkey.txt'");
+
+  const runSrc = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
+  assert.ok(runSrc.includes("'state.json'"), "run.mjs must contain 'state.json'");
+  assert.ok(runSrc.includes("'memory.md'"), "run.mjs must contain 'memory.md'");
+
+  for (const stateFile of ['key.pem', 'pubkey.txt', 'state.json', 'memory.md']) {
+    assert.ok(
+      readme.includes(`\`${stateFile}\``),
+      `town-npc/README.md Keys & state bullet must name \`${stateFile}\``
+    );
+  }
+});
+
+test('town-npc/README.md character soul fields match CHARACTERS and buildSystemPrompt', () => {
+  const readme = readReadme();
+  assert.equal(CHARACTERS.length, 3, 'CHARACTERS must have exactly 3 entries');
+
+  const charactersSrc = fs.readFileSync(path.join(__dirname, 'characters.mjs'), 'utf8');
+  for (const renderExpr of [
+    'Past: ${npc.past}',
+    'Want: ${npc.want}',
+    'Quirk: ${npc.quirk}',
+    'Earliest memory: ${npc.memory_seed}',
+  ]) {
+    assert.ok(
+      charactersSrc.includes(renderExpr),
+      `characters.mjs buildSystemPrompt must render ${renderExpr}`
+    );
+  }
+
+  for (const char of CHARACTERS) {
+    for (const field of ['past', 'want', 'quirk', 'memory_seed']) {
+      assert.equal(typeof char[field], 'string', `${char.handle}.${field} must be a string`);
+      assert.ok(
+        char[field].trim().length > 10,
+        `${char.handle}.${field} must be longer than 10 chars`
+      );
+    }
+  }
+
+  const charSection = readme.match(/## Characters\n\n([\s\S]*?)\n\n`plots\/milo\/`/);
+  assert.ok(charSection, 'town-npc/README.md must have a ## Characters bullet list');
+  const bullets = charSection[1].split('\n').filter((line) => line.startsWith('- '));
+  assert.equal(bullets.length, 3, '## Characters must have exactly 3 bullets');
+  for (let i = 0; i < CHARACTERS.length; i++) {
+    const char = CHARACTERS[i];
+    assert.ok(
+      bullets[i].includes(`**${char.name}** (\`${char.handle}\`)`),
+      `## Characters bullet ${i + 1} must name **${char.name}** (\`${char.handle}\`)`
+    );
+  }
+});
