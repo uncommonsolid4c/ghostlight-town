@@ -302,3 +302,132 @@ test('graceful degradation + fog fallback chain', () => {
   starsDrift.update(0);
   assert.equal(stars.visible, true);
 });
+
+function mkFog() {
+  return { color: makeStubColor(), near: 0, far: 0 };
+}
+
+test('mid-leg interpolation: smoothstep easing pins exact numeric + hex values at f=0.125 and f=0.0625', () => {
+  const p125 = daylightAt(0.125);
+  assert.deepEqual(p125, {
+    sky: 0x687ca0,
+    horizon: 0xbc958c,
+    hemiSky: 0xacb5d6,
+    hemiGround: 0x686476,
+    hemi: 0.76,
+    key: 0xdbcadf,
+    keyI: 1.35,
+    rim: 0x8696e2,
+    rimI: 0.625,
+    elev: 25.5,
+    fog: 0.775,
+    night: 0.675,
+  });
+
+  const p0625 = daylightAt(0.0625);
+  assert.equal(p0625.sky, 0x3c4860);
+  assert.equal(p0625.horizon, 0x715d63);
+  assert.equal(p0625.hemiSky, 0x7885b2);
+  assert.equal(p0625.hemiGround, 0x403f4f);
+  assert.equal(p0625.hemi, 0.71875);
+  assert.equal(p0625.key, 0xbec7f6);
+  assert.equal(p0625.keyI, 0.9375);
+  assert.equal(p0625.rim, 0x6a7bcc);
+  assert.ok(Math.abs(p0625.rimI - 0.5046875) < 1e-12);
+  assert.equal(p0625.elev, 35.46875);
+  assert.equal(p0625.fog, 0.7578125);
+  assert.equal(p0625.night, 0.8984375);
+});
+
+test('daylightAt input discipline: non-finite and non-number fractions fall back to night', () => {
+  const night = daylightAt(0);
+  for (const bad of [Infinity, -Infinity, NaN, '0.5', null, undefined, {}]) {
+    assert.deepEqual(daylightAt(bad), night);
+  }
+  assert.deepEqual(daylightAt(2.5), daylightAt(0.5));
+  assert.deepEqual(daylightAt(-1.5), daylightAt(0.5));
+});
+
+test('update returns the applied params: deep-equal to daylightAt(phase)', () => {
+  const drift1 = buildDaylightDrift({ night: 1 });
+  assert.deepEqual(drift1.update(450), daylightAt(0.25));
+  assert.deepEqual(drift1.update(450), daylightAt(0.5));
+
+  const drift2 = buildDaylightDrift({ night: 1 });
+  drift2.update(100);
+  drift2.update(100);
+  const third = drift2.update(100);
+  assert.ok(Math.abs(drift2.phase - 1 / 6) < 1e-12);
+  assert.deepEqual(third, daylightAt(1 / 6));
+});
+
+test('fog precedence: explicit fog beats scene.fog beats look.fog', () => {
+  const fogA = mkFog();
+  const fogB = mkFog();
+  const fogC = mkFog();
+  const drift1 = buildDaylightDrift(
+    { ...makeStubLook(), fog: fogC },
+    { fog: fogA, scene: { fog: fogB } }
+  );
+  drift1.update(450);
+  assert.equal(fogA.near, 102.4);
+  assert.equal(fogA.color.hex, 0xffc9b4);
+  assert.equal(fogB.near, 0);
+  assert.equal(fogB.color.hex, 0);
+  assert.equal(fogC.near, 0);
+  assert.equal(fogC.color.hex, 0);
+
+  const fogB2 = mkFog();
+  const fogC2 = mkFog();
+  const drift2 = buildDaylightDrift(
+    { ...makeStubLook(), fog: fogC2 },
+    { scene: { fog: fogB2 } }
+  );
+  drift2.update(450);
+  assert.equal(fogB2.near, 102.4);
+  assert.equal(fogC2.near, 0);
+});
+
+test('stars dawn boundary + custom far scales fog', () => {
+  const stars = { visible: false, material: { opacity: 0 } };
+  const driftStars = buildDaylightDrift(makeStubLook(), { stars });
+  driftStars.update(450);
+  assert.equal(stars.material.opacity, 0.35);
+  assert.equal(stars.visible, true);
+
+  const fog = mkFog();
+  const driftFog = buildDaylightDrift(makeStubLook(), { fog, far: 100 });
+  driftFog.update(900);
+  assert.ok(Math.abs(fog.near - 28.8) < 1e-9);
+  assert.equal(fog.far, 79.2);
+});
+
+test('partial look robustness + frozen config: missing color objects and sky geometry never throw', () => {
+  const partialLook = { night: 1, hemi: { intensity: 0 }, key: {}, rim: {}, sky: {} };
+  const drift1 = buildDaylightDrift(partialLook);
+  const res = drift1.update(450);
+  assert.equal(partialLook.hemi.intensity, 0.82);
+  assert.equal(partialLook.key.intensity, 1.95);
+  assert.deepEqual(res, daylightAt(0.25));
+
+  const noColorAttrLook = {
+    night: 1,
+    sky: { geometry: { attributes: { position: { count: 1, getY: () => 60 } } } },
+  };
+  const drift2 = buildDaylightDrift(noColorAttrLook);
+  drift2.update(0);
+
+  assert.equal(Object.isFrozen(DAYLIGHT_DRIFT_CONFIG), true);
+  assert.equal(Object.isFrozen(DAYLIGHT_DRIFT_CONFIG.keyframes), true);
+  for (const kf of DAYLIGHT_DRIFT_CONFIG.keyframes) {
+    assert.equal(Object.isFrozen(kf), true);
+  }
+  assert.deepEqual(
+    DAYLIGHT_DRIFT_CONFIG.keyframes.map((kf) => kf.at),
+    [0, 0.25, 0.5, 0.75, 1]
+  );
+  assert.deepEqual(
+    DAYLIGHT_DRIFT_CONFIG.keyframes.map((kf) => kf.name),
+    ['night', 'dawn', 'overcast', 'dawn', 'night']
+  );
+});
