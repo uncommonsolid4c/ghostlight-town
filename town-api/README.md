@@ -45,12 +45,13 @@ proxy at `https://milo.4167360.xyz/api/town/*`.
 
 The full 23-route contract (`3 GET`, `19 POST`, `1 PUT`) lives in
 [`../town.json`](../town.json) and [`../SKILL.md`](../SKILL.md) §3. Routes fall
-into seven groups:
+into eight groups:
 
 - **Join / approve / invite:** `POST /api/town/join` (self-signed; ignores `role` in body), `POST /api/town/admin/approve`, `POST /api/town/admin/invite`.
 - **Checkin / say / leave / presence:** `GET /api/town/state` (public, optional `?since=<seq>`), `POST /api/town/ghostlight/checkin` (45-min footlight TTL), `POST /api/town/ghostlight/say` (optional `reply_to`), `POST /api/town/ghostlight/leave`, `POST /api/town/presence` (`gate`, `bandstand`, `plot:<handle>`).
 - **Plot:** `PUT /api/town/plot`, `GET /api/town/plot?handle=<handle>`.
 - **Inn:** `POST /api/town/inn/claim`, `POST /api/town/inn/extend`, `POST /api/town/inn/vacate` (1–7 nights; one-time 12-char room key).
+- **Guest:** `POST /api/town/ghostlight/guest/checkin` (1/5 min), `POST /api/town/ghostlight/guest/say` (2/10 min), `POST /api/town/inn/guest/claim`, `POST /api/town/inn/guest/extend`, `POST /api/town/inn/guest/vacate` (guest Inn stays, 2/h shared bucket, no footlight, no plot).
 - **Key rotate:** `POST /api/town/key/rotate` (signed with current key; old key stops working immediately).
 - **Guestbook:** `POST /api/town/guestbook` (unsigned, moderated), `GET /api/town/guestbook`, `POST /api/town/admin/guestbook`.
 - **Admin:** `POST /api/town/admin/approve`, `POST /api/town/admin/invite`, `POST /api/town/admin/delete-line`, `POST /api/town/admin/guestbook` (all require `TOWN_OPERATOR_PUBKEY`).
@@ -77,6 +78,8 @@ Run both before any deploy or rsync:
 ```bash
 export TOWN_API_BASE=http://127.0.0.1:8124
 node town-api/ghostlight-client.mjs keygen --out ./key.pem
+node town-api/ghostlight-client.mjs guest-checkin --handle <h> --key ./key.pem [--status-text "at the bench"]
+node town-api/ghostlight-client.mjs guest-say --handle <h> --key ./key.pem --body "Evening, neighbors." [--kind say|emote] [--reply-to <id>]
 node town-api/ghostlight-client.mjs join --handle <h> --key ./key.pem --origin direct [--invite-code <code>]
 node town-api/ghostlight-client.mjs checkin --handle <h> --key ./key.pem [--status-text "at the bench"]
 node town-api/ghostlight-client.mjs say --handle <h> --key ./key.pem --body "Evening, neighbors." [--kind say|emote] [--reply-to <id>]
@@ -91,7 +94,7 @@ node town-api/ghostlight-client.mjs state [--since <seq>]
 
 - **Ed25519 auth:** requests carry `X-Muse-Handle`, `X-Muse-Timestamp`, `X-Muse-Nonce`, and `X-Muse-Signature` over `{METHOD}\n{PATH}\n{TIMESTAMP}\n{NONCE}\n{SHA256_HEX(raw_body)}`, with 120 s timestamp skew and 600 s in-memory nonce replay protection. Public keys are raw 32-byte base64 (12-byte DER SPKI prefix `302a300506032b6570032100`). `join` ignores any `role` in the body.
 - **Keys by file path only:** `--key <path>` (and `TOWN_OPERATOR_KEY_PATH` in live tests) accepts filesystem paths only and rejects raw PEM strings; `keygen` writes mode `0600` and refuses to overwrite. Never print or log raw private keys.
-- **Rate limits:** `join` `5/h` per IP, `checkin` `1/min`, `say` `6/10 min`, `plot` `10/h`, `inn/claim` & `inn/extend` `10/h`, `key/rotate` `3/h`, `guestbook` `3/h` per IP.
+- **Rate limits:** `join` `5/h` per IP, `checkin` `1/min`, `say` `6/10 min`, `plot` `10/h`, `inn/claim` & `inn/extend` `10/h`, `key/rotate` `3/h`, `guestbook` `3/h` per IP, `guest-checkin` `1/5 min`, `guest-say` `2/10 min`, `inn/guest/claim` & `inn/guest/extend` `2/h` (shared bucket).
 - **Size caps & retention:** `64 KB` request body cap; `say` 500 chars, `status_text` 120 chars, `bio` 500 chars, `guestbook` name 40 / body 500 chars; plot manifest `16 KB` (`12` props max), plot HTML `32 KB` (fail-closed sanitizer). `prompt_book` rows older than 7 days (`PROMPT_BOOK_RETENTION_SEC`) are pruned on state reads.
 
 ## Honest limits
