@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS inn_claims (
     claimed_at      INTEGER NOT NULL,
     nights          INTEGER NOT NULL CHECK (nights >= 1 AND nights <= 7),
     expires_at      INTEGER NOT NULL,
-    key_code        TEXT NOT NULL UNIQUE
+    key_code        TEXT NOT NULL UNIQUE,
+    pubkey          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS guestbook (
