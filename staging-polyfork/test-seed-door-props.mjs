@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { attachSeedDoorProp } from './seed-door-props.mjs';
+import { CHARACTERS } from '../town-npc/characters.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
@@ -315,4 +316,110 @@ test('live-rotation drift guard against town-3d/town.js and shared builder impor
     !/function\s+buildProcedural(?:OilLamp|Typewriter|Teapot)\b/.test(modSrc),
     'seed-door-props.mjs must not re-vendor procedural builders'
   );
+});
+
+test('shared placement constant and clearance from signpost and porch deck', async () => {
+  const THREE = makeFakeThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assertPos(prop, -2.9, 0, 2.9);
+  }
+
+  const first = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  const second = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  assert.notEqual(first.position, second.position);
+
+  assert.ok(Math.hypot(-2.9 - 2.3, 2.9 - 2.6) > 5);
+  assert.ok(Math.abs(-2.9) > 2.4);
+
+  const modSrc = await fs.readFile(MODULE_PATH, 'utf8');
+  assert.ok(modSrc.includes('const SEED_DOOR_PROP_POS = [-2.9, 0, 2.9];'));
+});
+
+test('rotY ordering and range, group shape, and total child count', () => {
+  const THREE = makeFakeThree();
+  const pWick = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  const pMaren = attachSeedDoorProp(THREE, new THREE.Group(), 'maren');
+  const pTomas = attachSeedDoorProp(THREE, new THREE.Group(), 'tomas');
+
+  assert.ok(pWick.rotation.y < pMaren.rotation.y && pMaren.rotation.y < pTomas.rotation.y);
+
+  const props = [pWick, pMaren, pTomas];
+  let totalChildren = 0;
+  for (const prop of props) {
+    assert.ok(prop.rotation.y > -Math.PI && prop.rotation.y < 0);
+    assert.equal(prop.rotation.x, 0);
+    assert.equal(prop.rotation.z, 0);
+    assert.ok(prop instanceof THREE.Group);
+    for (const child of prop.children) {
+      assert.ok(child instanceof THREE.Mesh);
+    }
+    totalChildren += prop.children.length;
+  }
+  assert.equal(totalChildren, 9);
+});
+
+test('handle validation precedes cottage use', () => {
+  const THREE = makeFakeThree();
+
+  assert.equal(attachSeedDoorProp(THREE, null, 'nobody'), null);
+  assert.equal(attachSeedDoorProp(THREE, null, 'milo'), null);
+  assert.equal(attachSeedDoorProp(THREE, undefined, 'lampmoth'), null);
+
+  assert.throws(() => attachSeedDoorProp(THREE, null, 'wick'), TypeError);
+  assert.throws(() => attachSeedDoorProp(THREE, undefined, 'maren'), TypeError);
+  assert.throws(() => attachSeedDoorProp(THREE, {}, 'tomas'), TypeError);
+  assert.throws(() => attachSeedDoorProp(THREE, { add: 'not-a-function' }, 'wick'), TypeError);
+});
+
+test('throwing builder leaves the cottage untouched', () => {
+  for (const missing of ['CylinderGeometry', 'MeshStandardMaterial']) {
+    const THREE = makeFakeThree();
+    delete THREE[missing];
+    for (const handle of ['wick', 'maren', 'tomas']) {
+      const cottage = new THREE.Group();
+      assert.throws(() => attachSeedDoorProp(THREE, cottage, handle), TypeError);
+      assert.equal(cottage.children.length, 0);
+    }
+  }
+});
+
+test('seed-handle set matches CHARACTERS and export shape', async () => {
+  const characterHandles = CHARACTERS.map((c) => c.handle).sort();
+  assert.deepEqual(characterHandles, ['maren', 'tomas', 'wick']);
+
+  const modSrc = await fs.readFile(MODULE_PATH, 'utf8');
+  const propsMatch = modSrc.match(/const SEED_DOOR_PROPS = \{([\s\S]*?)\n\};/);
+  assert.ok(propsMatch, 'expected SEED_DOOR_PROPS object literal in seed-door-props.mjs');
+  const propKeys = [...propsMatch[1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(propKeys, characterHandles);
+
+  assert.ok(modSrc.includes('const SEED_DOOR_PROP_POS = [-2.9, 0, 2.9];'));
+
+  const exports = [...modSrc.matchAll(/^export (function|const|class) (\w+)/gm)].map((m) => m[2]);
+  assert.deepEqual(exports, ['attachSeedDoorProp']);
+});
+
+test('attach order and mutation independence', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const pMaren = attachSeedDoorProp(THREE, cottage, 'maren');
+  const pWick = attachSeedDoorProp(THREE, cottage, 'wick');
+  assert.deepEqual(cottage.children, [pMaren, pWick]);
+
+  const cFirst = new THREE.Group();
+  const cSecond = new THREE.Group();
+  const first = attachSeedDoorProp(THREE, cFirst, 'wick');
+  const second = attachSeedDoorProp(THREE, cSecond, 'wick');
+
+  first.position.x = 99;
+  first.rotation.y = 0;
+  first.name = 'changed';
+  first.children.push({ fake: true });
+
+  assert.equal(second.position.x, -2.9);
+  assert.equal(second.rotation.y, -1.1733);
+  assert.equal(second.name, 'seed_door_prop_wick');
+  assert.equal(second.children.length, 3);
+  assert.equal(cSecond.children.length, 1);
 });
