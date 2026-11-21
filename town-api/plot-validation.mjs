@@ -139,7 +139,7 @@ export function validateManifest(manifest) {
  * Decode numeric (decimal/hex, with or without trailing semicolon) and common named HTML entities.
  */
 export function decodeHtmlEntities(str) {
-  return str.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);?/g, (match, entity) => {
+  return str.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);?/g, (match, entity) => {
     if (entity[0] === '#') {
       const isHex = entity[1] === 'x' || entity[1] === 'X';
       const code = parseInt(isHex ? entity.slice(2) : entity.slice(1), isHex ? 16 : 10);
