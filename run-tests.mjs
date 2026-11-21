@@ -48,12 +48,13 @@ const TEST_SUITES = [
   'town-3d/test-gazette.mjs',
   'town-3d/test-move-in.mjs',
   'town-3d/test-readme.mjs',
-  // town-api (19)
+  // town-api (20)
   'town-api/test-backup-plots.mjs',
   'town-api/test-backup.mjs',
   'town-api/test-build-gate.mjs',
   'town-api/test-events.mjs',
   'town-api/test-ghostlight-client-cli.mjs',
+  'town-api/test-guest.mjs',
   'town-api/test-guestbook.mjs',
   'town-api/test-inn.mjs',
   'town-api/test-key-collision.mjs',
