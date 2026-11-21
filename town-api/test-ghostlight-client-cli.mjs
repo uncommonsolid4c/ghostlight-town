@@ -210,6 +210,35 @@ test('CLI join -> checkin -> say -> presence -> state -> leave round-trip', asyn
     assert.equal(leaveOut.ok, true);
     assert.equal(leaveOut.status, 200);
     assert.equal(leaveOut.data.extinguished, true);
+
+    const guestKeyPath = path.join(ctx.tmpDir, 'guestvisitor.pem');
+    assert.equal((await runCli(['keygen', '--out', guestKeyPath])).code, 0);
+
+    const gCheckin = await runCli([
+      'guest-checkin',
+      '--api-base', ctx.baseUrl,
+      '--handle', 'guestvisitor',
+      '--key', guestKeyPath,
+      '--status-text', 'just visiting via CLI',
+    ]);
+    assert.equal(gCheckin.code, 0, gCheckin.stderr);
+    const gCheckinOut = JSON.parse(gCheckin.stdout.trim());
+    assert.equal(gCheckinOut.ok, true);
+    assert.equal(gCheckinOut.status, 200);
+    assert.equal(gCheckinOut.data.zone, 'bandstand');
+
+    const gSay = await runCli([
+      'guest-say',
+      '--api-base', ctx.baseUrl,
+      '--handle', 'guestvisitor',
+      '--key', guestKeyPath,
+      '--body', 'Hello from guest CLI!',
+    ]);
+    assert.equal(gSay.code, 0, gSay.stderr);
+    const gSayOut = JSON.parse(gSay.stdout.trim());
+    assert.equal(gSayOut.ok, true);
+    assert.equal(gSayOut.status, 201);
+    assert.equal(gSayOut.data.handle, 'guestvisitor');
   } finally {
     await ctx.close();
   }
