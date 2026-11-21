@@ -21,9 +21,12 @@ import {
   buildProp,
   createCottage,
   createAvatarCapsule,
+  formatPromptBookEntries,
   getPlotTargetPosition,
   loadTownProps,
   pinchFov,
+  renderPromptBook,
+  setAvatarStatusText,
   stepGlide,
   updateTownAnimations,
 } from './town.js';
@@ -537,16 +540,24 @@ test('createCottage honors tower manifest, custom colors, 0 props, and ignores u
   assert.equal(collectNodes(emptyCabin, (n) => n.name.startsWith('prop_')).length, 0);
 });
 
-test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
+test('createAvatarCapsule builds [MUSE], [guest], and [NPC] capsules and preserves [guest] on status update', () => {
   const THREE = createThreeStub();
   const muse = createAvatarCapsule(THREE, { handle: 'milo', role: 'muse' });
   const npc = createAvatarCapsule(THREE, { handle: 'trimmer', role: 'npc' });
+  const guest = createAvatarCapsule(THREE, { handle: 'visitor', role: 'guest' });
   assert.equal(muse.userData.role, 'muse');
   assert.equal(npc.userData.role, 'npc');
+  assert.equal(guest.userData.role, 'guest');
   const museSprites = collectNodes(muse, (n) => n.isSprite);
   const npcSprites = collectNodes(npc, (n) => n.isSprite);
+  const guestSprites = collectNodes(guest, (n) => n.isSprite);
   assert.equal(museSprites.length, 1);
   assert.equal(npcSprites.length, 1);
+  assert.equal(guestSprites.length, 1);
+
+  setAvatarStatusText(THREE, guest, 'just visiting');
+  assert.equal(guest.userData.role, 'guest');
+  assert.equal(guest.userData.statusText, 'just visiting');
 
   assert.equal(muse.userData.nametagLift, 0);
   assert.equal(muse.userData.nametagSprite, museSprites[0]);
@@ -557,6 +568,42 @@ test('createAvatarCapsule builds [MUSE] and [NPC] capsules', () => {
   const lifted = createAvatarCapsule(THREE, { handle: 'wick', role: 'npc', nametagLift: 0.5 });
   assert.equal(lifted.userData.nametagLift, 0.5);
   assert.equal(lifted.userData.nametagSprite.position.y, 2.3);
+});
+
+test('formatPromptBookEntries passes guest role through and renderPromptBook renders [guest] pill', () => {
+  const formatted = formatPromptBookEntries([
+    { id: 1, handle: 'wick', kind: 'say', body: 'hi', role: 'npc', created_at: 10 },
+    { id: 2, handle: 'visitor', kind: 'say', body: 'hello', role: 'guest', created_at: 20 },
+    { id: 3, handle: 'other', kind: 'say', body: 'yo', role: 'unknown', created_at: 30 },
+  ]);
+  assert.deepEqual(formatted.map((e) => e.role), ['npc', 'guest', 'muse']);
+
+  function makeEl(tag) {
+    return {
+      tagName: tag,
+      className: '',
+      textContent: '',
+      children: [],
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      appendChild(child) {
+        this.children.push(child);
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx !== -1) this.children.splice(idx, 1);
+      },
+    };
+  }
+  const docStub = { createElement: (tag) => makeEl(tag) };
+  const container = makeEl('div');
+  renderPromptBook(container, formatted, docStub);
+  assert.equal(container.children.length, 3);
+  const guestLine = container.children[1];
+  const guestPill = guestLine.children.find((c) => c.className === 'pb-guest-pill');
+  assert.ok(guestPill, 'guest line must render .pb-guest-pill');
+  assert.equal(guestPill.textContent, '[guest]');
 });
 
 // Budget raised 80 -> 120 (owner decision, 2026-11-12): lit windows and the
