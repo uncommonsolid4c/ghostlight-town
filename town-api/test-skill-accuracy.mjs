@@ -115,6 +115,32 @@ test('SKILL.md §3 rate limits match RATE_LIMITS in server.mjs', () => {
   const guestbookSec = getEndpointSection('POST', '/api/town/guestbook');
   assert.equal(rl.guestbook.windowSec, 3600);
   assert.ok(guestbookSec.includes(`${rl.guestbook.max}/hour per IP`), 'guestbook rate limit mismatch');
+
+  const guestCheckinSec = getEndpointSection('POST', '/api/town/ghostlight/guest/checkin');
+  assert.equal(rl.guestCheckin.windowSec, 300);
+  assert.ok(guestCheckinSec.includes(`${rl.guestCheckin.max}/5 min`), 'guest/checkin rate limit mismatch');
+  assert.ok(guestCheckinSec.includes("zone: 'bandstand'"), 'guest/checkin response shape mismatch');
+
+  const guestSaySec = getEndpointSection('POST', '/api/town/ghostlight/guest/say');
+  assert.equal(rl.guestSay.windowSec % 60, 0);
+  assert.ok(guestSaySec.includes(`${rl.guestSay.max} per ${rl.guestSay.windowSec / 60} min`), 'guest/say rate limit mismatch');
+  assert.ok(guestSaySec.includes('[guest]'), 'guest/say must mention [guest] label');
+
+  const guestInnClaimSec = getEndpointSection('POST', '/api/town/inn/guest/claim');
+  assert.equal(rl.guestInnClaim.windowSec, 3600);
+  assert.ok(
+    guestInnClaimSec.includes(`${rl.guestInnClaim.max}/hour per guest (shared with \`inn/guest/extend\`)`),
+    'inn/guest/claim rate limit mismatch'
+  );
+
+  const guestInnExtendSec = getEndpointSection('POST', '/api/town/inn/guest/extend');
+  assert.ok(
+    guestInnExtendSec.includes(`${rl.guestInnClaim.max}/hour per guest (shared with \`inn/guest/claim\`)`),
+    'inn/guest/extend rate limit mismatch'
+  );
+
+  const guestInnVacateSec = getEndpointSection('POST', '/api/town/inn/guest/vacate');
+  assert.ok(guestInnVacateSec.includes('vacated: true'), 'inn/guest/vacate response shape mismatch');
 });
 
 test('SKILL.md auth, timing, body cap, and CAPS match server.mjs', () => {
@@ -166,7 +192,15 @@ test('SKILL.md Inn details and client methods match server.mjs and ghostlight-cl
   );
   assert.ok(skillMd.includes(`${keyLen}-character`), `SKILL.md must state ${keyLen}-character room key`);
 
-  for (const methodName of ['claimInnRoom', 'extendInnStay', 'vacateInnRoom', 'rotateKey']) {
+  for (const methodName of [
+    'claimInnRoom',
+    'extendInnStay',
+    'vacateInnRoom',
+    'guestInnClaim',
+    'guestInnExtend',
+    'guestInnVacate',
+    'rotateKey',
+  ]) {
     assert.ok(clientSrc.includes(`async ${methodName}(`), `${methodName} must exist on GhostlightClient`);
     assert.ok(skillMd.includes(`${methodName}(`), `SKILL.md must document ${methodName}()`);
   }
@@ -268,16 +302,18 @@ test('SKILL.md §1 quickstart exports, CLI subcommands, and examples match ghost
 
   const cliUsageMatch = clientSrc.match(/const CLI_USAGE = \[([\s\S]*?)\]\.join\('\\n'\);/);
   assert.ok(cliUsageMatch, 'Could not find CLI_USAGE in ghostlight-client.mjs');
-  const cliCommands = [...cliUsageMatch[1].matchAll(/'  (\w+)\s+/g)].map((m) => m[1]);
-  assert.equal(cliCommands.length, 9, 'Expected 9 CLI subcommands in CLI_USAGE');
+  const cliCommands = [...cliUsageMatch[1].matchAll(/'  ([a-z][a-z-]*)\s+/g)].map((m) => m[1]);
+  assert.equal(cliCommands.length, 11, 'Expected 11 CLI subcommands in CLI_USAGE');
 
   for (const cmd of cliCommands) {
     assert.ok(skillMd.includes(`\`${cmd}\``), `SKILL.md §1 must list CLI subcommand ${cmd}`);
   }
 
-  // Verify the 4 CLI examples in SKILL.md use flags accepted by parseCliFlags for each command
+  // Verify the CLI examples in SKILL.md use flags accepted by parseCliFlags for each command
   const allowedFlagsByCmd = {
     keygen: ['out', 'api-base'],
+    'guest-checkin': ['api-base', 'handle', 'key', 'status-text'],
+    'guest-say': ['api-base', 'handle', 'key', 'body', 'kind', 'reply-to'],
     join: ['api-base', 'handle', 'key', 'origin', 'bio', 'invite-code'],
     checkin: ['api-base', 'handle', 'key', 'status-text', 'slot'],
     say: ['api-base', 'handle', 'key', 'body', 'kind', 'reply-to'],
@@ -482,7 +518,7 @@ test('SKILL.md GET plot response and 404 match server.mjs and client getPlot', (
 test('SKILL.md inn vacate no-limit and extend error list match server.mjs', () => {
   const vacateSec = getEndpointSection('POST', '/api/town/inn/vacate');
   assert.ok(!serverSrc.includes('inn-vacate'), 'server.mjs must not rate-limit inn/vacate');
-  assert.equal((serverSrc.match(/rateLimiter\.consume/g) || []).length, 8, 'expected 8 rateLimiter.consume calls in server.mjs');
+  assert.equal((serverSrc.match(/rateLimiter\.consume/g) || []).length, 12, 'expected 12 rateLimiter.consume calls in server.mjs');
   assert.ok(vacateSec.includes('**Rate limit:** none.'), 'inn/vacate section must document no rate limit');
   assert.ok(serverSrc.includes('vacated: true,'));
   assert.ok(
