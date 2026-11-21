@@ -649,3 +649,329 @@ test('server integration: file edit picked up via mtime without server restart',
     fs.rmSync(tmpEventsDir, { recursive: true, force: true });
   }
 });
+
+async function registerResidentWithKeys(ctx, handle) {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({
+    baseUrl: ctx.baseUrl,
+    handle,
+    ...keys,
+  });
+  const joinRes = await client.join({ origin: 'direct', bio: `${handle} bio` });
+  assert.equal(joinRes.status, 201);
+  const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+    handle,
+  });
+  assert.equal(appRes.status, 200);
+  return { client, keys };
+}
+
+async function signedCheckin(ctx, keys, handle, payload) {
+  const endpoint = '/api/town/ghostlight/checkin';
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: endpoint,
+    body: payload,
+    handle,
+    privateKeyPem: keys.privateKeyPem,
+    timestamp: ctx.nowSec(),
+  });
+  const res = await fetch(`${ctx.baseUrl}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, data };
+}
+
+test('selectCurrentEvent next: earliest start wins among multiple future events, regardless of order', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'E',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+    ...overrides,
+  });
+  const Later = ev({ title: 'Later', start_at: '2026-11-20T21:00:00Z' });
+  const Earlier = ev({ title: 'Earlier', start_at: '2026-11-20T19:00:00Z' });
+
+  const r1 = apiSelectCurrentEvent([Later, Earlier], T0);
+  assert.equal(r1?.status, 'next');
+  assert.equal(r1?.event.title, 'Earlier');
+
+  const r2 = apiSelectCurrentEvent([Earlier, Later], T0);
+  assert.equal(r2?.event.title, 'Earlier');
+
+  const oneMsFuture = ev({ title: 'OneMs', start_at: new Date(T0 + 1).toISOString() });
+  assert.equal(apiSelectCurrentEvent([oneMsFuture], T0)?.status, 'next');
+
+  assert.equal(
+    JSON.stringify(apiSelectCurrentEvent([Earlier], T0)),
+    JSON.stringify({ event: Earlier, status: 'next' })
+  );
+});
+
+test('selectNowNext: an event ending exactly at nowMs is neither now nor next', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'E',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+    ...overrides,
+  });
+  const Ending = ev({ title: 'Ending', start_at: '2026-11-20T17:00:00Z', duration_min: 60 });
+  const Future = ev({ title: 'Future', start_at: '2026-11-20T20:00:00Z' });
+  const Live = ev({ title: 'Live', start_at: '2026-11-20T17:30:00Z', duration_min: 60 });
+
+  const r1 = selectNowNext([Ending, Future], T0);
+  assert.equal(r1.now, null);
+  assert.equal(r1.next?.title, 'Future');
+
+  const r2 = selectNowNext([Ending, Live, Future], T0);
+  assert.equal(r2.now?.title, 'Live');
+  assert.equal(r2.next?.title, 'Future');
+});
+
+test('loadEventsFile shape edges', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-load-edges-'));
+  try {
+    const arrFile = path.join(tmpDir, 'arr.json');
+    fs.writeFileSync(arrFile, '[{"title":"x"}]', 'utf8');
+    assert.deepEqual(loadEventsFile(arrFile), { events: [] });
+
+    for (const badVal of ['not-array', { a: 1 }, null]) {
+      const f = path.join(tmpDir, 'bad-events.json');
+      fs.writeFileSync(f, JSON.stringify({ events: badVal }), 'utf8');
+      assert.deepEqual(loadEventsFile(f), { events: [] });
+    }
+
+    const extraKeysFile = path.join(tmpDir, 'extra.json');
+    fs.writeFileSync(
+      extraKeysFile,
+      JSON.stringify({
+        version: 2,
+        note: 'hi',
+        events: [
+          {
+            title: 'Kept',
+            host_handle: 'milo',
+            start_at: '2026-11-20T18:00:00Z',
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const extraLoaded = loadEventsFile(extraKeysFile);
+    assert.equal(extraLoaded.events.length, 1);
+    assert.equal(extraLoaded.events[0].title, 'Kept');
+
+    assert.deepEqual(loadEventsFile(tmpDir), { events: [] });
+
+    const bomFile = path.join(tmpDir, 'bom.json');
+    fs.writeFileSync(bomFile, '\uFEFF{"events":[]}', 'utf8');
+    assert.deepEqual(loadEventsFile(bomFile), { events: [] });
+
+    const fracFile = path.join(tmpDir, 'frac.json');
+    fs.writeFileSync(
+      fracFile,
+      JSON.stringify({
+        events: [
+          {
+            title: 'HalfPlus',
+            host_handle: 'milo',
+            start_at: '2026-11-20T18:00:00Z',
+            duration_min: 30.5,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const fracLoaded = loadEventsFile(fracFile);
+    assert.equal(fracLoaded.events.length, 1);
+    assert.equal(fracLoaded.events[0].duration_min, 30.5);
+
+    const tzFile = path.join(tmpDir, 'tz.json');
+    fs.writeFileSync(
+      tzFile,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Offset',
+            host_handle: 'milo',
+            start_at: '2026-11-20T18:00:00+02:00',
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const tzLoaded = loadEventsFile(tzFile);
+    assert.equal(tzLoaded.events.length, 1);
+    assert.equal(tzLoaded.events[0].start_at, '2026-11-20T18:00:00+02:00');
+
+    const dupTitleFile = path.join(tmpDir, 'dup.json');
+    fs.writeFileSync(
+      dupTitleFile,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Same',
+            host_handle: 'milo',
+            start_at: '2026-11-20T18:00:00Z',
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: '',
+          },
+          {
+            title: 'Same',
+            host_handle: 'vera',
+            start_at: '2026-11-20T19:00:00Z',
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const dupLoaded = loadEventsFile(dupTitleFile);
+    assert.equal(dupLoaded.events.length, 2);
+    assert.equal(dupLoaded.events[0].host_handle, 'milo');
+    assert.equal(dupLoaded.events[1].host_handle, 'vera');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('eventStateKey concatenates raw — a pipe in a title is not escaped', () => {
+  assert.equal(
+    eventStateKey({ title: 'A|B', start_at: '2026-11-20T18:00:00Z' }, null),
+    'now|A|B|2026-11-20T18:00:00Z'
+  );
+  assert.equal(
+    eventStateKey({ title: '', start_at: '2026-11-20T18:00:00Z' }, null),
+    'now||2026-11-20T18:00:00Z'
+  );
+  assert.equal(
+    eventStateKey(null, { title: 'A|B', start_at: '2026-11-20T20:00:00Z' }),
+    'next|A|B|2026-11-20T20:00:00Z'
+  );
+});
+
+test('server integration: host who checks in during the window gets event title immediately and own text back when window ends', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startIso = new Date((baseNow + 300) * 1000).toISOString();
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-inwin-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  fs.writeFileSync(
+    eventsPath,
+    JSON.stringify({
+      events: [
+        {
+          title: 'Lantern Reading',
+          host_handle: 'host',
+          start_at: startIso,
+          duration_min: 30,
+          location: 'bandstand',
+          blurb: '',
+        },
+      ],
+    }),
+    'utf8'
+  );
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const { keys } = await registerResidentWithKeys(ctx, 'host');
+
+    ctx.advanceClock(360);
+    const checkinRes = await signedCheckin(ctx, keys, 'host', {
+      status_text: 'my own words',
+      slot: 0,
+    });
+    assert.equal(checkinRes.status, 200);
+
+    const duringRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(duringRes.status, 200);
+    const duringState = await duringRes.json();
+    assert.equal(duringState.events.now?.title, 'Lantern Reading');
+    const hostDuring = duringState.footlights.find((f) => f.handle === 'host');
+    assert.equal(hostDuring.status_text, 'Lantern Reading');
+    assert.equal(hostDuring.event, true);
+
+    ctx.advanceClock(1800);
+    const afterRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(afterRes.status, 200);
+    const afterState = await afterRes.json();
+    assert.deepEqual(afterState.events, { now: null, next: null });
+    const hostAfter = afterState.footlights.find((f) => f.handle === 'host');
+    assert.equal(hostAfter.status_text, 'my own words');
+    assert.equal('event' in hostAfter, false);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('server integration: rewriting events file with identical content does not bump state_seq (304); corrupting it does bump', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startIso = new Date((baseNow - 60) * 1000).toISOString();
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-seq-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  const rawContent = JSON.stringify({
+    events: [
+      {
+        title: 'Steady Event',
+        host_handle: 'host',
+        start_at: startIso,
+        duration_min: 30,
+        location: 'bandstand',
+        blurb: '',
+      },
+    ],
+  });
+  fs.writeFileSync(eventsPath, rawContent, 'utf8');
+  const t1 = new Date('2026-11-15T17:00:00Z');
+  fs.utimesSync(eventsPath, t1, t1);
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res1.status, 200);
+    const s1 = await res1.json();
+    assert.equal(s1.events.now?.title, 'Steady Event');
+
+    fs.writeFileSync(eventsPath, rawContent, 'utf8');
+    const t2 = new Date('2026-11-15T17:05:00Z');
+    fs.utimesSync(eventsPath, t2, t2);
+    const res2 = await fetch(`${ctx.baseUrl}/api/town/state?since=${s1.state_seq}`);
+    assert.equal(res2.status, 304);
+
+    fs.writeFileSync(eventsPath, '{not json', 'utf8');
+    const t3 = new Date('2026-11-15T17:10:00Z');
+    fs.utimesSync(eventsPath, t3, t3);
+    const res3 = await fetch(`${ctx.baseUrl}/api/town/state?since=${s1.state_seq}`);
+    assert.equal(res3.status, 200);
+    const s3 = await res3.json();
+    assert.ok(s3.state_seq > s1.state_seq);
+    assert.equal(s3.events.now, null);
+    assert.equal(s3.events.next, null);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
