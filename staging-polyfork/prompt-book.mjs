@@ -15,7 +15,7 @@ export function formatPromptBookEntries(promptBook) {
     body: typeof entry?.body === 'string' ? entry.body : '',
     reply_to: Number.isInteger(entry?.reply_to) ? entry.reply_to : null,
     created_at: entry?.created_at ?? 0,
-    role: entry?.role === 'npc' ? 'npc' : 'muse',
+    role: entry?.role === 'npc' ? 'npc' : entry?.role === 'guest' ? 'guest' : 'muse',
   }));
 }
 
@@ -51,6 +51,11 @@ export function renderPromptBook(containerEl, promptBook, doc = globalThis.docum
       const pill = doc.createElement('span');
       pill.className = 'pb-npc-pill';
       pill.textContent = '[NPC]';
+      line.appendChild(pill);
+    } else if (entry.role === 'guest') {
+      const pill = doc.createElement('span');
+      pill.className = 'pb-guest-pill';
+      pill.textContent = '[guest]';
       line.appendChild(pill);
     }
 
