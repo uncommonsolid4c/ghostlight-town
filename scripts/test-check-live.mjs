@@ -703,3 +703,155 @@ test('argument errors print JSON on stderr, exit 1, and unknown arg makes no net
     if (server) await server.close();
   }
 });
+
+test('trailing-slash --base and --api-base are normalized', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-slash-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served, { apiStatus: 200 });
+
+    const trailingBase = `${server.baseUrl}/`;
+    const res = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', trailingBase,
+      '--api-base', trailingBase,
+      '--root', tmpDir,
+    ]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'ok');
+    assert.equal(summary.base, server.baseUrl);
+    assert.equal(summary.api, 'live');
+    assert.equal(summary.checked, 10);
+    assert.equal(summary.ok, 10);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('API socket destroyed reports not-live and exits 0 by default, or exits 1 with --require-api', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-apiclose-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served, { apiClose: true });
+
+    const resDefault = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resDefault.status, 0, `Expected exit 0, got ${resDefault.status}: ${resDefault.stderr}`);
+    const summaryDefault = JSON.parse(resDefault.stdout.trim());
+    assert.equal(summaryDefault.status, 'ok');
+    assert.equal(summaryDefault.api, 'not-live');
+
+    const resRequired = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', server.baseUrl,
+      '--root', tmpDir,
+      '--require-api',
+    ]);
+    assert.equal(resRequired.status, 1, `Expected exit 1, got ${resRequired.status}`);
+    const summaryRequired = JSON.parse(resRequired.stdout.trim());
+    assert.equal(summaryRequired.status, 'fail');
+    assert.equal(summaryRequired.api, 'not-live');
+    const apiFail = summaryRequired.failures.find(
+      (f) => f.file === '/api/town/state' && f.problem === 'bad-status',
+    );
+    assert.ok(apiFail, `Expected /api/town/state bad-status failure, got: ${JSON.stringify(summaryRequired.failures)}`);
+    assert.equal(typeof apiFail.detail, 'string');
+    assert.ok(apiFail.detail.length > 0, 'Expected non-empty detail on API socket failure');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--root pointing at a file prints JSON error on stderr and exits 1', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-rootfile-'));
+  try {
+    const filePath = path.join(tmpDir, `not-a-dir-${Date.now()}.txt`);
+    await fs.writeFile(filePath, 'not a directory\n');
+
+    const res = await runCheck(['--root', filePath]);
+    assert.equal(res.status, 1);
+    assert.equal(res.stdout, '');
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.equal(typeof errObj.error, 'string');
+    assert.match(errObj.error, /not a directory/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('live index.html with no ?v= fails with town_js_v', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-nov-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js";</script>\n';
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'fail');
+    assert.equal(summary.town_js_v, 13);
+    const vFail = summary.failures.find((f) => f.file === 'index.html' && f.problem === 'town_js_v');
+    assert.ok(vFail, `Expected town_js_v failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(vFail.detail, 'repo_v=13 vs live_v=null');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('short .glb under 4 bytes fails with mismatch', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-shortglb-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['models/bench.glb'] = Buffer.from([0x67, 0x6c]);
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'fail');
+    const glbFail = summary.failures.find((f) => f.file === 'models/bench.glb' && f.problem === 'mismatch');
+    assert.ok(glbFail, `Expected glb mismatch failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.match(glbFail.detail, /expected glTF magic/);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('multiple simultaneous failures accumulate with exact ok count', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-multi-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js?v=12";</script>\n';
+    served['models/bench.glb'] = Buffer.from('NOT_A_GLTF_FILE');
+    delete served['plots/milo/index.html'];
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'fail');
+    assert.equal(summary.checked, 10);
+    assert.equal(summary.ok, 7);
+    assert.equal(summary.failures.length, 3);
+    const pairs = summary.failures.map((f) => `${f.file}:${f.problem}`).sort();
+    assert.deepEqual(pairs, [
+      'index.html:town_js_v',
+      'models/bench.glb:mismatch',
+      'plots/milo/index.html:missing',
+    ]);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
