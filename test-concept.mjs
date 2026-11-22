@@ -533,3 +533,122 @@ test('CONCEPT.md Mood, Rule, roof-brown OPEN, and 90-hex scoped recount hold', (
   assert.equal(sheetHexes.size, 26, `Expected 26 in-sheet hexes, got ${sheetHexes.size}`);
   assert.equal(unlistedHexes.length, 90, `Expected 90 unlisted hexes, got ${unlistedHexes.length}`);
 });
+
+test('CONCEPT.md Palette ice-blue, warm-window, and paper-stack rows map to the source they claim', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('Ice blue | `#a8d8ea`'));
+  assert.ok(conceptText.includes('Warm window | `#ffbe5c`'));
+  assert.ok(conceptText.includes('paper stack `#ebe4d1`'));
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const ghostJs = fs.readFileSync(path.join(__dirname, dir, 'concept-ghost.js'), 'utf8');
+    assert.ok(ghostJs.includes("iceBlue: '#a8d8ea'"), `${dir}/concept-ghost.js must include iceBlue: '#a8d8ea'`);
+
+    const cottageJs = fs.readFileSync(path.join(__dirname, dir, 'concept-cottage.js'), 'utf8');
+    assert.ok(cottageJs.includes("iceBlue: '#a8d8ea'"), `${dir}/concept-cottage.js must include iceBlue: '#a8d8ea'`);
+    assert.ok(cottageJs.includes("warmWindow: '#ffbe5c'"), `${dir}/concept-cottage.js must include warmWindow: '#ffbe5c'`);
+  }
+
+  for (const relPath of ['town-3d/town.js', 'staging-polyfork/staging.js']) {
+    const src = fs.readFileSync(path.join(__dirname, relPath), 'utf8');
+    assert.ok(src.includes("'#ebe4d1'"), `${relPath} must include '#ebe4d1'`);
+  }
+});
+
+test('CONCEPT.md ghost face-decal details hold in both clients', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('big starry eyes'));
+  assert.ok(conceptText.includes('small smile'));
+  assert.ok(conceptText.includes('pink cheeks'));
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const ghostJs = fs.readFileSync(path.join(__dirname, dir, 'concept-ghost.js'), 'utf8');
+    assert.ok(ghostJs.includes('ghost_face_decal'), `${dir}/concept-ghost.js must include ghost_face_decal`);
+    assert.ok(ghostJs.includes("cheekPink: '#ff9ebb'"), `${dir}/concept-ghost.js must include cheekPink: '#ff9ebb'`);
+    assert.match(ghostJs, /starry sparkle/i);
+    assert.match(ghostJs, /small cute upturned smile|small smile/i);
+  }
+});
+
+test('CONCEPT.md Bandstand ghostlight bulb and ten footlights hold in both clients', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.match(conceptText, /ghostlight bulb burning\s*\n?\s*24\/7/);
+  assert.ok(conceptText.includes('Ten footlights around the bandstand rim'));
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const bandstandJs = fs.readFileSync(path.join(__dirname, dir, 'concept-bandstand.js'), 'utf8');
+    assert.match(bandstandJs, /footlightCount:\s*10/);
+    assert.ok(bandstandJs.includes('ghostlight_bulb'), `${dir}/concept-bandstand.js must include ghostlight_bulb`);
+    assert.match(bandstandJs, /bulbY:\s*3\.55/);
+    assert.ok(bandstandJs.includes("bulbColor: '#ffca66'"), `${dir}/concept-bandstand.js must include bulbColor: '#ffca66'`);
+    assert.ok(bandstandJs.includes("bulbEmissive: '#ffaa33'"), `${dir}/concept-bandstand.js must include bulbEmissive: '#ffaa33'`);
+  }
+});
+
+test('CONCEPT.md Ghostlight Inn Tavern palette wiring matches staging.js', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('cream `#f5efe0` plaster'));
+  assert.ok(conceptText.includes('roof brown `#5a4332` tile'));
+  assert.match(conceptText, /cedar\s+`#6b492b` timber/);
+
+  const stagingJs = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'staging.js'), 'utf8');
+  assert.match(stagingJs, /const CREAM = '#f5efe0'/);
+  assert.match(stagingJs, /const ROOF = '#5a4332'/);
+  assert.match(stagingJs, /const CEDAR = '#6b492b'/);
+  assert.match(
+    stagingJs,
+    /place\(Tavern,\s*\{[^}]*width:\s*10,\s*plaster:\s*CREAM,\s*tile:\s*ROOF,\s*timber:\s*CEDAR[^}]*\},\s*-11,\s*20/
+  );
+});
+
+test('CONCEPT.md newsstand cedar booth and paper stack match both clients', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('newsstand booth `#6b492b`'));
+
+  for (const relPath of ['staging-polyfork/staging.js', 'town-3d/town.js']) {
+    const src = fs.readFileSync(path.join(__dirname, relPath), 'utf8');
+    const idx = src.indexOf('function buildNewsstand(THREE)');
+    assert.notEqual(idx, -1, `${relPath} must define buildNewsstand(THREE)`);
+    const body = src.slice(idx, idx + 6000);
+    assert.ok(
+      body.includes("'#6b492b'") || body.includes('CEDAR'),
+      `${relPath} buildNewsstand must use '#6b492b' or CEDAR`
+    );
+  }
+});
+
+test("CONCEPT.md Don'ts no-money rule holds in shipped sources", () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const dontsText = extractSection(conceptText, "## Don'ts");
+  assert.ok(dontsText.includes('there is no money here, and nothing should look for sale.'));
+  assert.ok(dontsText.includes('No photoreal, no neon'));
+
+  const shippedFiles = [
+    ...collectShippedJsMjs(path.join(__dirname, 'town-3d')),
+    ...collectShippedJsMjs(path.join(__dirname, 'staging-polyfork')),
+  ];
+
+  const bannedHits = [];
+  const allowlistHits = [];
+  for (const file of shippedFiles) {
+    const rel = path.relative(__dirname, file);
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/\b(neon|price|checkout)\b/i.test(lines[i])) {
+        bannedHits.push(`${rel}:${i + 1}`);
+      }
+      if (/currency|for sale|shop visual/i.test(lines[i])) {
+        allowlistHits.push(`${rel}:${i + 1}`);
+      }
+    }
+  }
+
+  assert.deepEqual(bannedHits, [], `Expected zero neon/price/checkout hits, got ${bannedHits.join(', ')}`);
+  allowlistHits.sort();
+  assert.deepEqual(allowlistHits, [
+    'staging-polyfork/inn-guestbook-overlay.mjs:92',
+    'staging-polyfork/staging.js:1038',
+    'town-3d/town.js:2009',
+    'town-3d/town.js:908',
+  ]);
+});
