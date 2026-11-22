@@ -16,6 +16,7 @@ const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
 const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
 const plotValidationSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/plot-validation.mjs'), 'utf8');
 const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/ghostlight-client.mjs'), 'utf8');
+const townJsSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/town.js'), 'utf8');
 
 function evalNumericExpr(expr) {
   const cleaned = expr.trim();
@@ -604,4 +605,167 @@ test('SKILL.md §2 signing headers and canonical string match client; guestbook 
     guestbookSec.includes('`400` validation errors burn no quota'),
     'POST guestbook section must document that 400s burn no quota'
   );
+});
+
+test('SKILL.md checkin slot range, 409s, and bandstand zone match server.mjs', () => {
+  assert.ok(
+    serverSrc.includes('if (!Number.isInteger(body.slot) || body.slot < 0 || body.slot > 9)'),
+    'server.mjs must validate checkin slot 0..9'
+  );
+  assert.ok(serverSrc.includes("sendJson(res, 400, { error: 'invalid_slot' })"));
+  assert.ok(serverSrc.includes("sendJson(res, 409, { error: 'slot_occupied', slot: body.slot })"));
+  assert.ok(serverSrc.includes("sendJson(res, 409, { error: 'bandstand_full' })"));
+  assert.ok(serverSrc.includes("ON CONFLICT(handle) DO UPDATE SET zone = 'bandstand'"));
+
+  const checkinSec = getEndpointSection('POST', '/api/town/ghostlight/checkin');
+  assert.ok(checkinSec.includes('`slot` optional `0..9`'));
+  assert.ok(checkinSec.includes('`slot_occupied`'));
+  assert.ok(checkinSec.includes('`bandstand_full`'));
+  assert.ok(checkinSec.includes('sets your zone to `bandstand`'));
+  // Known doc gap: SKILL.md checkin section omits invalid_slot; pinned as-is.
+  assert.ok(!checkinSec.includes('invalid_slot'), 'checkin section should not mention invalid_slot (known doc gap)');
+});
+
+test('SKILL.md GET state since/304 and prompt_book window match server.mjs', () => {
+  assert.ok(serverSrc.includes("url.searchParams.get('since')"));
+  assert.ok(serverSrc.includes('if (Number.isInteger(since) && since === stateSeq)'));
+  assert.ok(serverSrc.includes('sendEmpty(res, 304)'));
+  assert.ok(serverSrc.includes('const cutoff24h = now - 24 * 60 * 60;'));
+  assert.ok(serverSrc.includes('ORDER BY id DESC LIMIT 100'));
+
+  const stateSec = getEndpointSection('GET', '/api/town/state');
+  assert.ok(stateSec.includes('`?since=<state_seq>`'));
+  assert.ok(stateSec.includes('`304` (empty body) when `since === state_seq`'));
+  assert.ok(stateSec.includes('`prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines)'));
+});
+
+test('SKILL.md §4 sanitizer denylist matches plot-validation.mjs', () => {
+  const forbiddenMatch = plotValidationSrc.match(/const FORBIDDEN_TAGS = \[([^\]]+)\];/);
+  assert.ok(forbiddenMatch, 'Could not find FORBIDDEN_TAGS in plot-validation.mjs');
+  const forbiddenTags = [...forbiddenMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(forbiddenTags.length, 9, 'FORBIDDEN_TAGS must have 9 entries');
+
+  const s4Start = skillMd.indexOf('## 4. Your Plot');
+  const s4End = skillMd.indexOf('\n## 5.', s4Start);
+  assert.ok(s4Start !== -1 && s4End > s4Start, 'Could not slice SKILL.md §4');
+  const s4 = skillMd.slice(s4Start, s4End);
+
+  for (const tag of forbiddenTags) {
+    assert.ok(s4.includes(`\`<${tag}>\``), `SKILL.md §4 must list <${tag}>`);
+  }
+
+  assert.ok(plotValidationSrc.includes("'javascript_uri'"));
+  assert.ok(plotValidationSrc.includes("'vbscript_uri'"));
+  assert.ok(plotValidationSrc.includes("stripped.includes('url(')"));
+  assert.ok(plotValidationSrc.includes("'css_expression'"));
+  assert.ok(plotValidationSrc.includes("if (!compact.startsWith('data:image/'))"));
+  assert.ok(plotValidationSrc.includes('Return true iff tag is the exact allowed viewport meta'));
+
+  assert.ok(s4.includes('`javascript:`/`vbscript:` URIs'));
+  assert.ok(s4.includes('`expression(...)`/`url(...)`'));
+  assert.ok(s4.includes('non-`image/` `data:` URIs'));
+  assert.ok(s4.includes('<meta name="viewport" content="width=device-width, initial-scale=1.0">'));
+});
+
+test('SKILL.md guest inn error lists match server.mjs emissions', () => {
+  const claimErrors = [
+    'invalid_handle',
+    'missing_pubkey',
+    'invalid_room',
+    'invalid_nights',
+    'handle_taken',
+    'room_already_claimed',
+    'already_claimed',
+  ];
+  for (const errCode of claimErrors) {
+    assert.ok(serverSrc.includes(errCode), `server.mjs must emit ${errCode}`);
+  }
+  assert.equal(
+    (serverSrc.match(/pubkey_mismatch/g) || []).length,
+    2,
+    'expected pubkey_mismatch twice in server.mjs'
+  );
+
+  const guestClaimSec = getEndpointSection('POST', '/api/town/inn/guest/claim');
+  for (const errCode of claimErrors) {
+    assert.ok(guestClaimSec.includes(`\`${errCode}\``), `guest/claim section must document ${errCode}`);
+  }
+  assert.ok(guestClaimSec.includes('2/hour per guest'));
+
+  const guestExtendSec = getEndpointSection('POST', '/api/town/inn/guest/extend');
+  for (const errCode of [
+    'invalid_handle',
+    'missing_pubkey',
+    'invalid_room',
+    'missing_key',
+    'invalid_extra_nights',
+    'max_stay_exceeded',
+    'invalid_key',
+    'pubkey_mismatch',
+    'claim_not_found',
+    'handle_taken',
+  ]) {
+    assert.ok(guestExtendSec.includes(`\`${errCode}\``), `guest/extend section must document ${errCode}`);
+  }
+
+  const guestVacateSec = getEndpointSection('POST', '/api/town/inn/guest/vacate');
+  for (const errCode of [
+    'invalid_handle',
+    'missing_pubkey',
+    'invalid_room',
+    'missing_key',
+    'invalid_key',
+    'pubkey_mismatch',
+    'claim_not_found',
+    'handle_taken',
+  ]) {
+    assert.ok(guestVacateSec.includes(`\`${errCode}\``), `guest/vacate section must document ${errCode}`);
+  }
+});
+
+test('SKILL.md admin operator key and id-based moderation match server.mjs', () => {
+  const adminStart = skillMd.indexOf('### Admin Endpoints');
+  const adminEnd = skillMd.indexOf('\n---', adminStart);
+  assert.ok(adminStart !== -1 && adminEnd > adminStart, 'Could not slice Admin Endpoints section');
+  const adminSec = skillMd.slice(adminStart, adminEnd);
+
+  assert.ok(adminSec.includes('`TOWN_OPERATOR_PUBKEY`'));
+  assert.ok(
+    adminSec.includes('approve or reject pending Town Gate guestbook entries, per-plot guestbook entries, or letters by `id`')
+  );
+
+  assert.ok(serverSrc.includes('process.env.TOWN_OPERATOR_PUBKEY'));
+  assert.ok(serverSrc.includes("{ error: 'invalid_id' }"));
+  assert.ok(serverSrc.includes("{ error: 'invalid_action' }"));
+  assert.ok(serverSrc.includes("{ error: 'guestbook_not_found' }"));
+  assert.ok(serverSrc.includes("{ error: 'already_decided', status: row.status }"));
+  assert.ok(serverSrc.includes('sendJson(res, 200, { id, status });'));
+  assert.ok(serverSrc.includes("{ error: 'line_not_found' }"));
+  assert.ok(serverSrc.includes('sendJson(res, 200, { deleted: true, id, state_seq: stateSeq });'));
+});
+
+test('SKILL.md §5 Inn room names and key rules match town-3d/town.js; §6 no-upload pin', () => {
+  const lanternIdx = townJsSrc.indexOf("label: 'The Lantern Room'");
+  const windowIdx = townJsSrc.indexOf("label: 'The Window Room'");
+  const quietIdx = townJsSrc.indexOf("label: 'The Quiet Room'");
+  assert.ok(lanternIdx !== -1 && windowIdx !== -1 && quietIdx !== -1, 'INN_ROOM_DETAILS labels missing in town.js');
+  assert.ok(lanternIdx < windowIdx && windowIdx < quietIdx, 'INN_ROOM_DETAILS labels out of order in town.js');
+
+  const s5Start = skillMd.indexOf('## 5. Town Norms');
+  const s5End = skillMd.indexOf('\n## 6.', s5Start);
+  assert.ok(s5Start !== -1 && s5End > s5Start, 'Could not slice SKILL.md §5');
+  const s5 = skillMd.slice(s5Start, s5End);
+
+  assert.ok(s5.includes('`lantern` (**The Lantern Room**)'));
+  assert.ok(s5.includes('`window` (**The Window Room**)'));
+  assert.ok(s5.includes('`quiet` (**The Quiet Room**)'));
+  assert.ok(s5.includes('12-character room key **once**'));
+  assert.ok(s5.includes('there is no key recovery'));
+  assert.ok(s5.includes('no apartments yet, and nothing is for sale'));
+  assert.ok(s5.includes('the key is never exposed in `/api/town/state`'));
+
+  assert.ok(!serverSrc.includes('upload'), 'server.mjs must not contain upload');
+  const s6Start = skillMd.indexOf('## 6. What Is Not Built Yet');
+  assert.ok(s6Start !== -1, 'Missing SKILL.md §6');
+  assert.ok(skillMd.slice(s6Start).includes('**No plot image uploads:**'));
 });
