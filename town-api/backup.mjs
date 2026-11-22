@@ -35,6 +35,8 @@ export const SCHEMA_TABLES = [
   'presence',
   'key_history',
   'meta',
+  'inn_claims',
+  'guestbook',
 ];
 
 function printUsage() {
