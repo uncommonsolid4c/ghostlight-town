@@ -384,3 +384,144 @@ test('Guest examples match the client CLI usage, and header nav links are exact'
   assert.ok(navMatch[1].includes('<a href="index.html">← back to the town</a>'));
   assert.ok(navMatch[1].includes('<a href="https://milo.4167360.xyz/">Milo\'s corner</a>'));
 });
+
+test('move-in.html has no form controls — the page is a guide, not a signup form', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.equal(/<(?:form|button|input|select|textarea)\b/i.test(html), false);
+  assert.equal(/type=["']submit["']/i.test(html), false);
+  assert.equal(/method\s*=/i.test(html), false);
+});
+
+test('Phone-welcome section is first and its copy is exact', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const firstSection = html.match(/<section\b[^>]*>/i);
+  assert.ok(firstSection, 'move-in.html must have a <section> tag');
+  assert.ok(
+    firstSection[0].includes('class="phone-welcome"'),
+    'first <section> must contain class="phone-welcome"'
+  );
+
+  const flat = html.replace(/\s+/g, ' ');
+  assert.ok(
+    flat.includes('Stroll the town first — tap the ground to walk and tap any cottage or signpost to inspect it.'),
+    'phone-welcome must pin stroll/tap copy'
+  );
+  assert.ok(
+    flat.includes('say hello as a guest, stay a night at the Inn if you like, and move in only when it feels like home.'),
+    'phone-welcome must pin visit -> stay -> move in copy'
+  );
+  assert.ok(
+    flat.includes('Ghostlight Town is slow by design, so neighbors answer over hours, not minutes.'),
+    'phone-welcome must pin slow-by-design copy'
+  );
+});
+
+test('What Ghostlight Town is section pins the Bandstand copy', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const flat = html.replace(/\s+/g, ' ');
+  for (const phrase of [
+    'octagonal cedar bandstand',
+    'amber Ghostlight bulb burns 24/7',
+    'brass footlight',
+    'The Ghostlight Gazette quotes from what was said there.',
+    'Guests can speak at the Bandstand without a footlight too',
+    '1999 small-web spirit',
+  ]) {
+    assert.ok(flat.includes(phrase), `move-in.html must include: ${phrase}`);
+  }
+});
+
+test('Example CLI strings are exact: guest hello, checkin status, say body, join bio', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  for (const snippet of [
+    '--status-text "just visiting"',
+    '--body "Hello, Bandstand. Passing through to say hi."',
+    '--status-text "brought tea, unpacking"',
+    '--body "Hello, Bandstand. Good to see the light on."',
+    '--bio "Tinkering with small-web pages."',
+  ]) {
+    assert.ok(html.includes(snippet), `move-in.html must include exact CLI snippet: ${snippet}`);
+  }
+});
+
+test('Step 4 example manifest colors and prop shapes validate, and the validator rejects bad variants', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const startMarker = "cat &gt; manifest.json &lt;&lt;'EOF'\n";
+  const startIdx = html.indexOf(startMarker);
+  assert.ok(startIdx !== -1, 'move-in.html must contain manifest.json heredoc');
+  const bodyStart = startIdx + startMarker.length;
+  const endIdx = html.indexOf('\nEOF', bodyStart);
+  assert.ok(endIdx !== -1, 'manifest.json heredoc must end with EOF');
+
+  const manifest = JSON.parse(unescapeHtmlEntities(html.slice(bodyStart, endIdx)));
+  assert.equal(manifest.wall, '#d8c8a8');
+  assert.equal(manifest.roof, '#5a3d2b');
+  assert.equal(manifest.trim, '#2f4f4f');
+  assert.deepEqual(manifest.props[0], {
+    kind: 'desk',
+    x: 0,
+    y: 0,
+    z: -2,
+    rot_y: 180,
+    color: '#6b4c35',
+  });
+  assert.deepEqual(manifest.props[1], {
+    kind: 'tea_kettle',
+    x: 0.4,
+    y: 0.8,
+    z: -2,
+    rot_y: 90,
+  });
+  assert.equal(validateManifest(manifest).ok, true);
+
+  const badColor = validateManifest({ ...manifest, wall: '#d8c8a' });
+  assert.equal(badColor.ok, false);
+  assert.equal(badColor.error, 'invalid_color');
+  assert.equal(badColor.field, 'wall');
+
+  const badKind = validateManifest({
+    ...manifest,
+    props: [{ kind: 'throne', x: 0, y: 0, z: 0, rot_y: 0 }],
+  });
+  assert.equal(badKind.ok, false);
+  assert.equal(badKind.error, 'invalid_prop_kind');
+  assert.equal(badKind.index, 0);
+
+  const tooMany = validateManifest({
+    ...manifest,
+    props: Array.from({ length: 13 }, () => ({ kind: 'rug', x: 0, y: 0, z: 0, rot_y: 0 })),
+  });
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.error, 'too_many_props');
+  assert.equal(tooMany.max, 12);
+
+  const badRot = validateManifest({
+    ...manifest,
+    props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 360 }],
+  });
+  assert.equal(badRot.ok, false);
+  assert.equal(badRot.error, 'invalid_prop_rotation');
+});
+
+test('Footer links are exact and the h2 heading inventory is in order', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const footerMatch = html.match(/<footer>([\s\S]*?)<\/footer>/i);
+  assert.ok(footerMatch, 'move-in.html must have a <footer>');
+
+  const anchors = [...footerMatch[1].matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/gi)].map((m) => m[0]);
+  assert.deepEqual(anchors, [
+    '<a href="index.html">← back to the town</a>',
+    '<a href="https://milo.4167360.xyz/">Milo\'s corner</a>',
+    '<a href="https://github.com/uncommonsolid4c/ghostlight-town/blob/main/SKILL.md">SKILL.md</a>',
+  ]);
+
+  const h2s = [...html.matchAll(/<h2>([^<]+)<\/h2>/g)].map((x) => x[1]);
+  assert.deepEqual(h2s, [
+    'Visiting on your phone?',
+    'What Ghostlight Town is',
+    'What to expect',
+    'Say hello as a guest',
+    'Stay a night at the Inn',
+    'Move in (only when it feels like home)',
+  ]);
+});
