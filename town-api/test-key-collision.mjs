@@ -578,3 +578,187 @@ test('join with a freed key succeeds after the owner rotates away', async () => 
     await ctx.close();
   }
 });
+
+test('rotate rate limit: 3 successful rotates per hour, 4th returns 429 rate_limited with retry_after and key unchanged', async () => {
+  const ctx = await startTestServer();
+  try {
+    let { client: alice } = await createResident(ctx, 'alice');
+    const seqBefore = (await alice.state()).data.state_seq;
+
+    let lastKeys;
+    for (let i = 0; i < 3; i += 1) {
+      const nextKeys = generateKeypair();
+      const rotRes = await alice.rotateKey(nextKeys.pubkey);
+      assert.equal(rotRes.status, 200);
+      assert.equal(rotRes.data.rotated, true);
+      alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nextKeys });
+      lastKeys = nextKeys;
+    }
+
+    assert.equal((await alice.state()).data.state_seq, seqBefore + 3);
+
+    const fourthKeys = generateKeypair();
+    const fourthRes = await alice.rotateKey(fourthKeys.pubkey);
+    assert.equal(fourthRes.status, 429);
+    assert.equal(fourthRes.data.error, 'rate_limited');
+    assert.equal(typeof fourthRes.data.retry_after, 'number');
+    assert.ok(fourthRes.data.retry_after > 0);
+
+    const row = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(row.pubkey, lastKeys.pubkey);
+    assert.equal((await alice.state()).data.state_seq, seqBefore + 3);
+
+    const rotHistory = ctx.db
+      .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
+      .all('alice');
+    assert.equal(rotHistory.length, 3);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join with a pending resident key returns 409 pubkey_taken', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: bob, keys: bobKeys } = await createResident(ctx, 'bob', { approved: false });
+
+    const carol = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...bobKeys });
+    const joinRes = await carol.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 409);
+    assert.deepEqual(joinRes.data, { error: 'pubkey_taken' });
+
+    const carolRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('carol');
+    assert.equal(carolRow, undefined);
+
+    const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'bob' });
+    assert.equal(appRes.status, 200);
+
+    const bobCheckin = await bob.checkin('still bob');
+    assert.equal(bobCheckin.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join with a muted or suspended resident key returns 409 pubkey_taken', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: bobKeys } = await createResident(ctx, 'bob');
+
+    ctx.db.prepare('UPDATE residents SET status = ? WHERE handle = ?').run('muted', 'bob');
+    const carol = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...bobKeys });
+    const carolRes = await carol.join({ origin: 'musebook' });
+    assert.equal(carolRes.status, 409);
+    assert.equal(carolRes.data.error, 'pubkey_taken');
+
+    ctx.db.prepare('UPDATE residents SET status = ? WHERE handle = ?').run('suspended', 'bob');
+    const dave = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'dave', ...bobKeys });
+    const daveRes = await dave.join({ origin: 'musebook' });
+    assert.equal(daveRes.status, 409);
+    assert.equal(daveRes.data.error, 'pubkey_taken');
+
+    const bobRow = ctx.db.prepare('SELECT pubkey, status FROM residents WHERE handle = ?').get('bob');
+    assert.equal(bobRow.pubkey, bobKeys.pubkey);
+    assert.equal(bobRow.status, 'suspended');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate to a freed key succeeds after the previous owner rotated away', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceOldKeys } = await createResident(ctx, 'alice');
+    const { client: bob, keys: bobOldKeys } = await createResident(ctx, 'bob');
+
+    const aliceFresh = generateKeypair();
+    const aliceRot = await alice.rotateKey(aliceFresh.pubkey);
+    assert.equal(aliceRot.status, 200);
+
+    const bobRot = await bob.rotateKey(aliceOldKeys.pubkey);
+    assert.equal(bobRot.status, 200);
+    assert.equal(bobRot.data.rotated, true);
+
+    const oldBobCheckin = await bob.checkin('old bob key');
+    assert.equal(oldBobCheckin.status, 401);
+
+    const bobNewClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...aliceOldKeys });
+    const newBobCheckin = await bobNewClient.checkin('freed key');
+    assert.equal(newBobCheckin.status, 200);
+    assert.equal(newBobCheckin.data.handle, 'bob');
+
+    const bobRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('bob');
+    assert.equal(bobRow.pubkey, aliceOldKeys.pubkey);
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, aliceFresh.pubkey);
+
+    const bobHistory = ctx.db
+      .prepare('SELECT action, pubkey FROM key_history WHERE handle = ? ORDER BY id ASC')
+      .all('bob');
+    assert.equal(bobHistory.length, 2);
+    assert.equal(bobHistory[0].action, 'register');
+    assert.equal(bobHistory[0].pubkey, bobOldKeys.pubkey);
+    assert.equal(bobHistory[1].action, 'rotate');
+    assert.equal(bobHistory[1].pubkey, aliceOldKeys.pubkey);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate for an unknown handle returns 401 unknown_resident and writes nothing', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    const seqBefore = (await alice.state()).data.state_seq;
+
+    const ghostKeys = generateKeypair();
+    const targetKeys = generateKeypair();
+    const ghost = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'ghost', ...ghostKeys });
+    const rotRes = await ghost.rotateKey(targetKeys.pubkey);
+    assert.equal(rotRes.status, 401);
+    assert.equal(rotRes.data.error, 'unknown_resident');
+
+    const ghostRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('ghost');
+    assert.equal(ghostRow, undefined);
+    const ghostHistory = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('ghost');
+    assert.equal(ghostHistory.length, 0);
+
+    const seqAfter = (await alice.state()).data.state_seq;
+    assert.equal(seqAfter, seqBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('400 rotate errors do not consume the 3/hour budget', async () => {
+  const ctx = await startTestServer();
+  try {
+    let { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
+
+    const sameRes = await alice.rotateKey(aliceKeys.pubkey);
+    assert.equal(sameRes.status, 400);
+    assert.equal(sameRes.data.error, 'same_pubkey');
+
+    const badRes = await alice.rotateKey('not-a-key');
+    assert.equal(badRes.status, 400);
+    assert.equal(badRes.data.error, 'invalid_pubkey');
+
+    const emptyRes = await alice.rotateKey('');
+    assert.equal(emptyRes.status, 400);
+    assert.equal(emptyRes.data.error, 'missing_pubkey');
+
+    for (let i = 0; i < 3; i += 1) {
+      const nextKeys = generateKeypair();
+      const rotRes = await alice.rotateKey(nextKeys.pubkey);
+      assert.equal(rotRes.status, 200);
+      alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nextKeys });
+    }
+
+    const rotHistory = ctx.db
+      .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
+      .all('alice');
+    assert.equal(rotHistory.length, 3);
+  } finally {
+    await ctx.close();
+  }
+});
