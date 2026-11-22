@@ -619,3 +619,165 @@ test('CLI partial failure exits 1 with ok: false summary', async () => {
     await ctx.close();
   }
 });
+
+test('function-level dry-run runs all 3 NPCs, posts nothing, writes nothing, never consults the brain', async () => {
+  const ctx = await startTestServer();
+  const keysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-dry-'));
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, keysDir);
+    const logs = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 0,
+      dryRun: true,
+      brainImpl: async () => {
+        throw new Error('brain must not be called in dry-run');
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.results.length, 3);
+    for (const r of res.results) {
+      assert.equal(r.action, 'dry_run');
+      assert.equal(r.posted, false);
+      assert.equal(r.ok, true);
+    }
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+    const summary = logs[logs.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(logs.filter((l) => l.action === 'dry_run').length, 3);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(keysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('single-NPC run never calls sleep, even with a large stagger', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir, ['maren']);
+    stateDir = makeStateDirFromKeys(sharedKeysDir, ['maren']);
+    let brainCalls = 0;
+    const sleepCalls = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      npc: 'maren',
+      staggerMs: 9999,
+      brainImpl: async () => {
+        brainCalls++;
+        return 'Lead sorts clink softly in the tray.';
+      },
+      logger: () => {},
+      sleepImpl: async (ms) => sleepCalls.push(ms),
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.results.length, 1);
+    assert.equal(res.results[0].npc, 'maren');
+    assert.equal(res.results[0].posted, true);
+    assert.deepEqual(sleepCalls, []);
+    assert.equal(brainCalls, 1);
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('probe HTTP 404 and 403 log the status and run no turns', async () => {
+  for (const status of [404, 403]) {
+    const logs = [];
+    let fetchCalls = 0;
+    const res = await runAll({
+      apiBase: 'http://fake.local',
+      stateDir: '/tmp/nope',
+      fetchImpl: async () => {
+        fetchCalls++;
+        return { ok: false, status };
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+
+    assert.deepEqual(res, { ok: false, results: [] });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].status, status);
+    assert.match(logs[0].error, new RegExp(`HTTP ${status}`));
+    assert.equal(logs[0].api_base, 'http://fake.local');
+    assert.equal(fetchCalls, 1);
+  }
+});
+
+test('CLI rejects empty --stagger-ms with usage on stderr', async () => {
+  const ctx = await startTestServer();
+  try {
+    const res = await runAllCli(['--api-base', ctx.baseUrl, '--stagger-ms', '']);
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /Usage:/);
+    assert.match(res.stderr, /Invalid --stagger-ms/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('whitespace-only apiBase fails at the probe, not as missing', async () => {
+  const logs = [];
+  const urls = [];
+  const res = await runAll({
+    apiBase: '   ',
+    stateDir: '/tmp/nope',
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      throw new Error('boom');
+    },
+    logger: (obj) => logs.push(obj),
+    sleepImpl: async () => {},
+  });
+
+  assert.deepEqual(res, { ok: false, results: [] });
+  assert.equal(logs.length, 1);
+  assert.match(logs[0].error, /API unreachable: boom/);
+  assert.notEqual(logs[0].error, 'Missing apiBase');
+  assert.deepEqual(urls, ['   /api/town/state']);
+});
+
+test('CLI --npc wick --dry-run runs only Wick, exits 0, writes nothing', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-wick-dry-'));
+  try {
+    const res = await runAllCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--npc',
+      'wick',
+      '--stagger-ms',
+      '0',
+      '--dry-run',
+    ]);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs.length, 1);
+    assert.equal(summary.npcs[0].npc, 'wick');
+    assert.equal(summary.npcs[0].action, 'dry_run');
+    assert.equal(summary.npcs[0].posted, false);
+    assert.equal(summary.npcs[0].ok, true);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
