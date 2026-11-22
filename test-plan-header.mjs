@@ -18,6 +18,7 @@ const STAGING_HTML_PATH = path.join(__dirname, 'staging-polyfork', 'index.html')
 const STAGE_TEST_PATH = path.join(__dirname, 'scripts', 'test-stage-deploy.mjs');
 const CHECK_LIVE_PATH = path.join(__dirname, 'scripts', 'check-live.mjs');
 const TOWN3D_DIR = path.join(__dirname, 'town-3d');
+const TOWN_JSON_PATH = path.join(__dirname, 'town.json');
 const RETIRED_TERM = 'camp' + 'fire';
 
 function readPlanHeader() {
@@ -331,4 +332,114 @@ test('PLAN.md header deploy-candidate pin agrees with README Status', () => {
 
   assert.equal(headerCandMatch[1], readmeCandMatch[1], 'Deploy-candidate ?v= must match between PLAN.md and README.md');
   assert.equal(headerCandMatch[2], readmeCandMatch[2], 'Deploy-candidate file count must match between PLAN.md and README.md');
+});
+
+test('town.json live fields agree with PLAN.md header', () => {
+  const town = JSON.parse(fs.readFileSync(TOWN_JSON_PATH, 'utf8'));
+  assert.equal(town.live, true, 'town.json live must be true');
+  assert.ok(
+    typeof town.live_note === 'string' && town.live_note.includes('Live since 2026-11-13'),
+    'town.json live_note must include Live since 2026-11-13'
+  );
+  assert.equal(town.gathering_place, 'Ghostlight Bandstand', 'town.json gathering_place must be Ghostlight Bandstand');
+  assert.equal(town.base_url, 'https://milo.4167360.xyz', 'town.json base_url must be https://milo.4167360.xyz');
+  assert.equal(town.version, '0.2.0-phase2', 'town.json version must be 0.2.0-phase2');
+
+  const { headerLines, statusLine } = readPlanHeader();
+  assert.ok(
+    statusLine.includes('town API live since 2026-11-13'),
+    'PLAN.md **Status:** must include town API live since 2026-11-13'
+  );
+  const gatheringLine = headerLines.find((line) => line.startsWith('The gathering place is decided:'));
+  assert.ok(gatheringLine, 'PLAN.md header must have the gathering-place line');
+  assert.ok(gatheringLine.includes('Ghostlight Bandstand'), 'Gathering-place line must name Ghostlight Bandstand');
+});
+
+test('PLAN.md §12.6 live-API deploy record agrees with the header', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const sec126Idx = planText.indexOf('### 12.6');
+  assert.ok(sec126Idx !== -1, 'PLAN.md must contain ### 12.6');
+  const sec126 = planText.slice(sec126Idx);
+
+  assert.ok(sec126.includes('2026-11-13'), 'PLAN.md §12.6 must include 2026-11-13');
+  assert.ok(
+    sec126.includes('`/api/town/*` is live at `https://milo.4167360.xyz/api/town/state`'),
+    'PLAN.md §12.6 must record live /api/town/state URL'
+  );
+  assert.ok(sec126.includes('`state_seq` `83`'), 'PLAN.md §12.6 must record `state_seq` `83`');
+  assert.match(
+    sec126,
+    /Phase 2 code is complete as of\s+slice 93/,
+    'PLAN.md §12.6 must record Phase 2 code is complete as of slice 93'
+  );
+  assert.ok(sec126.includes('`?v=40` / 193 files'), 'PLAN.md §12.6 must record `?v=40` / 193 files');
+
+  const candMatch = statusLine.match(/`(\?v=\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
+  assert.ok(candMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
+  assert.equal(candMatch[1], '?v=40', 'PLAN.md **Status:** deploy candidate ?v= must match §12.6 (?v=40)');
+  assert.equal(candMatch[2], '193', 'PLAN.md **Status:** deploy candidate file count must match §12.6 (193)');
+});
+
+test('README.md per-file pin agrees with the latest §8 entry', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  const sliceMatch = latestLine.match(/`([a-z0-9\-/]+\.mjs)` (\d+) → (\d+) top-level tests/);
+  assert.ok(sliceMatch, 'Latest §8 entry must record `<file>.mjs <old> → <new> top-level tests`');
+  const [, file, , newCount] = sliceMatch;
+
+  const readmeStatus = readReadmeStatusSection();
+  assert.ok(
+    readmeStatus.includes(`\`${file}\` ${newCount}/${newCount}`),
+    `README.md ## Status must pin \`${file}\` ${newCount}/${newCount}`
+  );
+});
+
+test('README.md Town API bullet agrees with the header and town.json', () => {
+  const readmeStatus = readReadmeStatusSection();
+  assert.ok(
+    readmeStatus.includes('https://milo.4167360.xyz/api/town/'),
+    'README.md ## Status must include https://milo.4167360.xyz/api/town/'
+  );
+  assert.ok(readmeStatus.includes('since 2026-11-13'), 'README.md ## Status must include since 2026-11-13');
+  assert.ok(readmeStatus.includes('**live** at'), 'README.md ## Status must include **live** at');
+  assert.ok(readmeStatus.includes('`http://127.0.0.1:8124`'), 'README.md ## Status must include `http://127.0.0.1:8124`');
+
+  const town = JSON.parse(fs.readFileSync(TOWN_JSON_PATH, 'utf8'));
+  assert.equal(town.dev_base_url, 'http://127.0.0.1:8124', 'town.json dev_base_url must be http://127.0.0.1:8124');
+});
+
+test('PLAN.md §8 slice-93 entry closes the last Phase 2 line', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const sec8 = readSection8(planText);
+  const entries = [...sec8.matchAll(/^\*Slice (\d+)([a-z]?)\b[^\n]*/gm)];
+  const slice93 = entries.find((m) => m[1] === '93');
+  assert.ok(slice93, 'PLAN.md §8 must contain a *Slice 93 entry');
+  assert.ok(
+    slice93[0].includes('last unshipped Phase 2 line'),
+    'PLAN.md §8 Slice 93 entry must include last unshipped Phase 2 line'
+  );
+
+  assert.ok(statusLine.includes('Phase 2 code complete'), 'PLAN.md **Status:** must include Phase 2 code complete');
+  const readmeStatus = readReadmeStatusSection();
+  assert.ok(
+    readmeStatus.includes('Phase 0 is done and Phase 2 code is complete'),
+    'README.md ## Status must include Phase 0 is done and Phase 2 code is complete'
+  );
+});
+
+test('Deploy candidate is strictly newer than live and not yet deployed', () => {
+  const { statusLine } = readPlanHeader();
+  const liveMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
+  assert.ok(liveMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
+
+  const candMatch = statusLine.match(/`\?v=(\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
+  assert.ok(candMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
+
+  assert.ok(
+    Number(candMatch[1]) > Number(liveMatch[1]),
+    `Deploy candidate ?v=${candMatch[1]} must be strictly newer than live ?v=${liveMatch[1]}`
+  );
+
+  const readmeStatus = readReadmeStatusSection();
+  assert.ok(readmeStatus.includes('(not yet deployed)'), 'README.md ## Status must include (not yet deployed)');
 });
