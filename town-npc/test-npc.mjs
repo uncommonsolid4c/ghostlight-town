@@ -868,3 +868,378 @@ test('runTurn passes reply_to when decision is reply and omits it when decision 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('buildTurnPrompt composes emote/[NPC] badges, last-20 slice, memory fallback, and reply guidance', () => {
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+  const book25 = Array.from({ length: 25 }, (_, i) => ({
+    id: i + 1,
+    handle: i % 2 === 0 ? 'lampmoth' : 'wick',
+    role: i % 2 === 0 ? 'muse' : 'npc',
+    kind: i === 24 ? 'emote' : 'say',
+    body: `line ${i + 1}`,
+    created_at: now - (25 - i) * 10,
+  }));
+
+  const p1 = buildTurnPrompt({
+    npc: wick,
+    partOfDay: 'morning',
+    decision: { action: 'reply', replyLine: { id: 7, handle: 'alice' } },
+    promptBook: book25,
+    presence: [],
+    memoryText: '',
+    now,
+  });
+  assert.equal(p1.includes('- [MUSE] lampmoth: line 1\n'), false);
+  assert.ok(p1.includes('line 6'));
+  assert.ok(p1.includes('line 25'));
+  assert.ok(p1.includes('- [MUSE] lampmoth (emote): line 25'));
+  assert.ok(p1.includes('- [NPC] wick: line 24'));
+  assert.ok(p1.includes('(No prior memories recorded yet.)'));
+  assert.ok(p1.includes("Answer alice's line #7 briefly in character."));
+  assert.ok(p1.includes('Remember: stay under 500 characters, output ONLY the single line to say (or NOTHING).'));
+
+  const p2 = buildTurnPrompt({
+    npc: wick,
+    partOfDay: 'morning',
+    decision: { action: 'reply', replyLine: null },
+    promptBook: [],
+    presence: [],
+    memoryText: '  ',
+    now,
+  });
+  assert.ok(p2.includes('(The Prompt Book is quiet.)'));
+  assert.ok(p2.includes('Someone mentioned you recently in the Prompt Book. Reply briefly in character.'));
+
+  const p3 = buildTurnPrompt({
+    npc: wick,
+    partOfDay: 'evening',
+    decision: { action: 'initiate' },
+    promptBook: [],
+    presence: [],
+    memoryText: '2026-11-12: swept the steps.',
+    now,
+  });
+  assert.ok(p3.includes('This is a quiet routine moment at the Bandstand. Offer one short in-character line or observation, or NOTHING if you prefer to stay quiet.'));
+  assert.ok(p3.includes('2026-11-12: swept the steps.'));
+});
+
+test('runTurn --force converts silent to initiate and retired+addressed to reply (dry-run)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-force-'));
+  try {
+    const wick = CHARACTERS[0];
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    assert.equal(localDateString(now), '2026-11-13');
+
+    const twoLit = {
+      footlights: [
+        { handle: 'alice', role: 'muse', slot: 0, lit_at: now - 60, expires_at: now + 2000 },
+        { handle: 'bob', role: 'muse', slot: 1, lit_at: now - 60, expires_at: now + 2000 },
+      ],
+      prompt_book: [
+        { id: 1, handle: 'alice', role: 'muse', body: 'talking with bob', created_at: now - 60 },
+      ],
+      presence: [],
+    };
+    assert.equal(
+      decideTurn({ npc: wick, state: twoLit, npcState: { ambient_today: 0, ambient_date: '2026-11-13' }, now }).action,
+      'silent'
+    );
+
+    const res1 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: true,
+      force: true,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => twoLit }),
+      brainImpl: async () => { throw new Error('no brain in dry-run'); },
+      logger: () => {},
+    });
+    assert.equal(res1.ok, true);
+    assert.equal(res1.action, 'dry_run');
+    assert.equal(res1.decision.action, 'initiate');
+    assert.ok(res1.decision.reason.startsWith('forced ('));
+
+    const retired = {
+      footlights: [],
+      prompt_book: [
+        { id: 9, handle: 'muse_0', role: 'muse', body: 'Wick, is the bulb warm?', created_at: now - 120 },
+      ],
+      presence: Array.from({ length: 10 }, (_, i) => ({
+        handle: `muse_${i}`,
+        role: 'muse',
+        updated_at: now - 500,
+      })),
+    };
+    assert.equal(
+      decideTurn({ npc: wick, state: retired, npcState: { ambient_today: 0, ambient_date: '2026-11-13' }, now }).action,
+      'retired'
+    );
+
+    const res2 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: true,
+      force: true,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => retired }),
+      brainImpl: async () => { throw new Error('no brain in dry-run'); },
+      logger: () => {},
+    });
+    assert.equal(res2.ok, true);
+    assert.equal(res2.action, 'dry_run');
+    assert.equal(res2.decision.action, 'reply');
+    assert.deepEqual(res2.decision.replyLine, { id: 9, handle: 'muse_0' });
+
+    assert.equal(fs.existsSync(path.join(tmpDir, 'wick')), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runTurn brain returning NOTHING or empty posts nothing and leaves memory empty', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-nothing-'));
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const quiet = { footlights: [], prompt_book: [], presence: [] };
+    const fakeFetch = async () => ({ ok: true, status: 200, json: async () => quiet });
+
+    for (const draft of ['NOTHING', '   ']) {
+      const res = await runTurn({
+        npcHandle: 'wick',
+        apiBase: 'http://fake.local',
+        stateDir: tmpDir,
+        dryRun: false,
+        now,
+        fetchImpl: fakeFetch,
+        brainImpl: async () => draft,
+        logger: () => {},
+      });
+      assert.equal(res.ok, true);
+      assert.equal(res.action, 'nothing');
+      assert.equal(res.posted, false);
+      assert.equal(fs.readFileSync(path.join(tmpDir, 'wick', 'memory.md'), 'utf8'), '');
+      const st = JSON.parse(fs.readFileSync(path.join(tmpDir, 'wick', 'state.json'), 'utf8'));
+      assert.equal(st.turns, 0);
+      assert.equal(st.last_turn_at, now);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runTurn state fetch failure returns error without calling the brain or writing files (dry-run)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-fetch-err-'));
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    let brainCalls = 0;
+    const brainImpl = async () => {
+      brainCalls += 1;
+      return 'should not run';
+    };
+
+    const logs1 = [];
+    const res1 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: true,
+      now,
+      fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+      brainImpl,
+      logger: (o) => logs1.push(o),
+    });
+    assert.equal(res1.ok, false);
+    assert.equal(res1.exitCode, 1);
+    assert.equal(res1.action, 'error');
+    assert.equal(logs1[0]?.reason, 'state fetch failed: HTTP 500');
+    assert.equal(brainCalls, 0);
+
+    const logs2 = [];
+    const res2 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir,
+      dryRun: true,
+      now,
+      fetchImpl: async () => { throw new Error('socket hang up'); },
+      brainImpl,
+      logger: (o) => logs2.push(o),
+    });
+    assert.equal(res2.ok, false);
+    assert.equal(res2.exitCode, 1);
+    assert.equal(res2.action, 'error');
+    assert.equal(logs2[0]?.reason, 'state fetch error: socket hang up');
+    assert.equal(brainCalls, 0);
+
+    assert.equal(fs.existsSync(path.join(tmpDir, 'wick')), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runTurn tolerates a failed checkin but reports a failed say', async () => {
+  const tmpA = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-checkin-fail-'));
+  const tmpB = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-say-fail-'));
+  const origFetch = globalThis.fetch;
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const quiet = { footlights: [], prompt_book: [], presence: [] };
+
+    const postedUrlsA = [];
+    const fakeFetchA = async (url, init) => {
+      if (init && init.method === 'POST') {
+        postedUrlsA.push(url);
+        if (url.endsWith('/api/town/ghostlight/checkin')) {
+          return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+        }
+        if (url.endsWith('/api/town/ghostlight/say')) {
+          return { ok: true, status: 201, json: async () => ({ id: 1 }) };
+        }
+      }
+      return { ok: true, status: 200, json: async () => quiet };
+    };
+    globalThis.fetch = fakeFetchA;
+    const logsA = [];
+    const resA = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpA,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetchA,
+      brainImpl: async () => 'Swept the top step before the sun hit.',
+      logger: (o) => logsA.push(o),
+    });
+    assert.equal(resA.ok, true);
+    assert.equal(resA.posted, true);
+    assert.equal(resA.action, 'initiate');
+    assert.ok(postedUrlsA.some((u) => u.endsWith('/api/town/ghostlight/say')));
+    assert.ok(logsA.some((o) => o.action === 'checkin_failed' && String(o.reason).includes('HTTP 500')));
+
+    const fakeFetchB = async (url, init) => {
+      if (init && init.method === 'POST') {
+        if (url.endsWith('/api/town/ghostlight/checkin')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        }
+        if (url.endsWith('/api/town/ghostlight/say')) {
+          return { ok: false, status: 500, json: async () => ({ error: 'say boom' }) };
+        }
+      }
+      return { ok: true, status: 200, json: async () => quiet };
+    };
+    globalThis.fetch = fakeFetchB;
+    const logsB = [];
+    const resB = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpB,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetchB,
+      brainImpl: async () => 'Swept the top step before the sun hit.',
+      logger: (o) => logsB.push(o),
+    });
+    assert.equal(resB.ok, false);
+    assert.equal(resB.action, 'say_failed');
+    assert.equal(resB.posted, false);
+    assert.ok(logsB.some((o) => o.action === 'say_failed' && String(o.reason).includes('HTTP 500')));
+    assert.equal(fs.readFileSync(path.join(tmpB, 'wick', 'memory.md'), 'utf8'), '');
+    const stB = JSON.parse(fs.readFileSync(path.join(tmpB, 'wick', 'state.json'), 'utf8'));
+    assert.equal(stB.turns, 0);
+  } finally {
+    globalThis.fetch = origFetch;
+    fs.rmSync(tmpA, { recursive: true, force: true });
+    fs.rmSync(tmpB, { recursive: true, force: true });
+  }
+});
+
+test('runTurn persists dated memory and state counters after a successful post', async () => {
+  const tmpDir1 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-persist-'));
+  const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-persist-long-'));
+  const origFetch = globalThis.fetch;
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    let currentState = { footlights: [], prompt_book: [], presence: [] };
+    const fakeFetch = async (url, init) => {
+      if (init && init.method === 'POST') {
+        return { ok: true, status: 201, json: async () => ({ id: 1 }) };
+      }
+      return { ok: true, status: 200, json: async () => currentState };
+    };
+    globalThis.fetch = fakeFetch;
+
+    const res1 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir1,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'Swept the top step before the sun hit.',
+      logger: () => {},
+    });
+    assert.equal(res1.ok, true);
+    assert.equal(res1.posted, true);
+    assert.equal(res1.action, 'initiate');
+    assert.equal(
+      fs.readFileSync(path.join(tmpDir1, 'wick', 'memory.md'), 'utf8'),
+      '2026-11-13: Swept the top step before the sun hit.\n'
+    );
+    const st1 = JSON.parse(fs.readFileSync(path.join(tmpDir1, 'wick', 'state.json'), 'utf8'));
+    assert.equal(st1.ambient_today, 1);
+    assert.equal(st1.turns, 1);
+    assert.equal(st1.last_turn_at, now);
+
+    currentState = {
+      footlights: [{ handle: 'wick', slot: 2, lit_at: now - 60, expires_at: now + 2000 }],
+      prompt_book: [
+        { id: 7, handle: 'lampmoth', kind: 'say', body: 'Wick, how is the oil holding?', created_at: now - 30, role: 'muse' },
+      ],
+      presence: [],
+    };
+    const res2 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir1,
+      dryRun: false,
+      now: now + 3600,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'Plenty of oil left for the evening.',
+      logger: () => {},
+    });
+    assert.equal(res2.ok, true);
+    assert.equal(res2.posted, true);
+    assert.equal(res2.action, 'reply');
+    const st2 = JSON.parse(fs.readFileSync(path.join(tmpDir1, 'wick', 'state.json'), 'utf8'));
+    assert.equal(st2.ambient_today, 1);
+    assert.equal(st2.turns, 2);
+    const memLines = fs.readFileSync(path.join(tmpDir1, 'wick', 'memory.md'), 'utf8').trimEnd().split('\n');
+    assert.equal(memLines.length, 2);
+
+    currentState = { footlights: [], prompt_book: [], presence: [] };
+    const res3 = await runTurn({
+      npcHandle: 'maren',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDir2,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => 'x'.repeat(200),
+      logger: () => {},
+    });
+    assert.equal(res3.ok, true);
+    assert.equal(res3.posted, true);
+    const trimmedMem = fs.readFileSync(path.join(tmpDir2, 'maren', 'memory.md'), 'utf8').trim();
+    assert.equal(trimmedMem.length, 140);
+    assert.ok(trimmedMem.endsWith('…'));
+    assert.ok(trimmedMem.startsWith('2026-11-13: '));
+  } finally {
+    globalThis.fetch = origFetch;
+    fs.rmSync(tmpDir1, { recursive: true, force: true });
+    fs.rmSync(tmpDir2, { recursive: true, force: true });
+  }
+});
