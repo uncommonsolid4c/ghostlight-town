@@ -579,3 +579,127 @@ test('buildEmptyPadMarker aligns signpost and slab geometry within floating-poin
   assert.equal(slab.position.z, 0);
   assert.equal(sign.position.x, 2.0);
 });
+
+test('plot ring geometry: all 8 plots lie on the 18.5 m ring with mirrored pairs', () => {
+  assert.equal(TOWN_LAYOUT.plots.length, 8);
+  for (const plot of TOWN_LAYOUT.plots) {
+    assert.ok(
+      Math.abs(Math.hypot(plot.x, plot.z) - 18.5) < 0.01,
+      `plot ${plot.plotNumber} should lie on the 18.5 m ring`
+    );
+  }
+
+  for (const [a, b] of [[1, 8], [2, 7], [3, 6], [4, 5]]) {
+    const pa = TOWN_LAYOUT.plots[a - 1];
+    const pb = TOWN_LAYOUT.plots[b - 1];
+    assert.ok(Math.abs(pa.x + pb.x) < 1e-9, `plots ${a} and ${b} x should be mirrored`);
+    assert.ok(Math.abs(pa.z - pb.z) < 1e-9, `plots ${a} and ${b} z should match`);
+    assert.ok(Math.abs(pa.rotY + pb.rotY) < 1e-9, `plots ${a} and ${b} rotY should be mirrored`);
+  }
+});
+
+test('buildEmptyPadMarker does not mutate the plot object and passes negative groundY through', () => {
+  const THREE = makeFakeThree();
+  const plot = { ...TOWN_LAYOUT.plots[3] };
+  const snapshot = JSON.stringify(plot);
+
+  buildEmptyPadMarker(THREE, plot, 1.0, () => ({}));
+  assert.equal(JSON.stringify(plot), snapshot);
+
+  const group = buildEmptyPadMarker(THREE, TOWN_LAYOUT.plots[1], -0.5, () => ({}));
+  assert.equal(group.position.y, -0.5);
+});
+
+test('slab has no map, sign has no color, slab keeps the default name, sign userData holds only signpostText', () => {
+  const THREE = makeFakeThree();
+  const tex = { tex: 1 };
+  const group = buildEmptyPadMarker(THREE, TOWN_LAYOUT.plots[1], 0, () => tex);
+  const [slab, sign] = group.children;
+
+  assert.equal(slab.material.map, undefined);
+  assert.equal(slab.material.color, '#6e7278');
+  assert.equal(sign.material.color, undefined);
+  assert.equal(sign.material.map, tex);
+  assert.equal(slab.name, '');
+  assert.equal(sign.name, 'plot_2_signpost');
+  assert.equal(Object.keys(slab.userData).length, 0);
+  assert.deepEqual(sign.userData, { signpostText: 'OPEN PLOT #2' });
+});
+
+test('syncEmptyPadMarkers rebuilds a freed plot with a fresh texture object', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  let texCount = 0;
+  const opts = {
+    THREE,
+    makeTextTexture: () => ({ texId: ++texCount }),
+    groundAt: () => 0,
+  };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(texCount, 7);
+  const savedTex2 = liveStore.emptyPadMarkers.get(2).children[1].material.map;
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 2 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(texCount, 7);
+
+  liveStore.plotAssignments.delete('wick');
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(texCount, 8);
+
+  const rebuiltTex2 = liveStore.emptyPadMarkers.get(2).children[1].material.map;
+  assert.notEqual(rebuiltTex2, savedTex2);
+  assert.equal(rebuiltTex2.texId, 8);
+});
+
+test('syncEmptyPadMarkers tolerates assignment objects with extra fields', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+
+  liveStore.plotAssignments.set('wick', {
+    plotNumber: 2,
+    handle: 'wick',
+    manifest: { cottage: 'cabin' },
+    plot_updated_at: 123,
+  });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(liveStore.emptyPadMarkers.has(2), false);
+});
+
+test('drift guard: staging empty-pad literals match town.js buildEmptyPlotPad including the deliberate groundY difference', () => {
+  const townSrc = readFileSync(new URL('../town-3d/town.js', import.meta.url), 'utf8');
+  const stagingSrc = readFileSync(new URL('./empty-pad.mjs', import.meta.url), 'utf8');
+
+  const match = townSrc.match(/function buildEmptyPlotPad\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(match, 'buildEmptyPlotPad must exist in town-3d/town.js');
+  const townBody = match[0];
+
+  const literals = [
+    'open_plot',
+    'clickable',
+    'plot_pad_',
+    'OPEN PLOT #',
+    'signpostText',
+    'plot_${plot.plotNumber}_signpost',
+  ];
+
+  for (const lit of literals) {
+    assert.ok(townBody.includes(lit), `town.js buildEmptyPlotPad missing literal: ${lit}`);
+    assert.ok(stagingSrc.includes(lit), `staging-polyfork/empty-pad.mjs missing literal: ${lit}`);
+  }
+
+  assert.ok(
+    townBody.includes('group.position.set(plot.x, 0, plot.z)'),
+    'town.js buildEmptyPlotPad should hardcode ground y to 0'
+  );
+  assert.ok(
+    stagingSrc.includes('group.position.set(plot.x, groundY, plot.z)'),
+    'staging-polyfork/empty-pad.mjs should parameterize groundY'
+  );
+});
