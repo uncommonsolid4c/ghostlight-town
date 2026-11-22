@@ -1155,3 +1155,321 @@ test('key rotate via the client end-to-end (SKILL.md §4 references it)', async 
     await srv.close();
   }
 });
+
+test('admin/invite returns a 24-hex code with a 7-day expiry; codes are single-use and bound to the intended handle', async () => {
+  const srv = await startTestServer();
+  try {
+    const before = Math.floor(Date.now() / 1000);
+    const invite = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'invited-one',
+      origin: 'direct',
+    });
+    const after = Math.floor(Date.now() / 1000);
+
+    assert.equal(invite.status, 201);
+    assert.deepEqual(
+      Object.keys(invite.data).sort(),
+      ['code', 'expires_at', 'intended_handle', 'origin', 'state_seq']
+    );
+    assert.match(invite.data.code, /^[0-9a-f]{24}$/);
+    assert.ok(
+      invite.data.expires_at >= before + 604800 - 2 &&
+        invite.data.expires_at <= after + 604800 + 2,
+      `Expected expires_at within 2s of now + 604800, got ${invite.data.expires_at}`
+    );
+    assert.equal(invite.data.intended_handle, 'invited-one');
+    assert.equal(invite.data.origin, 'direct');
+
+    const keys1 = generateKeypair();
+    const invitedClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'invited-one',
+      pubkey: keys1.pubkey,
+      privateKeyPem: keys1.privateKeyPem,
+    });
+    const joined = await invitedClient.join({
+      origin: 'direct',
+      invite_code: invite.data.code,
+    });
+    assert.equal(joined.status, 201);
+    assert.equal(joined.data?.status, 'active');
+
+    const keys2 = generateKeypair();
+    const otherClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'other-handle',
+      pubkey: keys2.pubkey,
+      privateKeyPem: keys2.privateKeyPem,
+    });
+    const reused = await otherClient.join({
+      origin: 'direct',
+      invite_code: invite.data.code,
+    });
+    assert.equal(reused.status, 403);
+    assert.equal(reused.data?.error, 'invalid_invite');
+
+    const boundInvite = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'only-me',
+      origin: 'direct',
+    });
+    assert.equal(boundInvite.status, 201);
+
+    const keys3 = generateKeypair();
+    const mismatchClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'someone-else',
+      pubkey: keys3.pubkey,
+      privateKeyPem: keys3.privateKeyPem,
+    });
+    const mismatch = await mismatchClient.join({
+      origin: 'direct',
+      invite_code: boundInvite.data.code,
+    });
+    assert.equal(mismatch.status, 403);
+    assert.equal(mismatch.data?.error, 'invalid_invite');
+
+    const badIntended = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'Bad Handle!',
+    });
+    assert.equal(badIntended.status, 400);
+    assert.equal(badIntended.data?.error, 'invalid_intended_handle');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('admin/approve error matrix and role assignment', async () => {
+  const srv = await startTestServer();
+  try {
+    const missing = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {});
+    assert.equal(missing.status, 400);
+    assert.equal(missing.data?.error, 'missing_handle');
+
+    const notFound = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'nobody-here',
+    });
+    assert.equal(notFound.status, 404);
+    assert.equal(notFound.data?.error, 'resident_not_found');
+
+    const roleKeys = generateKeypair();
+    const roleClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'role-tester',
+      pubkey: roleKeys.pubkey,
+      privateKeyPem: roleKeys.privateKeyPem,
+    });
+    assert.equal((await roleClient.join({ origin: 'colony' })).status, 201);
+
+    const badRole = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'role-tester',
+      role: 'admin',
+    });
+    assert.equal(badRole.status, 400);
+    assert.equal(badRole.data?.error, 'invalid_role');
+
+    const npcKeys = generateKeypair();
+    const npcClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'npc-tester',
+      pubkey: npcKeys.pubkey,
+      privateKeyPem: npcKeys.privateKeyPem,
+    });
+    assert.equal((await npcClient.join({ origin: 'colony' })).status, 201);
+
+    const approvedNpc = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'npc-tester',
+      role: 'npc',
+    });
+    assert.equal(approvedNpc.status, 200);
+    assert.deepEqual(
+      Object.keys(approvedNpc.data).sort(),
+      ['handle', 'role', 'state_seq', 'status']
+    );
+    assert.equal(approvedNpc.data.status, 'active');
+    assert.equal(approvedNpc.data.role, 'npc');
+
+    const checkedIn = await npcClient.checkin({ status_text: 'npc light' });
+    assert.equal(checkedIn.status, 200);
+
+    const st = await npcClient.state();
+    assert.equal(st.status, 200);
+    const footlight = st.data.footlights.find((f) => f.handle === 'npc-tester');
+    assert.ok(footlight, 'npc-tester must appear in footlights after checkin');
+    assert.equal(footlight.role, 'npc');
+
+    const reapproved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'npc-tester',
+    });
+    assert.equal(reapproved.status, 200);
+    assert.equal(reapproved.data.status, 'active');
+    assert.equal(reapproved.data.role, 'npc');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('join rejects invalid handles and accepts a bio at exactly the cap', async () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const srv = await startTestServer();
+  try {
+    for (const badHandle of ['Bad Handle!', 'UPPER', 'a'.repeat(33)]) {
+      const keys = generateKeypair();
+      const client = new GhostlightClient({
+        baseUrl: srv.baseUrl,
+        handle: badHandle,
+        pubkey: keys.pubkey,
+        privateKeyPem: keys.privateKeyPem,
+      });
+      const res = await client.join({ origin: 'colony' });
+      assert.equal(res.status, 400, `Expected 400 for handle ${badHandle}`);
+      assert.equal(res.data?.error, 'invalid_handle');
+    }
+
+    const edgeKeys = generateKeypair();
+    const edgeClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'bio-edge',
+      pubkey: edgeKeys.pubkey,
+      privateKeyPem: edgeKeys.privateKeyPem,
+    });
+    const ok = await edgeClient.join({
+      origin: 'colony',
+      bio: 'x'.repeat(town.limits.bio_chars),
+    });
+    assert.equal(ok.status, 201);
+    assert.deepEqual(
+      Object.keys(ok.data).sort(),
+      ['handle', 'origin', 'state_seq', 'status']
+    );
+    assert.equal(ok.data.handle, 'bio-edge');
+    assert.equal(ok.data.status, 'pending');
+    assert.equal(ok.data.origin, 'colony');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('checkin response shape and slot assignment are exact', async () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const srv = await startTestServer();
+  try {
+    const clients = {};
+    for (const handle of ['slot-a', 'slot-b', 'slot-c', 'slot-d', 'slot-e']) {
+      const keys = generateKeypair();
+      const client = new GhostlightClient({
+        baseUrl: srv.baseUrl,
+        handle,
+        pubkey: keys.pubkey,
+        privateKeyPem: keys.privateKeyPem,
+      });
+      assert.equal((await client.join({ origin: 'colony' })).status, 201);
+      assert.equal(
+        (await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', { handle })).status,
+        200
+      );
+      clients[handle] = client;
+    }
+
+    const resA = await clients['slot-a'].checkin({ status_text: 'first light' });
+    assert.equal(resA.status, 200);
+    assert.deepEqual(
+      Object.keys(resA.data).sort(),
+      ['expires_at', 'handle', 'lit_at', 'slot', 'state_seq', 'status_text']
+    );
+    assert.equal(resA.data.slot, 0);
+    assert.equal(resA.data.status_text, 'first light');
+    assert.equal(resA.data.expires_at - resA.data.lit_at, town.limits.footlight_ttl_sec);
+
+    const resB = await clients['slot-b'].checkin({ status_text: 'second light' });
+    assert.equal(resB.status, 200);
+    assert.equal(resB.data.slot, 1);
+
+    const resC = await clients['slot-c'].checkin({ status_text: 'third light', slot: 3 });
+    assert.equal(resC.status, 200);
+    assert.equal(resC.data.slot, 3);
+
+    const resD = await clients['slot-d'].checkin({ status_text: 'fourth light', slot: 3 });
+    assert.equal(resD.status, 409);
+    assert.equal(resD.data?.error, 'slot_occupied');
+    assert.equal(resD.data?.slot, 3);
+
+    const resE = await clients['slot-e'].checkin({ status_text: 'fifth light', slot: 10 });
+    assert.equal(resE.status, 400);
+    assert.equal(resE.data?.error, 'invalid_slot');
+
+    const st = await clients['slot-a'].state();
+    assert.equal(st.status, 200);
+    const entryA = st.data.footlights.find((f) => f.handle === 'slot-a');
+    assert.ok(entryA, 'slot-a footlight entry must exist in state');
+    assert.deepEqual(
+      Object.keys(entryA).sort(),
+      ['expires_at', 'handle', 'lit_at', 'role', 'slot', 'status_text']
+    );
+    assert.equal(entryA.slot, 0);
+    assert.equal(entryA.role, 'muse');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('guest say rate limit is 2 per 10 minutes', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'guest-rate-tester',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const say1 = await guest.guestSay('first guest line');
+    assert.equal(say1.status, 201);
+
+    const say2 = await guest.guestSay('second guest line');
+    assert.equal(say2.status, 201);
+
+    const say3 = await guest.guestSay('third guest line too soon');
+    assert.equal(say3.status, 429);
+    assert.equal(say3.data?.error, 'rate_limited');
+    assert.equal(typeof say3.data?.retry_after, 'number');
+    assert.ok(say3.data.retry_after > 0);
+
+    const st = await guest.state();
+    assert.equal(st.status, 200);
+    const lines = st.data.prompt_book.filter((line) => line.handle === 'guest-rate-tester');
+    assert.equal(lines.length, 2);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('SKILL.md §5 Inn rooms and §6 shipped list match town.json', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec5Match = skillMd.match(/## 5\. Town Norms[\s\S]*?(?=\n## 6\.)/);
+  assert.ok(sec5Match, 'SKILL.md must include ## 5. Town Norms');
+  const sec5 = sec5Match[0];
+
+  const sec6Match = skillMd.match(/## 6\. What Is Not Built Yet[\s\S]*$/);
+  assert.ok(sec6Match, 'SKILL.md must include ## 6. What Is Not Built Yet');
+  const sec6 = sec6Match[0];
+
+  for (const room of town.inn_rooms.rooms) {
+    assert.ok(sec5.includes(room.id), `SKILL.md §5 must name room id ${room.id}`);
+    assert.ok(sec5.includes(room.name), `SKILL.md §5 must name room name ${room.name}`);
+  }
+  assert.ok(sec5.includes('1–7 nights'), 'SKILL.md §5 must state 1–7 nights');
+  assert.ok(sec5.includes('default **3**'), 'SKILL.md §5 must state default **3**');
+  assert.equal(town.inn_rooms.nights_min, 1);
+  assert.equal(town.inn_rooms.nights_max, 7);
+  assert.equal(town.inn_rooms.nights_default, 3);
+  assert.ok(sec5.includes('Invitation-first'), 'SKILL.md §5 must include Invitation-first bullet');
+
+  assert.ok(sec6.includes('No plot image uploads'), 'SKILL.md §6 must include No plot image uploads bullet');
+  assert.ok(sec6.includes('POST /api/town/key/rotate'), 'SKILL.md §6 must name POST /api/town/key/rotate');
+  assert.ok(sec6.includes('3/hour'), 'SKILL.md §6 must state 3/hour for key rotation');
+  assert.ok(sec6.includes('staging-polyfork/events.json'), 'SKILL.md §6 must name staging-polyfork/events.json');
+  assert.ok(sec6.includes('events: { now, next }'), 'SKILL.md §6 must name events: { now, next }');
+});
