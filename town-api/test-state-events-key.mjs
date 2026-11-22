@@ -881,3 +881,282 @@ test('GET /api/town/state gives a guest host no annotation and no crash', async 
     await ctx.close();
   }
 });
+
+async function registerNpcResident(ctx, handle) {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys });
+  const joinRes = await client.join({ origin: 'direct', bio: `${handle} bio` });
+  assert.equal(joinRes.status, 201);
+  const appRes = await ctx.admin._signedPost('/api/town/admin/approve', { handle, role: 'npc' });
+  assert.equal(appRes.status, 200);
+  return client;
+}
+
+test('GET /api/town/state fails open with null events for wrong-shape events files', async () => {
+  const wrongShapes = ['{}', '{"events": "not-an-array"}', '{"events": null}', '[{"title": "x"}]'];
+  for (const eventsContent of wrongShapes) {
+    const ctx = await startStateServer({ eventsContent });
+    try {
+      const { status, body } = await ctx.getState();
+      assert.equal(status, 200);
+      assert.equal(body.events.now, null);
+      assert.equal(body.events.next, null);
+    } finally {
+      await ctx.close();
+    }
+  }
+});
+
+test('GET /api/town/state enforces the 15–240 minute duration bounds', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startAt = isoAt(baseNow, -600);
+  const ctx1 = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Too Short',
+          host_handle: 'milo',
+          start_at: startAt,
+          duration_min: 14,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Too Long',
+          host_handle: 'milo',
+          start_at: startAt,
+          duration_min: 241,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Floor Fifteen',
+          host_handle: 'milo',
+          start_at: startAt,
+          duration_min: 15,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx1.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Floor Fifteen');
+    assert.equal(body.events.next, null);
+  } finally {
+    await ctx1.close();
+  }
+
+  const ctx2 = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Ceiling Four Hours',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 240,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx2.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Ceiling Four Hours');
+  } finally {
+    await ctx2.close();
+  }
+});
+
+test('GET /api/town/state breaks same-start ties by file order for now and next', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const nowStart = isoAt(baseNow, -900);
+  const nextStart = isoAt(baseNow, 3600);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'First Now',
+          host_handle: 'milo',
+          start_at: nowStart,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Second Now',
+          host_handle: 'wick',
+          start_at: nowStart,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'First Next',
+          host_handle: 'maren',
+          start_at: nextStart,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Second Next',
+          host_handle: 'tomas',
+          start_at: nextStart,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'First Now');
+    assert.equal(body.events.next.title, 'First Next');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state returns 200 full state for garbage, empty, negative, and future since values', async () => {
+  const ctx = await startStateServer();
+
+  try {
+    const initial = await ctx.getState();
+    assert.equal(initial.status, 200);
+    const seq = initial.body.state_seq;
+
+    for (const since of ['abc', '1.5', '-1', '', String(seq + 999)]) {
+      const res = await ctx.getState(since);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.state_seq, seq);
+    }
+
+    const control = await ctx.getState(seq);
+    assert.equal(control.status, 304);
+    assert.equal(control.body, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state annotates the NPC now-host and leaves the lit next-host unflagged', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Now Show',
+          host_handle: 'wick',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Later Show',
+          host_handle: 'maren',
+          start_at: isoAt(baseNow, 3600),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const wick = await registerNpcResident(ctx, 'wick');
+    const maren = await registerResident(ctx, 'maren');
+    const wickCheck = await wick.checkin({ status_text: 'trimming lamps', slot: 1 });
+    const marenCheck = await maren.checkin({ status_text: 'setting type', slot: 2 });
+    assert.equal(wickCheck.status, 200);
+    assert.equal(marenCheck.status, 200);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    const wickRow = body.footlights.find((r) => r.handle === 'wick');
+    const marenRow = body.footlights.find((r) => r.handle === 'maren');
+    assert.ok(wickRow);
+    assert.ok(marenRow);
+    assert.equal(wickRow.role, 'npc');
+    assert.equal(wickRow.status_text, 'Now Show');
+    assert.equal(wickRow.event, true);
+    assert.equal(marenRow.role, 'muse');
+    assert.equal(marenRow.status_text, 'setting type');
+    assert.equal(marenRow.event, undefined);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state does not bump state_seq on an identical-content rewrite, but does on a title change', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startAt = isoAt(baseNow, -900);
+  const initialEvents = {
+    events: [
+      {
+        title: 'Steady Show',
+        host_handle: 'milo',
+        start_at: startAt,
+        duration_min: 60,
+        location: 'bandstand',
+        blurb: 'b',
+      },
+    ],
+  };
+  const ctx = await startStateServer({ baseNow, eventsContent: initialEvents });
+
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    const seq = first.body.state_seq;
+
+    fs.writeFileSync(ctx.eventsPath, JSON.stringify(initialEvents), 'utf8');
+    const newer1 = new Date(Date.now() + 5000);
+    fs.utimesSync(ctx.eventsPath, newer1, newer1);
+
+    const untouched = await ctx.getState(seq);
+    assert.equal(untouched.status, 304);
+    assert.equal(untouched.body, null);
+
+    fs.writeFileSync(
+      ctx.eventsPath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Renamed Show',
+            host_handle: 'milo',
+            start_at: startAt,
+            duration_min: 60,
+            location: 'bandstand',
+            blurb: 'b',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const newer2 = new Date(Date.now() + 10000);
+    fs.utimesSync(ctx.eventsPath, newer2, newer2);
+
+    const renamed = await ctx.getState(seq);
+    assert.equal(renamed.status, 200);
+    assert.ok(renamed.body.state_seq > seq);
+    assert.equal(renamed.body.events.now.title, 'Renamed Show');
+  } finally {
+    await ctx.close();
+  }
+});
