@@ -714,3 +714,228 @@ test('non-200 responses fall back across all three resolvers and tab-label handl
   assert.equal(formatPlotGuestbookTabLabel(0.5), 'Guestbook (0.5)');
   assert.equal(formatPlotGuestbookTabLabel(100), 'Guestbook (100)');
 });
+
+test('resolveInnOverlayContent handles fetch/json edges: thrown json, null response, unusable inn, and no-args call', async () => {
+  const throwJsonRes = await resolveInnOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        throw new Error('broken json');
+      },
+    }),
+  });
+  assert.deepEqual(throwJsonRes, { kind: 'static', url: 'inn/index.html' });
+
+  const nullRespRes = await resolveInnOverlayContent({
+    fetchFn: async () => null,
+  });
+  assert.deepEqual(nullRespRes, { kind: 'static', url: 'inn/index.html' });
+
+  const unknownRoomsRes = await resolveInnOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { inn: { attic: { handle: 'g', nights: 2 } } };
+      },
+    }),
+  });
+  assert.deepEqual(unknownRoomsRes, { kind: 'static', url: 'inn/index.html' });
+
+  const arrayInnRes = await resolveInnOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { inn: [] };
+      },
+    }),
+  });
+  assert.deepEqual(arrayInnRes, { kind: 'static', url: 'inn/index.html' });
+
+  const noArgsRes = await resolveInnOverlayContent();
+  assert.deepEqual(noArgsRes, { kind: 'static', url: 'inn/index.html' });
+});
+
+test('resolveGuestbookOverlayContent handles no-args, null response, 50-cap swallowing, bare entries, and negative dates', async () => {
+  const noArgsRes = await resolveGuestbookOverlayContent();
+  assert.deepEqual(noArgsRes, { kind: 'static', url: 'guestbook/index.html' });
+
+  const nullRespRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => null,
+  });
+  assert.deepEqual(nullRespRes, { kind: 'static', url: 'guestbook/index.html' });
+
+  const entriesWith50Nulls = Array.from({ length: 50 }, () => null);
+  entriesWith50Nulls.push({ kind: 'guestbook', name: 'Real51', body: 'Fifty-first', created_at: 1700000000 });
+  const capRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { entries: entriesWith50Nulls };
+      },
+    }),
+  });
+  assert.equal(capRes.kind, 'api');
+  assert.ok(capRes.html.includes('No signatures yet'));
+  assert.ok(!capRes.html.includes('Real51'));
+
+  const bareRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { entries: [{ kind: 'guestbook' }] };
+      },
+    }),
+  });
+  assert.equal(bareRes.kind, 'api');
+  assert.ok(bareRes.html.includes('<li><strong></strong><br></li>'));
+
+  const negDateRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { entries: [{ kind: 'guestbook', name: 'Neg', body: 'B', created_at: -86400 }] };
+      },
+    }),
+  });
+  assert.ok(negDateRes.html.includes('Dec 30, 1969'));
+});
+
+test('resolvePlotGuestbookOverlayContent handles handle length edges, thrown json, and non-string apiBase', async () => {
+  let oneCharCalled = false;
+  const oneCharRes = await resolvePlotGuestbookOverlayContent('a', {
+    fetchFn: async () => {
+      oneCharCalled = true;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(oneCharCalled, false);
+  assert.equal(oneCharRes.kind, 'fallback');
+
+  const handle32 = 'a' + 'b'.repeat(31);
+  let url32 = null;
+  const res32 = await resolvePlotGuestbookOverlayContent(handle32, {
+    fetchFn: async (url) => {
+      url32 = url;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(res32.kind, 'api');
+  assert.equal(url32, `/api/town/guestbook?plot=${handle32}&limit=50`);
+
+  const handle33 = 'a' + 'b'.repeat(32);
+  let called33 = false;
+  const res33 = await resolvePlotGuestbookOverlayContent(handle33, {
+    fetchFn: async () => {
+      called33 = true;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(called33, false);
+  assert.equal(res33.kind, 'fallback');
+
+  const throwJsonRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        throw new Error('bad json');
+      },
+    }),
+  });
+  assert.equal(throwJsonRes.kind, 'fallback');
+
+  let nonStringBaseUrl = null;
+  const nonStringBaseRes = await resolvePlotGuestbookOverlayContent('wick', {
+    apiBase: 42,
+    fetchFn: async (url) => {
+      nonStringBaseUrl = url;
+      return { status: 200, async json() { return { entries: [] }; } };
+    },
+  });
+  assert.equal(nonStringBaseRes.kind, 'api');
+  assert.equal(nonStringBaseUrl, '/api/town/guestbook?plot=wick&limit=50');
+});
+
+test('resolveInnOverlayContent handles occupancy-line type edges: string expires_at/nights and non-finite nowSec', async () => {
+  const nowSec = 1_700_000_000;
+  const typeRes = await resolveInnOverlayContent({
+    nowSec,
+    innState: {
+      lantern: { handle: "a&b'c", expires_at: 'soon', nights: 2 },
+      window: { handle: 'x', nights: '4' },
+      quiet: { handle: 'y', expires_at: nowSec + 3 * 86400, nights: 9 },
+    },
+  });
+  assert.equal(typeRes.kind, 'api');
+  assert.match(typeRes.html, /Occupied — @a&amp;b&#39;c, 2 nights left\./);
+  assert.match(typeRes.html, /Occupied — @x, 1 night left\./);
+  assert.match(typeRes.html, /Occupied — @y, 3 nights left\./);
+
+  const nonFiniteNowRes = await resolveInnOverlayContent({
+    nowSec: 'bad',
+    innState: {
+      lantern: { handle: 'z', expires_at: Math.floor(Date.now() / 1000) + 2 * 86400 },
+      window: null,
+      quiet: null,
+    },
+  });
+  assert.equal(nonFiniteNowRes.kind, 'api');
+  assert.match(nonFiniteNowRes.html, /Occupied — @z, 2 nights left\./);
+});
+
+test('open* overlays: onBeforeOpen runs even for invalid handles, and non-function onBeforeOpen never throws', async () => {
+  const els1 = makeFakeOverlayElements();
+  let before = 0;
+  const plotRes = await openPlotGuestbookOverlay('BadHandle', {
+    ...els1,
+    fetchFn: async () => {
+      throw new Error('must not be called');
+    },
+    onBeforeOpen: () => {
+      before++;
+    },
+  });
+  assert.equal(before, 1);
+  assert.equal(plotRes.kind, 'fallback');
+
+  const els2 = makeFakeOverlayElements();
+  const innRes = await openInnOverlay({
+    ...els2,
+    innState: { lantern: { handle: 'wick', nights: 1 }, window: null, quiet: null },
+    onBeforeOpen: 'not-a-function',
+  });
+  assert.equal(innRes.kind, 'api');
+  assert.equal(els2.overlayEl.hidden, false);
+
+  const els3 = makeFakeOverlayElements();
+  const gbRes = await openGuestbookOverlay({
+    ...els3,
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+    onBeforeOpen: 42,
+  });
+  assert.equal(gbRes.kind, 'api');
+});
+
+test('overlay HTML pins inn note, guestbook headings, and empty plot guestbook copy', async () => {
+  const innRes = await resolveInnOverlayContent({
+    innState: { lantern: null, window: null, quiet: null },
+  });
+  assert.equal(innRes.kind, 'api');
+  assert.ok(innRes.html.includes('Short stays only'));
+  assert.ok(innRes.html.includes('1&ndash;7 nights, default 3'));
+
+  const gbRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  assert.ok(gbRes.html.includes('<h1>Town Gate Guestbook</h1>'));
+  assert.ok(gbRes.html.includes('How to sign'));
+  assert.ok(gbRes.html.includes('wooden ledger'));
+
+  const plotRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(plotRes.kind, 'api');
+  assert.ok(plotRes.html.includes('No signatures yet — be the first to sign at this cottage door.'));
+  assert.ok(plotRes.html.includes('No letters yet.'));
+  assert.ok(plotRes.html.includes('"plot": "wick"'));
+});
