@@ -431,3 +431,204 @@ test('partial look robustness + frozen config: missing color objects and sky geo
     ['night', 'dawn', 'overcast', 'dawn', 'night']
   );
 });
+
+const KIT_STAGE_PATH = path.join(__dirname, 'kit-campground', '_internal', 'stage.mjs');
+
+test('other-leg midpoints: daylightAt(0.375, 0.625, 0.875) pin exact values and leg symmetry', () => {
+  const p375 = daylightAt(0.375);
+  assert.deepEqual(p375, {
+    sky: 0xa3b4d1,
+    horizon: 0xedd3cd,
+    hemiSky: 0xf0f3ff,
+    hemiGround: 0x9f9da7,
+    hemi: 1.16,
+    key: 0xf7e1da,
+    keyI: 1.4,
+    rim: 0xc3cef7,
+    rimI: 0.625,
+    elev: 34.5,
+    fog: 0.76,
+    night: 0.175,
+  });
+
+  assert.deepEqual(daylightAt(0.625), p375);
+
+  assert.deepEqual(daylightAt(0.875), {
+    sky: 0x687ca0,
+    horizon: 0xbc958c,
+    hemiSky: 0xacb5d6,
+    hemiGround: 0x686476,
+    hemi: 0.76,
+    key: 0xdbcadf,
+    keyI: 1.35,
+    rim: 0x8696e2,
+    rimI: 0.625,
+    elev: 25.5,
+    fog: 0.775,
+    night: 0.675,
+  });
+
+  assert.equal(p375.hemi, (0.82 + 1.50) / 2);
+  assert.equal(p375.keyI, (1.95 + 0.85) / 2);
+  assert.equal(p375.elev, (11 + 58) / 2);
+  assert.equal(p375.fog, (0.80 + 0.72) / 2);
+  assert.equal(p375.night, (0.35 + 0) / 2);
+});
+
+test('daylightAt returns fresh objects: mutating a result never touches the config', () => {
+  const a = daylightAt(0.25);
+  const b = daylightAt(0.25);
+  assert.notEqual(a, b);
+  assert.deepEqual(a, b);
+
+  a.night = 999;
+  a.sky = 0;
+
+  assert.deepEqual(daylightAt(0.25), KIT_DAWN);
+  assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes[1].night, 0.35);
+  assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes[1].sky, 0x8fa9d8);
+});
+
+test('night quantization counts writes: sub-0.01 moves write nothing', () => {
+  let storedNight = 1;
+  let writes = 0;
+  const look = {};
+  Object.defineProperty(look, 'night', {
+    configurable: true,
+    get() {
+      return storedNight;
+    },
+    set(v) {
+      writes++;
+      storedNight = v;
+    },
+  });
+
+  const drift = buildDaylightDrift(look);
+
+  drift.update(1);
+  assert.equal(writes, 0);
+
+  drift.update(59);
+  assert.equal(writes, 1);
+  assert.equal(storedNight, 0.9684148148148146);
+
+  drift.update(1);
+  assert.equal(writes, 1);
+
+  drift.update(839);
+  assert.equal(storedNight, 0);
+  assert.ok(writes >= 2);
+});
+
+test('sky-dome clamping: below-horizon vertices take the horizon color, above-dome vertices extrapolate', () => {
+  const ys = [-30, 0, 120];
+  const colorArr = new Float32Array(ys.length * 3);
+  const look = {
+    night: 1,
+    sky: {
+      geometry: {
+        attributes: {
+          position: {
+            count: ys.length,
+            getY(i) {
+              return ys[i];
+            },
+          },
+          color: {
+            array: colorArr,
+            needsUpdate: false,
+            setXYZ(i, r, g, b) {
+              colorArr[i * 3] = r;
+              colorArr[i * 3 + 1] = g;
+              colorArr[i * 3 + 2] = b;
+            },
+          },
+        },
+      },
+    },
+  };
+
+  buildDaylightDrift(look).update(0);
+
+  const hor = [0.010960, 0.020289, 0.064803];
+  const srgbToLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const top = [7 / 255, 11 / 255, 28 / 255].map(srgbToLin);
+  const k = Math.pow(2, 0.55);
+
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(colorArr[c] - hor[c]) < 1e-6, `y=-30 channel ${c}: ${colorArr[c]}`);
+    assert.ok(Math.abs(colorArr[3 + c] - hor[c]) < 1e-6, `y=0 channel ${c}: ${colorArr[3 + c]}`);
+    const expectedTop = hor[c] + (top[c] - hor[c]) * k;
+    assert.ok(Math.abs(colorArr[6 + c] - expectedTop) < 1e-6, `y=120 channel ${c}: ${colorArr[6 + c]}`);
+  }
+  assert.equal(look.sky.geometry.attributes.color.needsUpdate, true);
+});
+
+test('fog pins: night and overcast near/far, 2.75 ratio at every phase, custom far', () => {
+  const fogNight = mkFog();
+  buildDaylightDrift(makeStubLook(), { fog: fogNight, far: 320 }).update(0);
+  assert.equal(fogNight.near, 96);
+  assert.equal(fogNight.far, 264);
+  assert.equal(fogNight.color.hex, 0x1b2748);
+
+  const fogOvercast = mkFog();
+  buildDaylightDrift(makeStubLook(), { fog: fogOvercast, far: 320 }).update(900);
+  assert.ok(Math.abs(fogOvercast.near - 92.16) < 1e-9);
+  assert.ok(Math.abs(fogOvercast.far - 253.44) < 1e-9);
+  assert.equal(fogOvercast.color.hex, 0xd8dde2);
+
+  for (let i = 0; i <= 20; i++) {
+    const fog = mkFog();
+    buildDaylightDrift(makeStubLook(), { fog, far: 320 }).update((1800 * i) / 20);
+    assert.ok(Math.abs(fog.far / fog.near - 2.75) < 1e-9, `ratio at step ${i}`);
+  }
+
+  const fogCustom = mkFog();
+  buildDaylightDrift(makeStubLook(), { fog: fogCustom, far: 100 }).update(0);
+  assert.equal(fogCustom.near, 30);
+  assert.ok(Math.abs(fogCustom.far - 82.5) < 1e-9);
+});
+
+test('kit fidelity: drift presets are verbatim copies of kit stage.mjs TIMES night + LOOKS dawn/overcast', async () => {
+  const src = await fs.promises.readFile(KIT_STAGE_PATH, 'utf8');
+  const nightMatch = src.match(/\{ at: 1\.00, name: 'night',([^}]+)\}/);
+  const dawnMatch = src.match(/dawn:\s*\{([^}]+)\}/);
+  const overcastMatch = src.match(/overcast:\s*\{([^}]+)\}/);
+  const noonMatch = src.match(/noon:\s*\{([^}]+)\}/);
+
+  assert.ok(nightMatch, 'TIMES night row missing');
+  assert.ok(dawnMatch, 'LOOKS dawn row missing');
+  assert.ok(overcastMatch, 'LOOKS overcast row missing');
+  assert.ok(noonMatch, 'LOOKS noon row missing');
+
+  const parseFields = (body) => {
+    const out = {};
+    for (const m of body.matchAll(/(\w+):\s*(0x[0-9a-fA-F]+|-?\d+(?:\.\d+)?)/g)) {
+      out[m[1]] = m[2].startsWith('0x') ? Number.parseInt(m[2], 16) : Number(m[2]);
+    }
+    return out;
+  };
+
+  const baseKeys = ['sky', 'horizon', 'hemiSky', 'hemiGround', 'hemi', 'key', 'keyI', 'rim', 'rimI', 'elev', 'fog'];
+  const nightFields = parseFields(nightMatch[1]);
+  const dawnFields = parseFields(dawnMatch[1]);
+  const overcastFields = parseFields(overcastMatch[1]);
+  const noonFields = parseFields(noonMatch[1]);
+
+  for (const k of baseKeys) {
+    assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes[0][k], nightFields[k], `night.${k}`);
+  }
+  assert.equal(nightFields.night, undefined);
+  assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes[0].night, 1);
+
+  for (const k of [...baseKeys, 'night']) {
+    assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes[1][k], dawnFields[k], `dawn.${k}`);
+    assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes[2][k], overcastFields[k], `overcast.${k}`);
+  }
+
+  assert.equal(noonFields.sky, 0x66aef2);
+  for (const kf of DAYLIGHT_DRIFT_CONFIG.keyframes) {
+    assert.notEqual(kf.sky, 0x66aef2);
+  }
+});
