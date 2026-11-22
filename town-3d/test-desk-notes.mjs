@@ -345,3 +345,160 @@ test('exact sig line and h1 border color per handle', async () => {
     assert.ok(html.includes(expected[handle].border), `${handle}: missing exact h1 border declaration`);
   }
 });
+
+test('resolvePlotOverlayContent HANDLE_RE boundaries: 2-char, 32-char, digit-first, trailing _/- valid; 33-char, leading -/_, dot invalid', async () => {
+  const makeStub = () => {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    return { urls, fetchFn };
+  };
+
+  const validHandles = [
+    'ab',
+    'a' + 'b'.repeat(31),
+    '1abc',
+    'wick-2',
+    'wick_',
+  ];
+  for (const handle of validHandles) {
+    const { urls, fetchFn } = makeStub();
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.equal(result.kind, 'api', `expected api for valid handle ${handle}`);
+    assert.deepEqual(urls, [`/api/town/plot?handle=${handle}`]);
+  }
+
+  const invalidHandles = [
+    'a' + 'b'.repeat(32),
+    '-abc',
+    '_abc',
+    'wick.',
+  ];
+  for (const handle of invalidHandles) {
+    const { urls, fetchFn } = makeStub();
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.deepEqual(result, {
+      kind: 'static',
+      url: `plots/${encodeURIComponent(handle)}/index.html`,
+    });
+    assert.equal(urls.length, 0, `fetchFn must not be called for invalid handle ${handle}`);
+  }
+});
+
+test('resolvePlotOverlayContent apiBase edges: non-string collapses to empty, trailing slashes stripped, empty stays root-relative', async () => {
+  const cases = [
+    { apiBase: 123, expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: null, expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: 'https://x.example///', expectedUrl: 'https://x.example/api/town/plot?handle=wick' },
+    { apiBase: '', expectedUrl: '/api/town/plot?handle=wick' },
+  ];
+
+  for (const { apiBase, expectedUrl } of cases) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn, apiBase });
+    assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+    assert.deepEqual(urls, [expectedUrl]);
+  }
+});
+
+test('resolvePlotOverlayContent API response shape edges: null res, missing status, throwing json, missing json, array data, verbatim html', async () => {
+  const fallbackCases = [
+    async () => null,
+    async () => ({}),
+    async () => ({ status: 200, json: async () => { throw new Error('bad json'); } }),
+    async () => ({ status: 200 }),
+    async () => ({ status: 200, json: async () => ['<p>x</p>'] }),
+    async () => undefined,
+  ];
+
+  for (const fetchFn of fallbackCases) {
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: '0' }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'api', html: '0' });
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: '  <p>hi</p>  ' }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'api', html: '  <p>hi</p>  ' });
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: '<p>x</p>', extra: 1 }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+    assert.equal('extra' in result, false);
+  }
+});
+
+test('resolvePlotOverlayContent fetchFn type edges: non-function fetchFn never throws, rejecting fetch falls back to static', async () => {
+  for (const fetchFn of ['not-a-function', 42, null, {}]) {
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  const rejectingFetch = async () => {
+    throw new Error('boom');
+  };
+  const result = await resolvePlotOverlayContent('wick', { fetchFn: rejectingFetch });
+  assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('each desk note pins its body color, sig color, exact paragraph count, and shared type rules', async () => {
+  const expected = {
+    milo: {
+      bodyColor: 'color: #2b2118;',
+      sigRule: '.sig { font-style: italic; color: #46687a; }',
+      pCount: 4,
+    },
+    wick: {
+      bodyColor: 'color: #2b2118;',
+      sigRule: '.sig { font-style: italic; color: #6b3e1b; }',
+      pCount: 4,
+    },
+    maren: {
+      bodyColor: 'color: #1e2328;',
+      sigRule: '.sig { font-style: italic; color: #43505c; }',
+      pCount: 4,
+    },
+    tomas: {
+      bodyColor: 'color: #362015;',
+      sigRule: '.sig { font-style: italic; color: #8c4a2b; }',
+      pCount: 5,
+    },
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    assert.ok(html.includes(expected[handle].bodyColor), `${handle}: missing body color`);
+    assert.ok(html.includes(expected[handle].sigRule), `${handle}: missing sig rule`);
+    assert.ok(html.includes('h1 { font-size: 1.3rem;'), `${handle}: missing h1 font-size`);
+    assert.ok(html.includes('line-height: 1.6;'), `${handle}: missing line-height`);
+    assert.ok(html.includes('margin: 2rem auto; padding: 0 1rem;'), `${handle}: missing margin/padding`);
+    assert.equal((html.match(/<p\b/gi) || []).length, expected[handle].pCount, `${handle}: unexpected <p> count`);
+  }
+});
+
+test('each desk note pins its document skeleton: single style/head/body/meta, no title, Bandstand mention, exact ending', async () => {
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    assert.ok(html.endsWith('</body>\n</html>\n'), `${handle}: must end with </body>\\n</html>\\n`);
+    assert.equal((html.match(/<style\b/gi) || []).length, 1, `${handle}: must have exactly one <style>`);
+    assert.equal((html.match(/<head\b/gi) || []).length, 1, `${handle}: must have exactly one <head>`);
+    assert.equal((html.match(/<body\b/gi) || []).length, 1, `${handle}: must have exactly one <body>`);
+    assert.equal((html.match(/<meta\b/g) || []).length, 1, `${handle}: must have exactly one <meta`);
+    assert.ok(!/<title>/i.test(html), `${handle}: must not contain <title>`);
+    assert.match(html, /bandstand/i, `${handle}: must mention the Bandstand`);
+  }
+});
