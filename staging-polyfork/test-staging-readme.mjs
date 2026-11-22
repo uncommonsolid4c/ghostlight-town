@@ -443,3 +443,299 @@ test('staging-polyfork/README.md Verification and Controls claims match staging.
     '## Controls must state coarse-pointer #controls-hint swap'
   );
 });
+
+test('staging-polyfork/README.md Buildings table Tavern recolor, sign removal, and night interior match staging.js and tavern.mjs', () => {
+  const tavernMatch = stagingJs.match(
+    /place\(Tavern,\s*\{\s*width:\s*(\d+),\s*plaster:\s*(\w+),\s*tile:\s*(\w+),\s*timber:\s*(\w+)\s*\},\s*(-?\d+),\s*(-?\d+),\s*\{\s*remove:\s*'sign'\s*\}\)/
+  );
+  assert.ok(tavernMatch, 'Could not parse Tavern placement with remove: sign in staging.js');
+  const [, width, plasterSym, tileSym, timberSym, tx, tz] = tavernMatch;
+  assert.equal(width, '10');
+  assert.equal(plasterSym, 'CREAM');
+  assert.equal(tileSym, 'ROOF');
+  assert.equal(timberSym, 'CEDAR');
+  assert.equal(tx, '-11');
+  assert.equal(tz, '20');
+
+  const resolveColor = (name) => {
+    const m = stagingJs.match(new RegExp(`const\\s+${name}\\s*=\\s*'([^']+)'`));
+    assert.ok(m, `Could not resolve color constant ${name} in staging.js`);
+    return m[1];
+  };
+  const plasterHex = resolveColor(plasterSym);
+  const tileHex = resolveColor(tileSym);
+  const timberHex = resolveColor(timberSym);
+  assert.equal(plasterHex, '#f5efe0');
+  assert.equal(tileHex, '#5a4332');
+  assert.equal(timberHex, '#6b492b');
+
+  const tavernSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'kit-medieval/tavern.mjs'), 'utf8');
+  const interiorMatch = tavernSrc.match(/interior:\s*\{\s*color:\s*'([^']+)',\s*intensity:\s*([\d.]+)/);
+  assert.ok(interiorMatch, 'Could not parse night.interior in kit-medieval/tavern.mjs');
+  assert.equal(interiorMatch[1], '#ffb45c');
+  assert.equal(Number(interiorMatch[2]), 0.6);
+
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  for (const expected of [
+    '(−11, 20)',
+    `width ${width}`,
+    `plaster ${plasterHex}`,
+    `tile ${tileHex}`,
+    `timber ${timberHex}`,
+    'hanging sign REMOVED',
+    `interior ${interiorMatch[1]}`,
+  ]) {
+    assert.ok(buildingsSec.includes(expected), `## Buildings must include "${expected}"`);
+  }
+});
+
+test('staging-polyfork/README.md Buildings table Resident Cottages ring and seed signposts match avatar.mjs; decorative cottages absent from staging.js', async () => {
+  const { TOWN_LAYOUT, SEED_HOME_PADS } = await import('./avatar.mjs');
+  const avatarSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'avatar.mjs'), 'utf8');
+
+  assert.equal(TOWN_LAYOUT.plotRadius, 18.5);
+  assert.match(avatarSrc, /startAngle\s*=\s*0\.42\s*\*\s*Math\.PI/, 'avatar.mjs must use startAngle = 0.42 * Math.PI');
+  assert.match(avatarSrc, /endAngle\s*=\s*1\.58\s*\*\s*Math\.PI/, 'avatar.mjs must use endAngle = 1.58 * Math.PI');
+  assert.deepEqual(SEED_HOME_PADS, { wick: 2, maren: 3, tomas: 4 });
+
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  for (const expected of [
+    'plot ring (r = 18.5 m, 0.42π→1.58π)',
+    '`wick`→2',
+    '`maren`→3',
+    '`tomas`→4',
+    'decorative cottages at (15, −8) and (−16, −9) removed',
+  ]) {
+    assert.ok(buildingsSec.includes(expected), `## Buildings must include "${expected}"`);
+  }
+
+  assert.doesNotMatch(stagingJs, /15,\s*-8/, 'Decorative cottage (15, -8) must be absent from staging.js');
+  assert.doesNotMatch(stagingJs, /-16,\s*-9/, 'Decorative cottage (-16, -9) must be absent from staging.js');
+});
+
+test('staging-polyfork/README.md Buildings table Bandstand ghost drift and footlight 0 match staging.js, npc-wander.mjs, and concept-bandstand.js', async () => {
+  assert.match(stagingJs, /includeStageProps:\s*true/, 'staging.js must pass includeStageProps: true');
+  assert.match(stagingJs, /lightMiloFootlight:\s*true/, 'staging.js must pass lightMiloFootlight: true');
+  assert.match(stagingJs, /spot:\s*bandstandBuilt\.avatarSpots\[0\]/, 'staging.js must place ghost at bandstandBuilt.avatarSpots[0]');
+  assert.match(stagingJs, /includeEyeSpheres:\s*false/, 'staging.js must pass includeEyeSpheres: false');
+
+  const { GHOST_DRIFT_CONFIG } = await import('./npc-wander.mjs');
+  const wanderSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'npc-wander.mjs'), 'utf8');
+  assert.equal(GHOST_DRIFT_CONFIG.speed, 0.35);
+  assert.deepEqual(GHOST_DRIFT_CONFIG.lingers, { spot0: 25, deck1: 8, deck2: 10, deck3: 8 });
+  assert.equal(GHOST_DRIFT_CONFIG.deckPoints.length, 3);
+  assert.deepEqual(
+    GHOST_DRIFT_CONFIG.deckPoints.map((p) => p.label),
+    ['deck1', 'deck2', 'deck3']
+  );
+  assert.match(
+    wanderSrc,
+    /waypoints:\s*\[\s*\{\s*x:\s*spot0\.x[^}]*label:\s*'spot0'\s*\},\s*\.\.\.GHOST_DRIFT_CONFIG\.deckPoints\.map/,
+    'buildStagingGhostDrift waypoints must start with spot0 then spread GHOST_DRIFT_CONFIG.deckPoints'
+  );
+
+  const bandstandSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'concept-bandstand.js'), 'utf8');
+  assert.match(bandstandSrc, /pointLightColor:\s*'#ffaa44'/, 'concept-bandstand.js must set pointLightColor: #ffaa44');
+  assert.match(bandstandSrc, /light\.name\s*=\s*'ghostlight_point_light'/, 'concept-bandstand.js must name light ghostlight_point_light');
+
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  for (const expected of [
+    '`includeStageProps: true`',
+    '`lightMiloFootlight: true`',
+    '`includeEyeSpheres: false`',
+    '`spot0` + 3 deck points, 0.35 m/s',
+    'returns to `avatarSpots[0]`',
+    'footlight 0 stays lit',
+    '`ghostlight_point_light` (#ffaa44) + footlight slot 0',
+  ]) {
+    assert.ok(buildingsSec.includes(expected), `## Buildings must include "${expected}"`);
+  }
+});
+
+test('staging-polyfork/README.md NPC stand-ins table params and moved-outward coords match staging.js and concept-bandstand.js', () => {
+  const resolveColor = (token) => {
+    if (token.startsWith("'")) return token.slice(1, -1);
+    const m = stagingJs.match(new RegExp(`const\\s+${token}\\s*=\\s*'([^']+)'`));
+    assert.ok(m, `Could not resolve color ${token} in staging.js`);
+    return m[1];
+  };
+
+  const mapMatch = stagingJs.match(/const\s+npcStandIns\s*=\s*new\s+Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(mapMatch, 'Could not parse npcStandIns Map in staging.js');
+  const entries = [...mapMatch[1].matchAll(
+    /\['(\w+)',\s*\{\s*group:\s*place\((Villager|Tradesman),\s*\{([\s\S]*?)\},\s*(-?[\d.]+),\s*(-?[\d.]+)\)/g
+  )];
+  assert.equal(entries.length, 3, 'Expected 3 entries in npcStandIns');
+
+  const parsed = new Map();
+  for (const [, handle, cls, paramsRaw, xStr, zStr] of entries) {
+    const getParam = (key) => {
+      const m = paramsRaw.match(new RegExp(`${key}:\\s*('[^']+'|[\\d.]+|[A-Z_]+)`));
+      return m ? m[1] : null;
+    };
+    const x = Number(xStr);
+    const z = Number(zStr);
+    assert.ok(Math.hypot(x, z) > 4.5, `${handle} distance from origin (${Math.hypot(x, z).toFixed(2)}) must exceed 4.5 m`);
+    parsed.set(handle, {
+      cls,
+      figure: resolveColor(getParam('figure')),
+      age: resolveColor(getParam('age')),
+      expression: resolveColor(getParam('expression')),
+      build: getParam('build'),
+      tunic: resolveColor(getParam('tunic')),
+      apron: resolveColor(getParam('apron')),
+      hair: getParam('hair') ? resolveColor(getParam('hair')) : null,
+      x,
+      z,
+    });
+  }
+
+  assert.deepEqual(parsed.get('wick'), {
+    cls: 'Villager',
+    figure: 'masculine',
+    age: 'adult',
+    expression: 'alert',
+    build: '0.9',
+    tunic: '#7a6a55',
+    apron: '#6b492b',
+    hair: '#5a4632',
+    x: 4.16,
+    z: 4.99,
+  });
+  assert.deepEqual(parsed.get('maren'), {
+    cls: 'Tradesman',
+    figure: 'feminine',
+    age: 'old',
+    expression: 'warm',
+    build: '0.9',
+    tunic: '#6a7a8a',
+    apron: '#f5efe0',
+    hair: '#e8e8e8',
+    x: -3.53,
+    z: 5.46,
+  });
+  assert.deepEqual(parsed.get('tomas'), {
+    cls: 'Tradesman',
+    figure: 'masculine',
+    age: 'old',
+    expression: 'warm',
+    build: '1.0',
+    tunic: '#8a7a5a',
+    apron: '#5a4332',
+    hair: '#cfcfcf',
+    x: 0.76,
+    z: -6.46,
+  });
+
+  const bandstandSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'concept-bandstand.js'), 'utf8');
+  assert.match(
+    bandstandSrc,
+    /export\s+const\s+BANDSTAND_LAYOUT\s*=\s*\{[^}]*radius:\s*4\.5\b/,
+    'concept-bandstand.js BANDSTAND_LAYOUT must have radius: 4.5'
+  );
+
+  const npcSec = getSection(readmeMd, 'NPC stand-ins').replace(/\s+/g, ' ');
+  for (const expected of [
+    'villager | masculine, adult, `alert`, build 0.9, tunic #7a6a55, apron #6b492b',
+    'tradesman | feminine, old, `warm`, build 0.9, tunic #6a7a8a, apron #f5efe0, hair #e8e8e8',
+    'tradesman | masculine, old, `warm`, build 1.0, tunic #8a7a5a, apron #5a4332, hair #cfcfcf',
+    'Wick at (4.16, 4.99)',
+    'Maren at (−3.53, 5.46)',
+    'Tomas at (0.76, −6.46)',
+    'bandstand deck (radius 4.5 m)',
+  ]) {
+    assert.ok(npcSec.includes(expected), `## NPC stand-ins must include "${expected}"`);
+  }
+});
+
+test('staging-polyfork/README.md header live-state poller discipline matches staging.js and concept-bandstand.js', () => {
+  const contentsIdx = readmeMd.indexOf('## Contents');
+  assert.ok(contentsIdx !== -1, 'README.md must have ## Contents');
+  const header = readmeMd.slice(0, contentsIdx).replace(/\s+/g, ' ');
+
+  assert.ok(
+    header.includes('polls `GET /api/town/state` (5 s base, ×2 backoff to 60 s, `?since=`, 304 no-op)'),
+    'README header must document GET /api/town/state poller discipline'
+  );
+  assert.ok(
+    header.includes('footlights slots 1–9 by role (`muse` / `npc`, leaving slot 0 / Milo permanent)'),
+    'README header must document footlights slots 1–9 and permanent slot 0'
+  );
+
+  assert.match(
+    stagingJs,
+    /constructor\(\{[^}]*pollIntervalMs\s*=\s*5000,\s*maxBackoffMs\s*=\s*60000/,
+    'StagingLive constructor defaults must be pollIntervalMs = 5000, maxBackoffMs = 60000'
+  );
+  assert.match(
+    stagingJs,
+    /this\.currentIntervalMs\s*=\s*Math\.min\(this\.maxBackoffMs,\s*this\.currentIntervalMs\s*\*\s*2\)/,
+    'StagingLive._backoff must double interval capped at maxBackoffMs'
+  );
+  assert.ok(
+    stagingJs.includes('`?since=${encodeURIComponent(this.lastSeq)}`'),
+    'StagingLive.pollOnce must append ?since= when lastSeq is set'
+  );
+  assert.match(
+    stagingJs,
+    /if\s*\(res\.status\s*===\s*304\)\s*\{[\s\S]*?this\.currentIntervalMs\s*=\s*this\.baseIntervalMs;/,
+    'StagingLive.pollOnce must reset interval on 304'
+  );
+  assert.ok(
+    stagingJs.includes('Number.isInteger(row.slot) && row.slot >= 1 && row.slot < footlights.length'),
+    'applyStagingState must only light slots >= 1'
+  );
+  assert.ok(
+    stagingJs.includes('if (slot === 0 || flGroup.userData?.permanent) continue;'),
+    'applyStagingState must skip slot 0 / permanent footlight'
+  );
+
+  const bandstandSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'concept-bandstand.js'), 'utf8');
+  assert.match(bandstandSrc, /footlightCount:\s*10\b/, 'concept-bandstand.js must set footlightCount: 10');
+});
+
+test('staging-polyfork/README.md UI parity move-in CTA, footer bar, mobile pass, and no pinchFov match index.html, staging.js, and tap-glide.mjs', async () => {
+  const uiSec = getSection(readmeMd, 'UI parity (slices 65a–65c)').replace(/\s+/g, ' ');
+  for (const expected of [
+    '`#move-in-cta` (`href="move-in.html"`)',
+    "`#footer-bar` (`Move in →` + `← back to Milo's corner`)",
+    '@media (max-width: 640px)',
+    '44 px tap targets',
+    'HUD title ellipsis',
+    'Prompt Book repositioned below HUD',
+    'wrapped footer',
+    '`pinchFov` is deliberately not ported',
+  ]) {
+    assert.ok(uiSec.includes(expected), `## UI parity must include "${expected}"`);
+  }
+
+  assert.ok(
+    indexHtml.includes('<a id="move-in-cta" href="move-in.html">Move in &rarr;</a>'),
+    'index.html must include #move-in-cta linking to move-in.html'
+  );
+  const footerMatch = indexHtml.match(/<footer id="footer-bar">([\s\S]*?)<\/footer>/);
+  assert.ok(footerMatch, 'index.html must include #footer-bar');
+  assert.ok(footerMatch[1].includes('<a href="move-in.html">Move in &rarr;</a>'), '#footer-bar must include Move in link');
+  assert.ok(
+    footerMatch[1].includes('<a href="https://milo.4167360.xyz/"') &&
+      footerMatch[1].includes('&larr; back to Milo&apos;s corner</a>'),
+    "#footer-bar must include back to Milo's corner link"
+  );
+
+  const mediaIdx = indexHtml.indexOf('@media (max-width: 640px)');
+  assert.ok(mediaIdx !== -1, 'index.html must include @media (max-width: 640px)');
+  const mediaBlock = indexHtml.slice(mediaIdx, indexHtml.indexOf('</style>', mediaIdx));
+  assert.match(mediaBlock, /#hud h1\s*\{[^}]*white-space:\s*nowrap;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/);
+  assert.match(mediaBlock, /#move-in-cta\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/);
+  assert.match(mediaBlock, /#prompt-book\s*\{[^}]*top:\s*auto;[^}]*bottom:\s*168px;/);
+  assert.match(mediaBlock, /#footer-bar\s*\{[^}]*flex-wrap:\s*wrap;/);
+
+  const tapGlideSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'tap-glide.mjs'), 'utf8');
+  assert.ok(!stagingJs.includes('pinchFov'), 'staging.js must not contain pinchFov');
+  assert.ok(!indexHtml.includes('pinchFov'), 'index.html must not contain pinchFov');
+  assert.ok(!tapGlideSrc.includes('pinchFov'), 'tap-glide.mjs must not contain pinchFov');
+
+  const { DEFAULT_ORBIT_GLIDE_MAX_RADIUS } = await import('./tap-glide.mjs');
+  assert.equal(DEFAULT_ORBIT_GLIDE_MAX_RADIUS, 38);
+  assert.match(tapGlideSrc, /dragThreshold\s*=\s*4\b/, 'tap-glide.mjs must default dragThreshold = 4');
+});
