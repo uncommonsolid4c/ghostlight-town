@@ -1093,3 +1093,167 @@ test('explicit plot:null signs at the gate; empty ?kind= means no filter; whites
     await ctx.close();
   }
 });
+
+test('GET ?plot= trims surrounding whitespace around a valid plot', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const signRes = await visitor.signGuestbook('guestbook', 'Porch Fan', 'Lovely porch.', 'wick');
+    assert.equal(signRes.status, 201);
+
+    const appRes = await admin.moderateGuestbook(signRes.data.id, 'approve');
+    assert.equal(appRes.status, 200);
+
+    const res = await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=%20wick%20`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.entries.length, 1);
+    assert.equal(data.entries[0].id, signRes.data.id);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot handles are case-sensitive on POST and GET', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+
+    const postRes = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'A', body: 'hi', plot: 'WICK' },
+      { 'X-Forwarded-For': '203.0.113.111' }
+    );
+    assert.equal(postRes.status, 400);
+    assert.equal(postRes.data.error, 'unknown_plot');
+
+    const getRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=WICK`);
+    assert.equal(getRes.status, 400);
+    const getData = await getRes.json();
+    assert.equal(getData.error, 'unknown_plot');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('re-approve 409 carries the approved status', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const signRes = await visitor.signGuestbook('guestbook', 'Gate Fan', 'Gate note.');
+    assert.equal(signRes.status, 201);
+
+    const appRes = await admin.moderateGuestbook(signRes.data.id, 'approve');
+    assert.equal(appRes.status, 200);
+
+    const reAppRes = await admin.moderateGuestbook(signRes.data.id, 'approve');
+    assert.equal(reAppRes.status, 409);
+    assert.equal(reAppRes.data.error, 'already_decided');
+    assert.equal(reAppRes.data.status, 'approved');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rate-limit bucket is per-IP, not per-kind', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ipHeader = { 'X-Forwarded-For': '203.0.113.77' };
+    for (let i = 0; i < 3; i++) {
+      const res = await rawPost(
+        ctx.baseUrl,
+        '/api/town/guestbook',
+        { kind: 'guestbook', name: `Guest ${i}`, body: `note ${i}` },
+        ipHeader
+      );
+      assert.equal(res.status, 201);
+    }
+
+    const fourth = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'letter', name: 'Guest 3', body: 'letter 3' },
+      ipHeader
+    );
+    assert.equal(fourth.status, 429);
+    assert.equal(fourth.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('signing at a joined-but-unapproved resident plot succeeds (existence-only check)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const newbie = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'newbie',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    const joinRes = await newbie.join({ origin: 'colony', bio: '' });
+    assert.equal(joinRes.status, 201);
+
+    const row = ctx.db.prepare('SELECT status FROM residents WHERE handle = ?').get('newbie');
+    assert.ok(row);
+    assert.notEqual(row.status, 'approved');
+
+    const signRes = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Early', body: 'Welcome!', plot: 'newbie' },
+      { 'X-Forwarded-For': '203.0.113.78' }
+    );
+    assert.equal(signRes.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET entries expose exactly id/kind/name/body/created_at, no status or plot leak', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const gateSign = await visitor.signGuestbook('guestbook', 'Gate Visitor', 'Hello gate.');
+    assert.equal(gateSign.status, 201);
+    assert.equal((await admin.moderateGuestbook(gateSign.data.id, 'approve')).status, 200);
+
+    const plotSign = await visitor.signGuestbook('guestbook', 'Plot Visitor', 'Hello wick.', 'wick');
+    assert.equal(plotSign.status, 201);
+    assert.equal((await admin.moderateGuestbook(plotSign.data.id, 'approve')).status, 200);
+
+    const gateGet = await visitor.getGuestbook();
+    assert.equal(gateGet.status, 200);
+    assert.equal(gateGet.data.entries.length, 1);
+    assert.deepEqual(Object.keys(gateGet.data.entries[0]).sort(), ['body', 'created_at', 'id', 'kind', 'name']);
+
+    const plotGet = await visitor.getGuestbook(undefined, 'wick');
+    assert.equal(plotGet.status, 200);
+    assert.equal(plotGet.data.entries.length, 1);
+    assert.deepEqual(Object.keys(plotGet.data.entries[0]).sort(), ['body', 'created_at', 'id', 'kind', 'name']);
+  } finally {
+    await ctx.close();
+  }
+});
