@@ -403,3 +403,97 @@ test('vendored anim-idle.json quaternions are unit-length and staging.js uses on
     'staging.js must pass real Polyfork animate as animateFn'
   );
 });
+
+test('attachIdleAnimation and attachNpcAnimation return null for falsy groups without calling animateFn', async () => {
+  let calls = 0;
+  const countingFake = async () => {
+    calls++;
+    return { update() {} };
+  };
+
+  for (const group of [0, '', false, undefined]) {
+    assert.equal(await attachIdleAnimation({}, group, { animateFn: countingFake }), null);
+    assert.equal(await attachNpcAnimation({}, group, { animateFn: countingFake }), null);
+  }
+  assert.equal(calls, 0);
+});
+
+test('attachNpcAnimation catches a synchronously throwing animateFn, warns once, and returns null', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = await attachNpcAnimation({}, { name: 'sync-bad' }, {
+      animateFn: () => {
+        throw new Error('sync boom');
+      },
+    });
+    assert.equal(result, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('sync boom'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('attachIdleAnimation warns with the Error object itself when the thrown Error has an empty message', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = await attachIdleAnimation({}, { name: 'empty-err' }, {
+      animateFn: async () => {
+        throw new Error('');
+      },
+    });
+    assert.equal(result, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('Error'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('updateNpcAnimations skips primitive entries and non-object anim values without throwing', () => {
+  const goodCalls = [];
+  const standIns = new Map([
+    ['null-entry', null],
+    ['num-entry', 42],
+    ['str-entry', 'wick'],
+    ['num-anim', { anim: 42 }],
+    ['str-anim', { anim: 'x' }],
+    ['good', { anim: { update: (dt) => goodCalls.push(dt) } }],
+    ['undef-entry', undefined],
+  ]);
+
+  assert.doesNotThrow(() => updateNpcAnimations(standIns, 0.016));
+  assert.deepEqual(goodCalls, [0.016]);
+});
+
+test('updateNpcAnimations passes undefined and NaN dt through verbatim', () => {
+  const recorded = [];
+  const standIns = new Map([
+    ['wick', { anim: { update: (dt) => recorded.push(dt) } }],
+  ]);
+
+  updateNpcAnimations(standIns, undefined);
+  updateNpcAnimations(standIns, NaN);
+
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[0], undefined);
+  assert.equal(Number.isNaN(recorded[1]), true);
+});
+
+test('updateNpcAnimations follows Map insertion order across calls', () => {
+  const order = [];
+  const standIns = new Map([
+    ['wick', { anim: { update: () => order.push('wick') } }],
+    ['maren', { anim: { update: () => order.push('maren') } }],
+    ['tomas', { anim: { update: () => order.push('tomas') } }],
+  ]);
+
+  updateNpcAnimations(standIns, 0.016);
+  updateNpcAnimations(standIns, 0.033);
+
+  assert.deepEqual(order, ['wick', 'maren', 'tomas', 'wick', 'maren', 'tomas']);
+});
