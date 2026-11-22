@@ -711,3 +711,173 @@ test('staging.js wires attachPorchDeck at both cottage sites, in order', async (
   assert.ok(mTrim !== -1, 'missing attachPorchTrim(THREE, milosCottage);');
   assert.ok(mProps < mDeck && mDeck < mTrim, 'milosCottage porch wiring order must be props < deck < trim');
 });
+
+test('buildProp and attachPlotProps do not mutate their inputs', () => {
+  const THREE = makeFakeThree();
+
+  const remappedProp = { kind: 'cat', x: 1.1, y: 0, z: -12, rot_y: 45, color: '#2b2b2b' };
+  const remappedSnapshot = JSON.stringify(remappedProp);
+  const cat = buildProp(THREE, remappedProp);
+  assert.ok(cat);
+  assert.equal(cat.position.z, 3.45);
+  assert.equal(JSON.stringify(remappedProp), remappedSnapshot);
+
+  const groupProp = { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#6b492b' };
+  const groupSnapshot = JSON.stringify(groupProp);
+  const lantern = buildProp(THREE, groupProp);
+  assert.ok(lantern);
+  assert.equal(lantern.position.z, 2.2);
+  assert.equal(JSON.stringify(groupProp), groupSnapshot);
+
+  const mixedList = [
+    MILO_PLOT_PROPS[0],
+    { kind: 'nope', x: 0, y: 0, z: 0, rot_y: 0, color: '#000000' },
+    MILO_PLOT_PROPS[2],
+  ];
+  const listSnapshot = JSON.stringify(mixedList);
+  const cottage = new THREE.Group();
+  const attached = attachPlotProps(THREE, cottage, mixedList);
+  assert.equal(attached, 2);
+  assert.equal(mixedList.length, 3);
+  assert.equal(JSON.stringify(mixedList), listSnapshot);
+});
+
+test('buildProp returns fresh materials per call; porch trim children share one material; deck material is distinct', () => {
+  const THREE = makeFakeThree();
+
+  const deskProp = { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#7a5230' };
+  const deskA = buildProp(THREE, deskProp);
+  const deskB = buildProp(THREE, deskProp);
+  assert.ok(deskA && deskB);
+  assert.notEqual(deskA.material, deskB.material);
+  assert.equal(deskA.material.color, deskB.material.color);
+
+  const lanternProp = { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#6b492b' };
+  const lanternA = buildProp(THREE, lanternProp);
+  const lanternB = buildProp(THREE, lanternProp);
+  const glassA = lanternA.children.find((c) => c.name === 'prop_lantern_glass');
+  const glassB = lanternB.children.find((c) => c.name === 'prop_lantern_glass');
+  assert.ok(glassA && glassB);
+  assert.notEqual(glassA.material, glassB.material);
+
+  const cottageA = new THREE.Group();
+  const trim = attachPorchTrim(THREE, cottageA);
+  assert.ok(trim);
+  assert.equal(trim.children.length, 7);
+  for (const child of trim.children) {
+    assert.equal(child.material, trim.children[0].material);
+  }
+
+  const deckA = attachPorchDeck(THREE, cottageA);
+  assert.ok(deckA);
+  assert.notEqual(deckA.material, trim.children[0].material);
+
+  const cottageB = new THREE.Group();
+  const deckB = attachPorchDeck(THREE, cottageB);
+  assert.ok(deckB);
+  assert.notEqual(deckB.material, deckA.material);
+});
+
+test('buildProp and porch builders pin roughness per kind and part', () => {
+  const THREE = makeFakeThree();
+
+  const desk = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#7a5230' });
+  const kettle = buildProp(THREE, { kind: 'tea_kettle', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#b87333' });
+  assert.equal(desk.material.opts.roughness, 0.85);
+  assert.equal(kettle.material.opts.roughness, 0.85);
+
+  const cottage = new THREE.Group();
+  const deck = attachPorchDeck(THREE, cottage);
+  const trim = attachPorchTrim(THREE, cottage);
+  assert.equal(deck.material.opts.roughness, 0.9);
+  assert.equal(trim.children[0].material.opts.roughness, 0.9);
+
+  const planter = buildProp(THREE, { kind: 'planter', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#7a5230' });
+  const box = planter.children.find((c) => c.name === 'prop_planter_box');
+  const soil = planter.children.find((c) => c.name === 'prop_planter_soil');
+  const foliage = planter.children.find((c) => c.name === 'prop_planter_foliage');
+  assert.equal(soil.material.opts.roughness, 0.95);
+  assert.equal(foliage.material.opts.roughness, 0.9);
+  assert.equal(box.material.opts.roughness, 0.85);
+
+  const lantern = buildProp(THREE, { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#6b492b' });
+  const glass = lantern.children.find((c) => c.name === 'prop_lantern_glass');
+  assert.equal('roughness' in glass.material.opts, false);
+  assert.equal(glass.material.opts.emissiveIntensity, 1.4);
+});
+
+test('buildProp porch remap formula spot checks beyond the existing table', () => {
+  const THREE = makeFakeThree();
+  const cases = [
+    { z: 1.0, expectedZ: 2.4 },
+    { z: -1.0, expectedZ: 3.1 },
+    { z: 1.5, expectedZ: 2.225 },
+    { z: 2.04, expectedZ: 2.05 },
+    { z: -1.99, expectedZ: 3.4465 },
+  ];
+
+  for (const c of cases) {
+    const desk = buildProp(THREE, { kind: 'desk', x: 0.25, y: 0.1, z: c.z, rot_y: 30, color: '#7a5230' });
+    assert.ok(desk, `z=${c.z}`);
+    assert.ok(Math.abs(desk.position.z - c.expectedZ) < 1e-12, `z=${c.z} got ${desk.position.z}`);
+    assert.ok(Math.abs(desk.position.y - 0.64) < 1e-12, `z=${c.z} y got ${desk.position.y}`);
+    assert.equal(desk.position.x, 0.25);
+    assert.ok(Math.abs(desk.rotation.y - (30 * Math.PI) / 180) < 1e-12);
+  }
+});
+
+test('attachPlotProps preserves order across skipped props; porch attach returns the added child', () => {
+  const THREE = makeFakeThree();
+
+  const cottage = new THREE.Group();
+  const attached = attachPlotProps(THREE, cottage, [
+    MILO_PLOT_PROPS[0],
+    { kind: 'invalid_prop', x: 0, y: 0, z: 0, rot_y: 0, color: '#000000' },
+    MILO_PLOT_PROPS[2],
+    { kind: 'piano', x: 0, y: 0, z: 0, rot_y: 0, color: '#000000' },
+    { kind: 'rug', x: -0.4, y: 0, z: 2.2, rot_y: 0, color: '#a83232' },
+  ]);
+  assert.equal(attached, 3);
+  assert.deepEqual(
+    cottage.children.map((c) => c.name),
+    ['prop_desk', 'prop_cat', 'prop_rug']
+  );
+  assert.deepEqual(
+    cottage.children.map((c) => c.position.x),
+    [-1.2, 1.3, -0.4]
+  );
+
+  const deckGroup = new THREE.Group();
+  const deck = attachPorchDeck(THREE, deckGroup);
+  assert.equal(deckGroup.children.length, 1);
+  assert.equal(deck, deckGroup.children[0]);
+
+  const trimGroup = new THREE.Group();
+  const trim = attachPorchTrim(THREE, trimGroup);
+  assert.equal(trimGroup.children.length, 1);
+  assert.equal(trim, trimGroup.children[0]);
+});
+
+test('every VALID_PROP_KIND builds; attachPlotProps rejects non-array props; MILO props land on the porch band', () => {
+  const THREE = makeFakeThree();
+
+  assert.equal(VALID_PROP_KINDS.size, 9);
+  for (const kind of [...VALID_PROP_KINDS].sort()) {
+    const built = buildProp(THREE, { kind, x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' });
+    assert.ok(built, `expected ${kind} to build`);
+    assert.equal(built.name, `prop_${kind}`);
+  }
+
+  for (const badProps of ['x', 42, { not: 'array' }]) {
+    const cottage = new THREE.Group();
+    assert.equal(attachPlotProps(THREE, cottage, badProps), 0);
+    assert.equal(cottage.children.length, 0);
+  }
+
+  for (const prop of MILO_PLOT_PROPS) {
+    const mesh = buildProp(THREE, prop);
+    assert.ok(mesh);
+    assert.ok(mesh.position.z >= 2.05 && mesh.position.z <= 3.45, `z=${mesh.position.z} outside [2.05, 3.45]`);
+    assert.equal(mesh.material.color, prop.color);
+  }
+});
