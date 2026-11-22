@@ -970,3 +970,239 @@ test('checkin status_text too-long is rejected before rate limiter and omitted d
     await ctx.close();
   }
 });
+
+async function startClockTestServer(opts = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-build-gate-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+  let clockOffset = 0;
+  const nowFn = opts.nowFn || (() => Math.floor(Date.now() / 1000) + clockOffset);
+
+  const { server, db } = createTownServer({
+    dbPath,
+    plotsDir,
+    operatorPubkey: operatorKeys.pubkey,
+    nowFn,
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  return {
+    baseUrl,
+    plotsDir,
+    operatorKeys,
+    db,
+    nowSec: nowFn,
+    advanceClock(sec) {
+      clockOffset += sec;
+    },
+    async close() {
+      await new Promise((resolve) => server.close(resolve));
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function signedCheckinAtServerTime(ctx, handle, privateKeyPem, statusText = '') {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: '/api/town/ghostlight/checkin',
+    body: { status_text: statusText },
+    handle,
+    privateKeyPem,
+    timestamp: ctx.nowSec(),
+  });
+  const res = await fetch(`${ctx.baseUrl}/api/town/ghostlight/checkin`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
+
+test('bandstand full: ten residents fill slots 0..9 and the eleventh checkin is rejected 409 bandstand_full', async () => {
+  const ctx = await startTestServer();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const insertResident = ctx.db.prepare(
+      "INSERT INTO residents (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'active', 'muse', '', NULL, ?)"
+    );
+    const clients = [];
+    for (let i = 0; i < 10; i++) {
+      const handle = `seat${i}`;
+      const keys = generateKeypair();
+      insertResident.run(handle, keys.pubkey, now);
+      clients.push(new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys }));
+    }
+
+    for (let i = 0; i < 10; i++) {
+      const res = await clients[i].checkin({ status_text: `Seat ${i}` });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.slot, i);
+    }
+
+    const s1 = await clients[0].state();
+    assert.equal(s1.status, 200);
+    assert.deepEqual(
+      s1.data.footlights.map((f) => f.slot),
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    );
+
+    const eleventh = await createApprovedClient(ctx, 'eleventh');
+    const fullRes = await eleventh.checkin({ status_text: 'Late arrival' });
+    assert.equal(fullRes.status, 409);
+    assert.equal(fullRes.data.error, 'bandstand_full');
+
+    const s2 = await eleventh.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.footlights.length, 10);
+    assert.equal(s2.data.footlights.some((f) => f.handle === 'eleventh'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('checkin writes a presence row with zone bandstand and role muse; leave removes the footlight but not the presence row', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+    const checkinRes = await client.checkin({ status_text: 'Here.' });
+    assert.equal(checkinRes.status, 200);
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    const p1 = s1.data.presence.find((p) => p.handle === 'gatekeeper');
+    assert.ok(p1);
+    assert.equal(p1.zone, 'bandstand');
+    assert.equal(p1.role, 'muse');
+    assert.ok(Number.isInteger(p1.updated_at));
+
+    const leaveRes = await client.leave();
+    assert.equal(leaveRes.status, 200);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.footlights.some((f) => f.handle === 'gatekeeper'), false);
+    const p2 = s2.data.presence.find((p) => p.handle === 'gatekeeper');
+    assert.ok(p2);
+    assert.equal(p2.zone, 'bandstand');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say rate limit: six lines post, the seventh is rejected 429 rate_limited', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'chatter');
+    for (let i = 0; i < 6; i++) {
+      const res = await client.say(`line ${i}`);
+      assert.equal(res.status, 201);
+    }
+
+    const seventh = await client.say('line 6');
+    assert.equal(seventh.status, 429);
+    assert.equal(seventh.data.error, 'rate_limited');
+    assert.ok(Number.isInteger(seventh.data.retry_after) && seventh.data.retry_after > 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot rate limit: ten PUTs succeed, the eleventh is rejected 429 rate_limited', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'plotter');
+    for (let i = 0; i < 10; i++) {
+      const res = await client.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+      assert.equal(res.status, 200);
+    }
+
+    const eleventh = await client.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(eleventh.status, 429);
+    assert.equal(eleventh.data.error, 'rate_limited');
+    assert.ok(Number.isInteger(eleventh.data.retry_after) && eleventh.data.retry_after > 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('footlight expires after the 45-minute TTL and the slot frees for re-checkin', async () => {
+  const ctx = await startClockTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keys,
+    });
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+    const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(approveRes.status, 200);
+
+    const c1 = await client.checkin({ status_text: 'First watch' });
+    assert.equal(c1.status, 200);
+    assert.equal(c1.data.slot, 0);
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.footlights.length, 1);
+    const seq1 = s1.data.state_seq;
+
+    ctx.advanceClock(45 * 60 + 1);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.footlights.length, 0);
+    assert.equal(s2.data.state_seq, seq1);
+
+    const c2 = await signedCheckinAtServerTime(ctx, 'gatekeeper', keys.privateKeyPem, 'Back again');
+    assert.equal(c2.status, 200);
+    assert.equal(c2.data.slot, 0);
+    assert.equal(c2.data.expires_at, ctx.nowSec() + 45 * 60);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('fresh server state pins nightly_call, plots, inn, guestbook and events shapes', async () => {
+  const ctx = await startClockTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+    const s = await client.state();
+    assert.equal(s.status, 200);
+
+    assert.ok(Number.isInteger(s.data.state_seq));
+    assert.deepEqual(s.data.footlights, []);
+    assert.deepEqual(s.data.prompt_book, []);
+    assert.deepEqual(s.data.presence, []);
+    assert.deepEqual(s.data.plots, {});
+    assert.deepEqual(s.data.inn, { lantern: null, window: null, quiet: null });
+    assert.deepEqual(s.data.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(s.data.guestbook_by_plot, {});
+    assert.deepEqual(s.data.events, { now: null, next: null });
+
+    const nowSec = ctx.nowSec();
+    const expectedDate = new Date(nowSec * 1000).toISOString().slice(0, 10);
+    assert.equal(s.data.nightly_call.date, expectedDate);
+
+    const topicsPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'nightly-topics.json');
+    const topics = JSON.parse(fs.readFileSync(topicsPath, 'utf8'));
+    const midnightMs = Date.UTC(
+      Number(expectedDate.slice(0, 4)),
+      Number(expectedDate.slice(5, 7)) - 1,
+      Number(expectedDate.slice(8, 10))
+    );
+    const dayNumber = Math.floor(midnightMs / 86400000);
+    const idx = ((dayNumber % 30) + 30) % 30;
+    assert.equal(s.data.nightly_call.topic, topics[idx]);
+  } finally {
+    await ctx.close();
+  }
+});
