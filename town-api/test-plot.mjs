@@ -927,3 +927,167 @@ test('PUT stores the normalized manifest; plots are isolated; GET handle validat
     await ctx.close();
   }
 });
+
+test('PUT/GET response shapes are exact; second PUT bumps state_seq by exactly 1', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+
+    const put1 = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(put1.status, 200);
+    assert.deepEqual(Object.keys(put1.data).sort(), ['handle', 'plot_updated_at', 'state_seq']);
+    assert.equal(put1.data.handle, 'alice');
+
+    const get1 = await client.getPlot('alice');
+    assert.equal(get1.status, 200);
+    assert.deepEqual(Object.keys(get1.data).sort(), ['handle', 'html', 'manifest', 'plot_updated_at']);
+
+    const put2 = await client.plot(VALID_MANIFEST, '<p>updated</p>');
+    assert.equal(put2.status, 200);
+    assert.equal(put2.data.state_seq, put1.data.state_seq + 1);
+    assert.ok(put2.data.plot_updated_at >= put1.data.plot_updated_at);
+
+    const missing = await client.getPlot('nobody');
+    assert.equal(missing.status, 404);
+    assert.deepEqual(missing.data, { error: 'plot_not_found' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('validateManifest names unknown keys and too_many_props exactly', () => {
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, cotage: 'gable' }), {
+    ok: false,
+    error: 'unknown_manifest_key',
+    key: 'cotage',
+  });
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, extra: 1 }],
+    }),
+    { ok: false, error: 'unknown_prop_key', key: 'extra', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: Array.from({ length: 13 }, () => ({ kind: 'cat', x: 0, y: 0, z: 0, rot_y: 0 })),
+    }),
+    { ok: false, error: 'too_many_props', max: 12 }
+  );
+});
+
+test('validateManifest preserves hex case and counts signpost_text in characters', () => {
+  const hexRes = validateManifest({
+    ...VALID_MANIFEST,
+    wall: '#D8C8A8',
+    roof: '#AA00FF',
+    trim: '#112233',
+    props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: '#ABCDEF' }],
+  });
+  assert.equal(hexRes.ok, true);
+  assert.equal(hexRes.manifest.wall, '#D8C8A8');
+  assert.equal(hexRes.manifest.roof, '#AA00FF');
+  assert.equal(hexRes.manifest.trim, '#112233');
+  assert.equal(hexRes.manifest.props[0].color, '#ABCDEF');
+
+  assert.equal(
+    validateManifest({ ...VALID_MANIFEST, signpost_text: 'é'.repeat(120) }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, signpost_text: 'é'.repeat(121) }),
+    { ok: false, error: 'invalid_signpost_text', max: 120 }
+  );
+
+  for (const cottage of ['gable', 'cabin', 'tower']) {
+    assert.equal(validateManifest({ ...VALID_MANIFEST, cottage }).ok, true);
+  }
+});
+
+test('validateHtml allows safe everyday desk-note markup', () => {
+  const safeInputs = [
+    '<ul><li>one</li><li>two</li></ul>',
+    '<p>Hello <em>Bandstand</em> and <strong>ghost</strong></p>',
+    '<blockquote>quoted line</blockquote>',
+    '<a href="plots/wick">Wick</a>',
+    '<img src="data:image/svg+xml;base64,PHN2Zz4=">',
+    '<p title="a > b">quoted gt</p>',
+    '<a href="?x=1">query only</a>',
+    '<a href="">empty href</a>',
+    '<hr><h2>Sub</h2><p>x</p>',
+    '<ol><li>a</li></ol><dl><dt>term</dt><dd>def</dd></dl>',
+    VALID_HTML,
+  ];
+  for (const html of safeInputs) {
+    assert.deepEqual(validateHtml(html), { ok: true });
+  }
+});
+
+test('validateManifest/validateHtml size boundaries are exact', () => {
+  // '<p>' (3) + 32761 + '</p>' (4) = 32768 bytes (max); 32762 -> 32769 bytes
+  assert.deepEqual(validateHtml('<p>' + 'x'.repeat(32761) + '</p>'), { ok: true });
+  assert.deepEqual(validateHtml('<p>' + 'x'.repeat(32762) + '</p>'), {
+    ok: false,
+    error: 'html_too_large',
+    max: 32768,
+  });
+
+  // VALID_MANIFEST with 16114-char signpost serializes to 16384 bytes (passes size check -> invalid_signpost_text); 16115 -> 16385 bytes
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, signpost_text: 'a'.repeat(16114) }),
+    { ok: false, error: 'invalid_signpost_text', max: 120 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, signpost_text: 'a'.repeat(16115) }),
+    { ok: false, error: 'manifest_too_large', max: 16384 }
+  );
+});
+
+test('PUT ignores a body handle field and failed PUTs leave the stored plot untouched', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client, keys } = await createApprovedResident(ctx, 'alice');
+
+    const signed = signRequest({
+      method: 'PUT',
+      path: '/api/town/plot',
+      body: { handle: 'bob', manifest: VALID_MANIFEST, html: VALID_HTML },
+      handle: 'alice',
+      privateKeyPem: keys.privateKeyPem,
+    });
+    const res = await fetch(`${ctx.baseUrl}/api/town/plot`, {
+      method: 'PUT',
+      headers: signed.headers,
+      body: signed.rawBody,
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.handle, 'alice');
+
+    const bobGet = await client.getPlot('bob');
+    assert.equal(bobGet.status, 404);
+
+    const manifestPath = path.join(ctx.plotsDir, 'alice', 'manifest.json');
+    const htmlPath = path.join(ctx.plotsDir, 'alice', 'index.html');
+    const manifestBefore = fs.readFileSync(manifestPath);
+    const htmlBefore = fs.readFileSync(htmlPath);
+    const stateBefore = await client.state();
+    assert.equal(stateBefore.status, 200);
+
+    const badManifestPut = await client.plot({ ...VALID_MANIFEST, cottage: 'castle' }, VALID_HTML);
+    assert.equal(badManifestPut.status, 400);
+
+    const badHtmlPut = await client.plot(VALID_MANIFEST, '<script>alert(1)</script>');
+    assert.equal(badHtmlPut.status, 400);
+
+    assert.deepEqual(fs.readFileSync(manifestPath), manifestBefore);
+    assert.deepEqual(fs.readFileSync(htmlPath), htmlBefore);
+
+    const stateAfter = await client.state();
+    assert.equal(stateAfter.status, 200);
+    assert.equal(stateAfter.data.plots.alice, stateBefore.data.plots.alice);
+  } finally {
+    await ctx.close();
+  }
+});
