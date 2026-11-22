@@ -415,11 +415,13 @@ test('town-api/README.md Backups section matches backup.mjs and backup-plots.mjs
     'presence',
     'key_history',
     'meta',
+    'inn_claims',
+    'guestbook',
   ];
   assert.deepEqual(codeTables, expectedTables);
 
-  const readmeTablesMatch = readme.match(/across the 7 core schema tables \(([^)]+)\)/);
-  assert.ok(readmeTablesMatch, 'README must list the 7 core schema tables');
+  const readmeTablesMatch = readme.match(/across the 9 core schema tables \(([^)]+)\)/);
+  assert.ok(readmeTablesMatch, 'README must list the 9 core schema tables');
   const readmeTables = [...readmeTablesMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
   assert.deepEqual(readmeTables, codeTables);
 
