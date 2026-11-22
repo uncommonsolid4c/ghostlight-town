@@ -486,3 +486,213 @@ test('LAYOUT.json optional s is uniform and optional anim appears in _internal/c
     }
   }
 });
+
+test('PARTS.json class matches kit.json classes except the 3 pinned medieval divergences', () => {
+  const validPartsClasses = new Set(['building', 'character', 'prop', 'terrain', 'vehicle']);
+  const validKitClasses = new Set([...validPartsClasses, 'animal']);
+
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const keys = Object.keys(partsJson);
+    const mismatches = {};
+
+    for (const key of keys) {
+      const partsClass = partsJson[key].class;
+      const kitClass = kitJson.classes[key];
+      assert.ok(validPartsClasses.has(partsClass), `${kit} PARTS[${key}].class '${partsClass}' must be in valid vocabulary`);
+      assert.ok(validKitClasses.has(kitClass), `${kit} kit.json.classes['${key}'] '${kitClass}' must be in valid vocabulary`);
+      if (partsClass !== kitClass) {
+        mismatches[key] = [partsClass, kitClass];
+      }
+    }
+
+    if (kit === 'kit-campground') {
+      assert.equal(keys.length, 62, 'kit-campground PARTS.json must have 62 parts');
+      assert.deepEqual(mismatches, {}, 'kit-campground PARTS.json class must match kit.json classes for all 62 parts');
+    } else {
+      // The 3 medieval divergences are vendor-file disagreement, pinned as a drift guard — do not "fix" either file.
+      assert.deepEqual(
+        mismatches,
+        {
+          chicken: ['character', 'animal'],
+          'draft-horse': ['character', 'animal'],
+          'market-stall': ['prop', 'building'],
+        },
+        'kit-medieval PARTS.json class vs kit.json classes must match except the 3 pinned divergences'
+      );
+    }
+  }
+});
+
+test('LAYOUT.json params values are valid against PARTS.json knob specs', () => {
+  let checked = 0;
+
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+
+    for (let i = 0; i < layoutJson.length; i++) {
+      const row = layoutJson[i];
+      if (row.part === '_terrain' || row.params === undefined) continue;
+
+      const knobs = partsJson[row.part].knobs || {};
+      for (const [knob, value] of Object.entries(row.params)) {
+        const spec = knobs[knob];
+        assert.equal(typeof spec, 'string', `${kit} PARTS[${row.part}].knobs.${knob} must be a string`);
+        const body = spec.replace(/ \([^)]*\)$/, '');
+
+        // Knob 'seed' is exempt from the range check — the vendor's own composed layout uses seeds up to 139
+        // (primes: 101, 107, 113, 127, 137, 139) although the spec says "1..99 (7)".
+        if (knob === 'seed') {
+          assert.ok(Number.isInteger(value) && value >= 1, `${kit} LAYOUT[${i}].params.seed must be an integer >= 1`);
+          checked++;
+          continue;
+        }
+
+        if (body.includes('|')) {
+          assert.ok(
+            body.split('|').includes(String(value)),
+            `${kit} LAYOUT[${i}].params.${knob}='${value}' must be in enum '${body}'`
+          );
+        } else {
+          const rangeMatch = body.match(/^(-?[\d.]+)\.\.(-?[\d.]+)$/);
+          if (rangeMatch) {
+            const lo = Number(rangeMatch[1]);
+            const hi = Number(rangeMatch[2]);
+            assert.equal(typeof value, 'number', `${kit} LAYOUT[${i}].params.${knob} must be a number`);
+            assert.ok(
+              value >= lo && value <= hi,
+              `${kit} LAYOUT[${i}].params.${knob}=${value} must be within ${lo}..${hi}`
+            );
+          } else {
+            assert.fail(`${kit} LAYOUT[${i}].params.${knob} has unknown knob spec shape: '${spec}'`);
+          }
+        }
+        checked++;
+      }
+    }
+  }
+
+  assert.equal(checked, 379, 'Expected 379 LAYOUT.json param values checked across both kits');
+});
+
+test('CREDITS.txt .glb lines follow the LICENSE.txt credit-line template', () => {
+  const creditLineRe = /^([a-z0-9-]+)\.glb  (.+) by Polyfork \(https:\/\/polyfork\.dev\/asset\/[a-z0-9-]+-[0-9a-f]{6}\), CC BY 4\.0$/;
+
+  for (const kit of KITS) {
+    const credits = readKitFile(kit, 'CREDITS.txt');
+    const license = readKitFile(kit, 'LICENSE.txt');
+
+    assert.ok(
+      credits.startsWith('Credit lines for CC BY 4.0'),
+      `${kit}/CREDITS.txt must start with 'Credit lines for CC BY 4.0'`
+    );
+
+    const glbLines = credits.split(/\r?\n/).filter((line) => line.includes('.glb'));
+    for (const line of glbLines) {
+      assert.match(line, creditLineRe, `${kit}/CREDITS.txt .glb line must match LICENSE.txt credit-line template: ${line}`);
+    }
+
+    for (const phrase of ['CC BY 4.0', 'The Polyfork licence', 'EVERYTHING ELSE', '.mjs']) {
+      assert.ok(license.includes(phrase), `${kit}/LICENSE.txt must contain '${phrase}'`);
+    }
+  }
+});
+
+test('kit.json has exactly 7 top-level keys, null ground, false interior, and a slug KIT.md links', () => {
+  for (const kit of KITS) {
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const kitMd = readKitFile(kit, 'KIT.md');
+
+    assert.deepEqual(
+      Object.keys(kitJson).sort(),
+      ['classes', 'ground', 'interior', 'kit', 'night', 'terrain', 'title'],
+      `${kit}/kit.json must have exactly the 7 expected top-level keys`
+    );
+    assert.equal(kitJson.ground, null, `${kit}/kit.json ground must be null`);
+    assert.equal(kitJson.interior, false, `${kit}/kit.json interior must be false`);
+    assert.match(kitJson.kit, /^[a-z0-9]+(-[a-z0-9]+)*$/, `${kit}/kit.json kit must be a kebab-case slug`);
+    assert.ok(
+      kitMd.includes(`https://polyfork.dev/kit/${kitJson.kit}`),
+      `${kit}/KIT.md must link https://polyfork.dev/kit/${kitJson.kit}`
+    );
+  }
+});
+
+test('TERRAIN.json keys are declared terrain.mjs knobs and pads are well-formed', () => {
+  const kit = 'kit-campground';
+  const terrainJson = JSON.parse(readKitFile(kit, 'TERRAIN.json'));
+  const terrainSrc = readKitFile(kit, 'terrain.mjs');
+
+  const paramsMatch = terrainSrc.match(/export const params = \{([\s\S]*?)\n\};/);
+  assert.ok(paramsMatch, `${kit}/terrain.mjs must declare export const params`);
+  const paramKeys = new Set([...paramsMatch[1].matchAll(/^  ([a-zA-Z]+): \{/gm)].map((m) => m[1]));
+
+  const zonesMatch = terrainSrc.match(/const ZONES = \[([^\]]+)\];/);
+  assert.ok(zonesMatch, `${kit}/terrain.mjs must declare const ZONES`);
+  const zoneKeys = new Set([...zonesMatch[1].matchAll(/'([a-zA-Z]+)'/g)].map((m) => m[1]));
+
+  const extraKeys = new Set(['cx', 'cz', 'seed', 'pads']);
+  for (const key of Object.keys(terrainJson)) {
+    assert.ok(
+      paramKeys.has(key) || zoneKeys.has(key) || extraKeys.has(key),
+      `${kit}/TERRAIN.json key '${key}' must be a terrain.mjs param, ZONES entry, or cx/cz/seed/pads`
+    );
+  }
+
+  const colorwaysMatch = terrainSrc.match(/const COLORWAYS = \{([\s\S]*?)\n\};/);
+  assert.ok(
+    colorwaysMatch && colorwaysMatch[1].includes(`'${terrainJson.colorway}':`),
+    `${kit}/TERRAIN.json colorway '${terrainJson.colorway}' must appear in COLORWAYS`
+  );
+
+  const seasonsMatch = terrainSrc.match(/const SEASONS = \{([\s\S]*?)\n\};/);
+  assert.ok(
+    seasonsMatch && seasonsMatch[1].includes(`${terrainJson.season}:`),
+    `${kit}/TERRAIN.json season '${terrainJson.season}' must appear in SEASONS`
+  );
+
+  assert.ok(
+    terrainJson.edges === 'island' || terrainJson.edges === 'tile',
+    `${kit}/TERRAIN.json edges must be 'island' or 'tile'`
+  );
+
+  for (const zone of zoneKeys) {
+    assert.match(
+      terrainJson[zone],
+      /^#[0-9A-Fa-f]{6}$/,
+      `${kit}/TERRAIN.json zone '${zone}' must be a 6-digit hex color`
+    );
+  }
+
+  assert.ok(Array.isArray(terrainJson.pads) && terrainJson.pads.length === 11, `${kit}/TERRAIN.json pads must have length 11`);
+  for (let i = 0; i < terrainJson.pads.length; i++) {
+    const pad = terrainJson.pads[i];
+    assert.deepEqual(Object.keys(pad).sort(), ['d', 'w', 'x', 'y', 'z'], `${kit}/TERRAIN.json pads[${i}] keys`);
+    for (const k of ['x', 'z', 'w', 'd', 'y']) {
+      assert.equal(typeof pad[k], 'number', `${kit}/TERRAIN.json pads[${i}].${k} must be a number`);
+      assert.ok(Number.isFinite(pad[k]), `${kit}/TERRAIN.json pads[${i}].${k} must be finite`);
+    }
+    assert.ok(pad.w > 0 && pad.d > 0, `${kit}/TERRAIN.json pads[${i}] w and d must be > 0`);
+  }
+});
+
+test('clips.mjs falls back to the Polyfork CDN and animate defaults to HOME', () => {
+  // Pins the runtime clip-fetch dependency — served away from polyfork.dev, animate() fetches clips from the CDN.
+  for (const kit of KITS) {
+    const clipsSrc = readKitFile(kit, '_internal/clips.mjs');
+
+    assert.ok(clipsSrc.includes("const CDN = 'https://polyfork.dev/cdn/';"), `${kit}/_internal/clips.mjs must define CDN`);
+    assert.ok(clipsSrc.includes("const HERE = new URL('.', import.meta.url).href;"), `${kit}/_internal/clips.mjs must define HERE`);
+    assert.ok(
+      clipsSrc.includes('const HOME = /^https:\\/\\/polyfork\\.dev\\//.test(HERE) ? HERE : CDN;'),
+      `${kit}/_internal/clips.mjs must define HOME fallback to CDN`
+    );
+    assert.ok(
+      clipsSrc.includes("export async function animate(character, { clips = ['Idle', 'Walk', 'Run'], inPlace = true, fade = 0.2, base = HOME } = {})"),
+      `${kit}/_internal/clips.mjs animate() must default base = HOME`
+    );
+    assert.ok(clipsSrc.includes('fetch' + '(url)'), `${kit}/_internal/clips.mjs must call ` + 'fetch' + '(url)');
+  }
+});
