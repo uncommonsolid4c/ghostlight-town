@@ -780,3 +780,245 @@ test('guest say with reply_to posts as [guest] and CLI guest-say --kind/--reply-
     await ctx.close();
   }
 });
+
+test('say body is stored verbatim (not trimmed) and the 500-char cap counts raw length', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const padded = '  hello  ';
+    const r1 = await alice.say(padded);
+    assert.equal(r1.status, 201);
+    assert.equal(r1.data.body, padded);
+
+    const padded500 = 'x'.repeat(499) + ' ';
+    const r2 = await alice.say(padded500);
+    assert.equal(r2.status, 201);
+    assert.equal(r2.data.body, padded500);
+
+    const stateRes = await alice.state();
+    assert.equal(stateRes.status, 200);
+    const e1 = stateRes.data.prompt_book.find((e) => e.id === r1.data.id);
+    const e2 = stateRes.data.prompt_book.find((e) => e.id === r2.data.id);
+    assert.ok(e1);
+    assert.equal(e1.body, padded);
+    assert.ok(e2);
+    assert.equal(e2.body, padded500);
+
+    const over501 = await alice.say('x'.repeat(500) + ' ');
+    assert.equal(over501.status, 400);
+    assert.equal(over501.data.error, 'invalid_body');
+
+    const ws500 = await alice.say(' '.repeat(500));
+    assert.equal(ws500.status, 400);
+    assert.equal(ws500.data.error, 'invalid_body');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say validation order: muted beats body, body beats kind, kind beats reply_to', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const openRes = await maren.say('Open floor.');
+    assert.equal(openRes.status, 201);
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'lampmoth'").run();
+
+    const mutedRes = await lampmoth.say('', 'shout', 99999);
+    assert.equal(mutedRes.status, 403);
+    assert.equal(mutedRes.data.error, 'resident_muted');
+
+    const badBody = await maren.say('', 'shout', 99999);
+    assert.equal(badBody.status, 400);
+    assert.equal(badBody.data.error, 'invalid_body');
+
+    const badKind = await maren.say('valid body', 'shout', 99999);
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data.error, 'invalid_kind');
+
+    const badReply = await maren.say('valid body', 'say', 99999);
+    assert.equal(badReply.status, 400);
+    assert.equal(badReply.data.error, 'invalid_reply_to');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say response and state entry carry exact keys, and roles are muse/npc/guest', async () => {
+  const ctx = await startTestServer();
+  try {
+    const wickKeys = generateKeypair();
+    const wick = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'wick', ...wickKeys });
+    const wickJoin = await wick.join({ origin: 'musebook' });
+    assert.equal(wickJoin.status, 201);
+    const wickApp = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'wick',
+      role: 'npc',
+    });
+    assert.equal(wickApp.status, 200);
+
+    const { client: tomas } = await createResident(ctx, 'tomas');
+    const visitor9 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor9', ...generateKeypair() });
+
+    const before = Math.floor(Date.now() / 1000);
+    const wickRes = await wick.say('Lanterns lit.');
+    const after = Math.floor(Date.now() / 1000);
+    assert.equal(wickRes.status, 201);
+    assert.deepEqual(Object.keys(wickRes.data).sort(), [
+      'body',
+      'created_at',
+      'handle',
+      'id',
+      'kind',
+      'reply_to',
+      'state_seq',
+    ]);
+    assert.ok(
+      wickRes.data.created_at >= before && wickRes.data.created_at <= after,
+      `expected created_at in [${before}, ${after}], got ${wickRes.data.created_at}`
+    );
+
+    const tomasRes = await tomas.say('Evening, Wick.');
+    assert.equal(tomasRes.status, 201);
+
+    const guestRes = await visitor9.guestSay('Hello from a guest.');
+    assert.equal(guestRes.status, 201);
+
+    const stateRes = await tomas.state();
+    assert.equal(stateRes.status, 200);
+    const pb = stateRes.data.prompt_book;
+    const wickEntry = pb.find((e) => e.id === wickRes.data.id);
+    const tomasEntry = pb.find((e) => e.id === tomasRes.data.id);
+    const guestEntry = pb.find((e) => e.id === guestRes.data.id);
+
+    assert.ok(wickEntry);
+    assert.ok(tomasEntry);
+    assert.ok(guestEntry);
+    assert.equal(wickEntry.role, 'npc');
+    assert.equal(tomasEntry.role, 'muse');
+    assert.equal(guestEntry.role, 'guest');
+    assert.deepEqual(Object.keys(wickEntry).sort(), [
+      'body',
+      'created_at',
+      'handle',
+      'id',
+      'kind',
+      'reply_to',
+      'role',
+    ]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('admin delete-line: replies survive with a dangling reply_to, and replying to a deleted line fails', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: mira } = await createResident(ctx, 'mira');
+    const { client: luna } = await createResident(ctx, 'luna');
+
+    const topRes = await mira.say('Line to be deleted.');
+    assert.equal(topRes.status, 201);
+
+    const replyRes = await luna.say('Reply to mira.', 'say', topRes.data.id);
+    assert.equal(replyRes.status, 201);
+
+    const beforeState = await mira.state();
+    assert.equal(beforeState.status, 200);
+    const seqBefore = beforeState.data.state_seq;
+
+    const delRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/delete-line', {
+      id: topRes.data.id,
+    });
+    assert.equal(delRes.status, 200);
+    assert.equal(delRes.data.deleted, true);
+    assert.equal(delRes.data.id, topRes.data.id);
+    assert.ok(delRes.data.state_seq > seqBefore, `expected state_seq > ${seqBefore}, got ${delRes.data.state_seq}`);
+
+    const afterState = await mira.state();
+    assert.equal(afterState.status, 200);
+    assert.equal(afterState.data.prompt_book.some((e) => e.id === topRes.data.id), false);
+    const survivingReply = afterState.data.prompt_book.find((e) => e.id === replyRes.data.id);
+    assert.ok(survivingReply);
+    assert.equal(survivingReply.reply_to, topRes.data.id);
+
+    const postDelReply = await luna.say('Reply after delete.', 'say', topRes.data.id);
+    assert.equal(postDelReply.status, 400);
+    assert.equal(postDelReply.data.error, 'invalid_reply_to');
+
+    const delAgain = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/delete-line', {
+      id: topRes.data.id,
+    });
+    assert.equal(delAgain.status, 404);
+    assert.equal(delAgain.data.error, 'line_not_found');
+
+    for (const badId of [0, -1, 1.5, '3', true]) {
+      const badDel = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/delete-line', {
+        id: badId,
+      });
+      assert.equal(badDel.status, 400, `expected 400 for id=${JSON.stringify(badId)}`);
+      assert.equal(badDel.data.error, 'invalid_id');
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest reply rate limit is 2/10min and failed guest replies do not consume quota', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: milo2 } = await createResident(ctx, 'milo2');
+    const topRes = await milo2.say('Open floor for guest replies.');
+    assert.equal(topRes.status, 201);
+
+    const visitor5 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor5', ...generateKeypair() });
+
+    const badReply = await visitor5.guestSay('bad reply', 'say', 99999);
+    assert.equal(badReply.status, 400);
+    assert.equal(badReply.data.error, 'invalid_reply_to');
+
+    const g1 = await visitor5.guestSay('First guest reply.', 'say', topRes.data.id);
+    assert.equal(g1.status, 201);
+
+    const g2 = await visitor5.guestSay('Second guest reply.', 'say', topRes.data.id);
+    assert.equal(g2.status, 201);
+
+    const g3 = await visitor5.guestSay('Third guest reply.', 'say', topRes.data.id);
+    assert.equal(g3.status, 429);
+    assert.equal(g3.data.error, 'rate_limited');
+    assert.ok(g3.data.retry_after > 0, `expected retry_after > 0, got ${g3.data.retry_after}`);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say auth matrix: pending 403, unknown handle 401, wrong key 401 invalid_signature', async () => {
+  const ctx = await startTestServer();
+  try {
+    const pendingClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'pending1', ...generateKeypair() });
+    const joinRes = await pendingClient.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+
+    const pendingSay = await pendingClient.say('Waiting for approval.');
+    assert.equal(pendingSay.status, 403);
+    assert.equal(pendingSay.data.error, 'resident_not_active');
+    assert.equal(pendingSay.data.resident_status, 'pending');
+
+    const unknownClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'neverjoined', ...generateKeypair() });
+    const unknownSay = await unknownClient.say('Never joined.');
+    assert.equal(unknownSay.status, 401);
+    assert.equal(unknownSay.data.error, 'unknown_resident');
+
+    await createResident(ctx, 'mira2');
+    const wrongKeyClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'mira2', ...generateKeypair() });
+    const wrongKeySay = await wrongKeyClient.say('Wrong key.');
+    assert.equal(wrongKeySay.status, 401);
+    assert.equal(wrongKeySay.data.error, 'invalid_signature');
+  } finally {
+    await ctx.close();
+  }
+});
