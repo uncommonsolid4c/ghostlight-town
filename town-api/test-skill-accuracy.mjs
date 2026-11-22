@@ -1,13 +1,21 @@
 /**
  * Drift-guard test for SKILL.md against town-api/server.mjs,
  * town-api/plot-validation.mjs, town-api/ghostlight-client.mjs,
- * town.json, town-3d/town.js, and staging-polyfork (Slices 125, 135).
+ * town.json, town-3d/town.js, town-3d/gazette/build-digest.mjs,
+ * town-npc/run.mjs, town-npc/characters.mjs, and staging-polyfork (Slices 125, 135, 283).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+import { createTownServer } from './server.mjs';
+import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
+import { getPartOfDay } from '../town-npc/run.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -768,4 +776,279 @@ test('SKILL.md §5 Inn room names and key rules match town-3d/town.js; §6 no-up
   const s6Start = skillMd.indexOf('## 6. What Is Not Built Yet');
   assert.ok(s6Start !== -1, 'Missing SKILL.md §6');
   assert.ok(skillMd.slice(s6Start).includes('**No plot image uploads:**'));
+});
+
+async function startTestServer(opts = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-skill-test-'));
+  const dbPath = opts.dbPath || path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+  let clockOffset = 0;
+  const nowFn = opts.nowFn || (() => Math.floor(Date.now() / 1000) + clockOffset);
+
+  const { server, db } = createTownServer({
+    dbPath,
+    plotsDir,
+    operatorPubkey: operatorKeys.pubkey,
+    nowFn,
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  return {
+    baseUrl,
+    operatorKeys,
+    db,
+    nowSec: nowFn,
+    async close() {
+      await new Promise((resolve) => server.close(resolve));
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function rawPost(baseUrl, endpoint, payload, headers = {}) {
+  const res = await fetch(`${baseUrl}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, data };
+}
+
+async function adminPost(ctx, endpoint, payload) {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: endpoint,
+    body: payload,
+    handle: 'operator',
+    privateKeyPem: ctx.operatorKeys.privateKeyPem,
+  });
+  const res = await fetch(`${ctx.baseUrl}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, data };
+}
+
+test('SKILL.md §3 common errors list matches server.mjs emissions', () => {
+  const codes = [
+    'missing_auth_headers',
+    'stale_timestamp',
+    'unknown_resident',
+    'replayed_nonce',
+    'invalid_signature',
+    'resident_not_active',
+    'plot_not_found',
+    'claim_not_found',
+    'handle_taken',
+    'pubkey_taken',
+    'slot_occupied',
+    'room_already_claimed',
+    'resident_already_claimed',
+    'bandstand_full',
+  ];
+  for (const code of codes) {
+    assert.ok(serverSrc.includes(`'${code}'`), `server.mjs must emit '${code}'`);
+  }
+
+  const start = skillMd.indexOf('Common errors:');
+  const end = skillMd.indexOf('### `POST /api/town/join`', start);
+  assert.ok(start !== -1 && end > start, 'Could not slice SKILL.md §3 Common errors intro');
+  const intro = skillMd.slice(start, end);
+
+  const expectedPhrases = [
+    'missing headers, stale timestamp, unknown resident, replayed nonce, invalid signature',
+    'pending/suspended resident, or muted on speech',
+    'missing plot or claim',
+    'guest endpoints returning `409 handle_taken` when a guest handle collides with an existing resident',
+    'pubkey taken, bandstand slot occupied, or inn room/resident already claimed',
+    'rate limit exceeded',
+  ];
+  for (const phrase of expectedPhrases) {
+    assert.ok(intro.includes(phrase), `SKILL.md §3 Common errors must include: ${phrase}`);
+  }
+});
+
+test('SKILL.md §5 town clock matches run.mjs, characters.mjs, build-digest.mjs, and town.js', () => {
+  const checks = [
+    ['04:59', 'evening'],
+    ['05:00', 'morning'],
+    ['11:59', 'morning'],
+    ['12:00', 'afternoon'],
+    ['16:59', 'afternoon'],
+    ['17:00', 'evening'],
+    ['23:30', 'evening'],
+  ];
+  for (const [hhmm, expected] of checks) {
+    const epochSec = Date.parse(`2026-11-22T${hhmm}:00-08:00`) / 1000;
+    assert.equal(getPartOfDay(epochSec), expected, `getPartOfDay at ${hhmm} PST must be ${expected}`);
+  }
+
+  const runSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-npc/run.mjs'), 'utf8');
+  const charsSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-npc/characters.mjs'), 'utf8');
+  const digestSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/gazette/build-digest.mjs'), 'utf8');
+
+  assert.ok(runSrc.includes("timeZone: 'America/Los_Angeles'"), 'town-npc/run.mjs must use America/Los_Angeles');
+  assert.ok(charsSrc.includes('Town time is America/Los_Angeles'), 'town-npc/characters.mjs must state town time');
+  assert.ok(
+    digestSrc.includes("const TOWN_TIME_ZONE = 'America/Los_Angeles'") &&
+      digestSrc.includes('timeZone: TOWN_TIME_ZONE'),
+    'town-3d/gazette/build-digest.mjs must use TOWN_TIME_ZONE = America/Los_Angeles'
+  );
+  assert.ok(townJsSrc.includes("timeZone: 'America/Los_Angeles'"), 'town-3d/town.js must use America/Los_Angeles');
+
+  assert.ok(skillMd.includes('Town time is `America/Los_Angeles` (PST/PDT)'));
+  assert.ok(skillMd.includes('morning/afternoon/evening talk use town time'));
+  assert.ok(skillMd.includes('the Gazette dates issues by town time'));
+});
+
+test('SKILL.md §1 guest limits: no footlight and no plot', () => {
+  const gcStart = serverSrc.indexOf('function handleGuestCheckin');
+  const gsStart = serverSrc.indexOf('function handleGuestSay');
+  const gicStart = serverSrc.indexOf('function handleGuestInnClaim');
+  assert.ok(gcStart !== -1 && gsStart > gcStart && gicStart > gsStart, 'Could not slice guest handlers in server.mjs');
+
+  const gcSlice = serverSrc.slice(gcStart, gsStart);
+  const gsSlice = serverSrc.slice(gsStart, gicStart);
+  assert.doesNotMatch(gcSlice, /footlight/i, 'handleGuestCheckin must not reference footlight');
+  assert.doesNotMatch(gsSlice, /footlight/i, 'handleGuestSay must not reference footlight');
+
+  const sendMatch = gcSlice.match(/sendJson\(res,\s*200,\s*\{([\s\S]*?)\}\);/);
+  assert.ok(sendMatch, 'Could not find 200 response literal in handleGuestCheckin');
+  const respBlock = sendMatch[1];
+  for (const absentKey of ['slot', 'lit_at', 'expires_at']) {
+    assert.ok(!respBlock.includes(absentKey), `handleGuestCheckin response must not include ${absentKey}`);
+  }
+  for (const expectedKey of ['handle', "zone: 'bandstand'", 'updated_at', 'state_seq']) {
+    assert.ok(respBlock.includes(expectedKey), `handleGuestCheckin response must include ${expectedKey}`);
+  }
+
+  assert.ok(
+    serverSrc.includes("['PUT /api/town/plot', { mode: 'resident', handler: handlePutPlot }]"),
+    'PUT /api/town/plot must be resident-only'
+  );
+  assert.ok(skillMd.includes('no footlight and no plot'), 'SKILL.md §1 step 2 must state no footlight and no plot');
+});
+
+test('SKILL.md §2 openssl keygen pipeline produces a usable 44-char key', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-openssl-test-'));
+  try {
+    const keyPath = path.join(tmpDir, 'k.pem');
+    execFileSync('openssl', ['genpkey', '-algorithm', 'ed25519', '-out', keyPath]);
+    const der = execFileSync('openssl', ['pkey', '-in', keyPath, '-pubout', '-outform', 'DER']);
+    const rawPub = der.subarray(der.length - 32);
+    assert.equal(rawPub.length, 32);
+    const pubB64 = rawPub.toString('base64');
+    assert.equal(pubB64.length, 44);
+    assert.deepEqual(Buffer.from(pubB64, 'base64'), rawPub);
+
+    const pem = fs.readFileSync(keyPath, 'utf8');
+    const msg = Buffer.from('hello bandstand', 'utf8');
+    const sig = crypto.sign(null, msg, crypto.createPrivateKey(pem));
+
+    const spkiPrefix = Buffer.from('302a300506032b6570032100', 'hex');
+    const pubKey = crypto.createPublicKey({
+      key: Buffer.concat([spkiPrefix, rawPub]),
+      format: 'der',
+      type: 'spki',
+    });
+    assert.equal(crypto.verify(null, msg, pubKey, sig), true);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  assert.ok(skillMd.includes('openssl genpkey -algorithm ed25519 -out ghostlight-key.pem'));
+  assert.ok(
+    skillMd.includes("openssl pkey -in ghostlight-key.pem -pubout -outform DER | tail -c 32 | base64 | tr -d '\\n'")
+  );
+});
+
+test('SKILL.md §3 guestbook letter+plot rejection and say reply rendering', async () => {
+  const ctx = await startTestServer();
+  try {
+    const wickKeys = generateKeypair();
+    const wick = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'wick',
+      privateKeyPem: wickKeys.privateKeyPem,
+      pubkey: wickKeys.pubkey,
+    });
+    const joinRes = await wick.join({ origin: 'colony', bio: 'scratch' });
+    assert.equal(joinRes.status, 201);
+
+    const badLetter = await rawPost(ctx.baseUrl, '/api/town/guestbook', {
+      kind: 'letter',
+      name: 'A',
+      body: 'hi',
+      plot: 'wick',
+    });
+    assert.equal(badLetter.status, 400);
+    assert.equal(badLetter.data.error, 'invalid_plot');
+
+    const okGuestbook = await rawPost(ctx.baseUrl, '/api/town/guestbook', {
+      kind: 'guestbook',
+      name: 'A',
+      body: 'hi',
+      plot: 'wick',
+    });
+    assert.equal(okGuestbook.status, 201);
+    assert.equal(okGuestbook.data.status, 'pending');
+
+    const okLetter = await rawPost(ctx.baseUrl, '/api/town/guestbook', {
+      kind: 'letter',
+      name: 'A',
+      body: 'hi',
+    });
+    assert.equal(okLetter.status, 201);
+  } finally {
+    await ctx.close();
+  }
+
+  const promptBookSrc = fs.readFileSync(path.join(REPO_ROOT, 'staging-polyfork/prompt-book.mjs'), 'utf8');
+  assert.ok(promptBookSrc.includes('`\\u21a9 #${entry.reply_to} @${targetHandle}`'));
+  assert.ok(promptBookSrc.includes('`\\u21a9 #${entry.reply_to}`'));
+  assert.ok(skillMd.includes('Replies render as `↩ #N @handle`'));
+  assert.ok(skillMd.includes('(`kind: "letter"` with `plot` is rejected)'));
+});
+
+test('SKILL.md §5 Inn room key is returned once and never in state', async () => {
+  const ctx = await startTestServer();
+  try {
+    const aliceKeys = generateKeypair();
+    const alice = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      privateKeyPem: aliceKeys.privateKeyPem,
+      pubkey: aliceKeys.pubkey,
+    });
+    const joinRes = await alice.join({ origin: 'colony', bio: 'guest' });
+    assert.equal(joinRes.status, 201);
+
+    const approveRes = await adminPost(ctx, '/api/town/admin/approve', { handle: 'alice' });
+    assert.equal(approveRes.status, 200);
+
+    const claimRes = await alice.claimInnRoom('lantern', 2);
+    assert.equal(claimRes.status, 201);
+    assert.equal(typeof claimRes.data.key, 'string');
+    assert.equal(claimRes.data.key.length, 12);
+
+    const stateRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(stateRes.status, 200);
+    const state = await stateRes.json();
+    assert.ok(state.inn && state.inn.lantern, 'state.inn.lantern must exist');
+    assert.deepEqual(Object.keys(state.inn.lantern).sort(), ['expires_at', 'guest', 'handle', 'nights']);
+    assert.equal(state.inn.lantern.handle, 'alice');
+    assert.equal(JSON.stringify(state).includes(claimRes.data.key), false);
+  } finally {
+    await ctx.close();
+  }
+
+  assert.ok(skillMd.includes('the key is never exposed in `/api/town/state`'));
+  assert.ok(skillMd.includes('public state only shows who holds each room and when the stay expires'));
 });
