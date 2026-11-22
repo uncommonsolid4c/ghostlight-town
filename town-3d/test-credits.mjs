@@ -449,3 +449,222 @@ test('PROP_PLACEMENTS rotation/height bounds and CREDITS.md title pin', async ()
   const firstLine = creditsMd.split(/\r?\n/, 1)[0];
   assert.equal(firstLine, '# 3D Model Credits (`town-3d`)');
 });
+
+test('credited GLB mesh/primitive/accessor/material counts and generator are pinned', async () => {
+  const expected = new Map([
+    ['post-lantern.glb', { meshes: 2, primitives: 2, nodes: 3, accessors: 8, bufferViews: 9, materials: 1, generator: 'FBX2glTF v0.9.7', scenes: 1, hasTexcoord: true }],
+    ['lantern.glb', { meshes: 1, primitives: 1, nodes: 2, accessors: 4, bufferViews: 5, materials: 1, generator: 'FBX2glTF v0.9.7', scenes: 1, hasTexcoord: true }],
+    ['bench.glb', { meshes: 1, primitives: 1, nodes: 2, accessors: 4, bufferViews: 5, materials: 1, generator: 'FBX2glTF v0.9.7', scenes: 1, hasTexcoord: true }],
+    ['street-light.glb', { meshes: 1, primitives: 2, nodes: 2, accessors: 6, bufferViews: 6, materials: 2, generator: 'FBX2glTF v0.9.7', scenes: 1, hasTexcoord: false }],
+    ['bookshelf.glb', { meshes: 1, primitives: 1, nodes: 2, accessors: 4, bufferViews: 5, materials: 1, generator: 'FBX2glTF v0.9.7', scenes: 1, hasTexcoord: true }],
+    ['oil-lamp.glb', { meshes: 1, primitives: 2, nodes: 2, accessors: 6, bufferViews: 6, materials: 2, generator: 'FBX2glTF v0.9.7', scenes: 1, hasTexcoord: false }],
+    ['teapot.glb', { meshes: 3, primitives: 3, nodes: 3, accessors: 12, bufferViews: 5, materials: 1, generator: 'obj2gltf', scenes: 1, hasTexcoord: true }],
+  ]);
+
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+  assert.equal(creditedFiles.length, expected.size);
+
+  for (const file of creditedFiles) {
+    const exp = expected.get(file);
+    assert.ok(exp, `missing expected entry for ${file}`);
+    const buf = await fs.readFile(path.join(MODELS_DIR, file));
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.subarray(20, 20 + jsonLen).toString('utf8'));
+
+    const primCount = gltf.meshes.reduce((sum, m) => sum + m.primitives.length, 0);
+    assert.equal(gltf.meshes.length, exp.meshes, `${file} meshes count`);
+    assert.equal(primCount, exp.primitives, `${file} primitives count`);
+    assert.equal(gltf.nodes.length, exp.nodes, `${file} nodes count`);
+    assert.equal(gltf.accessors.length, exp.accessors, `${file} accessors count`);
+    assert.equal(gltf.bufferViews.length, exp.bufferViews, `${file} bufferViews count`);
+    assert.equal((gltf.materials ?? []).length, exp.materials, `${file} materials count`);
+    assert.equal(gltf.asset?.generator, exp.generator, `${file} asset.generator`);
+    assert.equal((gltf.scenes ?? []).length, exp.scenes, `${file} scenes.length`);
+
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        assert.equal(typeof prim.attributes?.POSITION, 'number', `${file} primitive missing POSITION`);
+        assert.equal(typeof prim.attributes?.NORMAL, 'number', `${file} primitive missing NORMAL`);
+        if (exp.hasTexcoord) {
+          assert.equal(typeof prim.attributes?.TEXCOORD_0, 'number', `${file} primitive missing TEXCOORD_0`);
+        } else {
+          assert.equal('TEXCOORD_0' in (prim.attributes ?? {}), false, `${file} primitive should not have TEXCOORD_0`);
+        }
+      }
+    }
+  }
+});
+
+test('credited GLB internal indices are all in range', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+
+  for (const file of creditedFiles) {
+    const buf = await fs.readFile(path.join(MODELS_DIR, file));
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.subarray(20, 20 + jsonLen).toString('utf8'));
+
+    const accLen = gltf.accessors.length;
+    const bvLen = gltf.bufferViews.length;
+    const matLen = (gltf.materials ?? []).length;
+    const meshLen = gltf.meshes.length;
+    const nodeLen = gltf.nodes.length;
+
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        for (const [attr, idx] of Object.entries(prim.attributes ?? {})) {
+          assert.ok(Number.isInteger(idx) && idx >= 0 && idx < accLen, `${file} ${attr} index ${idx} out of range`);
+        }
+        if (prim.indices !== undefined) {
+          assert.ok(
+            Number.isInteger(prim.indices) && prim.indices >= 0 && prim.indices < accLen,
+            `${file} indices ${prim.indices} out of range`
+          );
+        }
+        if (prim.material !== undefined) {
+          assert.ok(
+            Number.isInteger(prim.material) && prim.material >= 0 && prim.material < matLen,
+            `${file} material ${prim.material} out of range`
+          );
+        }
+      }
+    }
+
+    for (const acc of gltf.accessors) {
+      assert.ok(
+        Number.isInteger(acc.bufferView) && acc.bufferView >= 0 && acc.bufferView < bvLen,
+        `${file} accessor bufferView ${acc.bufferView} out of range`
+      );
+    }
+
+    for (const node of gltf.nodes) {
+      if (node.mesh !== undefined) {
+        assert.ok(
+          Number.isInteger(node.mesh) && node.mesh >= 0 && node.mesh < meshLen,
+          `${file} node mesh ${node.mesh} out of range`
+        );
+      }
+      for (const child of node.children ?? []) {
+        assert.ok(
+          Number.isInteger(child) && child >= 0 && child < nodeLen,
+          `${file} node child ${child} out of range`
+        );
+      }
+    }
+  }
+});
+
+test('credited GLB POSITION accessor min/max are finite, ordered, and span under 10 m', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+
+  for (const file of creditedFiles) {
+    const buf = await fs.readFile(path.join(MODELS_DIR, file));
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.subarray(20, 20 + jsonLen).toString('utf8'));
+
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        const acc = gltf.accessors[prim.attributes.POSITION];
+        assert.ok(Array.isArray(acc.min) && acc.min.length === 3, `${file} POSITION min must be length-3 array`);
+        assert.ok(Array.isArray(acc.max) && acc.max.length === 3, `${file} POSITION max must be length-3 array`);
+        for (let i = 0; i < 3; i += 1) {
+          assert.ok(Number.isFinite(acc.min[i]), `${file} min[${i}] must be finite`);
+          assert.ok(Number.isFinite(acc.max[i]), `${file} max[${i}] must be finite`);
+          assert.ok(acc.min[i] <= acc.max[i], `${file} min[${i}] <= max[${i}]`);
+          assert.ok(acc.max[i] - acc.min[i] <= 10, `${file} span[${i}] must be <= 10 m`);
+        }
+      }
+    }
+  }
+});
+
+test('CREDITS.md entry bodies have exactly 4 fields in Author/ID/Page/Licence order, and the file is clean text', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const entries = parseCreditEntries(creditsMd);
+  assert.equal(entries.length, 7);
+
+  const headerRe = /^- \*\*([^*]+)\*\* \(`models\/([^`\s]+\.glb)`\)/gm;
+  const headers = [...creditsMd.matchAll(headerRe)];
+  assert.equal(headers.length, entries.length);
+
+  const expectedPrefixes = ['- Author:', '- Poly Pizza ID:', '- Page:', '- Licence:'];
+  for (let i = 0; i < headers.length; i += 1) {
+    const start = headers[i].index + headers[i][0].length;
+    const end = i + 1 < headers.length ? headers[i + 1].index : creditsMd.length;
+    const body = creditsMd.slice(start, end);
+    const lines = body
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    assert.equal(lines.length, 4, `${entries[i].displayName} must have exactly 4 body lines`);
+    for (let j = 0; j < expectedPrefixes.length; j += 1) {
+      assert.ok(
+        lines[j].startsWith(expectedPrefixes[j]),
+        `${entries[i].displayName} line ${j} must start with ${expectedPrefixes[j]}`
+      );
+    }
+  }
+
+  assert.ok(creditsMd.endsWith('\n'), 'CREDITS.md must end with a newline');
+  assert.ok(!creditsMd.endsWith('\n\n'), 'CREDITS.md must end with exactly one newline');
+  assert.equal(/[ \t]$/m.test(creditsMd), false, 'CREDITS.md must have no trailing whitespace');
+  assert.equal(creditsMd.includes('\r'), false, 'CREDITS.md must not contain CR characters');
+});
+
+test('Poly Pizza IDs are 10-char alphanumeric and the author distribution is pinned', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const entries = parseCreditEntries(creditsMd);
+  assert.equal(entries.length, EXPECTED_TUPLES.length);
+
+  const counts = {};
+  for (const entry of entries) {
+    assert.match(entry.id, /^[A-Za-z0-9]{10}$/, `${entry.displayName} Poly Pizza ID must be 10-char alphanumeric`);
+    assert.match(entry.author, /^[A-Za-z ]+$/, `${entry.displayName} author must be letters/spaces`);
+    counts[entry.author] = (counts[entry.author] ?? 0) + 1;
+  }
+
+  assert.deepEqual(counts, {
+    'Kay Lousberg': 3,
+    Quaternius: 2,
+    CreativeTrio: 1,
+    MilkAndBanana: 1,
+  });
+});
+
+test('model placement parents ground the props and town-3d/README.md lists the models alphabetically', async () => {
+  const modelPlacements = PROP_PLACEMENTS.filter((p) => typeof p.model === 'string');
+  for (const p of modelPlacements) {
+    assert.equal(typeof p.parent, 'string', `${p.id} must have a string parent`);
+  }
+
+  const scenePlacements = modelPlacements.filter((p) => p.parent === 'scene');
+  assert.equal(scenePlacements.length, 7, 'expected 7 scene-parented model placements');
+  for (const p of scenePlacements) {
+    assert.equal(p.y, 0, `${p.id} scene placement must have y === 0`);
+  }
+
+  const newsstandPlacements = modelPlacements.filter((p) => p.parent === 'newsstand');
+  assert.equal(newsstandPlacements.length, 1, 'expected 1 newsstand-parented model placement');
+  assert.equal(newsstandPlacements[0].id, 'newsstand_lantern');
+  assert.ok(newsstandPlacements[0].y >= 1.0, 'newsstand_lantern must have y >= 1.0');
+
+  const readmeMd = await fs.readFile(README_PATH, 'utf8');
+  const alphabetical = [
+    'bench.glb',
+    'bookshelf.glb',
+    'lantern.glb',
+    'oil-lamp.glb',
+    'post-lantern.glb',
+    'street-light.glb',
+    'teapot.glb',
+  ];
+  let prevIdx = -1;
+  for (const name of alphabetical) {
+    const idx = readmeMd.indexOf(name);
+    assert.ok(idx >= 0, `town-3d/README.md must mention ${name}`);
+    assert.ok(idx > prevIdx, `town-3d/README.md must list ${name} in alphabetical order`);
+    prevIdx = idx;
+  }
+});
