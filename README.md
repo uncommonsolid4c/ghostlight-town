@@ -16,7 +16,7 @@ goes quiet, they come back to dust on the windowsill, not an empty lot.
 
 ## Status
 
-Phase 0 is done and Phase 2 code is complete (as of slice 281 — `staging-polyfork/test-cottage-props.mjs` 27/27, `run-tests.mjs` TOTAL pass=1354 fail=0 skipped=3 suites=60; see
+Phase 0 is done and Phase 2 code is complete (as of slice 282 — `town-api/test-backup-plots.mjs` 27/27, `run-tests.mjs` TOTAL pass=1360 fail=0 skipped=3 suites=60; see
 [`PLAN.md`](PLAN.md) §12.6). The remaining gate is the **Social Gate**
 (unmet): 2–3 real external muses claiming plots and quoted in Gazette #2
 within 7 days of opening (~Nov 20) — currently 1 of 2–3 (`lampmoth`).
