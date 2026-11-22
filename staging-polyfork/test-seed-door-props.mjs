@@ -423,3 +423,157 @@ test('attach order and mutation independence', () => {
   assert.equal(second.children.length, 3);
   assert.equal(cSecond.children.length, 1);
 });
+
+function serializeGroup(group) {
+  return {
+    name: group.name,
+    position: { x: group.position.x, y: group.position.y, z: group.position.z },
+    rotation: { x: group.rotation.x, y: group.rotation.y, z: group.rotation.z },
+    children: group.children.map((child) => ({
+      geometry: {
+        type: child.geometry.type,
+        args: [...child.geometry.args],
+      },
+      material: {
+        type: child.material.type,
+        color: child.material.color,
+        opts: { ...child.material.opts },
+      },
+      position: { x: child.position.x, y: child.position.y, z: child.position.z },
+      rotation: { x: child.rotation.x, y: child.rotation.y, z: child.rotation.z },
+    })),
+  };
+}
+
+test('attachSeedDoorProp returns exactly what the direct builder builds', async () => {
+  const {
+    buildProceduralOilLamp,
+    buildProceduralTypewriter,
+    buildProceduralTeapot,
+  } = await import('./interior-room.mjs');
+
+  const builders = [
+    ['wick', buildProceduralOilLamp],
+    ['maren', buildProceduralTypewriter],
+    ['tomas', buildProceduralTeapot],
+  ];
+
+  const THREE = makeFakeThree();
+  for (const [handle, buildFn] of builders) {
+    const attached = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    const direct = buildFn(THREE);
+    assert.equal(direct.name, '');
+    assert.deepEqual(serializeGroup(attached).children, serializeGroup(direct).children);
+  }
+});
+
+test('staging.js wires attachSeedDoorProp after the porch and plot props', async () => {
+  const stagingPath = path.join(__dirname, 'staging.js');
+  const stagingSrc = await fs.readFile(stagingPath, 'utf8');
+
+  assert.ok(
+    stagingSrc.includes("import { attachSeedDoorProp } from './seed-door-props.mjs?v=38';"),
+    'expected exact ?v=38 import of attachSeedDoorProp in staging.js'
+  );
+  assert.ok(
+    stagingSrc.includes('attachSeedDoorProp(THREE, cottage, handle);'),
+    'expected attachSeedDoorProp(THREE, cottage, handle); call in staging.js'
+  );
+
+  const plotIdx = stagingSrc.indexOf('attachPlotProps(THREE, cottage,');
+  const doorIdx = stagingSrc.indexOf('attachSeedDoorProp(THREE, cottage, handle);');
+  assert.ok(plotIdx !== -1, 'expected attachPlotProps(THREE, cottage, call in staging.js');
+  assert.ok(doorIdx !== -1, 'expected attachSeedDoorProp(THREE, cottage, handle); call in staging.js');
+  assert.ok(
+    plotIdx < doorIdx && doorIdx - plotIdx < 300,
+    `expected attachPlotProps before attachSeedDoorProp within 300 chars (plotIdx=${plotIdx}, doorIdx=${doorIdx})`
+  );
+
+  assert.ok(
+    stagingSrc.includes('sign.position.set(2.3, 0.18, 2.6);'),
+    'expected signpost placement at (2.3, 0.18, 2.6) in staging.js'
+  );
+});
+
+test('GLB fallback parity: town.js placements carry the same three prop kinds', async () => {
+  const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
+
+  const wickBlock = townSrc.match(/\{[^}]*?id:\s*'wick_oil_lamp'[^}]*?\}/);
+  assert.ok(wickBlock, 'expected wick_oil_lamp block in town-3d/town.js');
+  assert.match(wickBlock[0], /kind:\s*'oil-lamp'/);
+  assert.match(wickBlock[0], /model:\s*'models\/oil-lamp\.glb'/);
+
+  const tomasBlock = townSrc.match(/\{[^}]*?id:\s*'tomas_teapot'[^}]*?\}/);
+  assert.ok(tomasBlock, 'expected tomas_teapot block in town-3d/town.js');
+  assert.match(tomasBlock[0], /kind:\s*'teapot'/);
+  assert.match(tomasBlock[0], /model:\s*'models\/teapot\.glb'/);
+
+  const marenBlock = townSrc.match(/\{[^}]*?id:\s*'maren_typewriter'[^}]*?\}/);
+  assert.ok(marenBlock, 'expected maren_typewriter block in town-3d/town.js');
+  assert.match(marenBlock[0], /kind:\s*'typewriter'/);
+  assert.ok(!/\bmodel\s*:/.test(marenBlock[0]), 'maren_typewriter must have no model: field');
+
+  const modelsDir = path.join(__dirname, '..', 'town-3d', 'models');
+  const oilLampStat = await fs.stat(path.join(modelsDir, 'oil-lamp.glb'));
+  assert.ok(oilLampStat.isFile());
+  const teapotStat = await fs.stat(path.join(modelsDir, 'teapot.glb'));
+  assert.ok(teapotStat.isFile());
+  await assert.rejects(() => fs.stat(path.join(modelsDir, 'typewriter.glb')), { code: 'ENOENT' });
+});
+
+test("only wick's globe glows: emissive lives on the oil lamp alone", () => {
+  const THREE = makeFakeThree();
+  const wickProp = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  const [base, globe, handleMesh] = wickProp.children;
+  assert.equal(globe.material.opts.emissive, '#ffcf70');
+  assert.equal(globe.material.opts.emissiveIntensity, 1.1);
+  assert.equal(base.material.opts.emissive, undefined);
+  assert.equal(handleMesh.material.opts.emissive, undefined);
+
+  for (const handle of ['maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    for (const child of prop.children) {
+      assert.equal(child.material.opts.emissive, undefined, `${handle} prop must not have emissive`);
+    }
+  }
+});
+
+test('attachSeedDoorProp is deterministic: no randomness, no clock, identical repeats', async () => {
+  const modSrc = await fs.readFile(MODULE_PATH, 'utf8');
+  assert.ok(!/\bMath\.rand[o]m\b/.test(modSrc), 'seed-door-props.mjs must not use randomness');
+  assert.ok(!/\bDate\b/.test(modSrc), 'seed-door-props.mjs must not use Date');
+  assert.ok(!/\bcrypto\b/.test(modSrc), 'seed-door-props.mjs must not use crypto');
+
+  const THREE = makeFakeThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const first = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    const second = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.deepEqual(serializeGroup(first), serializeGroup(second));
+  }
+});
+
+test("door-prop kinds trace to each NPC's own record, as written", async () => {
+  const plotsDir = path.join(__dirname, '..', 'town-npc', 'plots');
+  const [wickNote, marenNote, tomasNote, marenManifestRaw, tomasManifestRaw] = await Promise.all([
+    fs.readFile(path.join(plotsDir, 'wick', 'desk-note.html'), 'utf8'),
+    fs.readFile(path.join(plotsDir, 'maren', 'desk-note.html'), 'utf8'),
+    fs.readFile(path.join(plotsDir, 'tomas', 'desk-note.html'), 'utf8'),
+    fs.readFile(path.join(plotsDir, 'maren', 'manifest.json'), 'utf8'),
+    fs.readFile(path.join(plotsDir, 'tomas', 'manifest.json'), 'utf8'),
+  ]);
+
+  const marenKinds = JSON.parse(marenManifestRaw).props.map((p) => p.kind);
+  const tomasKinds = JSON.parse(tomasManifestRaw).props.map((p) => p.kind);
+
+  assert.match(wickNote, /\blamp\b/i);
+
+  assert.ok(marenKinds.includes('typewriter'));
+  assert.doesNotMatch(marenNote, /\btypewriter\b/i);
+  assert.doesNotMatch(marenNote, /\blamp\b/i);
+
+  assert.match(tomasNote, /\blamp\b/i);
+  assert.match(tomasNote, /\bsamovar\b/i);
+  assert.doesNotMatch(tomasNote, /\bteapot\b/i);
+  assert.ok(tomasKinds.includes('tea_kettle'));
+  assert.ok(!tomasKinds.includes('teapot'));
+});
