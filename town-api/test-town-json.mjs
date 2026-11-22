@@ -513,3 +513,179 @@ test('every origin appears in SKILL.md', () => {
     );
   }
 });
+
+test('state summary pins the full state shape', () => {
+  const stateEp = townJson.endpoints.find(
+    (ep) => ep.method === 'GET' && ep.path === '/api/town/state'
+  );
+  assert.ok(stateEp, 'Missing endpoint GET /api/town/state');
+
+  const expectedTokens = [
+    'state_seq',
+    'footlights',
+    'prompt_book',
+    'presence',
+    'plots',
+    'inn',
+    'guestbook',
+    'guestbook_by_plot',
+    'events',
+    'nightly_call',
+    '?since',
+    '304',
+  ];
+
+  for (const token of expectedTokens) {
+    assert.ok(
+      stateEp.summary.includes(token),
+      `GET /api/town/state summary must include ${JSON.stringify(token)}`
+    );
+    assert.ok(
+      serverSrc.includes(token),
+      `server.mjs must include ${JSON.stringify(token)}`
+    );
+  }
+});
+
+test('every RATE_LIMITS key is documented by at least one endpoint', () => {
+  const rl = parseRateLimits();
+  const routesByKey = {
+    joinIp: ['POST /api/town/join'],
+    checkin: ['POST /api/town/ghostlight/checkin'],
+    say: ['POST /api/town/ghostlight/say'],
+    guestCheckin: ['POST /api/town/ghostlight/guest/checkin'],
+    guestSay: ['POST /api/town/ghostlight/guest/say'],
+    plot: ['PUT /api/town/plot'],
+    innClaim: ['POST /api/town/inn/claim', 'POST /api/town/inn/extend'],
+    guestInnClaim: ['POST /api/town/inn/guest/claim', 'POST /api/town/inn/guest/extend'],
+    keyRotate: ['POST /api/town/key/rotate'],
+    guestbook: ['POST /api/town/guestbook'],
+  };
+
+  assert.deepEqual(
+    Object.keys(rl).sort(),
+    Object.keys(routesByKey).sort(),
+    'RATE_LIMITS keys must match documented route mapping'
+  );
+
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const limitByKey = new Map();
+
+  for (const [rlKey, routes] of Object.entries(routesByKey)) {
+    const matched = routes.map((route) => {
+      const ep = byKey.get(route);
+      assert.ok(ep, `Missing endpoint ${route} for RATE_LIMITS.${rlKey}`);
+      assert.notEqual(
+        ep.rate_limit,
+        null,
+        `${route} for RATE_LIMITS.${rlKey} must have non-null rate_limit`
+      );
+      return ep;
+    });
+
+    assert.ok(matched.length >= 1, `RATE_LIMITS.${rlKey} must map to at least one endpoint`);
+    const rateLimits = new Set(matched.map((ep) => ep.rate_limit));
+    assert.equal(
+      rateLimits.size,
+      1,
+      `All endpoints for RATE_LIMITS.${rlKey} must share the same rate_limit string`
+    );
+    limitByKey.set(rlKey, matched[0].rate_limit);
+  }
+
+  assert.notEqual(
+    limitByKey.get('innClaim'),
+    limitByKey.get('guestInnClaim'),
+    'Resident innClaim limit must differ from guestInnClaim limit'
+  );
+});
+
+test('endpoint summaries carry the remaining behavior phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+
+  const expectedPhrases = [
+    ['POST /api/town/join', 'pending'],
+    ['PUT /api/town/plot', '1999 HTML'],
+    ['POST /api/town/inn/extend', '7 nights'],
+    ['POST /api/town/admin/invite', 'one-time'],
+    ['POST /api/town/guestbook', '400 invalid_plot'],
+    ['POST /api/town/admin/delete-line', 'delete a Prompt Book line'],
+  ];
+
+  for (const [key, phrase] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    assert.ok(
+      ep.summary.includes(phrase),
+      `${key} summary must include ${JSON.stringify(phrase)}`
+    );
+  }
+});
+
+test('plot catalog appears in SKILL.md', () => {
+  assert.ok(skillSrc.includes('town.json'), 'SKILL.md must mention town.json');
+  assert.equal(townJson.plot.starter_props.length, 9);
+
+  for (const style of townJson.plot.cottage_styles) {
+    assert.ok(
+      skillSrc.includes(style),
+      `SKILL.md must include cottage style ${JSON.stringify(style)}`
+    );
+  }
+  for (const prop of townJson.plot.starter_props) {
+    assert.ok(
+      skillSrc.includes(prop),
+      `SKILL.md must include starter prop ${JSON.stringify(prop)}`
+    );
+  }
+});
+
+test('inn key policy pins the 12-character key and the state-hiding rule', () => {
+  assert.ok(
+    townJson.inn_rooms.key_policy.includes('12-character'),
+    'inn_rooms.key_policy must include 12-character'
+  );
+  assert.ok(
+    townJson.inn_rooms.key_policy.includes('never exposed in /api/town/state'),
+    'inn_rooms.key_policy must include never exposed in /api/town/state'
+  );
+
+  const innHtmlSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/inn/index.html'), 'utf8');
+  for (const room of townJson.inn_rooms.rooms) {
+    assert.ok(
+      innHtmlSrc.includes(room.name),
+      `town-3d/inn/index.html must include room name ${JSON.stringify(room.name)}`
+    );
+  }
+
+  const innClaimEp = townJson.endpoints.find(
+    (ep) => ep.method === 'POST' && ep.path === '/api/town/inn/claim'
+  );
+  assert.ok(innClaimEp, 'Missing endpoint POST /api/town/inn/claim');
+  for (const room of townJson.inn_rooms.rooms) {
+    assert.ok(
+      innClaimEp.summary.includes(room.id),
+      `POST /api/town/inn/claim summary must include room id ${JSON.stringify(room.id)}`
+    );
+  }
+});
+
+test('version phase label matches PLAN.md and auth constants are well-formed', () => {
+  const versionMatch = townJson.version.match(/^\d+\.\d+\.\d+-(phase\d+)$/);
+  assert.ok(versionMatch, `Unexpected version format: ${townJson.version}`);
+
+  const phaseLabel = versionMatch[1];
+  const planSrc = fs.readFileSync(path.join(REPO_ROOT, 'PLAN.md'), 'utf8');
+  assert.ok(
+    planSrc.includes(phaseLabel),
+    `PLAN.md must include phase label ${JSON.stringify(phaseLabel)}`
+  );
+
+  assert.equal(townJson.auth.spki_der_prefix_hex.length, 24);
+  assert.match(townJson.auth.spki_der_prefix_hex, /^[0-9a-f]+$/);
+  assert.equal(townJson.auth.headers.length, 4);
+  assert.ok(
+    townJson.auth.canonical_string.includes('{SHA256_HEX(raw_body)}'),
+    'auth.canonical_string must include {SHA256_HEX(raw_body)}'
+  );
+});
