@@ -826,3 +826,244 @@ test('exported interior constants are frozen with exact values', async () => {
   const pitch0 = Math.asin((1.15 - 1.55) / Math.sqrt(5));
   assert.ok(Math.abs(pitch0 - -0.1798534997924783) < 1e-12);
 });
+
+test('isDoorHit handle case and clone discipline: non-milo handles use kit frontZ, worldToLocal clones the point, null local fails', () => {
+  const hitObj = {};
+  assert.equal(isDoorHit({ userData: { handle: 'MILO' } }, { object: hitObj, point: { x: 0, y: 1, z: 1.45 } }), true);
+  assert.equal(isDoorHit({ userData: { handle: 'milo' } }, { object: hitObj, point: { x: 0, y: 1, z: 1.45 } }), false);
+  assert.equal(isDoorHit({ userData: {} }, { object: hitObj, point: { x: 0, y: 1, z: 1.45 } }), true);
+  assert.equal(isDoorHit({}, { object: hitObj, point: { x: 0, y: 1, z: 1.45 } }), true);
+
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  cottage.position.set(2, 0, 3);
+  cottage.rotation.y = Math.PI / 2;
+  const point = makeVec3(0, 1, 1.7);
+  let cloneCount = 0;
+  const origClone = point.clone;
+  point.clone = () => {
+    cloneCount += 1;
+    return origClone.call(point);
+  };
+  isDoorHit(cottage, { object: hitObj, point });
+  assert.equal(cloneCount, 1);
+  assert.deepEqual({ x: point.x, y: point.y, z: point.z }, { x: 0, y: 1, z: 1.7 });
+
+  assert.equal(
+    isDoorHit({ worldToLocal: () => null }, { object: hitObj, point: { x: 0, y: 1, z: 1.6 } }),
+    false
+  );
+  assert.equal(
+    isDoorHit({ worldToLocal: () => undefined }, { object: hitObj, point: { x: 0, y: 1, z: 1.6 } }),
+    false
+  );
+});
+
+test('rayHitsInteriorDoor rotated-room direction transform and degenerate inputs', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  room.rotation.y = Math.PI / 2;
+
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: 0 }, { x: 1, y: 0, z: 0 }), true);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: 0 }, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: 0 }, { x: -1, y: 0, z: 0 }), false);
+
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: 0 }, { x: 0, y: 0, z: 0 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: 0 }, { x: 1, y: NaN, z: 0 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0.9, y: 1.55, z: undefined }, { x: 1, y: 0, z: 0 }), false);
+
+  const stubRoom = { rotation: { y: 0 } };
+  assert.equal(rayHitsInteriorDoor(stubRoom, { x: 0, y: 1.55, z: 1.43 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(rayHitsInteriorDoor(stubRoom, { x: 0, y: 1.55, z: 1.44 }, { x: 0, y: 0, z: 1 }), false);
+});
+
+test('lookBy keeps the target on the sqrt(5) sphere for extreme yaw, works without lookAt, and NaN drag propagates', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  milo.rotation.y = Math.PI / 4;
+
+  assert.equal(visit.enter(milo), true);
+  const eye = { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+  assert.equal(visit.lookBy(20000, 0), true);
+  const dist = Math.hypot(
+    controls.target.x - eye.x,
+    controls.target.y - eye.y,
+    controls.target.z - eye.z
+  );
+  assert.ok(Math.abs(dist - Math.sqrt(5)) < 1e-9, `expected sqrt(5), got ${dist}`);
+  assert.deepEqual({ x: camera.position.x, y: camera.position.y, z: camera.position.z }, eye);
+
+  const noLookAtCam = { position: makeVec3(0, 26, 58) };
+  const { controls: controls2 } = makeFakeCameraAndControls();
+  const room2 = buildInteriorRoom(THREE);
+  const visit2 = createInteriorVisit({
+    room: room2,
+    camera: noLookAtCam,
+    controls: controls2,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+  const originMilo = new THREE.Group();
+  originMilo.userData = { handle: 'milo' };
+  assert.equal(visit2.enter(originMilo), true);
+  assert.equal(visit2.lookBy(100, 0), true);
+  assert.ok(
+    controls2.target.x > 1.0 && controls2.target.x < 1.1,
+    `expected target.x in (1.0, 1.1), got ${controls2.target.x}`
+  );
+
+  assert.equal(visit2.lookBy(NaN, 0), true);
+  assert.equal(Number.isNaN(controls2.target.x), true);
+});
+
+test('enter/exit with plain-object positions use the setVec3 fallbacks, and a position-less cottage leaves the room pose alone', () => {
+  const room = { position: { x: 10, y: 0, z: 5 }, rotation: { y: 0 }, visible: false, children: [] };
+  const camera = { position: { x: 0, y: 26, z: 58 } };
+  const controls = { target: { x: 0, y: 2, z: 0 }, enabled: true };
+  const visibleCalls = [];
+  const paletteCalls = [];
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible(r, v) {
+      visibleCalls.push({ r, v });
+      r.visible = v;
+    },
+    setPalette(r, h) {
+      paletteCalls.push({ r, h });
+    },
+  });
+
+  const wick = {
+    userData: { handle: 'wick' },
+    position: { x: 3, y: 0.5, z: -4 },
+    rotation: { y: Math.PI / 2 },
+  };
+  assert.equal(visit.enter(wick), true);
+  assert.deepEqual(room.position, { x: 3, y: 0.5, z: -4 });
+  assert.equal(room.rotation.y, Math.PI / 2);
+  assert.ok(Math.abs(camera.position.x - 3.9) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - 2.05) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - -4) < 1e-9);
+  assert.ok(Math.abs(controls.target.x - 1.7) < 1e-9);
+  assert.ok(Math.abs(controls.target.y - 1.65) < 1e-9);
+  assert.ok(Math.abs(controls.target.z - -4) < 1e-9);
+  assert.equal(visibleCalls.length, 1);
+  assert.equal(paletteCalls.length, 1);
+  assert.equal(visit.exit(), true);
+  assert.deepEqual(camera.position, { x: 0, y: 26, z: 58 });
+  assert.deepEqual(controls.target, { x: 0, y: 2, z: 0 });
+
+  const room2 = { position: { x: 7, y: 1, z: 2 }, rotation: { y: 0.7 }, visible: false, children: [] };
+  const visit2 = createInteriorVisit({ room: room2, camera, controls });
+  assert.equal(visit2.enter({ userData: { handle: 'ada' } }), true);
+  assert.deepEqual(room2.position, { x: 7, y: 1, z: 2 });
+  assert.equal(room2.rotation.y, 0);
+  assert.ok(Math.abs(camera.position.x - 7) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - 2.55) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - 2.9) < 1e-9);
+  assert.ok(Math.abs(controls.target.x - 7) < 1e-9);
+  assert.ok(Math.abs(controls.target.y - 2.15) < 1e-9);
+  assert.ok(Math.abs(controls.target.z - 0.7) < 1e-9);
+});
+
+test('createInteriorVisit dep edges: no-arg call throws, missing-room visit stays inert, two visits are independent closures', () => {
+  assert.throws(() => createInteriorVisit(), TypeError);
+  assert.throws(() => createInteriorVisit(null), TypeError);
+
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+
+  const noRoomVisit = createInteriorVisit({ room: undefined, camera, controls });
+  assert.equal(noRoomVisit.isInside(), false);
+  assert.equal(noRoomVisit.exit(), false);
+  assert.equal(noRoomVisit.lookBy(10, 10), false);
+
+  const visitA = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+  const visitB = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+
+  assert.equal(visitA.enter(milo), true);
+  const poseAtBEnter = {
+    cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+  };
+  assert.equal(visitB.isInside(), false);
+  assert.equal(visitB.enter(wick), true);
+  assert.equal(room.position.x, -10);
+  assert.equal(room.position.z, -8);
+
+  assert.equal(visitA.exit(), true);
+  assert.deepEqual({ x: camera.position.x, y: camera.position.y, z: camera.position.z }, { x: 0, y: 26, z: 58 });
+  assert.equal(visitB.isInside(), true);
+
+  assert.equal(visitB.exit(), true);
+  assert.ok(Math.abs(camera.position.x - poseAtBEnter.cam.x) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - poseAtBEnter.cam.y) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - poseAtBEnter.cam.z) < 1e-9);
+  assert.ok(Math.abs(controls.target.x - poseAtBEnter.target.x) < 1e-9);
+  assert.ok(Math.abs(controls.target.y - poseAtBEnter.target.y) < 1e-9);
+  assert.ok(Math.abs(controls.target.z - poseAtBEnter.target.z) < 1e-9);
+});
+
+test('exit with omitted setVisible leaves visibility untouched, and re-enter saves the new pose', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const bareVisit = createInteriorVisit({ room, camera, controls });
+
+  room.visible = true;
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+
+  assert.equal(bareVisit.enter(wick), true);
+  assert.equal(room.visible, true);
+  assert.equal(bareVisit.exit(), true);
+  assert.equal(room.visible, true);
+  assert.equal(controls.enabled, true);
+
+  camera.position.set(99, 99, 99);
+  controls.target.set(1, 2, 3);
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+
+  assert.equal(bareVisit.enter(milo), true);
+  assert.equal(bareVisit.exit(), true);
+  assert.deepEqual({ x: camera.position.x, y: camera.position.y, z: camera.position.z }, { x: 99, y: 99, z: 99 });
+  assert.deepEqual({ x: controls.target.x, y: controls.target.y, z: controls.target.z }, { x: 1, y: 2, z: 3 });
+});
