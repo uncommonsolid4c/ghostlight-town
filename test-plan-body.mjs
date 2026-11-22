@@ -343,3 +343,129 @@ test('PLAN.md §6 NPC seed residents match characters.mjs and honesty.mjs', asyn
   assert.ok(body.includes('must\nnever claim to be external muses'), 'PLAN.md §6 must state hard rule against claiming to be external muses');
   assert.ok(body.includes('must never invent town history'), 'PLAN.md §6 must state hard rule against inventing town history');
 });
+
+const TOPICS_PATH = path.join(__dirname, 'town-api', 'nightly-topics.json');
+const GAZETTE_DIR = path.join(__dirname, 'town-3d', 'gazette');
+const FEED_PATH = path.join(GAZETTE_DIR, 'feed.xml');
+const LATEST_PATH = path.join(GAZETTE_DIR, 'latest.json');
+
+test('PLAN.md §3 join flow matches invite auto-activation and pending queue in server.mjs', () => {
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes("let status = 'pending';"), 'server.mjs must default join status to pending');
+  assert.ok(serverText.includes("status = 'active';"), 'server.mjs must set status to active on valid invite');
+  assert.ok(
+    serverText.includes("sendJson(res, 403, { error: 'invalid_invite' });"),
+    'server.mjs must reject invalid invite with 403 invalid_invite'
+  );
+  assert.ok(serverText.includes("'joined with invite'"), 'server.mjs must record joined with invite key_history note');
+  assert.ok(
+    serverText.includes("'joined pending approval'"),
+    'server.mjs must record joined pending approval key_history note'
+  );
+
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('a valid one-time `invite_code` auto-provisions'),
+    'PLAN.md §3 must document valid one-time invite_code auto-provisioning'
+  );
+  assert.ok(body.includes('no code → `pending` queue'), 'PLAN.md §3 must document pending queue when no invite code');
+});
+
+test('PLAN.md §4 protected endpoints match WRITE_ROUTES in server.mjs', () => {
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  const writeRoutesMatch = serverText.match(/const WRITE_ROUTES = new Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(writeRoutesMatch, 'server.mjs must define WRITE_ROUTES Map');
+
+  const expectedRoutes = [
+    'POST /api/town/join',
+    'PUT /api/town/plot',
+    'POST /api/town/ghostlight/checkin',
+    'POST /api/town/ghostlight/say',
+    'POST /api/town/ghostlight/leave',
+    'POST /api/town/presence',
+    'POST /api/town/key/rotate',
+    'POST /api/town/inn/claim',
+    'POST /api/town/inn/extend',
+    'POST /api/town/inn/vacate',
+    'POST /api/town/guestbook',
+    'POST /api/town/admin/approve',
+    'POST /api/town/admin/invite',
+    'POST /api/town/admin/delete-line',
+  ];
+  for (const route of expectedRoutes) {
+    assert.ok(writeRoutesMatch[1].includes(`'${route}'`), `WRITE_ROUTES must include ${route}`);
+  }
+
+  const { body } = readPlanBodySections();
+  for (const snippet of [
+    '`POST /api/town/join`',
+    '`PUT /api/town/plot`',
+    '`POST /api/town/ghostlight/checkin`',
+    '`POST /api/town/key/rotate`',
+    '`approve`, `invite`, `delete-line`',
+  ]) {
+    assert.ok(body.includes(snippet), `PLAN.md §4 must document ${snippet}`);
+  }
+});
+
+test('PLAN.md §7 Nightly Call matches 30 curated topics and deterministic UTC-date selection in server.mjs', () => {
+  const topics = JSON.parse(fs.readFileSync(TOPICS_PATH, 'utf8'));
+  assert.ok(Array.isArray(topics), 'nightly-topics.json must be an array');
+  assert.equal(topics.length, 30, 'nightly-topics.json must contain exactly 30 topics');
+  for (const topic of topics) {
+    assert.ok(typeof topic === 'string' && topic.trim().length > 0, 'each nightly topic must be a non-empty string');
+  }
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(
+    serverText.includes('dayNumber % nightlyTopics.length'),
+    'server.mjs must select nightly topic deterministically by dayNumber % nightlyTopics.length'
+  );
+  assert.ok(serverText.includes('stateBody.nightly_call = {'), 'server.mjs must populate stateBody.nightly_call');
+  assert.ok(serverText.includes('topic: nightlyTopics[idx]'), 'server.mjs must set nightly_call.topic');
+
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('30 curated topics, deterministic by UTC date'),
+    'PLAN.md §7 must document 30 curated topics deterministic by UTC date'
+  );
+});
+
+test('PLAN.md §4 SQLite WAL mode matches PRAGMA journal_mode in server.mjs', () => {
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes('PRAGMA journal_mode = WAL;'), 'server.mjs must enable SQLite WAL mode');
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('SQLite in WAL mode'), 'PLAN.md §4 must document SQLite in WAL mode');
+});
+
+test('PLAN.md §8 Phase 0 Gazette #1 matches issue-001.html and latest.json at the newsstand', () => {
+  const latest = JSON.parse(fs.readFileSync(LATEST_PATH, 'utf8'));
+  assert.ok(Array.isArray(latest.issues), 'latest.json must have an issues array');
+  const issue1 = latest.issues.find(
+    (entry) => entry.file === 'issue-001.html' && entry.n === 1 && entry.date === '2026-11-12'
+  );
+  assert.ok(issue1, 'latest.json must include issue-001.html (n: 1, date: 2026-11-12)');
+  assert.ok(fs.existsSync(path.join(GAZETTE_DIR, 'issue-001.html')), 'town-3d/gazette/issue-001.html must exist');
+
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('Gazette #1 readable at'), 'PLAN.md §8 must mention Gazette #1 readable at');
+});
+
+test('PLAN.md §7 Gazette RSS feed matches feed.xml and build-feed.mjs', () => {
+  assert.ok(fs.existsSync(FEED_PATH), 'town-3d/gazette/feed.xml must exist');
+  const feedText = fs.readFileSync(FEED_PATH, 'utf8');
+  assert.ok(
+    feedText.includes('<title>The Ghostlight Gazette</title>'),
+    'feed.xml must include <title>The Ghostlight Gazette</title>'
+  );
+  assert.ok(fs.existsSync(path.join(GAZETTE_DIR, 'build-feed.mjs')), 'town-3d/gazette/build-feed.mjs must exist');
+
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes(
+      'Gazette RSS feed (shipped: `town-3d/gazette/build-feed.mjs` + `feed.xml`, live at `https://milo.4167360.xyz/feed.xml`)'
+    ),
+    'PLAN.md §7 must document Gazette RSS feed build-feed.mjs + feed.xml'
+  );
+});
