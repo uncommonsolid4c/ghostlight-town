@@ -365,3 +365,251 @@ test('scripts/README.md check-live checks: glTF magic, latest.json, and informat
   assert.ok(readme.includes('`gazette/latest.json` parses cleanly'));
   assert.ok(readme.includes('Informational check of `<api-base>/api/town/state`; pass `--require-api` to'));
 });
+
+test('scripts/README.md stage-deploy usage lines and default bundle match source and a real dry run', () => {
+  const readme = readReadme();
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+  const townIndexHtml = fs.readFileSync(path.join(ROOT_DIR, 'town-3d', 'index.html'), 'utf8');
+
+  const usageStage = 'node scripts/stage-deploy.mjs [--bundle <name>] [--out <dir>] [--root <dir>]';
+  const usageVerify = 'node scripts/stage-deploy.mjs --verify <dir> [--root <dir>]';
+
+  assert.ok(readme.includes(usageStage), 'README must contain stage usage line');
+  assert.ok(readme.includes(usageVerify), 'README must contain verify usage line');
+
+  const headerComment = stageSrc.slice(0, stageSrc.indexOf('import '));
+  assert.ok(headerComment.includes(usageStage), 'stage-deploy.mjs header must contain stage usage line');
+  assert.ok(headerComment.includes(usageVerify), 'stage-deploy.mjs header must contain verify usage line');
+
+  const parseArgsMatch = stageSrc.match(/function parseArgs\([\s\S]*?\n\}/);
+  assert.ok(parseArgsMatch, 'parseArgs must exist in stage-deploy.mjs');
+  for (const flag of ['--bundle', '--out', '--root', '--verify']) {
+    assert.ok(
+      parseArgsMatch[0].includes(`arg === '${flag}'`),
+      `parseArgs must handle ${flag}`
+    );
+  }
+  assert.ok(stageSrc.includes("const bundle = bundleArg ?? 'town-3d';"));
+  assert.ok(townIndexHtml.includes('town.js?v=16'));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-default-'));
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.bundle, 'town-3d');
+    assert.equal(String(summary.town_js_v), '16');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md MANIFEST.json shape matches a real staging-polyfork dry run', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('with a sha256 `MANIFEST.json`'));
+  assert.ok(readme.includes('with per-file `sha256` hashes and byte counts'));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-manifest-'));
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'staging-polyfork', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.file_count, 193);
+    assert.equal(String(summary.staging_js_v), '40');
+    assert.equal(summary.town_js_v, null);
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(manifest.file_count, 193);
+    assert.equal(String(manifest.staging_js_v), '40');
+    assert.equal(manifest.files.length, 193);
+
+    let sumBytes = 0;
+    for (const entry of manifest.files) {
+      assert.equal(typeof entry.path, 'string');
+      assert.ok(entry.path.length > 0);
+      assert.equal(typeof entry.bytes, 'number');
+      assert.ok(entry.bytes > 0);
+      assert.match(entry.sha256, /^[0-9a-f]{64}$/);
+      sumBytes += entry.bytes;
+    }
+    assert.equal(manifest.total_bytes, sumBytes);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md --verify rejection claims hold against a real tampered staging', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('rejects missing, mismatched, or extra files, symlinks, and `town_js_v` /'));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-verify-'));
+  const stagedDir = path.join(tmpDir, 'ghostlight-town');
+  const runVerify = () => {
+    try {
+      const stdout = execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--verify', stagedDir],
+        { cwd: ROOT_DIR, encoding: 'utf8' }
+      );
+      return { exitCode: 0, json: JSON.parse(stdout.trim()) };
+    } catch (err) {
+      return { exitCode: err.status, json: JSON.parse(String(err.stdout || '').trim()) };
+    }
+  };
+
+  try {
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'staging-polyfork', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const origManifestRaw = fs.readFileSync(manifestPath, 'utf8');
+    const manifest = JSON.parse(origManifestRaw);
+    const firstRel = manifest.files[0].path;
+    const secondRel = manifest.files[1].path;
+    const firstPath = path.join(stagedDir, firstRel);
+    const secondPath = path.join(stagedDir, secondRel);
+    const firstOrigBytes = fs.readFileSync(firstPath);
+    const secondOrigBytes = fs.readFileSync(secondPath);
+
+    // 1. Clean staging
+    const cleanRes = runVerify();
+    assert.equal(cleanRes.exitCode, 0);
+    assert.equal(cleanRes.json.status, 'ok');
+    assert.deepEqual(cleanRes.json.mismatch, []);
+    assert.deepEqual(cleanRes.json.missing, []);
+    assert.deepEqual(cleanRes.json.extra, []);
+
+    // 2. Append one byte to the first staged file
+    fs.writeFileSync(firstPath, Buffer.concat([firstOrigBytes, Buffer.from([0x20])]));
+    const mismatchRes = runVerify();
+    assert.equal(mismatchRes.exitCode, 1);
+    assert.equal(mismatchRes.json.status, 'fail');
+    assert.ok(mismatchRes.json.mismatch.includes(firstRel));
+    fs.writeFileSync(firstPath, firstOrigBytes);
+
+    // 3. Tamper staging_js_v to '39' in MANIFEST.json
+    const tamperedManifest = { ...manifest, staging_js_v: '39' };
+    fs.writeFileSync(manifestPath, JSON.stringify(tamperedManifest, null, 2));
+    const driftRes = runVerify();
+    assert.equal(driftRes.exitCode, 1);
+    assert.equal(driftRes.json.status, 'fail');
+    assert.equal(driftRes.json.staged_staging_js_v, '40');
+    assert.equal(driftRes.json.staging_js_v, '39');
+    fs.writeFileSync(manifestPath, origManifestRaw);
+
+    // 4. Delete the second staged file
+    fs.unlinkSync(secondPath);
+    const missingRes = runVerify();
+    assert.equal(missingRes.exitCode, 1);
+    assert.equal(missingRes.json.status, 'fail');
+    assert.ok(missingRes.json.missing.includes(secondRel));
+    fs.writeFileSync(secondPath, secondOrigBytes);
+
+    // 5. Add extra-file.txt
+    const extraPath = path.join(stagedDir, 'extra-file.txt');
+    fs.writeFileSync(extraPath, 'extra\n');
+    const extraRes = runVerify();
+    assert.equal(extraRes.exitCode, 1);
+    assert.equal(extraRes.json.status, 'fail');
+    assert.ok(extraRes.json.extra.includes('extra-file.txt'));
+    fs.unlinkSync(extraPath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md Honest limits: neither script can deploy or mutate', () => {
+  const readme = readReadme();
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+
+  for (const forbidden of ['rsync', 'ssh', 'scp', '4167360.xyz']) {
+    assert.equal(stageSrc.includes(forbidden), false, `stage-deploy.mjs must not contain ${forbidden}`);
+  }
+
+  const fetchCallRe = new RegExp(`\\b${'fetch'}\\(`, 'g');
+  const fetchMatches = checkLiveSrc.match(fetchCallRe) || [];
+  assert.equal(fetchMatches.length, 1, 'check-live.mjs must contain exactly one fetch call');
+  const expectedCall = `await ${'fetch'}(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })`;
+  assert.ok(checkLiveSrc.includes(expectedCall), 'check-live.mjs fetch call must be GET-only with timeout');
+
+  for (const mutator of ["'POST'", "'PUT'", "'DELETE'", 'method:']) {
+    assert.equal(checkLiveSrc.includes(mutator), false, `check-live.mjs must not contain ${mutator}`);
+  }
+
+  assert.ok(readme.includes('never touches the homelab'));
+  assert.ok(readme.includes("deploying to the homelab is Milo's call"));
+  assert.ok(readme.includes('**`check-live.mjs` is read-only:**'));
+  assert.ok(readme.includes('cannot fix or mutate it'));
+});
+
+test('scripts/README.md Slice 28 staging script never stages town-api/ or town-npc/', () => {
+  const readme = readReadme();
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+  const headerComment = stageSrc.slice(0, stageSrc.indexOf('import '));
+
+  assert.ok(headerComment.includes('static deploy staging script (Slice 28)'));
+  assert.ok(readme.includes('Slice 28 static deploy staging script'));
+  assert.ok(headerComment.includes('never stages town-api/ or'));
+  assert.ok(readme.includes('never stages `town-api/` or `town-npc/`'));
+  assert.ok(stageSrc.includes("'town-api/ (server-side, separate deploy)'"));
+  assert.ok(stageSrc.includes("'town-npc/ (server-side, separate deploy)'"));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-notstaged-'));
+  try {
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'staging-polyfork', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    const notStagedJoined = manifest.not_staged.join('\n');
+    assert.ok(notStagedJoined.includes('town-api/'));
+    assert.ok(notStagedJoined.includes('town-npc/'));
+    assert.equal(
+      manifest.files.some((item) => item.path.startsWith('town-api/') || item.path.startsWith('town-npc/')),
+      false,
+      'town-api/ and town-npc/ must never appear in manifest.files'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md check-live usage line and flag defaults match source', () => {
+  const readme = readReadme();
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+  const headerComment = checkLiveSrc.slice(0, checkLiveSrc.indexOf('import '));
+
+  const usageLine = 'node scripts/check-live.mjs [--bundle <name>] [--base <url>] [--root <dir>] [--api-base <url>] [--require-api]';
+  assert.ok(readme.includes(usageLine), 'README must contain check-live usage line');
+  assert.ok(headerComment.includes(usageLine), 'check-live.mjs header must contain usage line');
+
+  const parseArgsMatch = checkLiveSrc.match(/function parseArgs\([\s\S]*?\n\}/);
+  assert.ok(parseArgsMatch, 'parseArgs must exist in check-live.mjs');
+  for (const flag of ['--base', '--root', '--bundle', '--api-base', '--require-api']) {
+    assert.ok(
+      parseArgsMatch[0].includes(`arg === '${flag}'`),
+      `check-live parseArgs must handle ${flag}`
+    );
+  }
+
+  assert.ok(checkLiveSrc.includes("const DEFAULT_BASE = 'https://milo.4167360.xyz';"));
+  assert.ok(checkLiveSrc.includes("const DEFAULT_BUNDLE = 'staging-polyfork';"));
+  assert.ok(readme.includes('`--base https://milo.4167360.xyz`'));
+  assert.ok(readme.includes('`--bundle staging-polyfork`'));
+});
