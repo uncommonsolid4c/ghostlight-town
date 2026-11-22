@@ -438,3 +438,176 @@ test('formatEventWhen handles non-finite input and renderEventBannerHeader clear
   assert.equal(renderEventBannerHeader(el2, null, null), false);
   assert.equal(el2.textContent, '');
 });
+
+test('loadEvents accepts host_handle and duration boundaries, drops extra fields, and pins empty location/blurb', async () => {
+  const load = (events) =>
+    loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return { events };
+      },
+    }));
+
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'a'.repeat(32) }])).events.length, 1);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'a'.repeat(33) }])).events.length, 0);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: '1abc' }])).events.length, 1);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: '-abc' }])).events.length, 0);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: '_abc' }])).events.length, 0);
+
+  assert.equal((await load([{ ...VALID_EVENT, duration_min: NaN }])).events.length, 0);
+  assert.equal((await load([{ ...VALID_EVENT, duration_min: Infinity }])).events.length, 0);
+  assert.deepEqual(await load([{ ...VALID_EVENT, duration_min: 30.5 }]), {
+    events: [{ ...VALID_EVENT, duration_min: 30.5 }],
+  });
+
+  assert.deepEqual(
+    await load([{ ...VALID_EVENT, extra_field: 'dropped', location: '', blurb: '' }]),
+    { events: [{ ...VALID_EVENT, location: '', blurb: '' }] }
+  );
+  assert.deepEqual(await load([{ ...VALID_EVENT, location: '   ' }]), {
+    events: [{ ...VALID_EVENT, location: '' }],
+  });
+  assert.deepEqual(await load([{ title: 'x' }]), { events: [] });
+});
+
+test('loadEvents returns { events: [] } on non-array events, null response, and null JSON', async () => {
+  assert.deepEqual(
+    await loadEvents(async () => ({ ok: true, async json() { return { events: 'x' }; } })),
+    { events: [] }
+  );
+  assert.deepEqual(
+    await loadEvents(async () => ({ ok: true, async json() { return { events: null }; } })),
+    { events: [] }
+  );
+  assert.deepEqual(
+    await loadEvents(async () => ({ ok: true, async json() { return null; } })),
+    { events: [] }
+  );
+  assert.deepEqual(
+    await loadEvents(async () => ({ ok: true, async json() { return [1, 2]; } })),
+    { events: [] }
+  );
+  assert.deepEqual(await loadEvents(async () => null), { events: [] });
+  assert.deepEqual(await loadEvents(async () => ({ ok: false, status: 500 })), { events: [] });
+  assert.deepEqual(await loadEvents(async () => ({ ok: true })), { events: [] });
+});
+
+test('selectCurrentEvent skips non-object entries and accepts a padded start_at', () => {
+  const nowMs = Date.parse('2026-11-15T20:30:00Z');
+  assert.equal(selectCurrentEvent([null, 'x', 42, undefined, VALID_EVENT], nowMs)?.status, 'now');
+  assert.equal(selectCurrentEvent([null, 'x', 42], nowMs), null);
+
+  const padded = { ...VALID_EVENT, start_at: ' 2026-11-15T20:00:00Z ' };
+  const res = selectCurrentEvent([padded], nowMs);
+  assert.equal(res?.status, 'now');
+  assert.equal(res.event.start_at, '2026-11-15T20:00:00Z');
+  assert.equal(selectCurrentEvent([padded], Date.parse('2026-11-15T19:00:00Z'))?.status, 'next');
+
+  assert.equal(selectCurrentEvent([VALID_EVENT], 'not-a-number'), null);
+});
+
+test('eventBannerLines hard-splits a long word, handles null event, and keeps embedded newlines', () => {
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'a'.repeat(40) }, 'now'),
+    ['EVENTS', 'a'.repeat(30), 'a'.repeat(10)]
+  );
+
+  const wrapped = eventBannerLines({ ...VALID_EVENT, title: 'word ' + 'b'.repeat(35) + ' tail' }, 'next');
+  assert.equal(wrapped[0], 'NEXT EVENT');
+  for (const line of wrapped.slice(1)) {
+    assert.ok(line.length <= 30, `Line too long (${line.length}): ${line}`);
+  }
+
+  assert.deepEqual(eventBannerLines(null, 'now'), ['EVENTS', '']);
+  assert.deepEqual(eventBannerLines(null, 'next'), ['NEXT EVENT', '']);
+  assert.deepEqual(eventBannerLines(undefined, undefined), ['NEXT EVENT', '']);
+
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'First line\nSecond line' }, 'now'),
+    ['EVENTS', 'First line\nSecond line']
+  );
+});
+
+test('updateEventBanner cache key ignores host change, clears on hide, and passes exact texture opts', () => {
+  let redrawCount = 0;
+  let lastLines = null;
+  let lastOpts = null;
+  const makeTextTexture = (_THREE, lines, opts) => {
+    redrawCount += 1;
+    lastLines = lines;
+    lastOpts = opts;
+    return { lines, opts };
+  };
+  const card = {
+    name: 'event_banner',
+    visible: false,
+    material: { map: null, needsUpdate: false },
+  };
+  const liveStore = { eventBannerKey: null };
+  const ctx = {
+    THREE: {},
+    bandstandBuilt: { group: { children: [{ name: 'other' }, card] } },
+    liveStore,
+    makeTextTexture,
+  };
+
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), true);
+  assert.equal(redrawCount, 1);
+  assert.deepEqual(lastOpts, {
+    width: 768,
+    height: 256,
+    titleSize: 30,
+    subSize: 20,
+    bg: '#f2e6cf',
+    border: '#b59449',
+    fg: '#2b1e14',
+  });
+  assert.equal(lastLines[0], 'NEXT EVENT');
+
+  assert.equal(updateEventBanner(ctx, { ...VALID_EVENT, host_handle: 'wick' }, 'next'), false);
+  assert.equal(redrawCount, 1);
+  assert.equal(
+    liveStore.eventBannerKey,
+    'next|Midnight Reading on the Bandstand|2026-11-15T20:00:00Z'
+  );
+
+  assert.equal(updateEventBanner(ctx, null, null), false);
+  assert.equal(card.visible, false);
+  assert.equal(liveStore.eventBannerKey, null);
+
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), true);
+  assert.equal(redrawCount, 2);
+
+  const guardCard = {
+    name: 'event_banner',
+    visible: false,
+    material: { map: null, needsUpdate: false },
+  };
+  assert.equal(
+    updateEventBanner(
+      { THREE: null, bandstandBuilt: { eventBanner: guardCard }, liveStore: { eventBannerKey: null }, makeTextTexture },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(guardCard.visible, false);
+});
+
+test('formatEventWhen pins noon, midnight, and the epoch, and renderEventBannerHeader exact strings', () => {
+  assert.equal(formatEventWhen(Date.parse('2026-11-15T20:00:00Z')), 'Nov 15, 12:00 PM');
+  assert.equal(formatEventWhen(Date.parse('2026-11-15T08:00:00Z')), 'Nov 15, 12:00 AM');
+  assert.equal(formatEventWhen(Date.parse('2026-11-15T04:00:00Z')), 'Nov 14, 8:00 PM');
+  assert.equal(formatEventWhen(Infinity), '');
+  assert.equal(formatEventWhen(-Infinity), '');
+  assert.equal(formatEventWhen(0), 'Dec 31, 4:00 PM');
+
+  const el = { hidden: true, textContent: '' };
+  assert.equal(renderEventBannerHeader(el, VALID_EVENT, 'now'), true);
+  assert.equal(el.textContent, 'Now: Midnight Reading on the Bandstand — hosted by @milo');
+  assert.equal(renderEventBannerHeader(el, VALID_EVENT, 'next'), true);
+  assert.equal(
+    el.textContent,
+    'Next: Midnight Reading on the Bandstand — Nov 15, 12:00 PM · hosted by @milo'
+  );
+});
