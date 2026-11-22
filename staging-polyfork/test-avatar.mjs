@@ -679,3 +679,131 @@ test('setAvatarStatusText edges: non-string status, undefined map, role-undefine
     assert.equal(noRole.userData.statusText.includes('…'), false);
   });
 });
+
+test('setAvatarStatusText status texture draws two-line badge with 30/22px fonts, and flips needsUpdate', () => {
+  const THREE = createFakeTHREE();
+  withRecordingDocument((calls) => {
+    const npc = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    calls.length = 0;
+    setAvatarStatusText(THREE, npc, 'Quiet tea');
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 144],
+      ['strokeRect', '#ffbe55', 8, 8, 8, 368, 128],
+      ['fillText', 'bold 30px monospace', '#ffbe55', '[NPC] maren', 192, 48],
+      ['fillText', 'bold 22px monospace', '#ffbe55', 'Quiet tea', 192, 96],
+    ]);
+    const sprite = npc.userData.nametagSprite;
+    assert.equal(sprite.material.needsUpdate, true);
+    assert.deepEqual({ x: sprite.scale.x, y: sprite.scale.y, z: sprite.scale.z }, { x: 1.5, y: 0.5625, z: 1 });
+  });
+});
+
+test('createAvatarCapsule role is case-sensitive: "NPC", empty, and null all fall back to muse', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument((drawnTexts) => {
+    const upper = createAvatarCapsule(THREE, { handle: 'x', role: 'NPC' });
+    const empty = createAvatarCapsule(THREE, { handle: 'y', role: '' });
+    const nil = createAvatarCapsule(THREE, { handle: 'z', role: null });
+
+    for (const av of [upper, empty, nil]) {
+      assert.equal(av.userData.role, 'muse');
+      assert.equal(av.children[0].material.color, '#6cb4d8');
+    }
+
+    assert.deepEqual(
+      drawnTexts.map((d) => d.text),
+      ['[MUSE] x', '[MUSE] y', '[MUSE] z']
+    );
+  });
+});
+
+test('getPlotTargetPosition target sits 3.6 m toward the clearing centre: exact plot 1 and plot 5 targets', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const t1 = getPlotTargetPosition(plot1, 0);
+  assert.deepEqual(t1, { x: 14.4321, y: 0, z: 3.7058, rotY: -1.8221 });
+  const r1 = Math.hypot(t1.x, t1.z);
+  assert.ok(Math.abs(r1 - 14.9) < 0.01, `expected plot 1 target radius ~14.9, got ${r1}`);
+  const dot1 = (t1.x - plot1.x) * (0 - plot1.x) + (t1.z - plot1.z) * (0 - plot1.z);
+  assert.ok(dot1 > 0, `expected forward step toward origin, got dot=${dot1}`);
+
+  const plot5 = TOWN_LAYOUT.plots[4];
+  const t5 = getPlotTargetPosition(plot5, 0);
+  assert.deepEqual(t5, { x: -3.8345, y: 0, z: -14.3983, rotY: 0.2603 });
+  const r5 = Math.hypot(t5.x, t5.z);
+  assert.ok(Math.abs(r5 - 14.9) < 0.01, `expected plot 5 target radius ~14.9, got ${r5}`);
+});
+
+test('getPlotTargetPosition indices 7 and 8 continue the ±0.9 stagger ladder', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const p0 = getPlotTargetPosition(plot1, 0);
+  const sideX = Math.cos(plot1.rotY);
+  const sideZ = -Math.sin(plot1.rotY);
+
+  const p7 = getPlotTargetPosition(plot1, 7);
+  const p8 = getPlotTargetPosition(plot1, 8);
+  for (const p of [p7, p8]) {
+    assert.equal(p.y, 0);
+    assert.equal(p.rotY, plot1.rotY);
+  }
+
+  const proj7 = (p7.x - p0.x) * sideX + (p7.z - p0.z) * sideZ;
+  const proj8 = (p8.x - p0.x) * sideX + (p8.z - p0.z) * sideZ;
+  assert.ok(Math.abs(proj7 - 3.6) < 0.01, `expected index 7 lateral +3.6, got ${proj7}`);
+  assert.ok(Math.abs(proj8 + 3.6) < 0.01, `expected index 8 lateral -3.6, got ${proj8}`);
+});
+
+test('pickBandstandSpot overflow slot 30 lands on the fourth ring at 8.4 m and never mutates avatarSpots', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const snapshot = spots.map((s) => ({ ...s }));
+  const used = new Set();
+
+  for (let i = 0; i < 30; i++) {
+    pickBandstandSpot(spots, used, null);
+  }
+  assert.equal(used.size, 30);
+  assert.deepEqual(spots, snapshot);
+
+  const slot30 = pickBandstandSpot(spots, used, null);
+  assert.equal(slot30.slot, 30);
+  assert.equal(slot30.y, 0);
+  assert.equal(slot30.nametagLift, 0);
+  assert.equal(slot30.x, 1.2553);
+  assert.equal(slot30.z, 8.3057);
+  assert.equal(slot30.rotY, -2.9916);
+  const r = Math.hypot(slot30.x, slot30.z);
+  assert.ok(Math.abs(r - 8.4) < 0.01, `expected fourth overflow ring radius ~8.4, got ${r}`);
+});
+
+test('setAvatarStatusText undefined clears, disposes once per change, and keeps scale z at 1', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument(() => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    const sprite = muse.userData.nametagSprite;
+
+    setAvatarStatusText(THREE, muse, 'First');
+    assert.equal(muse.userData.statusText, 'First');
+    assert.equal(sprite.material.needsUpdate, true);
+    assert.deepEqual({ x: sprite.scale.x, y: sprite.scale.y, z: sprite.scale.z }, { x: 1.5, y: 0.5625, z: 1 });
+
+    let disposed = 0;
+    sprite.material.map.dispose = () => { disposed += 1; };
+    setAvatarStatusText(THREE, muse, 'Second');
+    assert.equal(disposed, 1);
+    assert.equal(muse.userData.statusText, 'Second');
+    assert.equal(sprite.material.needsUpdate, true);
+
+    sprite.material.map.dispose = () => { disposed += 1; };
+    setAvatarStatusText(THREE, muse, undefined);
+    assert.equal(disposed, 2);
+    assert.equal(muse.userData.statusText, null);
+    assert.equal(sprite.material.map.canvas.width, 384);
+    assert.equal(sprite.material.map.canvas.height, 96);
+    assert.deepEqual({ x: sprite.scale.x, y: sprite.scale.y, z: sprite.scale.z }, { x: 1.5, y: 0.375, z: 1 });
+  });
+});
