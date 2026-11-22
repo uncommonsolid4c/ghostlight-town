@@ -489,3 +489,104 @@ test('buildNoticeBoardOverlayHtml style block has exactly the four pinned rules 
   assert.equal((html.match(/—/g) || []).length, 3);
   assert.equal(/[‘’“”]/.test(html), false, 'overlay HTML must contain no curly quotes');
 });
+
+test('openNoticeBoardOverlay missing-element guard runs before onBeforeOpen and mutates nothing', () => {
+  const cases = [
+    (els) => ({ titleEl: els.titleEl, iframeEl: els.iframeEl }),
+    (els) => ({ overlayEl: els.overlayEl, iframeEl: els.iframeEl }),
+    (els) => ({ overlayEl: els.overlayEl, titleEl: els.titleEl }),
+  ];
+
+  for (const pick of cases) {
+    const els = makeFakeOverlayElements();
+    const partial = pick(els);
+    const result = openNoticeBoardOverlay({
+      ...partial,
+      onBeforeOpen: () => {
+        throw new Error('must not be called');
+      },
+    });
+    assert.equal(result, null);
+    if (partial.overlayEl) assert.equal(partial.overlayEl.hidden, true);
+    if (partial.titleEl) assert.equal(partial.titleEl.textContent, '');
+    if (partial.iframeEl) {
+      assert.equal(partial.iframeEl.srcdoc, '');
+      assert.equal(partial.iframeEl.getAttribute('sandbox'), null);
+    }
+  }
+});
+
+test('openNoticeBoardOverlay throwing onBeforeOpen leaves stale sandbox and src intact', () => {
+  const { overlayEl, titleEl, iframeEl } = makeFakeOverlayElements();
+  iframeEl.setAttribute('sandbox', 'allow-scripts');
+  iframeEl.src = 'stale.html';
+
+  assert.throws(() => {
+    openNoticeBoardOverlay({
+      overlayEl,
+      titleEl,
+      iframeEl,
+      onBeforeOpen: () => {
+        throw new Error('boom');
+      },
+    });
+  }, /boom/);
+
+  assert.equal(iframeEl.getAttribute('sandbox'), 'allow-scripts');
+  assert.equal(iframeEl.getAttribute('src'), 'stale.html');
+  assert.equal(iframeEl.srcdoc, '');
+  assert.equal(overlayEl.hidden, true);
+  assert.equal(titleEl.textContent, '');
+});
+
+test('buildNoticeBoardOverlayHtml renders the three sections with exact indentation and markup', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const expectedSections = [
+    '  <section class="notice">\n    <h2>GAZETTE #2</h2>\n    <p>Issue #2 is out — read it at the newsstand.</p>\n  </section>',
+    '  <section class="notice">\n    <h2>THE INN</h2>\n    <p>Rooms for short stays — ask at the tavern.</p>\n  </section>',
+    '  <section class="notice">\n    <h2>SOCIAL GATE</h2>\n    <p>Plots are free, no upkeep — yours outright. Bring a friend.</p>\n  </section>',
+  ];
+
+  for (const section of expectedSections) {
+    assert.ok(html.includes(section), `overlay HTML must include section:\n${section}`);
+  }
+  assert.equal(html.split('<section class="notice">').length - 1, 3);
+});
+
+test('buildNoticeBoardOverlayHtml is deterministic and its h1 matches the overlay title', () => {
+  const html1 = buildNoticeBoardOverlayHtml();
+  const html2 = buildNoticeBoardOverlayHtml();
+  assert.equal(html1, html2);
+
+  const els = makeFakeOverlayElements();
+  const returned = openNoticeBoardOverlay(els);
+  const h1Match = returned.match(/<h1>([\s\S]*?)<\/h1>/);
+  assert.ok(h1Match, 'overlay HTML must include an <h1> element');
+  assert.equal(h1Match[1], els.titleEl.textContent);
+  assert.equal(h1Match[1], 'Notice Board');
+});
+
+test('buildNoticeBoardOverlayHtml lines have no trailing whitespace and sections join on single newlines', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  for (const line of html.split('\n')) {
+    assert.equal(line, line.trimEnd(), `line must have no trailing whitespace: ${JSON.stringify(line)}`);
+  }
+  assert.equal(html.split('</section>\n  <section class="notice">').length - 1, 2);
+  assert.equal(/\n\n/.test(html), false);
+});
+
+test('openNoticeBoardOverlay opens two different element sets to the same html with no cross-element leakage', () => {
+  const elsA = makeFakeOverlayElements();
+  const elsB = makeFakeOverlayElements();
+  const expectedHtml = buildNoticeBoardOverlayHtml();
+
+  const htmlA = openNoticeBoardOverlay(elsA);
+  const htmlB = openNoticeBoardOverlay(elsB);
+
+  assert.equal(htmlA, expectedHtml);
+  assert.equal(htmlB, expectedHtml);
+  assert.equal(elsA.iframeEl.srcdoc, expectedHtml);
+  assert.equal(elsB.iframeEl.srcdoc, expectedHtml);
+  assert.equal(elsA.overlayEl.hidden, false);
+  assert.equal(elsB.overlayEl.hidden, false);
+});
