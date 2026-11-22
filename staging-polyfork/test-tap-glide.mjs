@@ -453,3 +453,98 @@ test('createPointerTracker reset mid-gesture clears the pointer and a third fing
   assert.deepEqual(tracker.onPointerUp(2, 150, 100), { ended: false, shouldClick: false });
   assert.deepEqual(tracker.onPointerUp(1, 100, 100), { ended: true, shouldClick: false });
 });
+
+test('stepGlide steps diagonally with exact direction and clamps a diagonal out-of-bounds target', () => {
+  const partialDiag = stepGlide({ x: 0, z: 0 }, { x: 30, z: 40 }, 1, { speed: 7.5 });
+  assert.ok(Math.abs(partialDiag.x - 4.5) < 1e-9);
+  assert.ok(Math.abs(partialDiag.z - 6) < 1e-9);
+  assert.equal(partialDiag.arrived, false);
+
+  const clampedDiag = stepGlide({ x: 0, z: 0 }, { x: 60, z: 80 }, 10);
+  assert.ok(Math.abs(clampedDiag.x - 17.1) < 1e-9);
+  assert.ok(Math.abs(clampedDiag.z - 22.8) < 1e-9);
+  assert.equal(clampedDiag.arrived, true);
+});
+
+test('stepGlide boundary conditions: dist equals maxStep, remainder equals arriveDist, target exactly at maxRadius', () => {
+  assert.deepEqual(stepGlide({ x: 0, z: 0 }, { x: 7.5, z: 0 }, 1, { speed: 7.5 }), {
+    x: 7.5,
+    z: 0,
+    arrived: true,
+  });
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 1.9, { speed: 10, arriveDist: 1 }),
+    { x: 20, z: 0, arrived: true }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 1.9, { speed: 10, arriveDist: 0.9 }),
+    { x: 19, z: 0, arrived: false }
+  );
+  assert.deepEqual(stepGlide({ x: 0, z: 0 }, { x: 28.5, z: 0 }, 10), {
+    x: 28.5,
+    z: 0,
+    arrived: true,
+  });
+});
+
+test('stepGlide with out-of-bounds position and target, and negative speed', () => {
+  assert.deepEqual(
+    stepGlide({ x: 60, z: 0 }, { x: 60, z: 0 }, 1, { speed: 7.5, maxRadius: 28.5 }),
+    { x: 28.5, z: 0, arrived: true }
+  );
+  assert.deepEqual(stepGlide({ x: 0, z: 0 }, { x: 10, z: 0 }, 1, { speed: -7.5 }), {
+    x: -7.5,
+    z: 0,
+    arrived: false,
+  });
+});
+
+test('deriveGlideMaxRadius floor boundary and non-numeric widths', () => {
+  assert.equal(deriveGlideMaxRadius({ width: 109 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 108 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 120 }), 34);
+  assert.equal(deriveGlideMaxRadius({ width: '128' }), 38);
+  assert.equal(deriveGlideMaxRadius({}), 38);
+  assert.equal(deriveGlideMaxRadius({ width: 128.5 }), 38);
+});
+
+test('stepOrbitGlide arrival at origin, negative-delta snap, and camera follows exactly', () => {
+  assert.deepEqual(stepOrbitGlide({ x: 0, z: 0 }, { x: 3, z: 40 }, { x: 0, z: 0 }, 0.5), {
+    targetX: 0,
+    targetZ: 0,
+    cameraX: 3,
+    cameraZ: 40,
+    arrived: true,
+  });
+  assert.deepEqual(
+    stepOrbitGlide({ x: 5, z: 5 }, { x: 10, z: 10 }, { x: -5, z: -5 }, 1, { speed: 14 }),
+    { targetX: -5, targetZ: -5, cameraX: 0, cameraZ: 0, arrived: true }
+  );
+});
+
+test('createPointerTracker second-pointer right mouse is a pinch, pen starts, sequential taps reset', () => {
+  const tracker = createPointerTracker();
+  tracker.onPointerDown(1, 100, 100, { pointerType: 'mouse', button: 0 });
+  assert.deepEqual(tracker.onPointerDown(2, 120, 100, { pointerType: 'mouse', button: 2 }), {
+    started: true,
+    isPinch: true,
+    cancelGlide: true,
+  });
+  assert.deepEqual(tracker.onPointerUp(2, 120, 100), { ended: false, shouldClick: false });
+  assert.deepEqual(tracker.onPointerUp(1, 100, 100), { ended: true, shouldClick: false });
+
+  const penTracker = createPointerTracker();
+  assert.deepEqual(penTracker.onPointerDown(1, 50, 50, { pointerType: 'pen' }), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(penTracker.onPointerUp(1, 50, 50), { ended: true, shouldClick: true });
+
+  const seqTracker = createPointerTracker();
+  seqTracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  seqTracker.onPointerMove(1, 120, 100);
+  assert.deepEqual(seqTracker.onPointerUp(1, 120, 100), { ended: true, shouldClick: false });
+  seqTracker.onPointerDown(2, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(seqTracker.onPointerUp(2, 100, 100), { ended: true, shouldClick: true });
+});
