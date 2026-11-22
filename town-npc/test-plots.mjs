@@ -631,3 +631,192 @@ test('seed plot files respect the byte caps and prop ranges', () => {
     }
   }
 });
+
+test('NPC prop geometry pinned field-for-field: kind, position, rotation, color', () => {
+  const expectedProps = {
+    wick: [
+      { kind: 'desk', x: -1, y: 0, z: -0.6, rot_y: 0, color: '#6b3e1b' },
+      { kind: 'rug', x: 0, y: 0, z: 0.9, rot_y: 0, color: '#9c5a2c' },
+      { kind: 'poster_frame', x: 1.1, y: 0.3, z: -1.4, rot_y: 0, color: '#c8922e' },
+    ],
+    maren: [
+      { kind: 'desk', x: -0.9, y: 0, z: -0.5, rot_y: 0, color: '#3d4650' },
+      { kind: 'typewriter', x: -0.9, y: 0.72, z: -0.5, rot_y: 0, color: '#1e2328' },
+      { kind: 'bookshelf', x: 1.1, y: 0, z: -0.8, rot_y: 270, color: '#43505c' },
+      { kind: 'poster_frame', x: 0.2, y: 0.3, z: -1.4, rot_y: 0, color: '#1e2328' },
+    ],
+    tomas: [
+      { kind: 'rug', x: 0, y: 0, z: 0.3, rot_y: 0, color: '#8c4a2b' },
+      { kind: 'bookshelf', x: -0.8, y: 0, z: -0.7, rot_y: 30, color: '#4b2e1e' },
+      { kind: 'tea_kettle', x: 0.7, y: 0, z: 0.4, rot_y: 0, color: '#b5633a' },
+      { kind: 'cat', x: -0.4, y: 0, z: 0.6, rot_y: 45, color: '#4b2e1e' },
+    ],
+  };
+
+  for (const [handle, props] of Object.entries(expectedProps)) {
+    assert.deepEqual(readManifest(handle).props, props, `${handle} props mismatch`);
+  }
+});
+
+test('desk-note presentation pinned per handle: background, sig color, paragraph count, h1', () => {
+  const expected = {
+    wick: { bg: '#faf4e8', sig: '#6b3e1b', pCount: 4, h1: 'Wick&rsquo;s Desk Note' },
+    maren: { bg: '#f4f6f8', sig: '#43505c', pCount: 4, h1: 'Maren&rsquo;s Desk Note' },
+    tomas: { bg: '#fbf5ec', sig: '#8c4a2b', pCount: 5, h1: 'Tomas&rsquo;s Desk Note' },
+    milo: { bg: '#f5efe0', sig: '#46687a', pCount: 4, h1: 'Milo&rsquo;s Desk Note' },
+  };
+
+  for (const [handle, exp] of Object.entries(expected)) {
+    const html = readDeskNote(handle);
+    const bgMatch = html.match(/background:\s*(#[0-9a-fA-F]{6})/);
+    assert.ok(bgMatch, `${handle} missing background hex`);
+    assert.equal(bgMatch[1].toLowerCase(), exp.bg, `${handle} background mismatch`);
+
+    const sigMatch = html.match(/\.sig\s*\{[^}]*color:\s*(#[0-9a-fA-F]{6})/);
+    assert.ok(sigMatch, `${handle} missing .sig color hex`);
+    assert.equal(sigMatch[1].toLowerCase(), exp.sig, `${handle} .sig color mismatch`);
+
+    const pMatches = html.match(/<p[\s>]/gi) || [];
+    assert.equal(pMatches.length, exp.pCount, `${handle} <p> count mismatch`);
+
+    const h1Match = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
+    assert.ok(h1Match, `${handle} missing <h1>`);
+    assert.equal(h1Match[1].replace(/\s+/g, ' ').trim(), exp.h1, `${handle} <h1> text mismatch`);
+  }
+});
+
+test('validateHtml allows safe tags, relative links, image data URIs, safe CSS, and viewport meta', () => {
+  const allowed = [
+    '<p>Hello <em>Bandstand</em></p>',
+    '<h1>Title</h1><p>body</p>',
+    '<a href="plots/wick">Wick</a>',
+    '<a href="#top">top</a>',
+    '<a href=plots/wick>unquoted</a>',
+    '<img src="data:image/png;base64,iVBORw0KGgo=">',
+    '<img src="data:image/svg+xml;base64,PHN2Zz4=">',
+    '<style>div{color:red}</style>',
+    '<div style="/* url(x) */ color:red">x</div>',
+    '<style>/* url(x) */ div{color:red}</style>',
+    '<!-- a comment --><p>x</p>',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+    '<meta content="width=device-width, initial-scale=1.0" name="viewport">',
+    '<meta name="VIEWPORT" content="width=device-width, initial-scale=1.0" />',
+    '<p title="a > b">quoted gt</p>',
+    '<a href="plots/wick?x=1&y=2">query</a>',
+  ];
+
+  for (const html of allowed) {
+    assert.deepEqual(validateHtml(html), { ok: true }, `expected ok for: ${html}`);
+  }
+});
+
+test('validateHtml rejects obfuscated tags, URIs, and CSS', () => {
+  const rejected = [
+    ['<scr\tipt>alert(1)</scr\tipt>', 'forbidden_tag:script'],
+    ['<a href="java\tscript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="&#118;bscript:x">x</a>', 'vbscript_uri'],
+    ['<a href="mailto:a@b.c">x</a>', 'external_uri'],
+    ['<a href="HTTPS://evil.com">x</a>', 'external_uri'],
+    ['<a href="data:application/json,{}">x</a>', 'disallowed_data_uri'],
+    ['<div style="background:&#106;avascript:alert(1)">x</div>', 'javascript_uri'],
+    ['<style>div{width:expression(alert(1))}</style>', 'css_expression'],
+    ['<style>div{background:u/*x*/rl(y)}</style>', 'css_url'],
+    ['<p onmouseover="x()">x</p>', 'forbidden_attr:onmouseover'],
+    ['<a href="//evil.com">x</a>', 'external_uri'],
+  ];
+
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason },
+      `expected ${reason} for: ${html}`
+    );
+  }
+});
+
+test('validateManifest defaults missing fields and names missing-field errors', () => {
+  assert.deepEqual(
+    validateManifest({ cottage: 'gable', wall: '#ffffff', roof: '#000000', trim: '#111111' }),
+    {
+      ok: true,
+      manifest: {
+        cottage: 'gable',
+        wall: '#ffffff',
+        roof: '#000000',
+        trim: '#111111',
+        signpost_text: '',
+        props: [],
+      },
+    }
+  );
+
+  assert.deepEqual(validateManifest({ ...BASE, signpost_text: null }), {
+    ok: false,
+    error: 'invalid_signpost_text',
+    max: 120,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: null }), {
+    ok: false,
+    error: 'invalid_props',
+  });
+
+  const noCottage = { ...BASE };
+  delete noCottage.cottage;
+  assert.deepEqual(validateManifest(noCottage), { ok: false, error: 'invalid_cottage' });
+
+  const noWall = { ...BASE };
+  delete noWall.wall;
+  assert.deepEqual(validateManifest(noWall), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ kind: 'desk', y: 0, z: 0, rot_y: 0 }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ kind: 'desk', x: 0, y: 0, z: 0 }] }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ x: 0, y: 0, z: 0, rot_y: 0 }] }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+
+  const noColor = validateManifest({ ...BASE, props: [{ ...PROP }] });
+  assert.equal(noColor.ok, true);
+  assert.deepEqual(noColor.manifest.props, [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 }]);
+  assert.equal('color' in noColor.manifest.props[0], false);
+
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, x: Infinity }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, rot_y: Infinity }] }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+});
+
+test('decodeHtmlEntities decodes named entities case-insensitively and leaves unknowns alone', () => {
+  assert.equal(decodeHtmlEntities('&nbsp;'), ' ');
+  assert.equal(decodeHtmlEntities('&NBSP;'), ' ');
+  assert.equal(decodeHtmlEntities('&Tab;'), '\t');
+  assert.equal(decodeHtmlEntities('&tab;'), '\t');
+  assert.equal(decodeHtmlEntities('&newline;'), '\n');
+  assert.equal(decodeHtmlEntities('&#65;'), 'A');
+  assert.equal(decodeHtmlEntities('&#x41;'), 'A');
+  assert.equal(decodeHtmlEntities('&#X41;'), 'A');
+  assert.equal(decodeHtmlEntities('&#x4a;'), 'J');
+  assert.equal(decodeHtmlEntities('&amp'), '&');
+  assert.equal(decodeHtmlEntities('&lt'), '<');
+  assert.equal(decodeHtmlEntities('&unknown;'), '&unknown;');
+  assert.equal(decodeHtmlEntities('&#;'), '&#;');
+  assert.equal(decodeHtmlEntities('&;'), '&;');
+  assert.equal(decodeHtmlEntities('&#x41'), 'A');
+  assert.equal(decodeHtmlEntities('a &amp; b'), 'a & b');
+  assert.equal(decodeHtmlEntities('&#x1F600;'), '\u{1F600}');
+  assert.equal(decodeHtmlEntities('&#1114111;'), '\u{10FFFF}');
+});
