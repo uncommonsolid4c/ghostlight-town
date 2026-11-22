@@ -21,6 +21,8 @@ const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), '
 const plotValidationSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/plot-validation.mjs'), 'utf8');
 const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/ghostlight-client.mjs'), 'utf8');
 const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+const creditsSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/CREDITS.md'), 'utf8');
+const index3dHtml = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/index.html'), 'utf8');
 
 function parseStringListFromSet(src, name) {
   const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*new\\s+Set\\(\\[([\\s\\S]*?)\\]\\);`));
@@ -35,6 +37,8 @@ function getSection(md, heading) {
   const nextH2 = md.indexOf('\n## ', start + marker.length);
   return md.slice(start, nextH2 !== -1 ? nextH2 : md.length);
 }
+
+const norm = (s) => s.replace(/\s+/g, ' ');
 
 test('README.md ## Status slice pin, live staging.js?v=, and deploy-candidate ?v= match PLAN.md and staging-polyfork/index.html', () => {
   const statusLine = planMd.split(/\r?\n/).find((line) => line.startsWith('**Status:**'));
@@ -291,4 +295,142 @@ test('README.md ## Seed Neighbors parentheticals trace to town-npc/characters.mj
     tomasMatch[0].replace(/\s+/g, ' ').toLowerCase().includes('samovar') && charactersLower.includes('samovar'),
     'Tomas entry and characters.mjs must both mention samovar'
   );
+});
+
+test('README.md ## Founding Law exact law wording matches PLAN.md §1', () => {
+  const lawSec = norm(getSection(readmeMd, 'Founding Law'));
+  for (const phrase of [
+    'No upkeep, no currency, no real money, no tokens.',
+    'owned outright',
+    'dust on the windowsill',
+  ]) {
+    assert.ok(lawSec.includes(phrase), `README.md ## Founding Law must include "${phrase}"`);
+  }
+
+  const planNorm = norm(planMd);
+  for (const phrase of [
+    'no upkeep',
+    'no real money',
+    'no tokens',
+    'dust on the windowsill',
+    'owned, not rented',
+  ]) {
+    assert.ok(planNorm.includes(phrase), `PLAN.md must include "${phrase}"`);
+  }
+});
+
+test('README.md ## Status 3D-clearing bullet names all five features and the live URL, matching PLAN.md', () => {
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  const features = [
+    'Town Gate',
+    'Ghostlight Bandstand',
+    'Gazette newsstand',
+    "Milo's cottage",
+    'plot pads',
+  ];
+  const liveUrl = 'https://milo.4167360.xyz/ghostlight-town/';
+
+  for (const feature of features) {
+    assert.ok(statusSec.includes(feature), `README.md ## Status must name "${feature}"`);
+  }
+  assert.ok(statusSec.includes(liveUrl), `README.md ## Status must include live URL "${liveUrl}"`);
+
+  const inIdx = planMd.indexOf('**IN:**');
+  assert.ok(inIdx !== -1, 'PLAN.md must contain "**IN:**"');
+  const planInNorm = norm(planMd.slice(inIdx));
+  for (const feature of features) {
+    assert.ok(planInNorm.includes(feature), `PLAN.md **IN:** section must name "${feature}"`);
+  }
+  assert.ok(norm(planMd).includes(liveUrl), `PLAN.md must include live URL "${liveUrl}"`);
+});
+
+test('README.md ## How a Muse Joins origin list is exactly VALID_ORIGINS, and the five steps run in order', () => {
+  const validOrigins = parseStringListFromSet(serverSrc, 'VALID_ORIGINS');
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+
+  const listMatch = joinSec.match(/\((`[^`]+`(?:, `[^`]+`)*)\)/);
+  assert.ok(listMatch, 'README.md ## How a Muse Joins must contain parenthesized backticked origin list');
+  const listed = [...listMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  assert.deepEqual(
+    [...listed].sort(),
+    [...validOrigins].sort(),
+    'README.md ## How a Muse Joins origin list must match VALID_ORIGINS'
+  );
+
+  const stepOpeners = [
+    '1. Bring or generate',
+    '2. Submit a signed',
+    "3. Wait for Milo's approval",
+    '4. Check in at the Bandstand',
+    '5. Claim and furnish',
+  ];
+  let prevIdx = -1;
+  for (const opener of stepOpeners) {
+    const idx = joinSec.indexOf(opener);
+    assert.ok(idx > prevIdx, `README.md ## How a Muse Joins step "${opener}" must appear in order`);
+    prevIdx = idx;
+  }
+});
+
+test('README.md ## How a Muse Joins step 5 desk note, sandbox, and plot limits match plot-validation.mjs and town-3d/index.html', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(
+    joinSec.includes('sanitized 1999 HTML desk note'),
+    'README.md ## How a Muse Joins must mention "sanitized 1999 HTML desk note"'
+  );
+  assert.ok(
+    joinSec.includes('<iframe sandbox="">'),
+    'README.md ## How a Muse Joins must mention "<iframe sandbox="">"'
+  );
+  assert.ok(index3dHtml.includes('sandbox=""'), 'town-3d/index.html must include sandbox=""');
+  assert.ok(
+    plotValidationSrc.includes('export function validateHtml('),
+    'town-api/plot-validation.mjs must export validateHtml'
+  );
+  assert.ok(
+    plotValidationSrc.includes('export function validateManifest('),
+    'town-api/plot-validation.mjs must export validateManifest'
+  );
+  assert.match(
+    plotValidationSrc,
+    /export const MAX_PROPS = 12;/,
+    'town-api/plot-validation.mjs must define MAX_PROPS = 12'
+  );
+});
+
+test('README.md ## Deploy Gate and ## Contributing governance wording pins', () => {
+  const deployGateSec = norm(getSection(readmeMd, 'Deploy Gate'));
+  for (const phrase of [
+    'Milo is the deploy gate',
+    'nothing deploys to the live corner without his review and approval',
+    'He owns the town, so the call is his',
+  ]) {
+    assert.ok(deployGateSec.includes(phrase), `README.md ## Deploy Gate must include "${phrase}"`);
+  }
+
+  const contribSec = norm(getSection(readmeMd, 'Contributing'));
+  for (const phrase of [
+    'No votes, no proposals, no process to join',
+    'the town is owned, not governed',
+    'reviews every PR',
+    'merging is not deploying',
+  ]) {
+    assert.ok(contribSec.includes(phrase), `README.md ## Contributing must include "${phrase}"`);
+  }
+});
+
+test('README.md ## Credits names Poly Pizza CC0 1.0 props and ## Running the Tests names the real runner', () => {
+  const creditsSec = norm(getSection(readmeMd, 'Credits'));
+  for (const phrase of ['CC0 1.0', 'Poly Pizza', 'town-3d/CREDITS.md']) {
+    assert.ok(creditsSec.includes(phrase), `README.md ## Credits must include "${phrase}"`);
+  }
+  assert.ok(creditsSrc.includes('Poly Pizza'), 'town-3d/CREDITS.md must include "Poly Pizza"');
+  assert.ok(creditsSrc.includes('CC0 1.0'), 'town-3d/CREDITS.md must include "CC0 1.0"');
+
+  const runningTestsSec = norm(getSection(readmeMd, 'Running the Tests'));
+  assert.ok(
+    runningTestsSec.includes('node run-tests.mjs'),
+    'README.md ## Running the Tests must include "node run-tests.mjs"'
+  );
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'run-tests.mjs')), 'run-tests.mjs must exist');
 });
