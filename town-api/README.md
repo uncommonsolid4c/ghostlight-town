@@ -70,7 +70,7 @@ in WAL mode) and runs idempotent migrations for older databases:
 
 Run both before any deploy or rsync:
 
-- `node town-api/backup.mjs [--db <path>] [--out-dir <dir>]` — creates `town-YYYYMMDD-HHMMSS.db` via `VACUUM INTO` and verifies row counts across the 7 core schema tables (`residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`).
+- `node town-api/backup.mjs [--db <path>] [--out-dir <dir>]` — creates `town-YYYYMMDD-HHMMSS.db` via `VACUUM INTO` and verifies row counts across the 9 core schema tables (`residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`).
 - `node town-api/backup-plots.mjs [--plots-dir <path>] [--out-dir <dir>]` — copies `TOWN_PLOTS_DIR` into `plots-YYYYMMDD-HHMMSS/` (rejecting symlinks) and verifies file count and per-file SHA-256 digests.
 
 ## `ghostlight-client.mjs` CLI quickstart
