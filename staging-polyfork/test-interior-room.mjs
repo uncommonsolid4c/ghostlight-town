@@ -9,6 +9,9 @@ import {
   setInteriorVisible,
   setInteriorPalette,
   setInteriorDressing,
+  buildProceduralOilLamp,
+  buildProceduralTypewriter,
+  buildProceduralTeapot,
 } from './interior-room.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -585,5 +588,158 @@ test('setter edge cases: non-object rooms, plain-color assignment, partial dress
     const r = buildInteriorRoom(THREE, opts);
     const back = r.children.find((m) => m.name === 'interior_wall_back');
     assert.equal(back.material.color, '#f5efe0');
+  }
+});
+
+test('direct children are the exact 19 named meshes and groups in build order', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  assert.equal(room.children.length, 19);
+  assert.deepEqual(
+    room.children.map((c) => c.name),
+    [
+      'interior_floor',
+      'interior_wall_back',
+      'interior_wall_left',
+      'interior_wall_right',
+      'interior_wall_front_left',
+      'interior_wall_front_right',
+      'interior_wall_front_lintel',
+      'interior_window_glow_left',
+      'interior_window_glow_right',
+      'interior_rafter_1',
+      'interior_rafter_2',
+      'interior_rafter_3',
+      'interior_rafter_4',
+      'interior_desk',
+      'interior_rug',
+      'interior_dressing_milo',
+      'interior_dressing_wick',
+      'interior_dressing_maren',
+      'interior_dressing_tomas',
+    ]
+  );
+});
+
+test('desk and rug have exact geometry, positions, and materials', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const desk = room.children.find((c) => c.name === 'interior_desk');
+  const rug = room.children.find((c) => c.name === 'interior_rug');
+
+  assertBoxAt(desk, [1.1, 0.72, 0.6], [-0.95, 0.44, -0.85], 'interior_desk');
+  assert.equal(desk.material.color, '#6b492b');
+  assertNear(desk.material.opts.roughness, 0.85, 'desk roughness');
+
+  assertBoxAt(rug, [1.6, 0.04, 1.1], [0.25, 0.1, 0.15], 'interior_rug');
+  assert.equal(rug.material.color, '#5a4332');
+  assertNear(rug.material.opts.roughness, 0.95, 'rug roughness');
+});
+
+test('front wall segments have exact geometry and plaster material', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const frontLeft = room.children.find((c) => c.name === 'interior_wall_front_left');
+  const frontRight = room.children.find((c) => c.name === 'interior_wall_front_right');
+
+  assertBoxAt(frontLeft, [1.35, 2.6, 0.12], [-1.175, 1.3, 1.44], 'interior_wall_front_left');
+  assertBoxAt(frontRight, [1.35, 2.6, 0.12], [1.175, 1.3, 1.44], 'interior_wall_front_right');
+  assert.equal(frontLeft.material.color, '#f5efe0');
+  assert.equal(frontRight.material.color, '#f5efe0');
+});
+
+test('material roughness ledger matches the palette', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  assertNear(byName.get('interior_floor').material.opts.roughness, 0.85, 'floor roughness');
+  assertNear(byName.get('interior_wall_back').material.opts.roughness, 0.9, 'back wall roughness');
+  assertNear(byName.get('interior_wall_left').material.opts.roughness, 0.9, 'left wall roughness');
+  assertNear(byName.get('interior_window_glow_left').material.opts.roughness, 0.4, 'window glow roughness');
+
+  const milo = byName.get('interior_dressing_milo');
+  const kettle = milo.children.find((c) => c.name === 'interior_tea_kettle');
+  const cat = milo.children.find((c) => c.name === 'interior_cat');
+  assertNear(kettle.material.opts.roughness, 0.5, 'milo kettle roughness');
+  assertNear(cat.material.opts.roughness, 0.85, 'milo cat roughness');
+
+  const lamp = buildProceduralOilLamp(THREE);
+  assertNear(lamp.children[0].material.opts.roughness, 0.65, 'oil lamp brass roughness');
+  assert.equal(lamp.children[1].material.opts.roughness, undefined, 'oil lamp glass globe has no roughness');
+
+  const typewriter = buildProceduralTypewriter(THREE);
+  assertNear(typewriter.children[0].material.opts.roughness, 0.88, 'typewriter stand roughness');
+  assertNear(typewriter.children[1].material.opts.roughness, 0.75, 'typewriter body roughness');
+  assertNear(typewriter.children[2].material.opts.roughness, 0.8, 'typewriter roller roughness');
+
+  const teapot = buildProceduralTeapot(THREE);
+  assertNear(teapot.children[0].material.opts.roughness, 0.65, 'teapot body roughness');
+});
+
+test('build-time palette and setInteriorPalette edge cases fall back to plaster', () => {
+  const THREE = makeFakeThree();
+
+  for (const opts of [null, { palette: 'MILO' }, { palette: 42 }, { palette: '' }, {}]) {
+    const r = buildInteriorRoom(THREE, opts);
+    const back = r.children.find((c) => c.name === 'interior_wall_back');
+    assert.equal(back.material.color, '#f5efe0', `buildInteriorRoom(${JSON.stringify(opts)})`);
+  }
+
+  const room = buildInteriorRoom(THREE);
+  const backWall = room.children.find((c) => c.name === 'interior_wall_back');
+  for (const p of [null, 42, 'Milo', 'WICK', '']) {
+    assert.equal(setInteriorPalette(room, 'milo'), true);
+    assert.equal(setInteriorPalette(room, p), true);
+    assert.equal(backWall.material.color, '#f5efe0', `setInteriorPalette(${String(p)})`);
+  }
+
+  assert.equal(setInteriorPalette({ children: 'x' }, 'milo'), false);
+  assert.equal(setInteriorPalette({ children: [{ name: 'other' }] }, 'milo'), false);
+  assert.equal(setInteriorPalette({ children: [{ name: 'interior_wall_back' }] }, 'milo'), false);
+});
+
+test('setter coercion and dressing edges', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  for (const [input, expected] of [
+    [1, true],
+    [0, false],
+    ['yes', true],
+    ['', false],
+    [undefined, false],
+    [null, false],
+  ]) {
+    assert.equal(setInteriorVisible(room, input), expected);
+    assert.equal(room.visible, expected);
+  }
+
+  const handles = ['milo', 'wick', 'maren', 'tomas'];
+  const groups = Object.fromEntries(
+    handles.map((h) => [h, room.children.find((c) => c.name === `interior_dressing_${h}`)])
+  );
+  for (const badHandle of [42, 'MILO', null]) {
+    assert.equal(setInteriorDressing(room, 'wick'), true);
+    assert.equal(setInteriorDressing(room, badHandle), true);
+    assert.equal(groups.milo.visible, true);
+    assert.equal(groups.wick.visible, false);
+    assert.equal(groups.maren.visible, false);
+    assert.equal(groups.tomas.visible, false);
+  }
+
+  const roomWithExtras = buildInteriorRoom(THREE);
+  const marker = { name: 'extra_prop', visible: false };
+  roomWithExtras.children.unshift(null, undefined, marker);
+  assert.equal(setInteriorDressing(roomWithExtras, 'tomas'), true);
+  const tomasGroup = roomWithExtras.children.find((c) => c && c.name === 'interior_dressing_tomas');
+  assert.equal(tomasGroup.visible, true);
+  assert.equal(marker.visible, false);
+
+  for (const builder of [buildProceduralOilLamp, buildProceduralTypewriter, buildProceduralTeapot]) {
+    const group = builder(THREE);
+    assert.equal(group.name, '');
+    assert.equal(group.visible, true);
+    assert.equal(group.children.length, 3);
   }
 });
