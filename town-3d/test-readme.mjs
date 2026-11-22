@@ -304,3 +304,207 @@ test('town-3d/README.md town.js line count is within 100 of actual', () => {
     `town-3d/README.md town.js line count (${stated}) must be within 100 of actual (${actual})`
   );
 });
+
+test('town-3d/README.md shipped table concept files are vendored Argon proofs with the named builders', () => {
+  const readme = readReadme();
+  const concepts = [
+    ['concept-bandstand.js', 'buildConceptBandstand', 'Vendored Argon bandstand proof'],
+    ['concept-cottage.js', 'createConceptMilosCottage', 'Vendored Argon cottage proof'],
+    ['concept-ghost.js', 'createConceptMiloGhost', 'Vendored Argon ghost proof'],
+  ];
+  for (const [file, builder, phrase] of concepts) {
+    assert.ok(readme.includes(`\`${file}\``), `README must mention \`${file}\``);
+    assert.ok(readme.includes(`\`${builder}\``), `README must mention \`${builder}\``);
+    assert.ok(readme.includes(phrase), `README must include "${phrase}"`);
+    const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    assert.ok(
+      src.includes(`export function ${builder}(THREE, options = {})`),
+      `${file} must export function ${builder}(THREE, options = {})`
+    );
+  }
+});
+
+test('town-3d/README.md Honest limits no-fetch claim matches town.js and test-3d.mjs; index.html fetches gazette/latest.json', () => {
+  const fetchCall = `fetch${'('}`;
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.equal(townJs.includes(fetchCall), false, 'town.js must contain no fetch call');
+  assert.doesNotMatch(townJs, /\bfetch\s*\(/, 'town.js must not match /\\bfetch\\s*\\(/');
+
+  const test3d = fs.readFileSync(path.join(__dirname, 'test-3d.mjs'), 'utf8');
+  assert.ok(
+    test3d.includes(`town.js must not call ${fetchCall}`),
+    'test-3d.mjs must enforce no-fetch rule'
+  );
+  assert.ok(
+    test3d.includes('/\\bfetch\\s*\\(/'),
+    'test-3d.mjs must contain /\\bfetch\\s*\\(/ regex source'
+  );
+
+  assert.ok(
+    readmeNorm.includes(`No literal \`${fetchCall}\` in \`town.js\``),
+    'README must state no literal fetch in town.js'
+  );
+  assert.ok(
+    readmeNorm.includes('`index.html` fetches `gazette/latest.json` directly'),
+    'README must state index.html fetches gazette/latest.json directly'
+  );
+
+  const indexHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  assert.ok(
+    indexHtml.includes(`${fetchCall}'gazette/latest.json')`),
+    'town-3d/index.html must fetch gazette/latest.json'
+  );
+});
+
+test('town-3d/README.md models bullet CREDITS.md names every committed CC0 prop with a CC0 1.0 licence', () => {
+  const readme = readReadme();
+  const glbFiles = fs
+    .readdirSync(path.join(__dirname, 'models'))
+    .filter((name) => name.endsWith('.glb'))
+    .sort();
+  assert.equal(glbFiles.length, 8, 'town-3d/models/ must hold exactly 8 .glb files');
+  const expectedProps = [
+    'bench.glb',
+    'bookshelf.glb',
+    'lantern.glb',
+    'oil-lamp.glb',
+    'post-lantern.glb',
+    'street-light.glb',
+    'teapot.glb',
+  ];
+  const committed = glbFiles.filter((name) => name !== 'pine.glb');
+  assert.deepEqual(committed, [...expectedProps].sort(), 'committed props must match expected 7');
+
+  const credits = fs.readFileSync(path.join(__dirname, 'CREDITS.md'), 'utf8');
+  for (const prop of expectedProps) {
+    assert.ok(credits.includes(`models/${prop}`), `CREDITS.md must contain models/${prop}`);
+    assert.ok(readme.includes(`\`${prop}\``), `README models bullet must name \`${prop}\``);
+  }
+  const licenceMatches = credits.match(/Licence: CC0 1\.0/g) ?? [];
+  assert.equal(licenceMatches.length, 7, 'CREDITS.md must contain exactly 7 Licence: CC0 1.0 lines');
+  assert.ok(
+    credits.includes('CC0 1.0 requires no attribution'),
+    'CREDITS.md must state CC0 1.0 requires no attribution'
+  );
+});
+
+test('town-3d/README.md shared-files bullet membership matches STAGING_SHARED_TOWN3D_FILES in scripts/stage-deploy.mjs', () => {
+  const readme = readReadme();
+  const readmeNorm = readme.replace(/\s+/g, ' ');
+  const stageDeploy = fs.readFileSync(
+    path.join(REPO_ROOT, 'scripts', 'stage-deploy.mjs'),
+    'utf8'
+  );
+  const blockMatch = stageDeploy.match(/const STAGING_SHARED_TOWN3D_FILES = \[([\s\S]*?)\];/);
+  assert.ok(blockMatch, 'scripts/stage-deploy.mjs must define STAGING_SHARED_TOWN3D_FILES');
+  const entries = [...blockMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const expected = [
+    'gazette/feed.xml',
+    'gazette/issue-001.html',
+    'gazette/issue-002.html',
+    'gazette/issue-003.html',
+    'gazette/latest.json',
+    'plots/milo/index.html',
+    'plots/wick/index.html',
+    'plots/maren/index.html',
+    'plots/tomas/index.html',
+    'inn/index.html',
+    'guestbook/index.html',
+    'move-in.html',
+  ];
+  assert.deepEqual(entries, expected, 'STAGING_SHARED_TOWN3D_FILES must match the 12 expected entries');
+  for (const rel of entries) {
+    assert.ok(fs.existsSync(path.join(__dirname, rel)), `town-3d/${rel} must exist on disk`);
+    const base = path.basename(rel);
+    assert.ok(readme.includes(`\`${base}\``), `README must mention \`${base}\``);
+  }
+  for (const phrase of [
+    'Gazette issues/feed/index',
+    '4 seed desk notes',
+    '`inn/index.html`',
+    '`guestbook/index.html`',
+    '`move-in.html`',
+  ]) {
+    assert.ok(readmeNorm.includes(phrase), `README shared-files bullet must include ${phrase}`);
+  }
+});
+
+test('town-3d/README.md desk-note byte-identity claim matches test-desk-notes.mjs and the files on disk', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes('byte-identical copies of `town-npc/plots/<handle>/desk-note.html`'),
+    'README must state byte-identical copies of town-npc/plots/<handle>/desk-note.html'
+  );
+  assert.ok(
+    readmeNorm.includes('guarded by `test-desk-notes.mjs`'),
+    'README must state guarded by test-desk-notes.mjs'
+  );
+
+  const testDeskNotes = fs.readFileSync(path.join(__dirname, 'test-desk-notes.mjs'), 'utf8');
+  assert.match(
+    testDeskNotes,
+    /test\([^)]*byte-identical/,
+    'test-desk-notes.mjs must contain byte-identical in a test name'
+  );
+
+  for (const handle of ['milo', 'wick', 'maren', 'tomas']) {
+    const shipped = fs.readFileSync(path.join(__dirname, 'plots', handle, 'index.html'));
+    const npcNote = fs.readFileSync(path.join(REPO_ROOT, 'town-npc', 'plots', handle, 'desk-note.html'));
+    assert.ok(
+      Buffer.compare(shipped, npcNote) === 0 && shipped.equals(npcNote),
+      `town-3d/plots/${handle}/index.html must be byte-identical to town-npc/plots/${handle}/desk-note.html`
+    );
+  }
+});
+
+test('town-3d/README.md Gazette feed and build scripts exist; HTML page titles match; closing links resolve', () => {
+  const readme = readReadme();
+  const feedXml = fs.readFileSync(path.join(__dirname, 'gazette', 'feed.xml'), 'utf8');
+  assert.ok(
+    feedXml.startsWith('<?xml version="1.0" encoding="UTF-8"?>'),
+    'gazette/feed.xml must start with XML declaration'
+  );
+  assert.ok(feedXml.includes('<rss version="2.0">'), 'gazette/feed.xml must contain <rss version="2.0">');
+
+  const buildFeed = fs.readFileSync(path.join(__dirname, 'gazette', 'build-feed.mjs'), 'utf8');
+  assert.ok(
+    buildFeed.includes("path.join(__dirname, 'feed.xml')"),
+    'gazette/build-feed.mjs must write path.join(__dirname, \'feed.xml\')'
+  );
+
+  const buildDigest = fs.readFileSync(path.join(__dirname, 'gazette', 'build-digest.mjs'), 'utf8');
+  assert.ok(
+    buildDigest.includes('Build a Markdown digest'),
+    'gazette/build-digest.mjs must contain "Build a Markdown digest"'
+  );
+
+  const pageTitles = [
+    ['move-in.html', '<title>Move in — Ghostlight Town</title>'],
+    ['inn/index.html', '<title>Ghostlight Inn</title>'],
+    ['guestbook/index.html', '<title>Town Gate Guestbook</title>'],
+  ];
+  for (const [rel, titleTag] of pageTitles) {
+    const html = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    assert.ok(html.includes(titleTag), `${rel} must contain ${titleTag}`);
+    assert.ok(readme.includes(`\`${rel}\``), `README must name \`${rel}\``);
+  }
+
+  assert.ok(
+    fs.existsSync(path.join(REPO_ROOT, 'staging-polyfork', 'README.md')),
+    'staging-polyfork/README.md must exist on disk'
+  );
+  assert.ok(
+    readme.includes('[`../staging-polyfork/README.md`](../staging-polyfork/README.md)'),
+    'README must link to ../staging-polyfork/README.md'
+  );
+  assert.ok(
+    readme.includes('[`../PLAN.md`](../PLAN.md) §§4–8'),
+    'README must link to ../PLAN.md §§4–8'
+  );
+
+  const planMd = fs.readFileSync(path.join(REPO_ROOT, 'PLAN.md'), 'utf8');
+  for (const n of [4, 5, 6, 7, 8]) {
+    assert.match(planMd, new RegExp(`^## ${n}\\.`, 'm'), `PLAN.md must contain ## ${n}. heading`);
+  }
+});
