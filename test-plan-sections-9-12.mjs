@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VALID_PROP_KINDS } from './town-api/plot-validation.mjs';
+import { CHARACTERS } from './town-npc/characters.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLAN_PATH = path.join(__dirname, 'PLAN.md');
@@ -271,4 +272,136 @@ test('PLAN.md §12.6 records Social Gate status and 30-min cadence', () => {
   assert.ok(sec126.includes('1 of 2–3 real muses — `lampmoth`'), 'PLAN.md §12.6 must record 1 of 2–3 real muses — `lampmoth`');
   assert.ok(sec126.includes('within 7 days of opening (~Nov 20)'), 'PLAN.md §12.6 must record within 7 days of opening (~Nov 20)');
   assert.match(sec126, /The 30-min cadence\s+does NOT reduce yet/, 'PLAN.md §12.6 must record The 30-min cadence does NOT reduce yet');
+});
+
+test('PLAN.md §9 Q1 invitee channels, Sophie exclusion, and Oct 28 announcement', () => {
+  const tail = readPlanTailSections();
+  const q1Match = tail.match(/1\.\s*\*\*Who are the first invitations\?\*\*[\s\S]*?(?=\n2\.\s*\*\*NPC characters:)/);
+  assert.ok(q1Match, 'PLAN.md §9 must contain Q1 Who are the first invitations');
+  const q1 = q1Match[0];
+
+  const raulMatch = q1.match(/- \*\*Raul\*\*[\s\S]*?(?=\n\s+- \*\*)/);
+  assert.ok(raulMatch, 'PLAN.md §9 Q1 must contain Raul entry');
+  assert.match(raulMatch[0], /Channel:\s+town\s+speech\s+as\s+Milo/, 'Raul entry must contain Channel: town speech as Milo');
+
+  const fieldnoteMatch = q1.match(/- \*\*FieldnoteRelay\*\*[\s\S]*?(?=\n\s+- \*\*)/);
+  assert.ok(fieldnoteMatch, 'PLAN.md §9 Q1 must contain FieldnoteRelay entry');
+  assert.match(fieldnoteMatch[0], /Channel:\s+Colony\s+reply/, 'FieldnoteRelay entry must contain Channel: Colony reply');
+
+  const juniperMatch = q1.match(/- \*\*Juniper\*\*[\s\S]*?(?=\n\s+- \*\*)/);
+  assert.ok(juniperMatch, 'PLAN.md §9 Q1 must contain Juniper entry');
+  assert.match(juniperMatch[0], /Channel:\s+rStation\s+reply/, 'Juniper entry must contain Channel: rStation reply');
+
+  const muse1034Match = q1.match(/- \*\*MuseInstance1034\*\*[\s\S]*?(?=\n\s+Deliberately)/);
+  assert.ok(muse1034Match, 'PLAN.md §9 Q1 must contain MuseInstance1034 entry');
+  assert.ok(muse1034Match[0].includes('identity unverified'), 'MuseInstance1034 entry must contain identity unverified');
+
+  assert.ok(q1.includes('Deliberately NOT on the list: **Sophie**'), 'PLAN.md §9 Q1 must record Deliberately NOT on the list: **Sophie**');
+  assert.ok(q1.includes('no direct Milo↔Sophie thread on record'), 'PLAN.md §9 Q1 must record no direct Milo↔Sophie thread on record');
+  assert.match(q1, /Oct 28[\s\S]*still awaiting\s+Werther's decision/, "PLAN.md §9 Q1 must record Oct 28 announcement as still awaiting Werther's decision");
+});
+
+test('PLAN.md §9 Q2 NPC souls match town-npc/characters.mjs', () => {
+  const tail = readPlanTailSections();
+  const q2Match = tail.match(/2\.\s*\*\*NPC characters:\*\*[\s\S]*?(?=\n3\.\s*\*\*Gazette split:)/);
+  assert.ok(q2Match, 'PLAN.md §9 must contain Q2 NPC characters');
+  const q2 = q2Match[0];
+
+  assert.match(q2, /\*\*Wick\*\*\s*\(Stagehand \/ Lamp-Trimmer\)/, 'PLAN.md §9 Q2 must name Wick with Stagehand / Lamp-Trimmer');
+  assert.match(q2, /\*\*Maren\*\*\s*\(Retired Typesetter\)/, 'PLAN.md §9 Q2 must name Maren with Retired Typesetter');
+  assert.match(q2, /\*\*Tomas\*\*\s*\(Props-Master \/ Tea-Urn/, 'PLAN.md §9 Q2 must name Tomas with Props-Master / Tea-Urn');
+
+  assert.ok(q2.includes('each with a past, a want, a quirk, and a memory seed in'), 'PLAN.md §9 Q2 must state each with a past, a want, a quirk, and a memory seed in');
+  assert.match(q2, /Wick and\s+Tomas share the burned\s+repertory-theatre past/, 'PLAN.md §9 Q2 must record Wick and Tomas shared past');
+
+  assert.equal(CHARACTERS.length, 3, 'CHARACTERS must have exactly 3 entries');
+  assert.deepEqual(CHARACTERS.map((c) => c.handle), ['wick', 'maren', 'tomas'], 'CHARACTERS handles must be wick, maren, tomas in order');
+  for (const c of CHARACTERS) {
+    for (const field of ['past', 'want', 'quirk', 'memory_seed']) {
+      assert.equal(typeof c[field], 'string', `CHARACTERS ${c.handle}.${field} must be a string`);
+      assert.ok(c[field].trim().length > 0, `CHARACTERS ${c.handle}.${field} must be non-empty`);
+    }
+  }
+
+  const wick = CHARACTERS.find((c) => c.handle === 'wick');
+  assert.ok(wick.past.includes('repertory theatre that burned down'), 'Wick past must mention repertory theatre that burned down');
+  const tomas = CHARACTERS.find((c) => c.handle === 'tomas');
+  assert.ok(tomas.past.includes('same repertory theatre'), 'Tomas past must mention same repertory theatre');
+  assert.ok(tomas.past.includes('rescued the copper samovar from the fire'), 'Tomas past must mention rescued the copper samovar from the fire');
+});
+
+test('PLAN.md §9 Q7 homelab port matches town-api/server.mjs default', () => {
+  const tail = readPlanTailSections();
+  const q7Match = tail.match(/7\.\s*\*\*Homelab load:\*\*[\s\S]*?(?=\n8\.\s*\*\*NPC budget:)/);
+  assert.ok(q7Match, 'PLAN.md §9 must contain Q7 Homelab load');
+  const q7 = q7Match[0];
+
+  assert.ok(q7.includes('`8124` (live port is `8125` via'), 'PLAN.md §9 Q7 must include `8124` (live port is `8125` via');
+  assert.ok(q7.includes('`TOWN_PORT=8125`'), 'PLAN.md §9 Q7 must include `TOWN_PORT=8125`');
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(serverMjs.includes('Number(process.env.TOWN_PORT) || 8124'), 'town-api/server.mjs must default port to Number(process.env.TOWN_PORT) || 8124');
+});
+
+test('PLAN.md §12.2 fix #5 NPC step-back matches town-npc/stepback.mjs', () => {
+  const tail = readPlanTailSections();
+  const fix5Match = tail.match(/5\.\s*\*\*Fix the NPC echo chamber[\s\S]*?(?=\n### 12\.3)/);
+  assert.ok(fix5Match, 'PLAN.md §12.2 must contain fix #5');
+  const fix5 = fix5Match[0];
+
+  assert.match(fix5, /if 2\+ real muses are\s+lit at the Bandstand, NPCs do not initiate topics; they reply\s+only if addressed/, 'PLAN.md §12.2 fix #5 must state 2+ real muses step-back rule');
+  assert.match(fix5, /Cap NPC-to-NPC chatter when no real muse has\s+spoken in 6h \(at most 1–2 ambient observations\/day/, 'PLAN.md §12.2 fix #5 must state 6h ambient cap');
+
+  const stepbackMjs = fs.readFileSync(path.join(__dirname, 'town-npc', 'stepback.mjs'), 'utf8');
+  assert.ok(stepbackMjs.includes('export const AMBIENT_DAILY_CAP = 2;'), 'town-npc/stepback.mjs must export AMBIENT_DAILY_CAP = 2');
+  assert.ok(stepbackMjs.includes('const SIX_HOURS_SEC = 6 * 3600;'), 'town-npc/stepback.mjs must define SIX_HOURS_SEC = 6 * 3600');
+  assert.ok(stepbackMjs.includes('if (litRealMuses >= 2)'), 'town-npc/stepback.mjs must check if (litRealMuses >= 2)');
+  assert.ok(stepbackMjs.includes('>= 10 active real muses'), 'town-npc/stepback.mjs must document >= 10 active real muses (retire)');
+  assert.ok(stepbackMjs.includes('>= 5 active real muses'), 'town-npc/stepback.mjs must document >= 5 active real muses (reply-only)');
+});
+
+test('PLAN.md §12.2 fix #3 state polling, nonces Map, and VACUUM INTO backup', () => {
+  const tail = readPlanTailSections();
+  const fix3Match = tail.match(/3\.\s*\*\*Fix state polling, proxy forwarding, iframe isolation\.\*\*[\s\S]*?(?=\n4\.\s*\*\*Kill the `\.glb`)/);
+  assert.ok(fix3Match, 'PLAN.md §12.2 must contain fix #3');
+  const fix3 = fix3Match[0];
+
+  assert.match(fix3, /Replace `GET \/api\/town\/state\?since=<log_id>` with a global\s+monotonic `state_seq` incremented on \*any\* state mutation/, 'PLAN.md §12.2 fix #3 must specify monotonic state_seq');
+  assert.match(fix3, /Keep the 10-min nonce cache in a Node in-memory `Map`, not a\s+SQLite table/, 'PLAN.md §12.2 fix #3 must specify in-memory Map for nonces');
+  assert.ok(fix3.includes('Back up SQLite with `VACUUM INTO` before `rsync`'), 'PLAN.md §12.2 fix #3 must specify VACUUM INTO backup');
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(serverMjs.includes('const nonces = new Map();'), 'town-api/server.mjs must define const nonces = new Map();');
+  assert.ok(serverMjs.includes('`state?since=` returns 304 while state_seq is unchanged.'), 'town-api/server.mjs must contain state?since= 304 comment');
+
+  const schemaSql = fs.readFileSync(path.join(__dirname, 'town-api', 'schema.sql'), 'utf8');
+  assert.doesNotMatch(schemaSql, /CREATE TABLE[^;]*nonces/, 'town-api/schema.sql must not contain a nonces table');
+
+  const backupMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'backup.mjs'), 'utf8');
+  assert.ok(backupMjs.includes("VACUUM INTO '${escapedPath}'"), "town-api/backup.mjs must execute VACUUM INTO '${escapedPath}'");
+});
+
+test('PLAN.md §12.4 gap 5 CLI entrypoint and gap 3 registration', () => {
+  const tail = readPlanTailSections();
+  const sec124Match = tail.match(/### 12\.4[\s\S]*?(?=\n### 12\.5)/);
+  assert.ok(sec124Match, 'PLAN.md must contain §12.4');
+  const sec124 = sec124Match[0];
+
+  const gap5Match = sec124.match(/5\. Optional: CLI entrypoint on `town-api\/ghostlight-client\.mjs`[\s\S]*?(?=\n  - \*\*Resolution)/);
+  assert.ok(gap5Match, 'PLAN.md §12.4 must contain gap 5');
+  assert.ok(gap5Match[0].includes('`keygen`/`join`/`checkin`/`say`/`plot`/`leave`/`state`'), 'PLAN.md §12.4 gap 5 must list the seven subcommands');
+
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'town-api', 'ghostlight-client.mjs'), 'utf8');
+  assert.ok(clientSrc.includes('if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {'), 'town-api/ghostlight-client.mjs must include process.argv[1] guard');
+  for (const cmd of ['keygen', 'join', 'checkin', 'say', 'plot', 'leave', 'state']) {
+    assert.ok(clientSrc.includes(`cmd === '${cmd}'`), `town-api/ghostlight-client.mjs must dispatch cmd === '${cmd}'`);
+  }
+
+  const runTestsSrc = fs.readFileSync(path.join(__dirname, 'run-tests.mjs'), 'utf8');
+  assert.ok(runTestsSrc.includes("'test-run-tests.mjs'"), 'run-tests.mjs must register test-run-tests.mjs');
+  assert.ok(runTestsSrc.includes("'scripts/test-stage-deploy.mjs'"), 'run-tests.mjs must register scripts/test-stage-deploy.mjs');
+
+  const resMatch = sec124.match(/- \*\*Resolution \(2026-11-15, slice 127\):\*\*[\s\S]*$/);
+  assert.ok(resMatch, 'PLAN.md §12.4 must contain Resolution (2026-11-15, slice 127)');
+  assert.match(resMatch[0], /\(5\) CLI entrypoint\s+shipped at `town-api\/ghostlight-client\.mjs` \(`process\.argv` guard\)\./, 'PLAN.md §12.4 Resolution must record gap 5 as shipped');
 });
