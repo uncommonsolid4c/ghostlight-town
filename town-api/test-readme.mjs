@@ -463,3 +463,264 @@ test('town-api/README.md Rate limits line covers guest limits matching server.mj
   assert.ok(readme.includes('`guest-say` `2/10 min`'));
   assert.ok(readme.includes('`inn/guest/claim` & `inn/guest/extend` `2/h`'));
 });
+
+test('town-api/README.md env-vars table rows match code', () => {
+  const readme = readReadme();
+  const sectionMatch = readme.match(/## Environment variables & ports\s+([\s\S]*?)\n\nLive production/);
+  assert.ok(sectionMatch, 'Environment variables & ports table section must exist');
+
+  const rows = new Map();
+  for (const m of sectionMatch[1].matchAll(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/gm)) {
+    const usedBy = m[2].replace(/`/g, '').split(',').map((s) => s.trim()).join(', ');
+    rows.set(m[1], { usedBy, purpose: m[3] });
+  }
+  assert.equal(rows.size, 6, 'Env-vars table must have 6 rows');
+
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const backupSrc = fs.readFileSync(path.join(__dirname, 'backup.mjs'), 'utf8');
+  const backupPlotsSrc = fs.readFileSync(path.join(__dirname, 'backup-plots.mjs'), 'utf8');
+  const eventsSrc = fs.readFileSync(path.join(__dirname, 'events.mjs'), 'utf8');
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+
+  assert.equal(rows.get('TOWN_PORT').usedBy, 'server.mjs');
+  assert.ok(rows.get('TOWN_PORT').purpose.includes('8124'));
+  assert.ok(serverSrc.includes('Number(process.env.TOWN_PORT) || 8124'));
+
+  assert.equal(rows.get('TOWN_DB_PATH').usedBy, 'server.mjs, backup.mjs');
+  assert.ok(rows.get('TOWN_DB_PATH').purpose.includes('town-api/town.db'));
+  assert.ok(serverSrc.includes('process.env.TOWN_DB_PATH'));
+  assert.ok(backupSrc.includes('process.env.TOWN_DB_PATH'));
+
+  assert.equal(rows.get('TOWN_PLOTS_DIR').usedBy, 'server.mjs, backup-plots.mjs');
+  assert.ok(rows.get('TOWN_PLOTS_DIR').purpose.includes('town-api/plots'));
+  assert.ok(serverSrc.includes('process.env.TOWN_PLOTS_DIR'));
+  assert.ok(backupPlotsSrc.includes('process.env.TOWN_PLOTS_DIR'));
+
+  assert.equal(rows.get('TOWN_OPERATOR_PUBKEY').usedBy, 'server.mjs');
+  assert.ok(rows.get('TOWN_OPERATOR_PUBKEY').purpose.includes('503'));
+  assert.ok(serverSrc.includes('status: 503'));
+
+  assert.equal(rows.get('TOWN_EVENTS_PATH').usedBy, 'server.mjs');
+  assert.ok(rows.get('TOWN_EVENTS_PATH').purpose.includes('town-api/events.json'));
+  assert.ok(rows.get('TOWN_EVENTS_PATH').purpose.includes('fail-open'));
+  assert.ok(eventsSrc.includes('Fail-open'));
+
+  assert.equal(rows.get('TOWN_API_BASE').usedBy, 'ghostlight-client.mjs');
+  assert.ok(rows.get('TOWN_API_BASE').purpose.includes('http://127.0.0.1:8124'));
+  assert.ok(clientSrc.includes('process.env.TOWN_API_BASE'));
+});
+
+test('town-api/README.md shipped-files Role column names real exported symbols', () => {
+  const readme = readReadme();
+  const sectionMatch = readme.match(/## Shipped files\s+([\s\S]*?)\n## /);
+  assert.ok(sectionMatch, 'Shipped files section must exist');
+
+  const roles = new Map();
+  for (const m of sectionMatch[1].matchAll(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|$/gm)) {
+    roles.set(m[1], m[2]);
+  }
+
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+  const eventsSrc = fs.readFileSync(path.join(__dirname, 'events.mjs'), 'utf8');
+  const backupSrc = fs.readFileSync(path.join(__dirname, 'backup.mjs'), 'utf8');
+  const backupPlotsSrc = fs.readFileSync(path.join(__dirname, 'backup-plots.mjs'), 'utf8');
+
+  assert.ok(roles.get('server.mjs').includes('createTownServer'));
+  assert.ok(serverSrc.includes('export function createTownServer'));
+
+  assert.ok(roles.get('ghostlight-client.mjs').includes('GhostlightClient'));
+  assert.ok(clientSrc.includes('export class GhostlightClient'));
+
+  for (const fn of ['loadEventsFile', 'selectNowNext', 'selectCurrentEvent', 'eventStateKey']) {
+    assert.ok(roles.get('events.mjs').includes(fn), `events.mjs role must name ${fn}`);
+    assert.ok(eventsSrc.includes(`export function ${fn}`), `events.mjs must export ${fn}`);
+  }
+
+  assert.ok(roles.get('plot-validation.mjs').includes('validator'));
+  assert.ok(roles.get('plot-validation.mjs').includes('sanitizer'));
+
+  assert.ok(roles.get('backup.mjs').includes('VACUUM INTO'));
+  assert.ok(backupSrc.includes('VACUUM INTO'));
+
+  assert.ok(roles.get('backup-plots.mjs').includes('SHA-256'));
+  assert.ok(backupPlotsSrc.includes("createHash('sha256')"));
+
+  assert.ok(roles.get('nightly-topics.json').includes('30 curated'));
+});
+
+test('town-api/README.md live production line matches town.json', () => {
+  const readme = readReadme();
+  const townJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'town.json'), 'utf8'));
+
+  const liveMatch = readme.match(/Live production runs on[\s\S]*?\/api\/town\/\*`/);
+  assert.ok(liveMatch, 'Live production paragraph must exist');
+  const livePara = liveMatch[0];
+
+  assert.ok(livePara.includes(townJson.base_url), 'Live production paragraph must include town.json base_url');
+  assert.ok(livePara.includes('/api/town/*'), 'Live production paragraph must include /api/town/*');
+  assert.match(livePara, /\b8125\b/, 'Live production paragraph must include port 8125');
+
+  const quickstartMatch = readme.match(
+    /## `ghostlight-client\.mjs` CLI quickstart\s+```bash\n([\s\S]*?)\n```/
+  );
+  assert.ok(quickstartMatch, 'CLI quickstart bash block must exist');
+  assert.ok(
+    quickstartMatch[1].includes(`export TOWN_API_BASE=${townJson.dev_base_url}`),
+    'CLI quickstart must export TOWN_API_BASE=<town.json dev_base_url>'
+  );
+
+  assert.ok(townJson.live_note.includes('Live since 2026-11-13'));
+  assert.ok(townJson.live_note.includes('/api/town/*'));
+});
+
+test('town-api/README.md CLI quickstart flags match allowed flags per command', () => {
+  const readme = readReadme();
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+
+  const allowedByCmd = new Map();
+  for (const m of clientSrc.matchAll(
+    /cmd === '([a-z-]+)'\)\s*\{\s*\n\s*const opts = parseCliFlags\(rest,\s*\[([^\]]*)\]\)/g
+  )) {
+    const flags = [...m[2].matchAll(/'([^']+)'/g)].map((f) => f[1]);
+    allowedByCmd.set(m[1], new Set(flags));
+  }
+  assert.equal(allowedByCmd.size, 11, 'ghostlight-client.mjs must dispatch 11 commands');
+
+  const quickstartMatch = readme.match(
+    /## `ghostlight-client\.mjs` CLI quickstart\s+```bash\n([\s\S]*?)\n```/
+  );
+  assert.ok(quickstartMatch, 'CLI quickstart bash block must exist');
+  const lines = quickstartMatch[1]
+    .split('\n')
+    .filter((line) => line.includes('ghostlight-client.mjs '));
+
+  assert.equal(lines.length, 11, 'CLI quickstart must have exactly 11 command lines');
+  const seenCmds = new Set();
+  for (const line of lines) {
+    assert.equal(line.includes('--api-base'), false, 'CLI quickstart lines must not pass --api-base');
+    const cmdMatch = line.match(/ghostlight-client\.mjs\s+([a-z-]+)/);
+    assert.ok(cmdMatch, `Quickstart line must name a command: ${line}`);
+    const cmd = cmdMatch[1];
+    assert.ok(allowedByCmd.has(cmd), `Unknown quickstart command ${cmd}`);
+    seenCmds.add(cmd);
+
+    const allowed = allowedByCmd.get(cmd);
+    for (const flagMatch of line.matchAll(/--([a-z-]+)/g)) {
+      assert.ok(
+        allowed.has(flagMatch[1]),
+        `Quickstart flag --${flagMatch[1]} is not allowed for ${cmd}`
+      );
+    }
+  }
+  assert.equal(seenCmds.size, 11, 'CLI quickstart must cover all 11 dispatched commands once');
+});
+
+test('town-api/README.md backup commands match the backup CLIs', () => {
+  const readme = readReadme();
+  const backupSrc = fs.readFileSync(path.join(__dirname, 'backup.mjs'), 'utf8');
+  const backupPlotsSrc = fs.readFileSync(path.join(__dirname, 'backup-plots.mjs'), 'utf8');
+
+  const extractParsedFlags = (src) =>
+    new Set([...src.matchAll(/arg === '(--[a-z-]+)'/g)].map((m) => m[1]));
+
+  const backupFlags = extractParsedFlags(backupSrc);
+  const backupPlotsFlags = extractParsedFlags(backupPlotsSrc);
+  assert.deepEqual([...backupFlags].sort(), ['--db', '--help', '--out-dir']);
+  assert.deepEqual([...backupPlotsFlags].sort(), ['--help', '--out-dir', '--plots-dir']);
+
+  const backupCmdMatch = readme.match(/`node town-api\/backup\.mjs ([^`]+)`/);
+  const plotsCmdMatch = readme.match(/`node town-api\/backup-plots\.mjs ([^`]+)`/);
+  assert.ok(backupCmdMatch, 'README must document node town-api/backup.mjs command');
+  assert.ok(plotsCmdMatch, 'README must document node town-api/backup-plots.mjs command');
+
+  for (const m of backupCmdMatch[1].matchAll(/--[a-z-]+/g)) {
+    assert.ok(backupFlags.has(m[0]), `backup.mjs must parse ${m[0]}`);
+  }
+  for (const m of plotsCmdMatch[1].matchAll(/--[a-z-]+/g)) {
+    assert.ok(backupPlotsFlags.has(m[0]), `backup-plots.mjs must parse ${m[0]}`);
+  }
+
+  assert.equal(backupCmdMatch[1], '[--db <path>] [--out-dir <dir>]');
+  assert.ok(
+    backupSrc.includes('node town-api/backup.mjs [--db <path>] [--out-dir <dir>] [--help]'),
+    'backup.mjs Usage line must match README + [--help]'
+  );
+
+  assert.equal(plotsCmdMatch[1], '[--plots-dir <path>] [--out-dir <dir>]');
+  assert.ok(
+    backupPlotsSrc.includes('node town-api/backup-plots.mjs [--plots-dir <path>] [--out-dir <dir>] [--help]'),
+    'backup-plots.mjs Usage line must match README + [--help]'
+  );
+});
+
+test('town-api/README.md endpoint-map group membership is exact', () => {
+  const readme = readReadme();
+  const townJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'town.json'), 'utf8'));
+
+  const sectionMatch = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /);
+  assert.ok(sectionMatch, 'Endpoint map section must exist');
+
+  const actualGroups = new Map();
+  for (const m of sectionMatch[1].matchAll(/^- \*\*([^*]+?):\*\*\s*(.+)$/gm)) {
+    const routes = [
+      ...m[2].matchAll(/`((?:GET|POST|PUT) \/api\/town\/[^`?]+)(?:\?[^`]*)?`/g),
+    ].map((r) => r[1]);
+    actualGroups.set(m[1], routes.sort());
+  }
+
+  const expectedGroups = {
+    'Join / approve / invite': [
+      'POST /api/town/join',
+      'POST /api/town/admin/approve',
+      'POST /api/town/admin/invite',
+    ],
+    'Checkin / say / leave / presence': [
+      'GET /api/town/state',
+      'POST /api/town/ghostlight/checkin',
+      'POST /api/town/ghostlight/say',
+      'POST /api/town/ghostlight/leave',
+      'POST /api/town/presence',
+    ],
+    Plot: ['PUT /api/town/plot', 'GET /api/town/plot'],
+    Inn: [
+      'POST /api/town/inn/claim',
+      'POST /api/town/inn/extend',
+      'POST /api/town/inn/vacate',
+    ],
+    Guest: [
+      'POST /api/town/ghostlight/guest/checkin',
+      'POST /api/town/ghostlight/guest/say',
+      'POST /api/town/inn/guest/claim',
+      'POST /api/town/inn/guest/extend',
+      'POST /api/town/inn/guest/vacate',
+    ],
+    'Key rotate': ['POST /api/town/key/rotate'],
+    Guestbook: [
+      'POST /api/town/guestbook',
+      'GET /api/town/guestbook',
+      'POST /api/town/admin/guestbook',
+    ],
+    Admin: [
+      'POST /api/town/admin/approve',
+      'POST /api/town/admin/invite',
+      'POST /api/town/admin/delete-line',
+      'POST /api/town/admin/guestbook',
+    ],
+  };
+
+  assert.equal(actualGroups.size, 8, 'Endpoint map must have 8 groups');
+  const union = new Set();
+  for (const [name, expected] of Object.entries(expectedGroups)) {
+    assert.deepEqual(
+      actualGroups.get(name),
+      [...expected].sort(),
+      `Endpoint map group "${name}" membership mismatch`
+    );
+    for (const route of expected) union.add(route);
+  }
+
+  const townRoutes = townJson.endpoints.map((ep) => `${ep.method} ${ep.path}`).sort();
+  assert.equal(townRoutes.length, 23);
+  assert.deepEqual([...union].sort(), townRoutes, 'Union of all 8 groups must cover all 23 town.json routes');
+});
