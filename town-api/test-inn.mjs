@@ -758,6 +758,231 @@ test('inn auth failures: missing headers, unknown resident, bad signature, stale
   }
 });
 
+test('inn claim, extend, and vacate responses carry exact key sets and state_seq equals live state', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const claimRes = await alice.claimInnRoom('lantern', 2);
+    assert.equal(claimRes.status, 201);
+    assert.deepEqual(
+      Object.keys(claimRes.data).sort(),
+      ['claimed_at', 'expires_at', 'handle', 'key', 'nights', 'room', 'state_seq'],
+    );
+    const s1 = await alice.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.state_seq, claimRes.data.state_seq);
+
+    const extRes = await alice.extendInnStay('lantern', claimRes.data.key, 1);
+    assert.equal(extRes.status, 200);
+    assert.deepEqual(
+      Object.keys(extRes.data).sort(),
+      ['claimed_at', 'expires_at', 'handle', 'nights', 'room', 'state_seq'],
+    );
+    const s2 = await alice.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.state_seq, extRes.data.state_seq);
+
+    const vacRes = await alice.vacateInnRoom('lantern', claimRes.data.key);
+    assert.equal(vacRes.status, 200);
+    assert.deepEqual(
+      Object.keys(vacRes.data).sort(),
+      ['handle', 'room', 'state_seq', 'vacated'],
+    );
+    assert.equal(vacRes.data.vacated, true);
+    const s3 = await alice.state();
+    assert.equal(s3.status, 200);
+    assert.equal(s3.data.state_seq, vacRes.data.state_seq);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('inn vacate does not consume the inn-claim rate-limit bucket', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const claimRes = await alice.claimInnRoom('lantern', 2);
+    assert.equal(claimRes.status, 201);
+    const key = claimRes.data.key;
+
+    for (let i = 0; i < 9; i += 1) {
+      const conflict = await alice.claimInnRoom('window', 2);
+      assert.equal(conflict.status, 409);
+      assert.equal(conflict.data.error, 'resident_already_claimed');
+    }
+
+    const limited = await alice.claimInnRoom('quiet', 2);
+    assert.equal(limited.status, 429);
+    assert.equal(limited.data.error, 'rate_limited');
+    assert.equal(typeof limited.data.retry_after, 'number');
+    assert.ok(limited.data.retry_after > 0 && limited.data.retry_after <= 3600);
+
+    const vacRes = await alice.vacateInnRoom('lantern', key);
+    assert.equal(vacRes.status, 200);
+
+    const stillLimited = await alice.claimInnRoom('quiet', 2);
+    assert.equal(stillLimited.status, 429);
+    assert.equal(stillLimited.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('muted resident may claim the Inn; suspended resident may not claim, extend, or vacate', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    const { client: bob } = await createResident(ctx, 'bob');
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = ?").run('alice');
+    const aliceClaim = await alice.claimInnRoom('lantern', 2);
+    assert.equal(aliceClaim.status, 201);
+    const key = aliceClaim.data.key;
+
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('bob');
+    const bobClaim = await bob.claimInnRoom('window', 2);
+    assert.equal(bobClaim.status, 403);
+    assert.equal(bobClaim.data.error, 'resident_not_active');
+    assert.equal(bobClaim.data.resident_status, 'suspended');
+
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('alice');
+    const suspExt = await alice.extendInnStay('lantern', key, 1);
+    assert.equal(suspExt.status, 403);
+    assert.equal(suspExt.data.error, 'resident_not_active');
+
+    const suspVac = await alice.vacateInnRoom('lantern', key);
+    assert.equal(suspVac.status, 403);
+    assert.equal(suspVac.data.error, 'resident_not_active');
+
+    const s = await alice.state();
+    assert.equal(s.status, 200);
+    assert.equal(s.data.inn.lantern.handle, 'alice');
+
+    ctx.db.prepare("UPDATE residents SET status = 'active' WHERE handle = ?").run('alice');
+    const okVac = await alice.vacateInnRoom('lantern', key);
+    assert.equal(okVac.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('inn-claim rate-limit window resets after one hour', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
+
+    const claimRes = await alice.claimInnRoom('lantern', 2);
+    assert.equal(claimRes.status, 201);
+    const key = claimRes.data.key;
+
+    for (let i = 0; i < 9; i += 1) {
+      const conflict = await alice.claimInnRoom('window', 2);
+      assert.equal(conflict.status, 409);
+      assert.equal(conflict.data.error, 'resident_already_claimed');
+    }
+
+    const limited = await alice.claimInnRoom('quiet', 2);
+    assert.equal(limited.status, 429);
+    assert.equal(limited.data.error, 'rate_limited');
+
+    ctx.advanceClock(3601);
+
+    const vacRes = await signedPostAt(ctx, 'alice', aliceKeys, '/api/town/inn/vacate', {
+      room: 'lantern',
+      key,
+    });
+    assert.equal(vacRes.status, 200);
+
+    const afterReset = await signedPostAt(ctx, 'alice', aliceKeys, '/api/town/inn/claim', {
+      room: 'window',
+      nights: 2,
+    });
+    assert.equal(afterReset.status, 201);
+    assert.equal(afterReset.data.room, 'window');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('inn extend validation order: room beats key beats extra_nights; already-7-nights extend hits max_stay_exceeded', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const claimRes = await alice.claimInnRoom('lantern', 7);
+    assert.equal(claimRes.status, 201);
+    assert.equal(claimRes.data.nights, 7);
+    const key = claimRes.data.key;
+
+    const badRoom = await alice.extendInnStay('attic', '', 99);
+    assert.equal(badRoom.status, 400);
+    assert.equal(badRoom.data.error, 'invalid_room');
+
+    const badKey = await alice.extendInnStay('lantern', '', 99);
+    assert.equal(badKey.status, 400);
+    assert.equal(badKey.data.error, 'missing_key');
+
+    const badExtra = await alice.extendInnStay('lantern', key, 0);
+    assert.equal(badExtra.status, 400);
+    assert.equal(badExtra.data.error, 'invalid_extra_nights');
+
+    const tooLong = await alice.extendInnStay('lantern', key, 1);
+    assert.equal(tooLong.status, 400);
+    assert.equal(tooLong.data.error, 'max_stay_exceeded');
+
+    const s = await alice.state();
+    assert.equal(s.status, 200);
+    assert.equal(s.data.inn.lantern.nights, 7);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('expired claim re-claimed by another resident: old key is invalid for extend and vacate', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
+    const { keys: bobKeys } = await createResident(ctx, 'bob');
+
+    const aliceClaim = await alice.claimInnRoom('lantern', 1);
+    assert.equal(aliceClaim.status, 201);
+    const oldKey = aliceClaim.data.key;
+
+    ctx.advanceClock(NIGHT_SEC + 10);
+
+    const bobClaim = await signedPostAt(ctx, 'bob', bobKeys, '/api/town/inn/claim', {
+      room: 'lantern',
+      nights: 2,
+    });
+    assert.equal(bobClaim.status, 201);
+    assert.notEqual(bobClaim.data.key, oldKey);
+
+    const oldExt = await signedPostAt(ctx, 'alice', aliceKeys, '/api/town/inn/extend', {
+      room: 'lantern',
+      key: oldKey,
+      extra_nights: 1,
+    });
+    assert.equal(oldExt.status, 403);
+    assert.equal(oldExt.data.error, 'invalid_key');
+
+    const oldVac = await signedPostAt(ctx, 'alice', aliceKeys, '/api/town/inn/vacate', {
+      room: 'lantern',
+      key: oldKey,
+    });
+    assert.equal(oldVac.status, 403);
+    assert.equal(oldVac.data.error, 'invalid_key');
+
+    const s = await alice.state();
+    assert.equal(s.status, 200);
+    assert.equal(s.data.inn.lantern.handle, 'bob');
+    assert.equal(s.data.inn.lantern.nights, 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('no banned term in inn test file', () => {
   const selfSrc = fs.readFileSync(path.join(__dirname, 'test-inn.mjs'), 'utf8');
   assert.ok(!BANNED_TERM_RE.test(selfSrc), 'test-inn.mjs must not contain banned term');
