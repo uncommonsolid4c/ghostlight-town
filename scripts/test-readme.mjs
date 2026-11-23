@@ -613,3 +613,321 @@ test('scripts/README.md check-live usage line and flag defaults match source', (
   assert.ok(readme.includes('`--base https://milo.4167360.xyz`'));
   assert.ok(readme.includes('`--bundle staging-polyfork`'));
 });
+
+test('scripts/README.md --verify rejects a symlinked staged file', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes('rejects missing, mismatched, or extra files, symlinks, and `town_js_v` / `staging_js_v` drift')
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-symlink-'));
+  const stagedDir = path.join(tmpDir, 'ghostlight-town');
+  try {
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const manifest = JSON.parse(fs.readFileSync(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
+    const firstRel = manifest.files[0].path;
+    const secondRel = manifest.files[1].path;
+    const firstPath = path.join(stagedDir, firstRel);
+    const secondPath = path.join(stagedDir, secondRel);
+    fs.unlinkSync(firstPath);
+    fs.symlinkSync(secondPath, firstPath);
+
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', stagedDir],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        const parsed = JSON.parse(String(err.stderr || '').trim());
+        assert.deepEqual(parsed, {
+          ok: false,
+          error: `Refusing symlink in staged dir: ${firstRel}`,
+        });
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md --verify refuses forbidden dirs and the repo root', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'refuses to stage into or verify `<root>` itself or inside `town-3d/`, `town-api/`, `town-npc/`, or `staging-polyfork/`'
+    )
+  );
+
+  for (const forbidden of ['town-3d', 'town-api', 'town-npc', 'staging-polyfork']) {
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', path.join(ROOT_DIR, forbidden)],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.ok(
+          String(err.stderr || '').includes(`Refusing to verify inside ${forbidden}/:`),
+          `expected Refusing to verify inside ${forbidden}/: in stderr`
+        );
+        return true;
+      }
+    );
+  }
+
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--verify', ROOT_DIR],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.equal(err.status, 1);
+      assert.ok(String(err.stderr || '').includes('Refusing to verify repo root:'));
+      return true;
+    }
+  );
+});
+
+test('scripts/README.md check-live getExpectedFiles matches stage-deploy collectors', async () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'imports `collectSourceFiles` and `listStagedFiles` from `stage-deploy.mjs` so both scripts resolve the exact same file list for each bundle'
+    )
+  );
+
+  const { getExpectedFiles } = await import('./check-live.mjs');
+  const { collectSourceFiles, listStagedFiles } = await import('./stage-deploy.mjs');
+
+  const stagingExpected = await getExpectedFiles(ROOT_DIR, 'staging-polyfork');
+  const { files: stagingCollected } = await collectSourceFiles(ROOT_DIR, 'staging-polyfork');
+  assert.deepEqual(
+    stagingExpected,
+    stagingCollected.map((entry) => entry.relPath)
+  );
+  assert.equal(stagingExpected.length, 195);
+
+  const town3dExpected = await getExpectedFiles(ROOT_DIR, 'town-3d');
+  const town3dListed = await listStagedFiles(path.join(ROOT_DIR, 'town-3d'));
+  assert.deepEqual(town3dExpected, town3dListed);
+  assert.equal(town3dExpected.length, 25);
+});
+
+test('scripts/README.md town-3d staging facts match a real dry run and staged files are byte-identical', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(readmeNorm.includes('never bumps `?v=` in `index.html`'));
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-town3d-facts-'));
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.bundle, 'town-3d');
+    assert.equal(summary.file_count, 25);
+    assert.equal(String(summary.town_js_v), '16');
+
+    const stagedDir = path.join(tmpDir, 'ghostlight-town');
+    const stagedIndex = fs.readFileSync(path.join(stagedDir, 'index.html'));
+    const repoIndex = fs.readFileSync(path.join(ROOT_DIR, 'town-3d', 'index.html'));
+    assert.equal(Buffer.compare(stagedIndex, repoIndex), 0);
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(stagedDir, 'MANIFEST.json'), 'utf8'));
+    assert.equal(manifest.file_count, 25);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md secret-guard filename/content patterns match samples', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(readmeNorm.includes('blocks secret-like filenames or contents'));
+
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+  const filenameLiterals = ['/\\.pem$/i', '/\\.key$/i', '/token/i', '/secret/i', '/credential/i'];
+  const contentLiterals = [
+    '/api[_-]?key/i',
+    '/BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/',
+    '/x-auth-token/i',
+  ];
+
+  const toRegExp = (literal) => {
+    const lastSlash = literal.lastIndexOf('/');
+    return new RegExp(literal.slice(1, lastSlash), literal.slice(lastSlash + 1));
+  };
+
+  for (const lit of [...filenameLiterals, ...contentLiterals]) {
+    assert.ok(stageSrc.includes(lit), `stage-deploy.mjs must contain ${lit}`);
+  }
+
+  const filenameRes = filenameLiterals.map(toRegExp);
+  const contentRes = contentLiterals.map(toRegExp);
+
+  for (const badName of ['server.pem', 'id_rsa.key', 'api-token.txt', 'my-secret.yaml', 'credentials.json']) {
+    assert.ok(
+      filenameRes.some((re) => re.test(badName)),
+      `expected ${badName} to match a secret filename regex`
+    );
+  }
+  assert.equal(
+    filenameRes.some((re) => re.test('town.js')),
+    false,
+    'town.js must not match any secret filename regex'
+  );
+
+  for (const badContent of [
+    'api_key=abc',
+    'api-key: xyz',
+    '-----BEGIN RSA PRIVATE KEY-----',
+    'x-auth-token: abc123',
+  ]) {
+    assert.ok(
+      contentRes.some((re) => re.test(badContent)),
+      `expected ${badContent} to match a secret content regex`
+    );
+  }
+  assert.equal(
+    contentRes.some((re) => re.test('hello world')),
+    false,
+    'hello world must not match any secret content regex'
+  );
+});
+
+test('scripts/README.md unknown bundle and unknown argument rejected by both CLIs', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('**Bundles:** `town-3d` (default) or `staging-polyfork`'));
+
+  const expectedUnknownBundle = 'Unknown bundle: bogus (expected one of: town-3d, staging-polyfork)';
+
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'check-live.mjs'), '--bundle', 'bogus'],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.equal(err.status, 1);
+      const parsed = JSON.parse(String(err.stderr || '').trim());
+      assert.equal(parsed.error, expectedUnknownBundle);
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'check-live.mjs'), '--bogus'],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.equal(err.status, 1);
+      assert.ok(String(err.stderr || '').includes('Unknown argument: --bogus'));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'bogus'],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.equal(err.status, 1);
+      assert.ok(String(err.stderr || '').includes(expectedUnknownBundle));
+      return true;
+    }
+  );
+});
+
+test('scripts/README.md check-live fetch timeout is 5 seconds', () => {
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+  assert.ok(checkLiveSrc.includes('const REQUEST_TIMEOUT_MS = 5000;'));
+  assert.ok(checkLiveSrc.includes('AbortSignal.timeout(REQUEST_TIMEOUT_MS)'));
+});
+
+test('scripts/README.md PLAN.md section 8 reference resolves', () => {
+  const plan = fs.readFileSync(path.join(ROOT_DIR, 'PLAN.md'), 'utf8');
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(plan.includes('## 8. MVP and phased roadmap'));
+  assert.ok(readmeNorm.includes('and [`../PLAN.md`](../PLAN.md) §8 for bundle details and history.'));
+});
+
+test('scripts/README.md stage-deploy has no network access', () => {
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+  const fetchWord = `${'fe'}tch(`;
+  assert.equal(stageSrc.includes(fetchWord), false, 'stage-deploy.mjs must not call fetch');
+  assert.equal(stageSrc.includes('http://'), false, 'stage-deploy.mjs must not contain http://');
+  assert.equal(stageSrc.includes('https://'), false, 'stage-deploy.mjs must not contain https://');
+
+  const imports = [...stageSrc.matchAll(/^import .+ from '([^']+)';$/gm)].map((m) => m[1]);
+  assert.deepEqual(imports, ['node:crypto', 'node:fs/promises', 'node:path', 'node:url']);
+});
+
+test('scripts/README.md --verify is read-only', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(readmeNorm.includes('read-only check against `<dir>/MANIFEST.json`'));
+
+  const snapshotDir = (dir, prefix = '', out = new Map()) => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        snapshotDir(full, rel, out);
+      } else {
+        out.set(rel, fs.readFileSync(full));
+      }
+    }
+    return out;
+  };
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-readonly-'));
+  const stagedDir = path.join(tmpDir, 'ghostlight-town');
+  try {
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+
+    const before = snapshotDir(stagedDir);
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--verify', stagedDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const after = snapshotDir(stagedDir);
+
+    assert.deepEqual([...after.keys()], [...before.keys()]);
+    for (const [rel, bufBefore] of before.entries()) {
+      assert.equal(Buffer.compare(bufBefore, after.get(rel)), 0, `${rel} must be unchanged by --verify`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
