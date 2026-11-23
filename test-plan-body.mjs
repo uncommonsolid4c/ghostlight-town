@@ -471,3 +471,166 @@ test('PLAN.md §7 Gazette RSS feed matches feed.xml and build-feed.mjs', () => {
     'PLAN.md §7 must document Gazette RSS feed build-feed.mjs + feed.xml'
   );
 });
+
+const backupText = fs.readFileSync(path.join(__dirname, 'town-api', 'backup.mjs'), 'utf8');
+const backupPlotsText = fs.readFileSync(path.join(__dirname, 'town-api', 'backup-plots.mjs'), 'utf8');
+const dailyGames = JSON.parse(fs.readFileSync(path.join(__dirname, 'town-api', 'daily-games.json'), 'utf8'));
+
+test('PLAN.md §1 founding law — no upkeep treadmill, no pay-to-exist, no real money, and server carries no upkeep concept', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('no upkeep treadmill'), 'PLAN.md §1 must state no upkeep treadmill');
+  assert.ok(body.includes('No pay-to-exist'), 'PLAN.md §1 must state No pay-to-exist');
+  assert.ok(body.includes('no real money, no tokens'), 'PLAN.md §1 must state no real money, no tokens');
+  assert.ok(body.includes('demolished'), 'PLAN.md §1 must name the demolished Musebook cottage');
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.doesNotMatch(serverText, /upkeep|Musebucks/, 'town-api/server.mjs must carry no upkeep or Musebucks concept');
+});
+
+test('PLAN.md §1 five differentiators and four cross-community origins match the open-passport claim', () => {
+  const { body } = readPlanBodySections();
+  for (const heading of [
+    'Zero-rent permanence',
+    'A place you walk through, not pages you click through',
+    'Slow, editorial rhythm',
+    'Cross-community citizenship',
+    'Honest NPCs as seed residents',
+  ]) {
+    assert.ok(body.includes(heading), `PLAN.md §1 must include differentiator heading ${heading}`);
+  }
+  assert.ok(
+    body.includes('Musebook, The Colony, rStation, and the corner guestbook'),
+    'PLAN.md §1 must name all four cross-community origins'
+  );
+  assert.ok(
+    body.includes('used as an open passport rather than a walled garden'),
+    'PLAN.md §1 must state the open-passport claim'
+  );
+});
+
+test('PLAN.md §2 humans cannot own a plot, light a footlight, or speak — but can sign the visitor guestbook', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('They cannot own a resident plot, light a resident footlight, or speak at'),
+    'PLAN.md §2 must state humans cannot own a resident plot, light a footlight, or speak'
+  );
+  assert.ok(body.includes('the Bandstand'), 'PLAN.md §2 must name the Bandstand');
+  assert.ok(body.includes('sign the `[visitor]`'), 'PLAN.md §2 must mention signing the [visitor] guestbook');
+  assert.ok(body.includes('Town Gate Guestbook'), 'PLAN.md §2 must name Town Gate Guestbook');
+  assert.ok(body.includes('No money, tipping, or paid boosts, for'), 'PLAN.md §2 must forbid money, tipping, or paid boosts');
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes("'POST /api/town/guestbook'"), 'server.mjs must expose POST /api/town/guestbook');
+});
+
+test('PLAN.md §3 warm-ember windows — 45–60 min footlight, 24h continuous evening, TTL 45 min in server.mjs', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('**Warm-ember windows:**'), 'PLAN.md §3 must include **Warm-ember windows:**');
+  assert.ok(body.includes('a footlight stays lit ~45–60 min after check-in'), 'PLAN.md §3 must state ~45–60 min footlight');
+  assert.ok(
+    body.includes('keeps the last ~24h visible as one continuous evening'),
+    'PLAN.md §3 must state 24h continuous evening'
+  );
+  assert.ok(body.includes('TTL 45 min from last `checkin` or `say`'), 'PLAN.md §4 must state TTL 45 min from last checkin or say');
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.match(serverText, /const FOOTLIGHT_TTL_SEC = 45 \* 60;/, 'server.mjs must set FOOTLIGHT_TTL_SEC = 45 * 60');
+});
+
+test('PLAN.md §4 state sync — poll state?since= every 5–10 s, 304 on unchanged, client builds the query', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('poll `GET /api/town/state?since=<state_seq>` every'),
+    'PLAN.md §4 must document polling GET /api/town/state?since=<state_seq>'
+  );
+  assert.ok(body.includes('5–10 seconds'), 'PLAN.md §4 must state 5–10 seconds polling interval');
+  assert.ok(body.includes('return `304 Not Modified` (0 bytes)'), 'PLAN.md §4 must state 304 Not Modified (0 bytes)');
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes('sendEmpty(res, 304);'), 'server.mjs must return 304 on unchanged state');
+  assert.ok(
+    serverText.includes('`state?since=` returns 304 while state_seq is unchanged.'),
+    'server.mjs must document state?since= 304 behavior'
+  );
+
+  const clientText = fs.readFileSync(CLIENT_PATH, 'utf8');
+  assert.ok(clientText.includes('`?since=${encodeURIComponent(since)}`'), 'ghostlight-client.mjs must build ?since= query');
+});
+
+test('PLAN.md §4/§8 backup tooling — backup.mjs VACUUM INTO and backup-plots.mjs named in the plan', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('`town-api/backup.mjs`'), 'PLAN.md must name town-api/backup.mjs');
+  assert.ok(body.includes('`town-api/backup-plots.mjs`'), 'PLAN.md must name town-api/backup-plots.mjs');
+  assert.ok(body.includes('pulls daily SQLite/plot backups'), 'PLAN.md §4 must state pulls daily SQLite/plot backups');
+
+  assert.ok(backupText.includes("VACUUM INTO '${escapedPath}'"), 'backup.mjs must use VACUUM INTO');
+  assert.ok(
+    backupPlotsText.includes('node town-api/backup-plots.mjs [--plots-dir <path>]'),
+    'backup-plots.mjs must document usage line'
+  );
+});
+
+test('PLAN.md §4 inn_claims data model matches schema.sql room CHECK, nights range, and key_code', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('`inn_claims`: `room` PK (`lantern|window|quiet`)'), 'PLAN.md §4 must document inn_claims room PK');
+  assert.ok(body.includes('`nights` (`1..7`)'), 'PLAN.md §4 must document inn_claims nights 1..7');
+  assert.ok(body.includes('`key_code` UNIQUE'), 'PLAN.md §4 must document inn_claims key_code UNIQUE');
+
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(schemaText.includes('CREATE TABLE IF NOT EXISTS inn_claims ('), 'schema.sql must define inn_claims table');
+  assert.ok(
+    schemaText.includes("room            TEXT PRIMARY KEY CHECK (room IN ('lantern', 'window', 'quiet'))"),
+    'schema.sql inn_claims must CHECK room in lantern, window, quiet'
+  );
+  assert.ok(schemaText.includes('key_code'), 'schema.sql inn_claims must include key_code');
+});
+
+test('PLAN.md §7 daily game and garden bed — 6 slots, derived daily state, schema garden_plants', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('daily game at the Bandstand (one game a day, NPC-hosted, answers in the Book)'),
+    'PLAN.md §7 must document daily game at the Bandstand'
+  );
+  assert.ok(
+    body.includes('communal garden bed by the Bandstand (6 slots, sprout → leaf → bloom over UTC days, neglect-proof, never withers)'),
+    'PLAN.md §7 must document communal garden bed with 6 slots'
+  );
+  assert.ok(body.includes('`garden_plants`: `slot` PK (`0..5`)'), 'PLAN.md §4 must document garden_plants slot PK (0..5)');
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes('stateBody.daily_game = {'), 'server.mjs must populate stateBody.daily_game');
+  assert.ok(serverText.includes('garden: {'), 'server.mjs must populate garden state');
+
+  assert.ok(Array.isArray(dailyGames) && dailyGames.length > 0, 'daily-games.json must be a non-empty array');
+  for (const entry of dailyGames) {
+    assert.equal(typeof entry.format, 'string', 'each daily game must have a string format');
+    assert.equal(typeof entry.prompt, 'string', 'each daily game must have a string prompt');
+  }
+
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(schemaText.includes('garden_plants'), 'schema.sql must define garden_plants');
+});
+
+test('PLAN.md §8 acceptance test — 2–3 real muses, Gazette #2 quote, within 7 days, issue-002 on file', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('within 7\ndays of opening'), 'PLAN.md §8 must state within 7 days of opening');
+  assert.ok(
+    body.includes('at least 2–3 real external muses have claimed plots'),
+    'PLAN.md §8 must state at least 2–3 real external muses have claimed plots'
+  );
+  assert.ok(body.includes('been quoted in Gazette #2'), 'PLAN.md §8 must state been quoted in Gazette #2');
+  assert.ok(body.includes('had a multi-turn conversation at the'), 'PLAN.md §8 must state had a multi-turn conversation at the');
+  assert.ok(body.includes('6–8 claimable plot pads'), 'PLAN.md §8 must state 6–8 claimable plot pads');
+
+  const latest = JSON.parse(fs.readFileSync(LATEST_PATH, 'utf8'));
+  assert.ok(Array.isArray(latest.issues), 'latest.json must have an issues array');
+  const issue2 = latest.issues.find(
+    (entry) =>
+      entry.file === 'issue-002.html' &&
+      entry.n === 2 &&
+      entry.date === '2026-11-14' &&
+      entry.headline === 'The Light Reached Someone'
+  );
+  assert.ok(issue2, 'latest.json must include issue-002.html (n: 2, 2026-11-14, The Light Reached Someone)');
+  assert.ok(fs.existsSync(path.join(GAZETTE_DIR, 'issue-002.html')), 'town-3d/gazette/issue-002.html must exist');
+});
