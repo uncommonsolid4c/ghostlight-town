@@ -716,3 +716,366 @@ test('runTurn integration: game post lights the host footlight and records the l
     await env.close();
   }
 });
+
+test('dailyGameHostForDate rotation: 30 days split 10-10-10, 9-day window 3-3-3, pre-epoch and far-future edges', () => {
+  const startMs = Date.UTC(2026, 10, 21);
+  const counts30 = { wick: 0, maren: 0, tomas: 0 };
+  const counts9 = { wick: 0, maren: 0, tomas: 0 };
+
+  for (let i = 0; i < 30; i++) {
+    const dateStr = new Date(startMs + i * 86400000).toISOString().slice(0, 10);
+    const host = dailyGameHostForDate(dateStr);
+    counts30[host] += 1;
+    if (i < 9) counts9[host] += 1;
+  }
+
+  assert.deepEqual(counts30, { wick: 10, maren: 10, tomas: 10 });
+  assert.deepEqual(counts9, { wick: 3, maren: 3, tomas: 3 });
+
+  const h21 = dailyGameHostForDate('2026-11-21');
+  assert.equal(dailyGameHostForDate('2026-11-24'), h21);
+  assert.equal(dailyGameHostForDate('2026-11-27'), h21);
+
+  assert.equal(dailyGameHostForDate('1969-12-31'), 'tomas');
+  assert.ok(['wick', 'maren', 'tomas'].includes(dailyGameHostForDate('2100-01-01')));
+});
+
+test('buildDailyGameLine is case-sensitive on format, preserves newlines, and has no length cap', () => {
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'Riddle', prompt: 'What am I?' } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'riddle ', prompt: 'What am I?' } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: '', prompt: 'What am I?' } }), null);
+
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'Line one\nLine two' } }),
+    "Today's game — Riddle: Line one\nLine two"
+  );
+
+  const longLine = buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'A'.repeat(600) } });
+  assert.ok(longLine !== null);
+  assert.equal(longLine.length, 623);
+});
+
+test('isDailyGamePosted is case-sensitive, format-agnostic, and rejects trailing-space prompts', () => {
+  const prompt = 'What gets wetter?';
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ body: "Today's game — Riddle: what gets wetter?" }],
+      dailyGame: { format: 'riddle', prompt },
+    }),
+    false
+  );
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ body: "Today's game — Riddle: What gets wetter?" }],
+      dailyGame: { prompt },
+    }),
+    true
+  );
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ body: "Today's game — Riddle: What gets wetter?" }],
+      dailyGame: { prompt: 'What gets wetter? ' },
+    }),
+    false
+  );
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ body: 'What gets wetter?' }],
+      dailyGame: { format: 'riddle', prompt },
+    }),
+    true
+  );
+});
+
+test('runTurn integration: game already quoted by a muse — host stays silent, no re-post', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const gameLine = buildDailyGameLine({ dailyGame: stateBefore.daily_game });
+
+    const kp = generateKeypair();
+    const muse = new GhostlightClient({ baseUrl: env.baseUrl, handle: 'alice', ...kp });
+    const joinRes = await muse.join({ origin: 'musebook', bio: 'Real muse' });
+    assert.equal(joinRes.status, 201);
+    const approveRes = await adminPost(env.baseUrl, env.operatorKeys, '/api/town/admin/approve', {
+      handle: 'alice',
+    });
+    assert.equal(approveRes.status, 200);
+    const sayRes = await muse.say(gameLine, 'say');
+    assert.equal(sayRes.status, 201);
+
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => {
+        brainCalled = true;
+        return 'A quiet evening by the steps.';
+      },
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'silent');
+    assert.equal(res.posted, undefined);
+    assert.notEqual(res.postedGame, true);
+    assert.equal(brainCalled, false);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.filter((l) => l.body === gameLine).length, 1);
+    assert.equal(stateAfter.prompt_book.some((l) => l.handle === host), false);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: malformed daily_game format falls through to a normal brain turn', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const realState = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(realState.daily_game.date);
+    const brainLine = 'Just a quiet evening by the steps.';
+
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      fetchImpl: async (url, init) => {
+        if (String(url).endsWith('/api/town/state')) {
+          return {
+            ok: true,
+            json: async () => ({
+              ...realState,
+              daily_game: { date: realState.daily_game.date, format: 'quiz', prompt: 'Is this a quiz?' },
+            }),
+          };
+        }
+        return globalThis.fetch(url, init);
+      },
+      brainImpl: async () => {
+        brainCalled = true;
+        return brainLine;
+      },
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'initiate');
+    assert.equal(res.posted, true);
+    assert.notEqual(res.postedGame, true);
+    assert.equal(brainCalled, true);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.some((l) => l.body.startsWith("Today's game —")), false);
+    assert.equal(stateAfter.prompt_book.some((l) => l.handle === host && l.body === brainLine), true);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: next-day host rotation — new host posts, old host skips the game', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const realState = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const todayHost = dailyGameHostForDate(realState.daily_game.date);
+    const [y, m, d] = realState.daily_game.date.split('-').map(Number);
+    const nextDate = new Date(Date.UTC(y, m - 1, d) + 86400000).toISOString().slice(0, 10);
+    const nextHost = dailyGameHostForDate(nextDate);
+    assert.notEqual(nextHost, todayHost);
+
+    const nextGame = { ...realState.daily_game, date: nextDate };
+    const nextLine = buildDailyGameLine({ dailyGame: nextGame });
+
+    const fetchWithNextGame = async (url, init) => {
+      const r = await globalThis.fetch(url, init);
+      if (String(url).endsWith('/api/town/state')) {
+        const data = await r.json();
+        return { ok: r.ok, status: r.status, json: async () => ({ ...data, daily_game: nextGame }) };
+      }
+      return r;
+    };
+
+    let oldBrainCalled = false;
+    const oldRes = await runTurn({
+      npcHandle: todayHost,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      fetchImpl: fetchWithNextGame,
+      brainImpl: async () => {
+        oldBrainCalled = true;
+        return 'Old host checking in.';
+      },
+      logger: () => {},
+    });
+    assert.equal(oldRes.ok, true);
+    assert.notEqual(oldRes.postedGame, true);
+    assert.equal(oldBrainCalled, true);
+
+    let newBrainCalled = false;
+    const newRes = await runTurn({
+      npcHandle: nextHost,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      fetchImpl: fetchWithNextGame,
+      brainImpl: async () => {
+        newBrainCalled = true;
+        return 'NO';
+      },
+      logger: () => {},
+    });
+    assert.equal(newRes.ok, true);
+    assert.equal(newRes.postedGame, true);
+    assert.equal(newBrainCalled, false);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const gameLines = stateAfter.prompt_book.filter((l) => l.body === nextLine);
+    assert.equal(gameLines.length, 1);
+    assert.equal(gameLines[0].handle, nextHost);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: non-host dry-run reports no would_post_game', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const nonHost = ['wick', 'maren', 'tomas'].find((h) => h !== host);
+
+    const logs = [];
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: nonHost,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      dryRun: true,
+      now,
+      brainImpl: async () => {
+        brainCalled = true;
+        return 'NO';
+      },
+      logger: (obj) => logs.push(obj),
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'dry_run');
+    assert.equal(res.posted, false);
+    assert.equal(res.wouldPostGame, undefined);
+    assert.equal(brainCalled, false);
+    assert.equal(logs.some((l) => l.would_post_game === true), false);
+    assert.equal(typeof res.prompt, 'string');
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.length, 0);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: host posts the game while a muse is checked in at the bandstand', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const gameLine = buildDailyGameLine({ dailyGame: stateBefore.daily_game });
+
+    const kp = generateKeypair();
+    const muse = new GhostlightClient({ baseUrl: env.baseUrl, handle: 'alice', ...kp });
+    const joinRes = await muse.join({ origin: 'musebook', bio: 'Real muse' });
+    assert.equal(joinRes.status, 201);
+    const approveRes = await adminPost(env.baseUrl, env.operatorKeys, '/api/town/admin/approve', {
+      handle: 'alice',
+    });
+    assert.equal(approveRes.status, 200);
+    const checkinRes = await muse.checkin({ status_text: 'visiting the bandstand' });
+    assert.equal(checkinRes.status, 200);
+
+    const stateMid = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(
+      stateMid.presence.some((p) => p.handle === 'alice' && p.zone === 'bandstand'),
+      true
+    );
+
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => {
+        brainCalled = true;
+        return 'NO';
+      },
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.posted, true);
+    assert.equal(res.postedGame, true);
+    assert.equal(brainCalled, false);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.filter((l) => l.body === gameLine).length, 1);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: game-post line has reply_to null and role npc; memory line is dated and within 140 chars', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const gameLine = buildDailyGameLine({ dailyGame: stateBefore.daily_game });
+
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => 'NO',
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.postedGame, true);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const postedLine = stateAfter.prompt_book.find((l) => l.body === gameLine);
+    assert.ok(postedLine);
+    assert.equal(postedLine.role, 'npc');
+    assert.equal(postedLine.handle, host);
+    assert.equal(postedLine.reply_to, null);
+
+    const memoryLines = fs
+      .readFileSync(path.join(env.stateDir, host, 'memory.md'), 'utf8')
+      .split('\n')
+      .filter(Boolean);
+    const memLine = memoryLines.find((l) => l.includes(gameLine));
+    assert.ok(memLine);
+    assert.equal(memLine.startsWith(`${localDateString(now)}: `), true);
+    assert.ok(memLine.length <= 140);
+  } finally {
+    await env.close();
+  }
+});
