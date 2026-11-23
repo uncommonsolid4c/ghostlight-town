@@ -468,3 +468,124 @@ test('No pending deploy candidate: live equals staged and README says deployed, 
   );
   assert.ok(readmeStatus.includes('deployed 2026-11-22'), 'README.md ## Status must include deployed 2026-11-22');
 });
+
+test('PLAN.md header status-line disclaimer — live counters not pinned, no state_seq number in the header', () => {
+  const { headerLines, statusLine } = readPlanHeader();
+  assert.ok(
+    statusLine.includes('live counters such as `state_seq` are not pinned here — they move with every state mutation'),
+    'PLAN.md **Status:** must include the live-counters disclaimer verbatim'
+  );
+  for (const line of headerLines) {
+    assert.doesNotMatch(
+      line,
+      /state_seq[^0-9;)]*[0-9]/,
+      'No PLAN.md header line may pin a live state_seq number'
+    );
+  }
+  const matches = statusLine.match(/\bstate_seq\b/g) || [];
+  assert.equal(matches.length, 1, 'PLAN.md **Status:** must contain state_seq exactly once (in the disclaimer)');
+});
+
+test('PLAN.md header structure — Status first, exactly one Status/Reviewed/Owner line', () => {
+  const { headerLines } = readPlanHeader();
+  const boldLines = headerLines.filter((line) => line.startsWith('**'));
+  assert.ok(boldLines.length > 0, 'PLAN.md header must have **-prefixed metadata lines');
+  assert.ok(boldLines[0].startsWith('**Status:**'), 'First ** line in PLAN.md header must be **Status:**');
+  for (const prefix of ['**Status:**', '**Reviewed:**', '**Owner:**', '**Planned with:**']) {
+    const count = headerLines.filter((line) => line.startsWith(prefix)).length;
+    assert.equal(count, 1, `PLAN.md header must have exactly one ${prefix} line`);
+  }
+});
+
+test('README.md ## Status records the same TOTAL verbatim as the PLAN.md header', () => {
+  const { statusLine } = readPlanHeader();
+  const totalMatch = statusLine.match(/TOTAL pass=(\d+) fail=(\d+) skipped=(\d+) suites=(\d+)/);
+  assert.ok(totalMatch, 'PLAN.md **Status:** must include TOTAL pass=... fail=... skipped=... suites=...');
+  const readmeStatus = readReadmeStatusSection();
+  assert.ok(
+    readmeStatus.includes(totalMatch[0]),
+    `README.md ## Status must record "${totalMatch[0]}" verbatim`
+  );
+});
+
+test('README.md ## Status pins no live state_seq number', () => {
+  const readmeStatus = readReadmeStatusSection();
+  assert.doesNotMatch(
+    readmeStatus,
+    /state_seq[^0-9;)]*[0-9]/,
+    'README.md ## Status must not pin a live state_seq number'
+  );
+  assert.equal(
+    /\bstate_seq\b/.test(readmeStatus),
+    false,
+    'README.md ## Status must not include the word state_seq'
+  );
+});
+
+test('PLAN.md §8 slice entries are strictly increasing with no duplicates', () => {
+  const { planText } = readPlanHeader();
+  const sec8 = readSection8(planText);
+  const entries = [...sec8.matchAll(/^\*Slice (\d+)([a-z]?)\b[^\n]*/gm)];
+  assert.ok(entries.length > 0, 'PLAN.md §8 must contain *Slice N* entries');
+  let prev = -Infinity;
+  for (const m of entries) {
+    const num = Number(m[1]);
+    assert.ok(num > prev, `PLAN.md §8 slice numbers must be strictly increasing (${num} after ${prev})`);
+    prev = num;
+  }
+});
+
+test('PLAN.md §8 every slice entry from slice 180 carries a YYYY-MM-DD date', () => {
+  const { planText } = readPlanHeader();
+  const sec8 = readSection8(planText);
+  const entries = [...sec8.matchAll(/^\*Slice (\d+)([a-z]?)\b[^\n]*/gm)];
+  const datedEntries = entries.filter((m) => Number(m[1]) >= 180);
+  assert.ok(datedEntries.length > 0, 'PLAN.md §8 must have slice entries >= 180');
+  for (const m of datedEntries) {
+    assert.match(m[0], /\d{4}-\d{2}-\d{2}/, `Slice ${m[1]} entry must carry a YYYY-MM-DD date`);
+  }
+});
+
+test('PLAN.md latest §8 entry live-check record agrees with the header bundle counts', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(latestLine, /`check-live` 195\/195 ok, zero gaps/, 'Latest §8 entry must record `check-live` 195/195 ok, zero gaps');
+  assert.match(latestLine, /`staging-polyfork` 195\/195/, 'Latest §8 entry must record `staging-polyfork` 195/195');
+  assert.match(latestLine, /`town-3d` 25\/25/, 'Latest §8 entry must record `town-3d` 25/25');
+
+  const bundleMatch = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed 2026-11-22/);
+  assert.ok(bundleMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <M> files deployed 2026-11-22');
+  assert.equal(bundleMatch[2], '195', 'Header deployed bundle count must be 195');
+
+  const fallbackMatch = statusLine.match(/`town\.js\?v=(\d+)`\s*\/\s*(\d+) files/);
+  assert.ok(fallbackMatch, 'PLAN.md **Status:** must state `town.js?v=<N>` / <M> files');
+  assert.equal(fallbackMatch[2], '25', 'Header fallback bundle count must be 25');
+});
+
+test('README.md 3D clearing bullet lists the five features and matches the header live ?v=', () => {
+  const { statusLine } = readPlanHeader();
+  const readmeStatus = readReadmeStatusSection();
+  for (const feature of ['Town Gate', 'Ghostlight Bandstand', 'Gazette newsstand', "Milo's cottage", 'plot pads']) {
+    assert.ok(readmeStatus.includes(feature), `README.md ## Status 3D clearing bullet must include ${feature}`);
+  }
+  const readmeVMatch = readmeStatus.match(/serving `staging\.js\?v=(\d+)`/);
+  assert.ok(readmeVMatch, 'README.md ## Status must state serving `staging.js?v=<N>`');
+  const headerVMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
+  assert.ok(headerVMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
+  assert.equal(readmeVMatch[1], headerVMatch[1], 'README.md serving ?v= must equal PLAN.md header live ?v=');
+});
+
+test('PLAN.md header Social Gate deadline ~Nov 20 agrees with §12.6 and README Status', () => {
+  const { planText, statusLine } = readPlanHeader();
+  assert.ok(statusLine.includes('~Nov 20'), 'PLAN.md **Status:** must include ~Nov 20');
+  const idx126 = planText.indexOf('### 12.6');
+  assert.ok(idx126 !== -1, 'PLAN.md must contain ### 12.6');
+  const sec126 = planText.slice(idx126);
+  assert.ok(sec126.includes('~Nov 20'), 'PLAN.md §12.6 must include ~Nov 20');
+  assert.match(sec126, /Social Gate — unmet/, 'PLAN.md §12.6 must match Social Gate — unmet');
+
+  const readmeStatus = readReadmeStatusSection();
+  assert.ok(readmeStatus.includes('~Nov 20'), 'README.md ## Status must include ~Nov 20');
+  assert.ok(readmeStatus.includes('within 7 days of opening'), 'README.md ## Status must include within 7 days of opening');
+  assert.ok(readmeStatus.includes('(unmet)'), 'README.md ## Status must include (unmet)');
+});
