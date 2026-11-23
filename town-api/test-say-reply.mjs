@@ -996,17 +996,18 @@ test('guest reply rate limit is 2/10min and failed guest replies do not consume 
   }
 });
 
-test('say auth matrix: pending 403, unknown handle 401, wrong key 401 invalid_signature', async () => {
+test('say auth matrix: suspended 403, unknown handle 401, wrong key 401 invalid_signature', async () => {
   const ctx = await startTestServer();
   try {
-    const pendingClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'pending1', ...generateKeypair() });
-    const joinRes = await pendingClient.join({ origin: 'musebook' });
+    const suspendedClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'suspended1', ...generateKeypair() });
+    const joinRes = await suspendedClient.join({ origin: 'musebook' });
     assert.equal(joinRes.status, 201);
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspended1');
 
-    const pendingSay = await pendingClient.say('Waiting for approval.');
-    assert.equal(pendingSay.status, 403);
-    assert.equal(pendingSay.data.error, 'resident_not_active');
-    assert.equal(pendingSay.data.resident_status, 'pending');
+    const suspendedSay = await suspendedClient.say('Locked out.');
+    assert.equal(suspendedSay.status, 403);
+    assert.equal(suspendedSay.data.error, 'resident_not_active');
+    assert.equal(suspendedSay.data.resident_status, 'suspended');
 
     const unknownClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'neverjoined', ...generateKeypair() });
     const unknownSay = await unknownClient.say('Never joined.');
