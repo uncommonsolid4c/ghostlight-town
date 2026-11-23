@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createTownServer } from './server.mjs';
 import { GhostlightClient, generateKeypair } from './ghostlight-client.mjs';
+import { dailyGameHostForDate, buildDailyGameLine, isDailyGamePosted, FORMAT_LABELS } from '../town-npc/daily-game.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAMES_PATH = path.join(__dirname, 'daily-games.json');
@@ -150,5 +151,73 @@ test('bad or invalid daily-games file omits daily_game softly without failing st
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('daily game host rotates wick -> maren -> tomas across consecutive UTC days', () => {
+  const hosts = ['2026-11-21', '2026-11-22', '2026-11-23', '2026-11-24'].map(dailyGameHostForDate);
+  assert.deepEqual(hosts, ['wick', 'maren', 'tomas', 'wick']);
+});
+
+test('daily game host returns null for invalid dates', () => {
+  for (const bad of ['2026-02-30', '2026-13-01', '2026-11-31', '11/22/2026', '', null, undefined, 20261122]) {
+    assert.equal(dailyGameHostForDate(bad), null, `expected null for ${String(bad)}`);
+  }
+});
+
+test('daily game line composes the exact line for each format', () => {
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'What has keys but opens no locks?' } }),
+    'Today\u0027s game \u2014 Riddle: What has keys but opens no locks?'
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'word', prompt: 'Name a word that\u2026' } }),
+    'Today\u0027s game \u2014 Word game: Name a word that\u2026'
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'story', prompt: 'Once upon a\u2026' } }),
+    'Today\u0027s game \u2014 Story chain: Once upon a\u2026'
+  );
+});
+
+test('daily game line returns null for malformed input', () => {
+  const bad = [
+    {},
+    { dailyGame: { format: 'puzzle', prompt: 'x' } },
+    { dailyGame: { format: 'riddle', prompt: '  ' } },
+    { dailyGame: null },
+    { dailyGame: { format: 'riddle' } },
+  ];
+  for (const input of bad) {
+    assert.equal(buildDailyGameLine(input), null, `expected null for ${JSON.stringify(input)}`);
+  }
+});
+
+test('isDailyGamePosted detects the posted prompt and nothing else', () => {
+  const promptBook = [
+    { body: 'Today\u0027s game \u2014 Riddle: What has keys but opens no locks?' },
+    { body: 'hello' },
+  ];
+  assert.equal(isDailyGamePosted({ promptBook, dailyGame: { prompt: 'What has keys but opens no locks?' } }), true);
+  assert.equal(isDailyGamePosted({ promptBook, dailyGame: { prompt: 'something else' } }), false);
+  assert.equal(isDailyGamePosted({ promptBook }), false);
+  assert.equal(isDailyGamePosted({ promptBook: 'nope', dailyGame: { prompt: 'What has keys but opens no locks?' } }), false);
+  assert.equal(isDailyGamePosted({ dailyGame: { prompt: 'What has keys but opens no locks?' } }), false);
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: { prompt: 'What has keys but opens no locks?' } }), false);
+});
+
+test('daily game labels and host align with the state endpoint', async () => {
+  assert.deepEqual(Object.keys(FORMAT_LABELS).sort(), ['riddle', 'story', 'word']);
+  const baseNow = Math.floor(Date.UTC(2026, 10, 21, 12, 0, 0) / 1000);
+  const ctx = await startTestServer({ baseNow });
+  try {
+    const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+    assert.equal(res.status, 200);
+    assert.equal(res.data.daily_game.date, '2026-11-21');
+    assert.equal(res.data.daily_game.format, 'riddle');
+    assert.equal(dailyGameHostForDate(res.data.daily_game.date), 'wick');
+    assert.ok(buildDailyGameLine({ dailyGame: res.data.daily_game }).startsWith('Today\u0027s game \u2014 Riddle: '));
+  } finally {
+    await ctx.close();
   }
 });
