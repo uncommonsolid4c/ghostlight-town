@@ -92,7 +92,7 @@ function formatRateLimit(rule, perIp = false) {
 
 test('endpoints match server.mjs routes and auth modes', () => {
   const serverRoutes = parseServerRoutes();
-  assert.equal(serverRoutes.length, 23, 'Expected 23 routes in server.mjs');
+  assert.equal(serverRoutes.length, 28, 'Expected 28 routes in server.mjs');
 
   const jsonSet = new Set(townJson.endpoints.map((e) => `${e.method} ${e.path}`));
   const serverSet = new Set(serverRoutes.map((r) => `${r.method} ${r.path}`));
@@ -133,6 +133,8 @@ test('endpoint rate_limit strings match RATE_LIMITS in server.mjs', () => {
     'POST /api/town/inn/guest/extend': formatRateLimit(rl.guestInnClaim, false),
     'POST /api/town/key/rotate': formatRateLimit(rl.keyRotate, false),
     'POST /api/town/guestbook': formatRateLimit(rl.guestbook, true),
+    'POST /api/town/fish/cast': formatRateLimit(rl.fishCast, false),
+    'POST /api/town/fish/guest/cast': formatRateLimit(rl.guestFishCast, false),
   };
 
   for (const ep of townJson.endpoints) {
@@ -472,8 +474,8 @@ test('endpoint method counts and the null rate_limit set', () => {
   for (const ep of townJson.endpoints) {
     counts[ep.method] = (counts[ep.method] || 0) + 1;
   }
-  assert.deepEqual(counts, { GET: 3, POST: 19, PUT: 1 });
-  assert.equal(townJson.endpoints.length, 23);
+  assert.deepEqual(counts, { GET: 4, POST: 23, PUT: 1 });
+  assert.equal(townJson.endpoints.length, 28);
 
   const nullRateLimits = townJson.endpoints
     .filter((ep) => ep.rate_limit === null)
@@ -481,6 +483,7 @@ test('endpoint method counts and the null rate_limit set', () => {
     .sort();
 
   assert.deepEqual(nullRateLimits, [
+    'GET /api/town/fish/log',
     'GET /api/town/guestbook',
     'GET /api/town/plot',
     'GET /api/town/state',
@@ -488,6 +491,8 @@ test('endpoint method counts and the null rate_limit set', () => {
     'POST /api/town/admin/delete-line',
     'POST /api/town/admin/guestbook',
     'POST /api/town/admin/invite',
+    'POST /api/town/fish/guest/reel',
+    'POST /api/town/fish/reel',
     'POST /api/town/ghostlight/leave',
     'POST /api/town/inn/guest/vacate',
     'POST /api/town/inn/vacate',
@@ -560,6 +565,8 @@ test('every RATE_LIMITS key is documented by at least one endpoint', () => {
     guestInnClaim: ['POST /api/town/inn/guest/claim', 'POST /api/town/inn/guest/extend'],
     keyRotate: ['POST /api/town/key/rotate'],
     guestbook: ['POST /api/town/guestbook'],
+    fishCast: ['POST /api/town/fish/cast'],
+    guestFishCast: ['POST /api/town/fish/guest/cast'],
   };
 
   assert.deepEqual(
