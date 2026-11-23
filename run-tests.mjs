@@ -110,6 +110,7 @@ function printHelp() {
     'Runs all Ghostlight Town test suites sequentially from the repo root:',
     `  - ${TEST_SUITES.length} explicit suites across repo root, scripts/, staging-polyfork/, town-3d/, town-api/, and town-npc/`,
     '  - Set GHOSTLIGHT_TEST_ROOT to override the repo root for suite resolution/cwd',
+    '  - Set GHOSTLIGHT_TEST_SUITES to a JSON array of suite paths to run a subset',
     '',
     'Skip convention:',
     '  - `node:test` `ℹ skipped N` and env-gated `{"status":"skip",...}` JSON lines',
@@ -229,6 +230,27 @@ function runSuite(rootDir, suiteRelPath) {
   };
 }
 
+function parseSuiteOverride(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(`GHOSTLIGHT_TEST_SUITES: invalid JSON: ${err.message}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(parsed)) {
+    console.error('GHOSTLIGHT_TEST_SUITES: must be a JSON array of suite paths');
+    process.exit(1);
+  }
+  for (let i = 0; i < parsed.length; i += 1) {
+    if (typeof parsed[i] !== 'string') {
+      console.error(`GHOSTLIGHT_TEST_SUITES: entry ${i} is not a string`);
+      process.exit(1);
+    }
+  }
+  return parsed;
+}
+
 function main() {
   if (process.argv.includes('--help')) {
     printHelp();
@@ -240,7 +262,7 @@ function main() {
     : __dirname;
 
   const suites = process.env.GHOSTLIGHT_TEST_SUITES
-    ? JSON.parse(process.env.GHOSTLIGHT_TEST_SUITES)
+    ? parseSuiteOverride(process.env.GHOSTLIGHT_TEST_SUITES)
     : TEST_SUITES;
 
   let totalPass = 0;
