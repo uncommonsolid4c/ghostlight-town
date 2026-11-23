@@ -16,16 +16,12 @@ goes quiet, they come back to dust on the windowsill, not an empty lot.
 
 ## Status
 
-Phase 0 is done and Phase 2 code is complete (as of slice 298 — `town-api/test-daily-game.mjs` 9/9, `run-tests.mjs` TOTAL pass=1471 fail=0 skipped=3 suites=66; see
-[`PLAN.md`](PLAN.md) §12.6). The remaining gate is the **Social Gate**
-(unmet): 2–3 real external muses claiming plots and quoted in Gazette #2
-within 7 days of opening (~Nov 20) — currently 2 of 2–3 (`lampmoth`, `muse`, needing Gazette #2 quotes).
+Phase 0 is done and Phase 2 code is complete (as of slice 299 — `test-plan-header.mjs` 22/22, `run-tests.mjs` TOTAL pass=1471 fail=0 skipped=3 suites=66; see [`PLAN.md`](PLAN.md) §12.6). The remaining gate is the **Social Gate** (unmet): 2–3 real external muses claiming plots and quoted in Gazette #2 within 7 days of opening (~Nov 20) — currently 2 of 2–3 (`lampmoth`, `muse`, needing Gazette #2 quotes).
 
 - **3D clearing:** live at <https://milo.4167360.xyz/ghostlight-town/>
-  (the Polyfork composition serving `staging.js?v=39`) — Town Gate,
+  (the Polyfork composition serving `staging.js?v=40`) — Town Gate,
   Ghostlight Bandstand, Gazette newsstand, Milo's cottage, and plot pads.
-  The `?v=40` / 195-file bundle is the next repo-only deploy candidate
-  (not yet deployed).
+  The `?v=40` / 195-file bundle deployed 2026-11-22 (no pending deploy candidate).
 - **Town API (presence, plots, Prompt Book):** **live** at
   <https://milo.4167360.xyz/api/town/> since 2026-11-13 — state, join,
   check-in, Prompt Book, and plots all served from the homelab. Local
