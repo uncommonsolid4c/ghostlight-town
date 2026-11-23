@@ -143,11 +143,11 @@ test('PLAN.md header town-3d/ fallback town.js?v= matches town-3d/index.html', (
   );
 });
 
-test('PLAN.md header staging-polyfork deploy candidate ?v= and file count match index.html and test-stage-deploy.mjs', () => {
+test('PLAN.md header deployed bundle ?v= and file count match staging-polyfork/index.html and test-stage-deploy.mjs', () => {
   const { statusLine } = readPlanHeader();
-  const candMatch = statusLine.match(/`\?v=(\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
-  assert.ok(candMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
-  const [, headerV, headerFiles] = candMatch;
+  const depMatch = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed 2026-11-22, no pending deploy candidate/);
+  assert.ok(depMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deployed 2026-11-22, no pending deploy candidate');
+  const [, headerV, headerFiles] = depMatch;
 
   const stagingHtml = fs.readFileSync(STAGING_HTML_PATH, 'utf8');
   const htmlVMatch = stagingHtml.match(/staging\.js\?v=(\d+)/);
@@ -160,6 +160,16 @@ test('PLAN.md header staging-polyfork deploy candidate ?v= and file count match 
     new RegExp(`assert\\.equal\\(summary\\.file_count,\\s*${headerFiles}\\)`),
     `scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === ${headerFiles}`
   );
+
+  assert.equal(
+    statusLine.includes('next repo-only deploy candidate'),
+    false,
+    'PLAN.md **Status:** must not contain next repo-only deploy candidate'
+  );
+
+  const liveMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
+  assert.ok(liveMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
+  assert.equal(liveMatch[1], headerV, `PLAN.md **Status:** live ?v=${liveMatch[1]} must match deployed ?v=${headerV}`);
 });
 
 test('PLAN.md header and README.md ## Status agree on Phase 2 code complete', () => {
@@ -321,17 +331,23 @@ test('PLAN.md header live URL agrees with README Status and check-live.mjs DEFAU
   );
 });
 
-test('PLAN.md header deploy-candidate pin agrees with README Status', () => {
+test('PLAN.md header and README.md ## Status agree there is no pending deploy candidate', () => {
   const { statusLine } = readPlanHeader();
-  const headerCandMatch = statusLine.match(/`(\?v=\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
-  assert.ok(headerCandMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
-
   const readmeStatus = readReadmeStatusSection();
-  const readmeCandMatch = readmeStatus.match(/`(\?v=\d+)`\s*\/\s*(\d+)-file\s+bundle\s+is\s+the\s+next\s+repo-only\s+deploy\s+candidate/);
-  assert.ok(readmeCandMatch, 'README.md ## Status must state `?v=<N>` / <count>-file bundle deploy candidate');
 
-  assert.equal(headerCandMatch[1], readmeCandMatch[1], 'Deploy-candidate ?v= must match between PLAN.md and README.md');
-  assert.equal(headerCandMatch[2], readmeCandMatch[2], 'Deploy-candidate file count must match between PLAN.md and README.md');
+  assert.ok(statusLine.includes('no pending deploy candidate'), 'PLAN.md **Status:** must include no pending deploy candidate');
+  assert.ok(readmeStatus.includes('no pending deploy candidate'), 'README.md ## Status must include no pending deploy candidate');
+  assert.equal(
+    statusLine.includes('next repo-only deploy candidate'),
+    false,
+    'PLAN.md **Status:** must not contain next repo-only deploy candidate'
+  );
+  assert.equal(
+    readmeStatus.includes('next repo-only deploy candidate'),
+    false,
+    'README.md ## Status must not contain next repo-only deploy candidate'
+  );
+  assert.ok(readmeStatus.includes('deployed 2026-11-22'), 'README.md ## Status must include deployed 2026-11-22');
 });
 
 test('town.json live fields agree with PLAN.md header', () => {
@@ -373,11 +389,12 @@ test('PLAN.md §12.6 live-API deploy record agrees with the header', () => {
     'PLAN.md §12.6 must record Phase 2 code is complete as of slice 93'
   );
   assert.ok(sec126.includes('`?v=40` / 195 files'), 'PLAN.md §12.6 must record `?v=40` / 195 files');
+  assert.ok(sec126.includes('deployed 2026-11-22'), 'PLAN.md §12.6 must record deployed 2026-11-22');
+  assert.ok(sec126.includes('serves `staging.js?v=40`'), 'PLAN.md §12.6 must record serves `staging.js?v=40`');
 
-  const candMatch = statusLine.match(/`(\?v=\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
-  assert.ok(candMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
-  assert.equal(candMatch[1], '?v=40', 'PLAN.md **Status:** deploy candidate ?v= must match §12.6 (?v=40)');
-  assert.equal(candMatch[2], '195', 'PLAN.md **Status:** deploy candidate file count must match §12.6 (195)');
+  const liveMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
+  assert.ok(liveMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
+  assert.equal(liveMatch[1], '40', 'PLAN.md **Status:** live staging.js?v= must be 40');
 });
 
 test('README.md per-file pin agrees with the latest §8 entry', () => {
@@ -427,19 +444,27 @@ test('PLAN.md §8 slice-93 entry closes the last Phase 2 line', () => {
   );
 });
 
-test('Deploy candidate is strictly newer than live and not yet deployed', () => {
+test('No pending deploy candidate: live equals staged and README says deployed, not pending', () => {
   const { statusLine } = readPlanHeader();
   const liveMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
   assert.ok(liveMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
 
-  const candMatch = statusLine.match(/`\?v=(\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
-  assert.ok(candMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
+  const stagingHtml = fs.readFileSync(STAGING_HTML_PATH, 'utf8');
+  const htmlVMatch = stagingHtml.match(/staging\.js\?v=(\d+)/);
+  assert.ok(htmlVMatch, 'staging-polyfork/index.html must reference staging.js?v=<N>');
+  assert.equal(liveMatch[1], htmlVMatch[1], `Live ?v=${liveMatch[1]} must equal staged ?v=${htmlVMatch[1]}`);
 
-  assert.ok(
-    Number(candMatch[1]) > Number(liveMatch[1]),
-    `Deploy candidate ?v=${candMatch[1]} must be strictly newer than live ?v=${liveMatch[1]}`
+  assert.equal(
+    statusLine.includes('next repo-only deploy candidate'),
+    false,
+    'PLAN.md **Status:** must not contain next repo-only deploy candidate'
   );
 
   const readmeStatus = readReadmeStatusSection();
-  assert.ok(readmeStatus.includes('(not yet deployed)'), 'README.md ## Status must include (not yet deployed)');
+  assert.equal(
+    readmeStatus.includes('(not yet deployed)'),
+    false,
+    'README.md ## Status must not contain (not yet deployed)'
+  );
+  assert.ok(readmeStatus.includes('deployed 2026-11-22'), 'README.md ## Status must include deployed 2026-11-22');
 });
