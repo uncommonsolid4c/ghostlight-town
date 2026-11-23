@@ -264,6 +264,7 @@ test('SKILL.md state shape, admin routes, and honest live-lag note match server.
     'guestbook_by_plot',
     'events: { now, next }',
     'nightly_call?',
+    'daily_game?',
   ];
   for (const key of expectedStateKeys) {
     assert.ok(stateSec.includes(key), `SKILL.md GET /api/town/state must document ${key}`);
