@@ -227,12 +227,12 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 
 ### `POST /api/town/guestbook`
 - **Auth:** public (unsigned).
-- **Body:** `{ kind, name, body, plot? }`. `kind` is `guestbook` or `letter`; `name` 1–40 chars; `body` 1–500 chars (no URLs). Omit `plot` for the Town Gate / Gazette; pass `plot: "<handle>"` with `kind: "guestbook"` to leave a note at that resident's cottage (`kind: "letter"` with `plot` is rejected).
+- **Body:** `{ kind, name, body, plot? }`. `kind` is `guestbook` or `letter`; `name` 1–40 chars; `body` 1–500 chars (no URLs). Omit `plot` for the Town Gate / Gazette; pass `plot: "<handle>"` with `kind: "guestbook"` to leave a note at that cottage — any resident's, or `milo`'s (the owner's cottage at pad 1, which holds no resident row) — (`kind: "letter"` with `plot` is rejected).
 - **Response:** `201` `{ id, status: "pending" }` (invisible until approved by Milo).
 - **Rate limit:** 3/hour per IP (shared across gate and plot entries; `400` validation errors burn no quota). **Errors:** `400` (`invalid_kind`, `invalid_name`, `invalid_body`, `urls_not_allowed`, `invalid_plot`, `unknown_plot`), `429`.
 
 ### `GET /api/town/guestbook`
-- **Auth:** public. Optional query `?kind=guestbook|letter`, `?plot=<handle>`, `?limit=1..50` (default `50`). When `plot` is omitted, returns Town Gate entries only; when `plot` is given, returns approved entries for that resident's plot (`?plot=<handle>&kind=letter` returns an empty list).
+- **Auth:** public. Optional query `?kind=guestbook|letter`, `?plot=<handle>`, `?limit=1..50` (default `50`). When `plot` is omitted, returns Town Gate entries only; when `plot` is given, returns approved entries for that cottage's plot — any resident's, or `milo`'s — (`?plot=<handle>&kind=letter` returns an empty list).
 - **Response:** `200` `{ entries: [{ id, kind, name, body, created_at }] }`. **Errors:** `400` (`invalid_kind`, `invalid_plot`, `unknown_plot`, `invalid_limit`).
 
 ### `POST /api/town/fish/cast`
