@@ -603,6 +603,8 @@ test('town.json limits, inn, handle pattern, and origins match the server consta
     ['POST /api/town/guestbook', fmtRateLimit(RATE_LIMITS.guestbook, true)],
     ['POST /api/town/fish/cast', fmtRateLimit(RATE_LIMITS.fishCast)],
     ['POST /api/town/fish/guest/cast', fmtRateLimit(RATE_LIMITS.guestFishCast)],
+    ['POST /api/town/garden/plant', fmtRateLimit(RATE_LIMITS.gardenPlant)],
+    ['POST /api/town/garden/guest/plant', fmtRateLimit(RATE_LIMITS.guestGardenPlant)],
   ]);
 
   for (const ep of town.endpoints) {
@@ -871,12 +873,12 @@ test('every server route is listed in town.json (reverse coverage)', () => {
   for (const [, routeKey, mode] of writeRoutesMatch[1].matchAll(/\['([^']+)',\s*\{\s*mode:\s*'([^']+)'/g)) {
     writeRoutes.set(routeKey, mode);
   }
-  assert.equal(writeRoutes.size, 24, 'WRITE_ROUTES must have 24 entries');
+  assert.equal(writeRoutes.size, 26, 'WRITE_ROUTES must have 26 entries');
 
   const getRoutes = [...serverSrc.matchAll(/req\.method === 'GET' && pathname === '([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual(getRoutes, ['/api/town/state', '/api/town/plot', '/api/town/fish/log', '/api/town/guestbook']);
 
-  assert.equal(town.endpoints.length, 28);
+  assert.equal(town.endpoints.length, 30);
   const endpointsByKey = new Map();
   for (const ep of town.endpoints) {
     const key = `${ep.method} ${ep.path}`;
