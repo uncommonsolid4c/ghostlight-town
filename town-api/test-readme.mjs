@@ -85,9 +85,14 @@ test('town-api/README.md documents all env vars and ports 8124 / 8125', () => {
   assert.match(readme, /\b8125\b/);
 });
 
-test('town-api/README.md states honest limits (live drift, no pinned counters) and key-path rail', () => {
+test('town-api/README.md states honest limits (live state keys, no pinned counters) and key-path rail', () => {
   const readme = readReadme();
-  assert.match(readme, /predates.*`events`.*`guestbook_by_plot`/i);
+  assert.match(readme, /serves the `events` and `guestbook_by_plot` keys/);
+  assert.match(readme, /Live state keys/);
+  const honestStart = readme.indexOf('## Honest limits');
+  const honestEnd = readme.indexOf('\n## ', honestStart + 1);
+  const honestSection = honestEnd === -1 ? readme.slice(honestStart) : readme.slice(honestStart, honestEnd);
+  assert.doesNotMatch(honestSection, /predates/i);
   assert.match(readme, /foreground turn/i);
   assert.match(readme, /never pinned|not pinned/i);
   assert.match(readme, /filesystem paths only|file path only/i);
@@ -735,4 +740,119 @@ test('town-api/README.md endpoint-map group membership is exact', () => {
   const townRoutes = townJson.endpoints.map((ep) => `${ep.method} ${ep.path}`).sort();
   assert.equal(townRoutes.length, 30);
   assert.deepEqual([...union].sort(), townRoutes, 'Union of all 8 groups must cover all 30 town.json routes');
+});
+
+test('town-api/README.md nightly-topics and daily-games counts and formats match the JSON files', () => {
+  const readme = readReadme();
+  const topics = JSON.parse(fs.readFileSync(path.join(__dirname, 'nightly-topics.json'), 'utf8'));
+  const games = JSON.parse(fs.readFileSync(path.join(__dirname, 'daily-games.json'), 'utf8'));
+
+  assert.ok(Array.isArray(topics));
+  assert.equal(topics.length, 30);
+
+  assert.ok(Array.isArray(games));
+  assert.equal(games.length, 30);
+  const formats = [...new Set(games.map((g) => g.format))].sort();
+  assert.deepEqual(formats, ['riddle', 'story', 'word']);
+
+  assert.match(readme, /30 curated Nightly Call/);
+  assert.match(readme, /30 daily Bandstand game prompts \(riddle, word, story;/);
+});
+
+test('town-api/README.md fish and garden rate limits match server.mjs RATE_LIMITS', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  const rateVal = (key) => {
+    const m = serverSrc.match(new RegExp(`${key}:\\s*\\{\\s*max:\\s*(\\d+),\\s*windowSec:\\s*([^}]+)\\}`));
+    assert.ok(m, `Missing RATE_LIMITS.${key} in server.mjs`);
+    return {
+      max: Number(m[1]),
+      windowSec: Function(`"use strict"; return (${m[2]});`)(),
+    };
+  };
+
+  const fishCast = rateVal('fishCast');
+  const gardenPlant = rateVal('gardenPlant');
+  const guestFishCast = rateVal('guestFishCast');
+  const guestGardenPlant = rateVal('guestGardenPlant');
+
+  assert.deepEqual(fishCast, { max: 10, windowSec: 3600 });
+  assert.deepEqual(gardenPlant, { max: 10, windowSec: 3600 });
+  assert.deepEqual(guestFishCast, { max: 2, windowSec: 3600 });
+  assert.deepEqual(guestGardenPlant, { max: 2, windowSec: 3600 });
+
+  assert.ok(readme.includes('`fish/cast` `10/h`'));
+  assert.ok(readme.includes('`fish/guest/cast` `2/h`'));
+  assert.ok(readme.includes('`POST /api/town/garden/plant` (10/h, 6-slot communal bed)'));
+  assert.ok(readme.includes('`POST /api/town/garden/guest/plant` (2/h)'));
+});
+
+test('town-api/README.md fish settle time matches SETTLE_SEC', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  assert.ok(serverSrc.includes('const SETTLE_SEC = 300;'));
+  assert.ok(readme.includes('`POST /api/town/fish/cast` (10/h, 300s settle)'));
+});
+
+test('town-api/README.md garden slot count matches GARDEN_SLOTS', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  assert.ok(serverSrc.includes('const GARDEN_SLOTS = 6;'));
+  assert.ok(readme.includes('`POST /api/town/garden/plant` (10/h, 6-slot communal bed)'));
+});
+
+test('town-api/README.md fish log cap matches server.mjs LIMIT 50', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  assert.match(serverSrc, /FROM fish_catches[\s\S]*?LIMIT 50/);
+  assert.ok(readme.includes('`GET /api/town/fish/log?handle=<handle>` (personal collection, cap 50, not a leaderboard)'));
+});
+
+test('town-api/README.md presence zones match server.mjs zone guard', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  assert.ok(serverSrc.includes('const ZONE_PLOT_RE = /^plot:([a-z0-9][a-z0-9_-]{1,31})$/;'));
+  assert.ok(serverSrc.includes("zone !== 'gate' && zone !== 'bandstand'"));
+  assert.ok(readme.includes('`POST /api/town/presence` (`gate`, `bandstand`, `plot:<handle>`)'));
+});
+
+test('town-api/README.md WAL mode matches server.mjs pragma', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  assert.ok(serverSrc.includes("db.exec('PRAGMA journal_mode = WAL;');"));
+  assert.ok(readme.includes('in WAL mode'));
+});
+
+test('town-api/README.md keygen 0600 and no-overwrite match ghostlight-client.mjs', () => {
+  const readme = readReadme();
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+
+  assert.ok(clientSrc.includes('mode: 0o600'));
+  assert.ok(clientSrc.includes('Refusing to overwrite existing key file'));
+  assert.ok(readme.includes('`keygen` writes mode `0600` and refuses to overwrite'));
+});
+
+test('town-api/README.md join ignores role matches handleJoin vs handleAdminApprove', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  const joinStart = serverSrc.indexOf('function handleJoin(');
+  const checkinStart = serverSrc.indexOf('function handleCheckin(');
+  assert.ok(joinStart !== -1 && checkinStart > joinStart, 'handleJoin and handleCheckin boundaries must exist');
+  const joinBody = serverSrc.slice(joinStart, checkinStart);
+  assert.equal(/\brole\b/.test(joinBody), false, 'handleJoin must not read or reference role');
+
+  const approveStart = serverSrc.indexOf('function handleAdminApprove(');
+  assert.ok(approveStart !== -1, 'handleAdminApprove must exist');
+  const approveSlice = serverSrc.slice(approveStart, approveStart + 400);
+  assert.ok(approveSlice.includes('const role = body.role;'));
+
+  assert.ok(readme.includes('`POST /api/town/join` (self-signed; ignores `role` in body)'));
+  assert.ok(readme.includes('`join` ignores any `role` in the body'));
 });
