@@ -39,6 +39,7 @@ export const SCHEMA_TABLES = [
   'guestbook',
   'fish_casts',
   'fish_catches',
+  'garden_plants',
 ];
 
 function printUsage() {
