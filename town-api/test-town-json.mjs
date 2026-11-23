@@ -536,6 +536,7 @@ test('state summary pins the full state shape', () => {
     'guestbook_by_plot',
     'events',
     'nightly_call',
+    'daily_game',
     '?since',
     '304',
   ];
