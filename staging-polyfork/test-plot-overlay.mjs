@@ -795,3 +795,175 @@ test('openPlotOverlay overwrites a pre-set sandbox value, and closePlotOverlay c
   assert.equal(iframeEl.src, 'about:blank');
   assert.equal(iframeEl.getAttribute('srcdoc'), null);
 });
+
+test('resolvePlotOverlayContent returns static paths for undefined, object, and boolean handles without fetching, and treats a non-function fetchFn as absent', async () => {
+  let calls = 0;
+  const spyFetch = async () => {
+    calls++;
+    return { status: 200, async json() { return { html: '<p>x</p>' }; } };
+  };
+
+  assert.deepEqual(
+    await resolvePlotOverlayContent(undefined, { fetchFn: spyFetch }),
+    { kind: 'static', url: 'plots//index.html' },
+  );
+  assert.deepEqual(
+    await resolvePlotOverlayContent({}, { fetchFn: spyFetch }),
+    { kind: 'static', url: 'plots/%5Bobject%20Object%5D/index.html' },
+  );
+  assert.deepEqual(
+    await resolvePlotOverlayContent(true, { fetchFn: spyFetch }),
+    { kind: 'static', url: 'plots/true/index.html' },
+  );
+  assert.deepEqual(
+    await resolvePlotOverlayContent('a b', { fetchFn: spyFetch }),
+    { kind: 'static', url: 'plots/a%20b/index.html' },
+  );
+  assert.deepEqual(
+    await resolvePlotOverlayContent('wick', { fetchFn: 'not-a-function' }),
+    { kind: 'static', url: 'plots/wick/index.html' },
+  );
+  assert.equal(calls, 0);
+});
+
+test('resolveGazetteOverlayContent falls back to issue-001 when the latest-matched entry has an invalid file, and tolerates non-object data', async () => {
+  const shadowedRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() {
+        return {
+          latest: 2,
+          issues: [
+            { n: 1, file: 'issue-001.html' },
+            { n: 2, file: 'sub/bad.html' },
+          ],
+        };
+      },
+    }),
+  });
+  assert.equal(shadowedRes.issueFile, 'issue-001.html');
+  assert.equal(shadowedRes.issueNum, 1);
+
+  const nonObjectRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return 'not-an-object'; },
+    }),
+  });
+  assert.equal(nonObjectRes.issueFile, 'issue-001.html');
+  assert.equal(nonObjectRes.issueNum, 1);
+});
+
+test('resolveGazetteOverlayContent keeps a string issue n verbatim and tolerates an undefined response', async () => {
+  const stringNRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() {
+        return {
+          latest: '2',
+          issues: [{ n: '2', file: 'issue-002.html' }],
+        };
+      },
+    }),
+  });
+  assert.deepEqual(stringNRes, {
+    issueNum: '2',
+    issueFile: 'issue-002.html',
+    url: 'gazette/issue-002.html',
+    title: 'The Ghostlight Gazette — Issue #2',
+  });
+
+  const undefRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => undefined,
+  });
+  assert.equal(undefRes.issueFile, 'issue-001.html');
+  assert.equal(undefRes.issueNum, 1);
+});
+
+test('openPlotOverlay calls onBeforeOpen before any DOM change and still opens the static fallback when fetch throws', async () => {
+  const els = makeFakeOverlayElements();
+  let observedTitle = null;
+  let observedHidden = null;
+
+  await openPlotOverlay('wick', {
+    ...els,
+    fetchFn: async () => ({ status: 200, async json() { return { html: '<p>ok</p>' }; } }),
+    onBeforeOpen: () => {
+      observedTitle = els.titleEl.textContent;
+      observedHidden = els.overlayEl.hidden;
+    },
+  });
+  assert.equal(observedTitle, '');
+  assert.equal(observedHidden, true);
+  assert.equal(els.titleEl.textContent, '@wick — Desk Note');
+
+  const throwEls = makeFakeOverlayElements();
+  throwEls.iframeEl.srcdoc = '<p>stale</p>';
+  const throwRes = await openPlotOverlay('wick', {
+    ...throwEls,
+    fetchFn: async () => { throw new Error('network boom'); },
+  });
+  assert.deepEqual(throwRes, { kind: 'static', url: 'plots/wick/index.html' });
+  assert.equal(throwEls.overlayEl.hidden, false);
+  assert.equal(throwEls.iframeEl.src, 'plots/wick/index.html');
+  assert.equal(throwEls.iframeEl.getAttribute('srcdoc'), null);
+});
+
+test('openPlotOverlay and openGazetteOverlay return null without fetching when any element is missing', async () => {
+  for (const missingKey of ['overlayEl', 'titleEl', 'iframeEl']) {
+    let plotCalls = 0;
+    const plotEls = makeFakeOverlayElements();
+    plotEls[missingKey] = null;
+    const plotRes = await openPlotOverlay('wick', {
+      ...plotEls,
+      fetchFn: async () => {
+        plotCalls++;
+        return { status: 200, async json() { return { html: '<p>x</p>' }; } };
+      },
+    });
+    assert.equal(plotRes, null);
+    assert.equal(plotCalls, 0);
+
+    let gazetteCalls = 0;
+    const gazetteEls = makeFakeOverlayElements();
+    gazetteEls[missingKey] = null;
+    const gazetteRes = await openGazetteOverlay({
+      ...gazetteEls,
+      fetchFn: async () => {
+        gazetteCalls++;
+        return {
+          ok: true,
+          async json() { return { latest: 2, issues: [{ n: 2, file: 'issue-002.html' }] }; },
+        };
+      },
+    });
+    assert.equal(gazetteRes, null);
+    assert.equal(gazetteCalls, 0);
+  }
+});
+
+test('closePlotOverlay leaves the title and sandbox untouched, and openGazetteOverlay overwrites a pre-set sandbox value', async () => {
+  const plotEls = makeFakeOverlayElements();
+  await openPlotOverlay('wick', {
+    ...plotEls,
+    fetchFn: async () => ({ status: 200, async json() { return { html: '<h1>W</h1>' }; } }),
+  });
+  closePlotOverlay({ overlayEl: plotEls.overlayEl, iframeEl: plotEls.iframeEl });
+  assert.equal(plotEls.overlayEl.hidden, true);
+  assert.equal(plotEls.iframeEl.src, 'about:blank');
+  assert.equal(plotEls.iframeEl.getAttribute('srcdoc'), null);
+  assert.equal(plotEls.titleEl.textContent, '@wick — Desk Note');
+  assert.equal(plotEls.iframeEl.getAttribute('sandbox'), '');
+
+  const gazetteEls = makeFakeOverlayElements();
+  gazetteEls.iframeEl.setAttribute('sandbox', 'allow-scripts');
+  await openGazetteOverlay({
+    ...gazetteEls,
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { latest: 2, issues: [{ n: 2, file: 'issue-002.html' }] }; },
+    }),
+  });
+  assert.equal(gazetteEls.iframeEl.getAttribute('sandbox'), '');
+  assert.equal(gazetteEls.titleEl.textContent, 'The Ghostlight Gazette — Issue #2');
+});
