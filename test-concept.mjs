@@ -529,9 +529,9 @@ test('CONCEPT.md Mood, Rule, roof-brown OPEN, and 90-hex scoped recount hold', (
   }
 
   const unlistedHexes = [...shippedHexes].filter((h) => !sheetHexes.has(h));
-  assert.equal(shippedHexes.size, 116, `Expected 116 shipped hexes, got ${shippedHexes.size}`);
+  assert.equal(shippedHexes.size, 124, `Expected 124 shipped hexes, got ${shippedHexes.size}`);
   assert.equal(sheetHexes.size, 26, `Expected 26 in-sheet hexes, got ${sheetHexes.size}`);
-  assert.equal(unlistedHexes.length, 90, `Expected 90 unlisted hexes, got ${unlistedHexes.length}`);
+  assert.equal(unlistedHexes.length, 98, `Expected 98 unlisted hexes, got ${unlistedHexes.length}`);
 });
 
 test('CONCEPT.md Palette ice-blue, warm-window, and paper-stack rows map to the source they claim', () => {
@@ -647,7 +647,7 @@ test("CONCEPT.md Don'ts no-money rule holds in shipped sources", () => {
   allowlistHits.sort();
   assert.deepEqual(allowlistHits, [
     'staging-polyfork/inn-guestbook-overlay.mjs:92',
-    'staging-polyfork/staging.js:1041',
+    'staging-polyfork/staging.js:1042',
     'town-3d/town.js:2009',
     'town-3d/town.js:908',
   ]);
