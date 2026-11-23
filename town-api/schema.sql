@@ -84,3 +84,20 @@ CREATE TABLE IF NOT EXISTS guestbook (
 );
 
 CREATE INDEX IF NOT EXISTS idx_guestbook_created_at ON guestbook (created_at);
+
+CREATE TABLE IF NOT EXISTS fish_casts (
+    handle          TEXT PRIMARY KEY,
+    cast_at         INTEGER NOT NULL,
+    reel_at         INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fish_catches (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    handle          TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    flavor          TEXT NOT NULL,
+    created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fish_catches_handle ON fish_catches (handle, created_at DESC);
