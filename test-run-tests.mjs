@@ -601,3 +601,162 @@ test('a partial summary missing the skipped line errors, it is not a pass', asyn
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('invalid GHOSTLIGHT_TEST_SUITES JSON exits 1 with a clean error, no stack trace, no TOTAL', async () => {
+  const res = await runRunner([], {
+    GHOSTLIGHT_TEST_SUITES: '{not json',
+  });
+
+  assert.equal(res.code, 1, `Expected exit 1 for invalid JSON, got ${res.code}`);
+  assert.match(res.stderr, /invalid JSON/i);
+  assert.doesNotMatch(res.stderr, /\n    at /);
+  assert.equal(res.stdout, '');
+});
+
+test('string GHOSTLIGHT_TEST_SUITES JSON exits 1 with a clean array error, not per-character suites', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-strjson-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'a.mjs'),
+      [
+        "console.log('ℹ tests 1');",
+        "console.log('ℹ pass 1');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify('a.mjs'),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1 for string JSON, got ${res.code}`);
+    assert.match(res.stderr, /must be a JSON array/i);
+    assert.doesNotMatch(res.stderr, /\n    at /);
+    assert.equal(res.stdout, '');
+    assert.doesNotMatch(res.stdout, /a MISSING/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('number GHOSTLIGHT_TEST_SUITES JSON exits 1 with a clean array error', async () => {
+  const res = await runRunner([], {
+    GHOSTLIGHT_TEST_SUITES: '123',
+  });
+
+  assert.equal(res.code, 1, `Expected exit 1 for number JSON, got ${res.code}`);
+  assert.match(res.stderr, /must be a JSON array/i);
+  assert.doesNotMatch(res.stderr, /\n    at /);
+  assert.equal(res.stdout, '');
+});
+
+test('object GHOSTLIGHT_TEST_SUITES JSON exits 1 with a clean array error', async () => {
+  const res = await runRunner([], {
+    GHOSTLIGHT_TEST_SUITES: '{"a":1}',
+  });
+
+  assert.equal(res.code, 1, `Expected exit 1 for object JSON, got ${res.code}`);
+  assert.match(res.stderr, /must be a JSON array/i);
+  assert.doesNotMatch(res.stderr, /\n    at /);
+  assert.equal(res.stdout, '');
+});
+
+test('non-string GHOSTLIGHT_TEST_SUITES entry exits 1 naming the entry index, before any suite runs', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-nonstring-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'a.mjs'),
+      [
+        "console.log('ℹ tests 1');",
+        "console.log('ℹ pass 1');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['a.mjs', 42]),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1 for non-string entry, got ${res.code}`);
+    assert.match(res.stderr, /entry 1 is not a string/);
+    assert.doesNotMatch(res.stderr, /\n    at /);
+    assert.equal(res.stdout, '');
+    assert.doesNotMatch(res.stdout, /a\.mjs pass=/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('nonexistent GHOSTLIGHT_TEST_ROOT reports every suite MISSING with a TOTAL', async () => {
+  const res = await runRunner([], {
+    GHOSTLIGHT_TEST_ROOT: '/tmp/does-not-exist-ghostlight-320',
+    GHOSTLIGHT_TEST_SUITES: JSON.stringify(['x.mjs', 'y.mjs']),
+  });
+
+  assert.equal(res.code, 1, `Expected exit 1 for nonexistent root, got ${res.code}`);
+  assert.match(res.stdout, /^x\.mjs MISSING$/m);
+  assert.match(res.stdout, /^y\.mjs MISSING$/m);
+  assert.match(res.stdout, /^TOTAL pass=0 fail=2 skipped=0 suites=2$/m);
+});
+
+test('a suite printing both a summary and a skip JSON counts the summary, not the skip', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-both-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'both.mjs'),
+      [
+        "console.log('ℹ tests 2');",
+        "console.log('ℹ pass 2');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+        'console.log(JSON.stringify({ status: "skip", reason: "also here" }));',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['both.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0 when summary has fail=0, got ${res.code}`);
+    assert.match(res.stdout, /^both\.mjs pass=2 fail=0 skipped=0$/m);
+    assert.match(res.stdout, /^TOTAL pass=2 fail=0 skipped=0 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Note: the Node stack tail for a directory suite is a known wart left alone in this slice.
+test('a directory listed as a suite errors cleanly with a TOTAL', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-dir-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, 'adir.mjs'));
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['adir.mjs']),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1 for directory suite, got ${res.code}`);
+    assert.match(res.stdout, /^adir\.mjs ERROR \(exit 1, no parseable summary\)$/m);
+    assert.match(res.stdout, /^TOTAL pass=0 fail=1 skipped=0 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--help documents the GHOSTLIGHT_TEST_SUITES override', async () => {
+  const res = await runRunner(['--help']);
+
+  assert.equal(res.code, 0, `Expected exit 0 for --help, got ${res.code}`);
+  assert.match(res.stdout, /GHOSTLIGHT_TEST_SUITES/);
+  assert.match(res.stdout, /Usage:/);
+  assert.match(res.stdout, /skip/i);
+});
