@@ -530,3 +530,184 @@ test('town-3d/README.md Gazette feed and build scripts exist; HTML page titles m
     assert.match(planMd, new RegExp(`^## ${n}\\.`, 'm'), `PLAN.md must contain ## ${n}. heading`);
   }
 });
+
+test('town-3d/README.md pine.glb size is ~2.2 MB and deliberately uncredited', () => {
+  const readme = readReadme();
+  const pineSize = fs.statSync(path.join(__dirname, 'models', 'pine.glb')).size;
+  assert.ok(
+    pineSize >= 2_000_000 && pineSize <= 2_400_000,
+    `town-3d/models/pine.glb size (${pineSize}) must lie in [2,000,000, 2,400,000]`
+  );
+  assert.match(readme, /~2\.2 MB/, 'town-3d/README.md must state ~2.2 MB for pine.glb');
+  const credits = fs.readFileSync(path.join(__dirname, 'CREDITS.md'), 'utf8');
+  assert.doesNotMatch(credits, /pine/i, 'town-3d/CREDITS.md must not contain pine');
+});
+
+test('town-3d/README.md Gazette issue titles match gazette/latest.json', () => {
+  const readme = readReadme();
+  const latestJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'gazette', 'latest.json'), 'utf8')
+  );
+  assert.equal(latestJson.latest, 3, 'gazette/latest.json latest must be 3');
+  assert.equal(latestJson.issues.length, 3, 'gazette/latest.json must list 3 issues');
+  for (const issue of latestJson.issues) {
+    const issueHtml = fs.readFileSync(path.join(__dirname, 'gazette', issue.file), 'utf8');
+    assert.ok(
+      issueHtml.includes(`<title>The Ghostlight Gazette — Issue #${issue.n}</title>`),
+      `${issue.file} must contain <title>The Ghostlight Gazette — Issue #${issue.n}</title>`
+    );
+    assert.ok(
+      issueHtml.includes('Ghostlight Gazette'),
+      `${issue.file} must contain masthead Ghostlight Gazette`
+    );
+    assert.ok(
+      readme.includes(`\`${issue.file}\``),
+      `town-3d/README.md must name \`${issue.file}\``
+    );
+  }
+});
+
+test('town-3d/README.md 2026-11-14 adoption and live staging root match PLAN.md and staging-polyfork/index.html', () => {
+  const readme = readReadme();
+  assert.match(readme, /2026-11-14 adoption/, 'town-3d/README.md must mention 2026-11-14 adoption');
+  const planMd = fs.readFileSync(path.join(REPO_ROOT, 'PLAN.md'), 'utf8');
+  assert.match(planMd, /Adoption \(2026-11-14/, 'PLAN.md must record Adoption (2026-11-14');
+  const stagingIndex = fs.readFileSync(
+    path.join(REPO_ROOT, 'staging-polyfork', 'index.html'),
+    'utf8'
+  );
+  const match = stagingIndex.match(/\.\/staging\.js\?v=(\d+)/);
+  assert.ok(match, 'staging-polyfork/index.html must load ./staging.js?v=<n>');
+  const statusLine = planMd.match(/^\*\*Status:\*\*.*$/m)?.[0] ?? '';
+  assert.ok(
+    statusLine.includes(`staging.js?v=${match[1]}`),
+    `PLAN.md header must pin staging.js?v=${match[1]}`
+  );
+});
+
+test('town-3d/README.md deterministic wandering pins SEED_WANDER_CONFIG and no Math.random', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes('Deterministic wandering'),
+    'town-3d/README.md must mention Deterministic wandering'
+  );
+  for (const name of ['Wick', 'Maren', 'Tomas']) {
+    assert.ok(readmeNorm.includes(name), `town-3d/README.md must name ${name}`);
+  }
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  const cfgMatch = townJs.match(/const SEED_WANDER_CONFIG = \[([\s\S]*?)\];/);
+  assert.ok(cfgMatch, 'town-3d/town.js must define SEED_WANDER_CONFIG');
+  const handles = [...cfgMatch[1].matchAll(/handle:\s*'([^']+)'/g)].map((m) => m[1]);
+  const slots = [...cfgMatch[1].matchAll(/bandstandSlot:\s*(\d+)/g)].map((m) => Number(m[1]));
+  assert.deepEqual(handles, ['wick', 'maren', 'tomas'], 'SEED_WANDER_CONFIG handles must match');
+  assert.deepEqual(slots, [1, 2, 3], 'SEED_WANDER_CONFIG bandstandSlots must match');
+
+  const mathRandom = `Math.${'random'}`;
+  for (const file of ['town.js', 'concept-bandstand.js', 'concept-cottage.js', 'concept-ghost.js']) {
+    const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    assert.equal(src.includes(mathRandom), false, `town-3d/${file} must not use ${mathRandom}`);
+  }
+});
+
+test('town-3d/README.md inn common windows any-occupancy rule matches town.js', () => {
+  const readme = readReadme();
+  const readmeNorm = readme.replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes('any-occupancy rule'),
+    'town-3d/README.md must mention any-occupancy rule'
+  );
+  assert.ok(
+    readme.includes('commonWindowMaterial'),
+    'town-3d/README.md must name commonWindowMaterial'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  for (const line of [
+    'let anyClaimed = false;',
+    'if (isClaimed) anyClaimed = true;',
+    'applyInnWindowPalette(commonMat, anyClaimed);',
+  ]) {
+    assert.ok(townJs.includes(line), `town-3d/town.js must contain ${line}`);
+  }
+  const roomsMatch = townJs.match(/export const INN_ROOM_WINDOWS = \{([\s\S]*?)\};/);
+  assert.ok(roomsMatch, 'town-3d/town.js must export INN_ROOM_WINDOWS');
+  const rooms = [...roomsMatch[1].matchAll(/(\w+):/g)].map((m) => m[1]);
+  assert.deepEqual(rooms, ['lantern', 'window', 'quiet'], 'INN_ROOM_WINDOWS rooms must match');
+});
+
+test('town-3d/README.md per-plot guestbook tab labels match town.js', () => {
+  const readme = readReadme();
+  assert.ok(
+    readme.includes('formatPlotGuestbookTabLabel'),
+    'town-3d/README.md must name formatPlotGuestbookTabLabel'
+  );
+  assert.ok(
+    readme.includes('resolvePlotGuestbookOverlayContent'),
+    'town-3d/README.md must name resolvePlotGuestbookOverlayContent'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('export function formatPlotGuestbookTabLabel(count)'),
+    'town-3d/town.js must export formatPlotGuestbookTabLabel(count)'
+  );
+  assert.ok(
+    townJs.includes("return Number.isFinite(count) && count > 0 ? `Guestbook (${count})` : 'Guestbook';"),
+    'town-3d/town.js formatPlotGuestbookTabLabel must return exact expected expression'
+  );
+  assert.ok(
+    townJs.includes('export async function resolvePlotGuestbookOverlayContent(handle,'),
+    'town-3d/town.js must export resolvePlotGuestbookOverlayContent(handle,'
+  );
+});
+
+test('town-3d/README.md TownLive injected fetch default matches town.js', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('this.fetchFn = opts.fetch || globalThis.fetch || null;'),
+    'town-3d/town.js must default this.fetchFn to opts.fetch || globalThis.fetch || null'
+  );
+  assert.ok(
+    readmeNorm.includes('`TownLive` accepts an injected `opts.fetch`'),
+    'town-3d/README.md must state `TownLive` accepts an injected `opts.fetch`'
+  );
+  assert.ok(
+    readmeNorm.includes('defaulting to `globalThis.fetch` at runtime'),
+    'town-3d/README.md must state defaulting to `globalThis.fetch` at runtime'
+  );
+});
+
+test('town-3d/README.md procedural WebGL client importmap pins three@0.160.0', () => {
+  const readme = readReadme();
+  assert.ok(
+    readme.includes('Procedural WebGL 3D client'),
+    'town-3d/README.md must include Procedural WebGL 3D client'
+  );
+  const indexHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  assert.ok(
+    indexHtml.includes('"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"'),
+    'town-3d/index.html importmap must pin three@0.160.0'
+  );
+  assert.ok(
+    indexHtml.includes('"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"'),
+    'town-3d/index.html importmap must pin three@0.160.0 addons'
+  );
+});
+
+test('town-3d/README.md Gazette feed has one item per issue', () => {
+  const readme = readReadme();
+  const latestJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'gazette', 'latest.json'), 'utf8')
+  );
+  const feedXml = fs.readFileSync(path.join(__dirname, 'gazette', 'feed.xml'), 'utf8');
+  const items = feedXml.match(/<item>/g) ?? [];
+  assert.equal(items.length, latestJson.issues.length, 'gazette/feed.xml must have one <item> per issue');
+  for (const issue of latestJson.issues) {
+    assert.ok(
+      feedXml.includes(issue.file),
+      `gazette/feed.xml must link ${issue.file}`
+    );
+  }
+  for (const name of ['feed.xml', 'build-feed.mjs', 'build-digest.mjs']) {
+    assert.ok(readme.includes(`\`${name}\``), `town-3d/README.md must name \`${name}\``);
+  }
+});
