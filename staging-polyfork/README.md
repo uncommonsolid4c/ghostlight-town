@@ -1,6 +1,6 @@
 # Ghostlight Town — the live town (Polyfork composition)
 
-The live town since the 2026-11-14 adoption (slice 77), now at `staging.js?v=40`:
+The live town since the 2026-11-14 adoption (slice 77), now at `staging.js?v=41`:
 Campground & Lake terrain + Medieval Village buildings + Village Tavern as
 the Inn + humanoid bodies for the three NPCs + the procedural Bandstand,
 Milo's cottage, and Milo's blue ghost ported from `town-3d/`. The old
@@ -118,7 +118,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=40` cache bust, `#plot-overlay` markup + click
+  Prompt Book UI elements, `?v=41` cache bust, `#plot-overlay` markup + click
   wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
   per-room glow toggle, Nightly Call card redraw/cache/split).
 - `test-daylight-drift.mjs` — unit tests for `daylight-drift.mjs` (keyframe
