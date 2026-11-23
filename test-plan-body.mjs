@@ -349,18 +349,17 @@ const GAZETTE_DIR = path.join(__dirname, 'town-3d', 'gazette');
 const FEED_PATH = path.join(GAZETTE_DIR, 'feed.xml');
 const LATEST_PATH = path.join(GAZETTE_DIR, 'latest.json');
 
-test('PLAN.md §3 join flow matches invite auto-activation and pending queue in server.mjs', () => {
+test('PLAN.md §3 join flow matches active-immediately join and invite validation in server.mjs', () => {
   const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
-  assert.ok(serverText.includes("let status = 'pending';"), 'server.mjs must default join status to pending');
-  assert.ok(serverText.includes("status = 'active';"), 'server.mjs must set status to active on valid invite');
+  assert.ok(serverText.includes("const status = 'active';"), 'server.mjs must set join status to active');
   assert.ok(
     serverText.includes("sendJson(res, 403, { error: 'invalid_invite' });"),
     'server.mjs must reject invalid invite with 403 invalid_invite'
   );
   assert.ok(serverText.includes("'joined with invite'"), 'server.mjs must record joined with invite key_history note');
   assert.ok(
-    serverText.includes("'joined pending approval'"),
-    'server.mjs must record joined pending approval key_history note'
+    serverText.includes("'joined'"),
+    'server.mjs must record joined key_history note'
   );
 
   const { body } = readPlanBodySections();
@@ -368,7 +367,10 @@ test('PLAN.md §3 join flow matches invite auto-activation and pending queue in 
     body.includes('a valid one-time `invite_code` auto-provisions'),
     'PLAN.md §3 must document valid one-time invite_code auto-provisioning'
   );
-  assert.ok(body.includes('no code → `pending` queue'), 'PLAN.md §3 must document pending queue when no invite code');
+  assert.ok(
+    body.includes('no code → `active` immediately, same as the invited path'),
+    'PLAN.md §3 must document active immediately when no invite code'
+  );
 });
 
 test('PLAN.md §4 protected endpoints match WRITE_ROUTES in server.mjs', () => {
