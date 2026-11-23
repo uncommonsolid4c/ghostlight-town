@@ -1,6 +1,6 @@
 # Ghostlight Town — the live town (Polyfork composition)
 
-The live town since the 2026-11-14 adoption (slice 77), now at `staging.js?v=39`:
+The live town since the 2026-11-14 adoption (slice 77), now at `staging.js?v=40`:
 Campground & Lake terrain + Medieval Village buildings + Village Tavern as
 the Inn + humanoid bodies for the three NPCs + the procedural Bandstand,
 Milo's cottage, and Milo's blue ghost ported from `town-3d/`. The old
