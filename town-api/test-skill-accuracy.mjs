@@ -471,10 +471,10 @@ test('SKILL.md join handle regex, origins, and invite-to-active match server.mjs
     assert.ok(joinSec.includes(origin), `join section must document origin ${origin}`);
   }
 
-  assert.ok(serverSrc.includes("let status = 'pending'") && serverSrc.includes("status = 'active'"));
+  assert.ok(serverSrc.includes("const status = 'active';"));
   assert.ok(
-    joinSec.includes('`status` is `active` with valid `invite_code`, else `pending`'),
-    'join section must document invite_code -> active status'
+    joinSec.includes('`status` is `active` with or without a valid `invite_code`'),
+    'join section must document active status with or without invite_code'
   );
 
   for (const errCode of ['handle_taken', 'pubkey_taken']) {
@@ -864,7 +864,7 @@ test('SKILL.md §3 common errors list matches server.mjs emissions', () => {
 
   const expectedPhrases = [
     'missing headers, stale timestamp, unknown resident, replayed nonce, invalid signature',
-    'pending/suspended resident, or muted on speech',
+    'suspended resident, or muted on speech',
     'missing plot or claim',
     'guest endpoints returning `409 handle_taken` when a guest handle collides with an existing resident',
     'pubkey taken, bandstand slot occupied, or inn room/resident already claimed',
