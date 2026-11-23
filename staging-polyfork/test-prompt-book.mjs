@@ -542,3 +542,166 @@ test('renderPromptBook renders null/empty entries as unknown lines and keeps emp
     '',
   );
 });
+
+test('formatPromptBookEntries returns exactly seven keys, strips extra fields, and passes id and created_at through verbatim', () => {
+  const f = formatPromptBookEntries([
+    { id: 1.5, handle: 'a', kind: 'say', body: 'x', reply_to: null, created_at: false, role: 'muse', extra: 'drop', nested: { z: 1 } },
+    { id: '7', handle: 'b', kind: 'say', body: 'y', created_at: '', role: 'muse' },
+    { id: 3, handle: 'c', kind: 'say', body: 'z', created_at: 0, role: 'muse' },
+  ]);
+
+  assert.deepEqual(Object.keys(f[0]), ['id', 'handle', 'kind', 'body', 'reply_to', 'created_at', 'role']);
+  assert.equal(f[0].id, 1.5);
+  assert.equal(f[0].created_at, false);
+  assert.equal('extra' in f[0], false);
+  assert.equal('nested' in f[0], false);
+  assert.equal(f[1].id, '7');
+  assert.equal(f[1].created_at, '');
+  assert.equal(f[2].created_at, 0);
+});
+
+test('formatPromptBookEntries is case-sensitive on role and kind and rejects non-integer reply_to values', () => {
+  const f = formatPromptBookEntries([
+    { id: 1, handle: 'a', kind: 'EMOTE', body: 'x', role: 'NPC' },
+    { id: 2, handle: 'b', kind: 'System', body: 'x', role: 'ADMIN' },
+    { id: 3, handle: 'c', kind: ' SAY ', body: 'x', role: '' },
+    { id: 4, handle: 'd', kind: 'say', body: 'x', role: null, reply_to: NaN },
+    { id: 5, handle: 'e', kind: 'say', body: 'x', reply_to: Infinity },
+    { id: 6, handle: 'f', kind: 'say', body: 'x', reply_to: true },
+    { id: 7, handle: 'g', kind: 'say', body: 'x', reply_to: '2' },
+    { id: 8, handle: 'h', kind: 'say', body: 'x', reply_to: -0 },
+  ]);
+
+  assert.equal(f[0].kind, 'say');
+  assert.equal(f[0].role, 'muse');
+  assert.equal(f[1].kind, 'say');
+  assert.equal(f[1].role, 'muse');
+  assert.equal(f[2].kind, 'say');
+  assert.equal(f[2].role, 'muse');
+  assert.equal(f[3].role, 'muse');
+  assert.equal(f[3].reply_to, null);
+  assert.equal(f[4].reply_to, null);
+  assert.equal(f[5].reply_to, null);
+  assert.equal(f[6].reply_to, null);
+  assert.equal(f[7].reply_to === 0, true);
+});
+
+test('renderPromptBook renders a reply to a capped-out target as a bare #id', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  const entries = Array.from({ length: 101 }, (_, i) => ({
+    id: i + 1,
+    handle: `m${i + 1}`,
+    kind: 'say',
+    body: `n${i + 1}`,
+    role: 'muse',
+    reply_to: i === 100 ? 1 : null,
+  }));
+
+  renderPromptBook(container, entries, doc);
+
+  assert.equal(container.children.length, 100);
+  const lastLine = container.children[99];
+  assert.equal(lastLine.children.find((c) => c.className === 'pb-handle').textContent, 'm101');
+  assert.equal(lastLine.children.find((c) => c.className === 'pb-reply-to').textContent, '\u21a9 #1');
+});
+
+test('renderPromptBook child order, tag names, and exact line textContent for NPC emote and guest system replies', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 10, handle: 'wick', kind: 'say', body: 'lanterns lit', role: 'npc' },
+      { id: 11, handle: 'wick', kind: 'emote', body: 'trims a wick', role: 'npc', reply_to: 10 },
+      { id: 12, handle: 'vis', kind: 'system', body: 'arrived', role: 'guest', reply_to: 10 },
+    ],
+    doc,
+  );
+
+  const [line0, line1, line2] = container.children;
+  assert.equal(line0.tagName, 'div');
+  assert.deepEqual(
+    line1.children.map((c) => c.tagName),
+    ['span', 'span', 'span', 'span'],
+  );
+  assert.deepEqual(
+    line1.children.map((c) => c.className),
+    ['pb-npc-pill', 'pb-reply-to', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(line1.textContent, '[NPC]\u21a9 #10 @wickwick trims a wick');
+
+  assert.equal(line2.className, 'pb-line pb-kind-system');
+  assert.deepEqual(
+    line2.children.map((c) => c.className),
+    ['pb-guest-pill', 'pb-reply-to', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(line2.children[1].textContent, '\u21a9 #10 @wick');
+  assert.equal(line2.textContent, '[guest]\u21a9 #10 @wickvis: arrived');
+});
+
+test('renderPromptBook renders non-array promptBook as the empty state and clears stale lines on re-render to empty', () => {
+  const doc = createFakeDoc();
+  const c1 = doc.makeContainer();
+  renderPromptBook(c1, null, doc);
+  assert.equal(c1.children.length, 1);
+  assert.equal(c1.children[0].className, 'pb-empty');
+
+  const c2 = doc.makeContainer();
+  renderPromptBook(c2, 'nope', doc);
+  assert.equal(c2.children.length, 1);
+  assert.equal(c2.children[0].textContent, 'No remarks yet in the last 24h.');
+
+  const c3 = doc.makeContainer();
+  renderPromptBook(
+    c3,
+    [
+      { id: 1, handle: 'ada', kind: 'say', body: 'one', role: 'muse' },
+      { id: 2, handle: 'sol', kind: 'say', body: 'two', role: 'muse' },
+    ],
+    doc,
+  );
+  assert.equal(c3.children.length, 2);
+
+  renderPromptBook(c3, [], doc);
+  assert.equal(c3.children.length, 1);
+  assert.equal(c3.children[0].tagName, 'p');
+  assert.equal(c3.children[0].className, 'pb-empty');
+  assert.equal(c3.children[0].textContent, 'No remarks yet in the last 24h.');
+});
+
+test('renderPromptBook gives system kind an NPC pill for npc role, a guest pill plus reply for guest role, and no pill for muse', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 1, handle: 'wick', kind: 'system', body: 'lamps checked', role: 'npc' },
+      { id: 2, handle: 'vis', kind: 'say', body: 'hello', role: 'guest', reply_to: 1 },
+      { id: 3, handle: 'bell', kind: 'system', body: 'chimes', role: 'muse', reply_to: 1 },
+    ],
+    doc,
+  );
+
+  const [line0, line1, line2] = container.children;
+  assert.equal(line0.className, 'pb-line pb-kind-system');
+  assert.deepEqual(
+    line0.children.map((c) => c.className),
+    ['pb-npc-pill', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(line0.children[0].textContent, '[NPC]');
+
+  assert.deepEqual(
+    line1.children.map((c) => c.className),
+    ['pb-guest-pill', 'pb-reply-to', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(line1.children[1].textContent, '\u21a9 #1 @wick');
+
+  assert.deepEqual(
+    line2.children.map((c) => c.className),
+    ['pb-reply-to', 'pb-handle', 'pb-body'],
+  );
+  assert.equal(line2.children[0].textContent, '\u21a9 #1 @wick');
+});
