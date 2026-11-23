@@ -59,12 +59,88 @@ const RATE_LIMITS = {
   guestCheckin: { max: 1, windowSec: 5 * 60 },
   guestSay: { max: 2, windowSec: 10 * 60 },
   guestInnClaim: { max: 2, windowSec: 60 * 60 },
+  guestFishCast: { max: 2, windowSec: 60 * 60 },
   joinIp: { max: 5, windowSec: 60 * 60 },
   plot: { max: 10, windowSec: 60 * 60 },
+  fishCast: { max: 10, windowSec: 60 * 60 },
   innClaim: { max: 10, windowSec: 60 * 60 },
   keyRotate: { max: 3, windowSec: 60 * 60 },
   guestbook: { max: 3, windowSec: 60 * 60 },
 };
+
+const SETTLE_SEC = 300;
+
+const POEM_BOTTLE_LINES = Object.freeze([
+  'The lake keeps what the town forgets, and returns it damp.',
+  'If you are reading this, the water was kinder than the road.',
+  'Someone loved this shore enough to write it down.',
+  'The minnows know the way home. Ask them nicely.',
+]);
+
+const FISH_CATCH_TABLE = Object.freeze([
+  Object.freeze({
+    kind: 'old_boot',
+    weight: 22,
+    label: 'An old boot.',
+    flavor: 'It has seen things. It has been places. It is, technically, a catch.',
+  }),
+  Object.freeze({
+    kind: 'tin_kettle',
+    weight: 18,
+    label: 'A tin kettle.',
+    flavor: 'Dented, but the spout still whistles in a stiff breeze. Tomas would approve.',
+  }),
+  Object.freeze({
+    kind: 'rusty_spoon',
+    weight: 16,
+    label: 'A rusty spoon.',
+    flavor: "Somebody's soup, a long time ago.",
+  }),
+  Object.freeze({
+    kind: 'soggy_glove',
+    weight: 14,
+    label: 'A soggy glove.',
+    flavor: 'One glove. The other one is still out there, living its best life.',
+  }),
+  Object.freeze({
+    kind: 'tangled_string',
+    weight: 12,
+    label: 'A tangle of string.',
+    flavor: 'It was a fishing line once. It has come home.',
+  }),
+  Object.freeze({
+    kind: 'poem_in_a_bottle',
+    weight: 10,
+    label: 'A poem in a bottle.',
+    flavor: null,
+  }),
+  Object.freeze({
+    kind: 'silver_minnow',
+    weight: 5,
+    label: 'A silver minnow.',
+    flavor: 'It flashes once in your palm and slips back into the lake. You were faster this time.',
+  }),
+  Object.freeze({
+    kind: 'glass_float',
+    weight: 3,
+    label: 'A glass float.',
+    flavor: 'Sea-green, perfect, older than the town. The lake gives up its treasures rarely.',
+  }),
+]);
+
+function drawFishCatch() {
+  const roll = crypto.randomInt(0, 100);
+  let acc = 0;
+  for (const entry of FISH_CATCH_TABLE) {
+    acc += entry.weight;
+    if (roll < acc) {
+      const flavor = entry.flavor ?? POEM_BOTTLE_LINES[crypto.randomInt(0, POEM_BOTTLE_LINES.length)];
+      return { kind: entry.kind, label: entry.label, flavor };
+    }
+  }
+  const last = FISH_CATCH_TABLE[FISH_CATCH_TABLE.length - 1];
+  return { kind: last.kind, label: last.label, flavor: last.flavor };
+}
 
 function generateInnKey() {
   const maxValid = Math.floor(256 / INN_KEY_ALPHABET.length) * INN_KEY_ALPHABET.length;
@@ -1036,6 +1112,110 @@ export function createTownServer(opts = {}) {
     });
   }
 
+  function castFishForHandle(handle, now, rlBucket, rlRule, res) {
+    const existing = db.prepare('SELECT cast_at, reel_at FROM fish_casts WHERE handle = ?').get(handle);
+    if (existing) {
+      sendJson(res, 409, {
+        error: 'already_cast',
+        cast_at: existing.cast_at,
+        reel_at: existing.reel_at,
+      });
+      return;
+    }
+
+    const rl = rateLimiter.consume(rlBucket, rlRule.max, rlRule.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    const castAt = now;
+    const reelAt = castAt + SETTLE_SEC;
+    db.prepare('INSERT INTO fish_casts (handle, cast_at, reel_at) VALUES (?, ?, ?)').run(handle, castAt, reelAt);
+    sendJson(res, 201, { handle, cast_at: castAt, reel_at: reelAt });
+  }
+
+  function reelFishForHandle(handle, now, res) {
+    const cast = db.prepare('SELECT cast_at, reel_at FROM fish_casts WHERE handle = ?').get(handle);
+    if (!cast) {
+      sendJson(res, 404, { error: 'no_active_cast' });
+      return;
+    }
+    if (now < cast.reel_at) {
+      sendJson(res, 409, { error: 'line_settling', reel_at: cast.reel_at });
+      return;
+    }
+
+    const caught = drawFishCatch();
+    db.prepare('DELETE FROM fish_casts WHERE handle = ?').run(handle);
+    db.prepare(
+      'INSERT INTO fish_catches (handle, kind, label, flavor, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(handle, caught.kind, caught.label, caught.flavor, now);
+
+    sendJson(res, 200, { handle, catch: caught, caught_at: now });
+  }
+
+  function handleFishCast(req, res, body, auth) {
+    if (auth.resident.status === 'muted') {
+      sendJson(res, 403, { error: 'resident_muted' });
+      return;
+    }
+    castFishForHandle(auth.handle, auth.now, `fish-cast:${auth.handle}`, RATE_LIMITS.fishCast, res);
+  }
+
+  function handleFishReel(req, res, body, auth) {
+    if (auth.resident.status === 'muted') {
+      sendJson(res, 403, { error: 'resident_muted' });
+      return;
+    }
+    reelFishForHandle(auth.handle, auth.now, res);
+  }
+
+  function handleGuestFishCast(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+    castFishForHandle(handle, auth.now, `guest-fish-cast:${handle}`, RATE_LIMITS.guestFishCast, res);
+  }
+
+  function handleGuestFishReel(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+    reelFishForHandle(handle, auth.now, res);
+  }
+
+  function handleGetFishLog(req, res, url) {
+    const handle = url.searchParams.get('handle') || '';
+    if (!HANDLE_RE.test(handle)) {
+      sendJson(res, 400, { error: 'invalid_handle' });
+      return;
+    }
+
+    const rows = db.prepare(
+      'SELECT kind, label, flavor, created_at FROM fish_catches WHERE handle = ? ORDER BY created_at DESC, id DESC LIMIT 50'
+    ).all(handle);
+
+    const catches = rows.map((r) => ({
+      kind: r.kind,
+      label: r.label,
+      flavor: r.flavor,
+      caught_at: r.created_at,
+    }));
+
+    sendJson(res, 200, {
+      handle,
+      catches,
+      count: catches.length,
+    });
+  }
+
   function handleInnClaim(req, res, body, auth) {
     const room = body.room;
     if (typeof room !== 'string' || !INN_ROOM_SET.has(room)) {
@@ -1727,6 +1907,10 @@ export function createTownServer(opts = {}) {
     ['POST /api/town/inn/guest/claim', { mode: 'guest', handler: handleGuestInnClaim }],
     ['POST /api/town/inn/guest/extend', { mode: 'guest', handler: handleGuestInnExtend }],
     ['POST /api/town/inn/guest/vacate', { mode: 'guest', handler: handleGuestInnVacate }],
+    ['POST /api/town/fish/cast', { mode: 'resident', handler: handleFishCast }],
+    ['POST /api/town/fish/reel', { mode: 'resident', handler: handleFishReel }],
+    ['POST /api/town/fish/guest/cast', { mode: 'guest', handler: handleGuestFishCast }],
+    ['POST /api/town/fish/guest/reel', { mode: 'guest', handler: handleGuestFishReel }],
     ['POST /api/town/presence', { mode: 'resident', handler: handlePresence }],
     ['POST /api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }],
     ['POST /api/town/admin/invite', { mode: 'admin', handler: handleAdminInvite }],
@@ -1746,6 +1930,11 @@ export function createTownServer(opts = {}) {
 
       if (req.method === 'GET' && pathname === '/api/town/plot') {
         handleGetPlot(req, res, url);
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/town/fish/log') {
+        handleGetFishLog(req, res, url);
         return;
       }
 
