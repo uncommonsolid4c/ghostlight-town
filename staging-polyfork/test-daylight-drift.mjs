@@ -632,3 +632,214 @@ test('kit fidelity: drift presets are verbatim copies of kit stage.mjs TIMES nig
     assert.notEqual(kf.sky, 0x66aef2);
   }
 });
+
+test('staging.js wires the drift: import, init next to stage(night), update before look.update()', async () => {
+  const src = await fs.promises.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const importLine = "import { buildDaylightDrift } from './daylight-drift.mjs?v=40';";
+  const stageCall = "stage(renderer, scene, { time: 'night'";
+  const initCall = 'buildDaylightDrift(look, { stars, scene })';
+  const updateCall = 'daylightDrift.update(dt)';
+  const lookUpdate = 'look.update(); // drives the night glow';
+
+  assert.ok(src.includes(importLine), 'missing ?v=40 daylight-drift import');
+  assert.ok(src.includes("scene.getObjectByName('sky')?.getObjectByName('stars')"), 'missing stars lookup');
+  assert.ok(src.includes('if (stars) stars.visible = true;'), 'missing forced stars.visible = true');
+
+  const iStage = src.indexOf(stageCall);
+  const iInit = src.indexOf(initCall);
+  const iUpdate = src.indexOf(updateCall);
+  const iLookUpdate = src.indexOf(lookUpdate);
+
+  assert.ok(iStage >= 0, 'missing stage(night) call');
+  assert.ok(iInit > iStage, 'buildDaylightDrift init must follow stage(night)');
+  assert.ok(iUpdate > iInit, 'daylightDrift.update(dt) must follow init');
+  assert.ok(iLookUpdate > iUpdate, 'look.update() must follow daylightDrift.update(dt)');
+});
+
+test('staging.js re-applies Inn dimming when a quantized night step lands', async () => {
+  const src = await fs.promises.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const prevNightLine = 'const prevNight = look.night;';
+  const updateCall = 'daylightDrift.update(dt)';
+  const lookUpdate = 'look.update(); // drives the night glow';
+  const resyncCond = 'if (look.night !== prevNight && liveStore.lastState?.inn) {';
+  const innCall = 'updateStagingInnOccupancy(tavernGroup, liveStore.lastState.inn);';
+
+  const iPrev = src.indexOf(prevNightLine);
+  const iUpdate = src.indexOf(updateCall);
+  const iLookUpdate = src.indexOf(lookUpdate);
+  const iCond = src.indexOf(resyncCond);
+  const iInnCall = src.indexOf(innCall, iLookUpdate);
+
+  assert.ok(iPrev >= 0, 'missing const prevNight = look.night;');
+  assert.ok(iUpdate > iPrev, 'prevNight must be captured before daylightDrift.update(dt)');
+  assert.ok(iCond > iLookUpdate, 'Inn re-sync condition must follow look.update()');
+  assert.ok(iInnCall > iCond, 'updateStagingInnOccupancy must sit inside the re-sync block after look.update()');
+});
+
+test('staging-polyfork/README.md drift bullets match the module + staging.js', async () => {
+  const raw = await fs.promises.readFile(path.join(__dirname, 'README.md'), 'utf8');
+  const norm = raw.replace(/\s+/g, ' ');
+
+  assert.ok(norm.includes('30-minute town-clock cycle (night → dawn → overcast → dawn → night)'));
+  assert.ok(norm.includes('capped below noon so windows and ghostlight always win'));
+  assert.ok(norm.includes('quantized `look.night` updates and star fade'));
+
+  assert.ok(norm.includes('starting at night on every load'));
+  assert.ok(norm.includes('Shadow span raised from the default 70'));
+  assert.ok(norm.includes('Stars start visible (`night` preset leaves them off) and fade with the drift'));
+});
+
+test('applier at night: update(0) pins all lights, elevation, fog, stars', () => {
+  const look = makeStubLook();
+  const fog = mkFog();
+  const stars = { visible: false, material: { opacity: 0 } };
+  buildDaylightDrift(look, { fog, stars, far: 320 }).update(0);
+
+  assert.equal(look.hemi.color.hex, 0x53659e);
+  assert.equal(look.hemi.groundColor.hex, 0x1b2032);
+  assert.equal(look.hemi.intensity, 0.70);
+  assert.equal(look.key.color.hex, 0xaec6ff);
+  assert.equal(look.key.intensity, 0.75);
+  assert.equal(look.rim.color.hex, 0x5a6cc0);
+  assert.equal(look.rim.intensity, 0.45);
+  assert.equal(look.elevation, 40);
+  assert.equal(fog.color.hex, 0x1b2748);
+  assert.equal(fog.near, 96);
+  assert.equal(fog.far, 264);
+  assert.equal(stars.material.opacity, 1);
+  assert.equal(stars.visible, true);
+});
+
+test('applier at overcast: update(900) pins all lights, elevation, fog, stars', () => {
+  const look = makeStubLook();
+  const fog = mkFog();
+  const stars = { visible: true, material: { opacity: 1 } };
+  buildDaylightDrift(look, { fog, stars, far: 320 }).update(900);
+
+  assert.equal(look.hemi.color.hex, 0xffffff);
+  assert.equal(look.hemi.groundColor.hex, 0xaeb0b2);
+  assert.equal(look.hemi.intensity, 1.50);
+  assert.equal(look.key.color.hex, 0xeef2f6);
+  assert.equal(look.key.intensity, 0.85);
+  assert.equal(look.rim.color.hex, 0xdde4ee);
+  assert.equal(look.rim.intensity, 0.45);
+  assert.equal(look.elevation, 58);
+  assert.equal(look.night, 0);
+  assert.equal(fog.color.hex, 0xd8dde2);
+  assert.ok(Math.abs(fog.near - 92.16) < 1e-9);
+  assert.ok(Math.abs(fog.far - 253.44) < 1e-9);
+  assert.equal(stars.material.opacity, 0);
+  assert.equal(stars.visible, false);
+});
+
+test('night quantization exact-1 endpoint: forced from 0.005 away, silent from a near-1 value', () => {
+  const makeCountingLook = (initialNight) => {
+    let storedNight = initialNight;
+    let writes = 0;
+    const look = {};
+    Object.defineProperty(look, 'night', {
+      configurable: true,
+      get() {
+        return storedNight;
+      },
+      set(v) {
+        writes++;
+        storedNight = v;
+      },
+    });
+    return {
+      look,
+      get storedNight() {
+        return storedNight;
+      },
+      get writes() {
+        return writes;
+      },
+    };
+  };
+
+  const caseA = makeCountingLook(0.995);
+  buildDaylightDrift(caseA.look).update(0);
+  assert.equal(caseA.writes, 1);
+  assert.equal(caseA.storedNight, 1);
+
+  const caseB = makeCountingLook(0.995);
+  buildDaylightDrift(caseB.look).update(1);
+  assert.equal(caseB.writes, 0);
+
+  const caseC = makeCountingLook(1);
+  const driftC = buildDaylightDrift(caseC.look);
+  driftC.update(1799);
+  assert.equal(caseC.writes, 0);
+  driftC.update(1);
+  assert.equal(caseC.writes, 0);
+  assert.equal(caseC.storedNight, 1);
+  assert.equal(driftC.phase, 0);
+});
+
+test('phase accumulates across small updates and wraps exactly', () => {
+  const d1 = buildDaylightDrift({ night: 1 });
+  for (let i = 0; i < 30; i++) d1.update(60);
+  assert.equal(d1.phase, 0);
+
+  const d2 = buildDaylightDrift({ night: 1 });
+  for (let i = 0; i < 3; i++) d2.update(450);
+  assert.ok(Math.abs(d2.phase - 0.75) < 1e-12);
+
+  const d3 = buildDaylightDrift({ night: 1 });
+  for (let i = 0; i < 2; i++) d3.update(450);
+  assert.ok(Math.abs(d3.phase - 0.5) < 1e-12);
+});
+
+test('sky-dome gradient at night and overcast', () => {
+  const srgbToLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const hexToLin = (hex) =>
+    [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255].map(srgbToLin);
+
+  const nightLook = makeStubLook();
+  buildDaylightDrift(nightLook, {}).update(0);
+  const nightArr = nightLook.sky.geometry.attributes.color.array;
+  const nightTop = hexToLin(0x070b1c);
+  const nightHor = hexToLin(0x1b2748);
+  const k = Math.pow(0.5, 0.55);
+
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(nightArr[c] - nightTop[c]) < 1e-6, `night top channel ${c}`);
+    assert.ok(Math.abs(nightArr[3 + c] - nightHor[c]) < 1e-6, `night horizon channel ${c}`);
+    const expectedMid = nightHor[c] + (nightTop[c] - nightHor[c]) * k;
+    assert.ok(Math.abs(nightArr[6 + c] - expectedMid) < 1e-6, `night mid channel ${c}`);
+  }
+
+  const overcastLook = makeStubLook();
+  buildDaylightDrift(overcastLook, {}).update(900);
+  const overcastArr = overcastLook.sky.geometry.attributes.color.array;
+  const overcastTop = hexToLin(0xb4bfca);
+  const overcastHor = hexToLin(0xd8dde2);
+
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(overcastArr[c] - overcastTop[c]) < 1e-6, `overcast top channel ${c}`);
+    assert.ok(Math.abs(overcastArr[3 + c] - overcastHor[c]) < 1e-6, `overcast horizon channel ${c}`);
+  }
+});
+
+test('stars without material hide at overcast + look.night written when missing or non-number', () => {
+  const stars = { visible: true };
+  buildDaylightDrift(makeStubLook(), { stars }).update(900);
+  assert.equal(stars.visible, false);
+
+  const bareLook = {};
+  buildDaylightDrift(bareLook).update(0);
+  assert.equal(bareLook.night, 1);
+
+  const nonNumberLook = { night: 'night' };
+  buildDaylightDrift(nonNumberLook).update(0);
+  assert.equal(nonNumberLook.night, 1);
+});
+
+test('near-wrap continuity: night and elevation rejoin across the 0/1 seam', () => {
+  assert.ok(daylightAt(0.999).night > 0.99);
+  assert.ok(Math.abs(daylightAt(0.999).night - daylightAt(0.001).night) < 0.01);
+  assert.ok(daylightAt(0.9999).night > 0.999);
+  assert.ok(Math.abs(daylightAt(0.999).elev - 40) < 0.5);
+  assert.ok(Math.abs(daylightAt(0.001).elev - 40) < 0.5);
+});
