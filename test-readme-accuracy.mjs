@@ -127,7 +127,7 @@ test('README.md ## Status Social Gate state matches PLAN.md §12.6', () => {
   const nextH3 = planMd.indexOf('\n### ', sec126Idx + sec126Heading.length);
   const sec126 = planMd.slice(sec126Idx, nextH3 !== -1 ? nextH3 : planMd.length);
 
-  for (const fact of ['unmet', '1 of 2–3', '`lampmoth`', '~Nov 20', 'quoted in Gazette #2']) {
+  for (const fact of ['unmet', '2 of 2–3', '`lampmoth`', '~Nov 20', 'quoted in Gazette #2']) {
     assert.ok(statusSec.includes(fact), `README.md ## Status must include Social Gate fact "${fact}"`);
     assert.ok(sec126.includes(fact), `PLAN.md §12.6 must include Social Gate fact "${fact}"`);
   }
