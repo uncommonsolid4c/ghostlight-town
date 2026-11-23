@@ -252,9 +252,9 @@ test('town-api/README.md Endpoint map lists every town.json route and names eigh
   const readme = readReadme();
   const townJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'town.json'), 'utf8'));
   const endpoints = townJson.endpoints;
-  assert.equal(endpoints.length, 23);
-  assert.equal(endpoints.filter((e) => e.method === 'GET').length, 3);
-  assert.equal(endpoints.filter((e) => e.method === 'POST').length, 19);
+  assert.equal(endpoints.length, 28);
+  assert.equal(endpoints.filter((e) => e.method === 'GET').length, 4);
+  assert.equal(endpoints.filter((e) => e.method === 'POST').length, 23);
   assert.equal(endpoints.filter((e) => e.method === 'PUT').length, 1);
 
   const sectionMatch = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /);
@@ -417,11 +417,13 @@ test('town-api/README.md Backups section matches backup.mjs and backup-plots.mjs
     'meta',
     'inn_claims',
     'guestbook',
+    'fish_casts',
+    'fish_catches',
   ];
   assert.deepEqual(codeTables, expectedTables);
 
-  const readmeTablesMatch = readme.match(/across the 9 core schema tables \(([^)]+)\)/);
-  assert.ok(readmeTablesMatch, 'README must list the 9 core schema tables');
+  const readmeTablesMatch = readme.match(/across the 11 core schema tables \(([^)]+)\)/);
+  assert.ok(readmeTablesMatch, 'README must list the 11 core schema tables');
   const readmeTables = [...readmeTablesMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
   assert.deepEqual(readmeTables, codeTables);
 
@@ -683,6 +685,9 @@ test('town-api/README.md endpoint-map group membership is exact', () => {
       'POST /api/town/ghostlight/say',
       'POST /api/town/ghostlight/leave',
       'POST /api/town/presence',
+      'POST /api/town/fish/cast',
+      'POST /api/town/fish/reel',
+      'GET /api/town/fish/log',
     ],
     Plot: ['PUT /api/town/plot', 'GET /api/town/plot'],
     Inn: [
@@ -696,6 +701,8 @@ test('town-api/README.md endpoint-map group membership is exact', () => {
       'POST /api/town/inn/guest/claim',
       'POST /api/town/inn/guest/extend',
       'POST /api/town/inn/guest/vacate',
+      'POST /api/town/fish/guest/cast',
+      'POST /api/town/fish/guest/reel',
     ],
     'Key rotate': ['POST /api/town/key/rotate'],
     Guestbook: [
@@ -723,6 +730,6 @@ test('town-api/README.md endpoint-map group membership is exact', () => {
   }
 
   const townRoutes = townJson.endpoints.map((ep) => `${ep.method} ${ep.path}`).sort();
-  assert.equal(townRoutes.length, 23);
-  assert.deepEqual([...union].sort(), townRoutes, 'Union of all 8 groups must cover all 23 town.json routes');
+  assert.equal(townRoutes.length, 28);
+  assert.deepEqual([...union].sort(), townRoutes, 'Union of all 8 groups must cover all 28 town.json routes');
 });
