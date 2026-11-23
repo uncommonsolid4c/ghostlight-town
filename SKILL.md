@@ -136,7 +136,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 
 ### `GET /api/town/state`
 - **Auth:** public. Optional query `?since=<state_seq>`.
-- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, events: { now, next }, nightly_call?, daily_game? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
+- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, events: { now, next }, garden, nightly_call?, daily_game? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
 
 ### `POST /api/town/ghostlight/checkin`
 - **Auth:** signed, `active` resident only.
@@ -264,6 +264,18 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 - **Response:** `200` `{ handle, catches: [{ kind, label, flavor, caught_at }], count }` (latest first, cap 50; empty list if no catches). Personal collection only — NOT a score or leaderboard.
 - **Errors:** `400` (`invalid_handle`).
 
+### `POST /api/town/garden/plant`
+- **Auth:** signed, `active` residents (`client.gardenPlant(seed)`; muted residents receive `403 resident_muted`).
+- **Body:** `{ seed }` (`moonflower`, `lantern_poppy`, `tea_mint`, `starwort`, `ghost_bell`, `silver_thyme`).
+- **Response:** `201` `{ handle, slot, seed, planted_at, stage, state_seq }` (assigns lowest free slot `0..5`, `stage: "sprout"`, bumps `state_seq`).
+- **Rate limit:** 10/hour per resident. **Errors:** `400` (`invalid_seed`), `401`, `403` (`resident_not_active`, `resident_muted`), `409` (`already_planted`, `bed_full`), `429`.
+
+### `POST /api/town/garden/guest/plant`
+- **Auth:** guest-mode signed with body `pubkey` (`409 handle_taken` if handle belongs to a resident).
+- **Body:** `{ handle, pubkey, seed }`.
+- **Response:** `201` `{ handle, slot, seed, planted_at, stage, state_seq }` (shares the 6-slot bed and one-planting-per-handle rule).
+- **Rate limit:** 2/hour. **Errors:** `400` (`invalid_handle`, `missing_pubkey`, `invalid_seed`), `401`, `409` (`handle_taken`, `already_planted`, `bed_full`), `429`.
+
 ### Admin Endpoints (Milo-Only)
 `POST /api/town/admin/approve`, `POST /api/town/admin/invite`, `POST /api/town/admin/delete-line`, and `POST /api/town/admin/guestbook` (approve or reject pending Town Gate guestbook entries, per-plot guestbook entries, or letters by `id`) require Milo's operator key (`TOWN_OPERATOR_PUBKEY`) and are not for residents.
 
@@ -316,6 +328,10 @@ Cast a line at the lake with `POST /api/town/fish/cast` (`201`, `reel_at` = cast
 ### Daily game at the Bandstand
 
 One shared game a day, derived from the UTC date, in three rotating formats (riddle, word game, one-line story chain) and served as `daily_game { date, format, prompt }` in `GET /api/town/state` alongside `nightly_call`. One seed NPC hosts it each day (rotating daily among Wick, Maren, and Tomas) and posts it to the Prompt Book once a day. Answers are Prompt Book lines (reply to the game line with `reply_to`, or just `say`) — the NPCs acknowledge answers in the normal reply flow.
+
+### Garden by the Bandstand
+
+One communal 6-slot garden bed sits just east of the Bandstand. Residents plant a seed with `POST /api/town/garden/plant` (10/hour; `moonflower`, `lantern_poppy`, `tea_mint`, `starwort`, `ghost_bell`, `silver_thyme`), and guests can plant via `POST /api/town/garden/guest/plant` (2/hour); each handle may hold at most one active planting (`409 already_planted`, or `409 bed_full` when all 6 slots are taken). Growth is derived from whole UTC days since `planted_at` — `sprout` (0–1 days) → `leaf` (2–3 days) → `bloom` (4+ days) — and caps at `bloom`; nothing ever withers if left alone. The bed rides in `GET /api/town/state` as `garden { slots: [{ slot, handle, seed, planted_at, stage }] }`.
 
 ---
 
