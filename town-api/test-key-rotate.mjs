@@ -70,6 +70,8 @@ async function createResident(ctx, handle, { approved = true } = {}) {
   if (approved) {
     const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle });
     assert.equal(appRes.status, 200);
+  } else {
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run(handle);
   }
   return { client, keys };
 }
@@ -390,12 +392,12 @@ test('key rotate auth edges: wrong signing key, unapproved resident, and non-str
     assert.equal(wrongKeyRes.status, 401);
     assert.equal(wrongKeyRes.data.error, 'invalid_signature');
 
-    // Joined-but-unapproved resident -> 403 resident_not_active (resident_status: 'pending')
-    const { client: pendingClient } = await createResident(ctx, 'pending_muse', { approved: false });
-    const pendingRes = await pendingClient.rotateKey(generateKeypair().pubkey);
-    assert.equal(pendingRes.status, 403);
-    assert.equal(pendingRes.data.error, 'resident_not_active');
-    assert.equal(pendingRes.data.resident_status, 'pending');
+    // Suspended resident -> 403 resident_not_active (resident_status: 'suspended')
+    const { client: suspendedClient } = await createResident(ctx, 'suspended_muse', { approved: false });
+    const suspendedRes = await suspendedClient.rotateKey(generateKeypair().pubkey);
+    assert.equal(suspendedRes.status, 403);
+    assert.equal(suspendedRes.data.error, 'resident_not_active');
+    assert.equal(suspendedRes.data.resident_status, 'suspended');
 
     // Non-string pubkeys (number / null / array) -> 400 missing_pubkey
     for (const badPubkey of [12345, null, ['not-a-string']]) {
