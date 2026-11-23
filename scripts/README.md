@@ -39,7 +39,7 @@ node scripts/stage-deploy.mjs --verify <dir> [--root <dir>]
   and `README.md` in `staging-polyfork/`, and blocks secret-like filenames or
   contents.
 - **Current staging facts:** staging bundle `staging-polyfork` stages **195
-  files** with `staging_js_v` **40** (verified with `--bundle staging-polyfork`
+  files** with `staging_js_v` **41** (verified with `--bundle staging-polyfork`
   and `--verify`).
 
 ## `check-live.mjs` (Slices 34, 100)
