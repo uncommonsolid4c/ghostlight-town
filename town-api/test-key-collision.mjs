@@ -64,6 +64,8 @@ async function createResident(ctx, handle, { approved = true } = {}) {
   if (approved) {
     const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle });
     assert.equal(appRes.status, 200);
+  } else {
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run(handle);
   }
   return { client, keys };
 }
@@ -207,7 +209,7 @@ test('schema enforces UNIQUE(pubkey) at the SQLite level on a fresh DB', async (
       () => {
         ctx.db
           .prepare(
-            "INSERT INTO residents (handle, pubkey, origin, status, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'pending', '', NULL, ?)"
+            "INSERT INTO residents (handle, pubkey, origin, status, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'suspended', '', NULL, ?)"
           )
           .run('carol', bobKeys.pubkey, now);
       },
@@ -235,7 +237,7 @@ test('startup migration applies UNIQUE(pubkey) to a pre-seeded old-schema DB wit
       () => {
         ctx.db
           .prepare(
-            "INSERT INTO residents (handle, pubkey, origin, status, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'pending', '', NULL, ?)"
+            "INSERT INTO residents (handle, pubkey, origin, status, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'suspended', '', NULL, ?)"
           )
           .run('carol', bobKeys.pubkey, now);
       },
@@ -378,7 +380,7 @@ test('successful rotate retires old key and records exactly one rotate row', asy
     assert.equal(history.length, 2);
     assert.equal(history[0].action, 'register');
     assert.equal(history[0].pubkey, oldKeys.pubkey);
-    assert.equal(history[0].note, 'joined pending approval');
+    assert.equal(history[0].note, 'joined');
     assert.equal(history[1].action, 'rotate');
     assert.equal(history[1].pubkey, newKeys.pubkey);
     assert.equal(history[1].note, 'self-service rotation');
@@ -412,23 +414,23 @@ test('join 409s consume the per-IP join budget (unlike rotate 409s)', async () =
   }
 });
 
-test('pending resident cannot rotate: 403 resident_not_active', async () => {
+test('suspended resident cannot rotate: 403 resident_not_active', async () => {
   const ctx = await startTestServer();
   try {
-    const { client: pend, keys: pendKeys } = await createResident(ctx, 'pend', { approved: false });
+    const { client: susp, keys: suspKeys } = await createResident(ctx, 'susp', { approved: false });
     const freshKeys = generateKeypair();
 
-    const rotRes = await pend.rotateKey(freshKeys.pubkey);
+    const rotRes = await susp.rotateKey(freshKeys.pubkey);
     assert.equal(rotRes.status, 403);
     assert.equal(rotRes.data.error, 'resident_not_active');
-    assert.equal(rotRes.data.resident_status, 'pending');
+    assert.equal(rotRes.data.resident_status, 'suspended');
 
-    const row = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('pend');
-    assert.equal(row.pubkey, pendKeys.pubkey);
+    const row = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('susp');
+    assert.equal(row.pubkey, suspKeys.pubkey);
 
     const rotHistory = ctx.db
       .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
-      .all('pend');
+      .all('susp');
     assert.equal(rotHistory.length, 0);
   } finally {
     await ctx.close();
@@ -479,7 +481,7 @@ test('join 409 writes no key_history row for the rejected handle', async () => {
   }
 });
 
-test('rotate to a pending resident key returns 409 and pending owner keeps the key', async () => {
+test('rotate to a suspended resident key returns 409 and suspended owner keeps the key', async () => {
   const ctx = await startTestServer();
   try {
     const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
@@ -617,7 +619,7 @@ test('rotate rate limit: 3 successful rotates per hour, 4th returns 429 rate_lim
   }
 });
 
-test('join with a pending resident key returns 409 pubkey_taken', async () => {
+test('join with a suspended resident key returns 409 pubkey_taken', async () => {
   const ctx = await startTestServer();
   try {
     const { client: bob, keys: bobKeys } = await createResident(ctx, 'bob', { approved: false });
