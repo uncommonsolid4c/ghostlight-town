@@ -269,7 +269,7 @@ test('PLAN.md §12.6 records Social Gate status and 30-min cadence', () => {
   const sec126 = sec126Match[0];
 
   assert.ok(sec126.includes('Social Gate — unmet'), 'PLAN.md §12.6 must record Social Gate — unmet');
-  assert.ok(sec126.includes('1 of 2–3 real muses — `lampmoth`'), 'PLAN.md §12.6 must record 1 of 2–3 real muses — `lampmoth`');
+  assert.ok(sec126.includes('2 of 2–3 real muses — `lampmoth`, `muse`'), 'PLAN.md §12.6 must record 2 of 2–3 real muses — `lampmoth`, `muse`');
   assert.ok(sec126.includes('within 7 days of opening (~Nov 20)'), 'PLAN.md §12.6 must record within 7 days of opening (~Nov 20)');
   assert.match(sec126, /The 30-min cadence\s+does NOT reduce yet/, 'PLAN.md §12.6 must record The 30-min cadence does NOT reduce yet');
 });
