@@ -15,6 +15,7 @@ import { createTownServer } from '../town-api/server.mjs';
 import { generateKeypair, GhostlightClient, signRequest } from '../town-api/ghostlight-client.mjs';
 import { ensureKeypair } from './keygen.mjs';
 import { runAll } from './run-all.mjs';
+import { dailyGameHostForDate } from './daily-game.mjs';
 
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ALL_SCRIPT = path.join(THIS_DIR, 'run-all.mjs');
@@ -779,6 +780,293 @@ test('CLI --npc wick --dry-run runs only Wick, exits 0, writes nothing', async (
     assert.equal(summary.npcs[0].ok, true);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('zero stagger never sleeps across all three NPCs', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const sleepCalls = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 0,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Wick')) return 'The bulb is steady on the steps tonight.';
+        if (prompt.includes('You are Maren')) return 'A clean line is worth keeping in the pocket.';
+        return 'The copper kettle is warm if anyone stops by.';
+      },
+      logger: () => {},
+      sleepImpl: async (ms) => {
+        sleepCalls.push(ms);
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(sleepCalls, []);
+    assert.deepEqual(
+      res.results.map((r) => r.posted),
+      [true, true, true]
+    );
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('default stagger is 60 seconds between turns', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const sleepCalls = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Wick')) return 'The bulb is steady on the steps tonight.';
+        if (prompt.includes('You are Maren')) return 'A clean line is worth keeping in the pocket.';
+        return 'The copper kettle is warm if anyone stops by.';
+      },
+      logger: () => {},
+      sleepImpl: async (ms) => {
+        sleepCalls.push(ms);
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(sleepCalls, [60000, 60000]);
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI full happy path runs all three NPCs and exits 0', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const res = await runAllCli(
+      ['--api-base', ctx.baseUrl, '--state-dir', stateDir, '--stagger-ms', '0'],
+      { NPC_BRAIN_CMD: 'printf "The kettle is warm by the steps tonight.\\n"' }
+    );
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.deepEqual(
+      summary.npcs.map((n) => n.npc),
+      ['wick', 'maren', 'tomas']
+    );
+    assert.deepEqual(
+      summary.npcs.map((n) => n.posted),
+      [true, true, true]
+    );
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('uppercase --npc is rejected by CLI and by runAll', async () => {
+  const cliRes = await runAllCli([
+    '--api-base',
+    'http://127.0.0.1:9999',
+    '--state-dir',
+    '/tmp/nope',
+    '--npc',
+    'WICK',
+    '--stagger-ms',
+    '0',
+  ]);
+  assert.equal(cliRes.code, 1);
+  assert.match(cliRes.stderr, /Usage:/);
+  assert.match(cliRes.stderr, /Invalid --npc "WICK"/);
+
+  const logs = [];
+  let fetchCalled = false;
+  const res = await runAll({
+    apiBase: 'http://fake.local',
+    npc: 'WICK',
+    stateDir: '/tmp/nope',
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error('should not be called');
+    },
+    logger: (obj) => logs.push(obj),
+    sleepImpl: async () => {},
+  });
+  assert.deepEqual(res, { ok: false, results: [] });
+  assert.equal(fetchCalled, false);
+  assert.deepEqual(logs, [{ action: 'error', ok: false, error: 'Unknown seed NPC: WICK' }]);
+});
+
+test('CLI --npc twice runs only the last one', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-npc-twice-'));
+  try {
+    const res = await runAllCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--npc',
+      'wick',
+      '--npc',
+      'maren',
+      '--stagger-ms',
+      '0',
+      '--dry-run',
+    ]);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs.length, 1);
+    assert.equal(summary.npcs[0].npc, 'maren');
+    assert.equal(summary.npcs[0].action, 'dry_run');
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI --npc with no value exits 1 with usage', async () => {
+  const res = await runAllCli(['--api-base', 'http://127.0.0.1:9999', '--npc']);
+  assert.equal(res.code, 1);
+  assert.match(res.stderr, /Usage:/);
+  assert.match(res.stderr, /Unknown or incomplete argument: --npc/);
+});
+
+test('CLI --stagger-ms 1.5 is accepted', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-stagger-frac-'));
+  try {
+    const res = await runAllCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--stagger-ms',
+      '1.5',
+      '--dry-run',
+    ]);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('run_all summary npcs mirrors results on partial failure', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const logs = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 0,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Maren')) {
+          throw new Error('simulated brain failure');
+        }
+        return 'Quiet evening by the steps.';
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+
+    assert.equal(res.ok, false);
+    const summary = logs[logs.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, false);
+    assert.deepEqual(summary.npcs, res.results);
+    assert.deepEqual(summary.npcs[1], {
+      npc: 'maren',
+      action: 'error',
+      posted: false,
+      ok: false,
+    });
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('happy-path log sequence: three turn logs in order, then the run_all summary', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const logs = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 0,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Wick')) return 'The bulb is steady on the steps tonight.';
+        if (prompt.includes('You are Maren')) return 'A clean line is worth keeping in the pocket.';
+        return 'The copper kettle is warm if anyone stops by.';
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(logs.length, 4);
+    assert.deepEqual(
+      logs.slice(0, 3).map((l) => l.npc),
+      ['wick', 'maren', 'tomas']
+    );
+    for (const entry of logs.slice(0, 3)) {
+      assert.equal(entry.posted, true);
+    }
+    assert.equal(logs[3].action, 'run_all');
+    assert.equal(logs[3].ok, true);
+
+    const stateRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(stateRes.status, 200);
+    const state = await stateRes.json();
+    const host = dailyGameHostForDate(state.daily_game.date);
+    const hostIndex = ['wick', 'maren', 'tomas'].indexOf(host);
+    assert.notEqual(hostIndex, -1);
+    assert.equal(logs[hostIndex].postedGame, true);
+    assert.equal(logs[hostIndex].reason, 'daily game');
+    for (let i = 0; i < 3; i++) {
+      if (i !== hostIndex) {
+        assert.equal('postedGame' in logs[i], false);
+      }
+    }
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
     await ctx.close();
   }
 });
