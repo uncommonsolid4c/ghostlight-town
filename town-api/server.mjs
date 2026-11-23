@@ -298,6 +298,7 @@ function atomicWriteFile(targetPath, content) {
  * @param {string} [opts.plotsDir]
  * @param {string} [opts.operatorPubkey]
  * @param {string} [opts.topicsPath]
+ * @param {string} [opts.gamesPath]
  * @param {string} [opts.eventsPath]
  * @param {() => number} [opts.nowFn] - returns unix seconds (for deterministic tests)
  */
@@ -308,6 +309,7 @@ export function createTownServer(opts = {}) {
     opts.operatorPubkey !== undefined ? opts.operatorPubkey : process.env.TOWN_OPERATOR_PUBKEY || '';
   const nowSec = opts.nowFn || (() => Math.floor(Date.now() / 1000));
   const topicsPath = opts.topicsPath !== undefined ? opts.topicsPath : path.join(__dirname, 'nightly-topics.json');
+  const gamesPath = opts.gamesPath !== undefined ? opts.gamesPath : path.join(__dirname, 'daily-games.json');
   const eventsPath = opts.eventsPath || process.env.TOWN_EVENTS_PATH || path.join(__dirname, 'events.json');
 
   let cachedEvents = { mtimeMs: null, events: [] };
@@ -340,6 +342,31 @@ export function createTownServer(opts = {}) {
       }
     } catch {
       nightlyTopics = null;
+    }
+  }
+
+  const validGameFormats = new Set(['riddle', 'word', 'story']);
+  let dailyGames = null;
+  if (typeof gamesPath === 'string' && gamesPath.length > 0) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(gamesPath, 'utf8'));
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every(
+          (g) =>
+            g &&
+            typeof g === 'object' &&
+            validGameFormats.has(g.format) &&
+            typeof g.prompt === 'string' &&
+            g.prompt.trim().length > 0 &&
+            g.prompt.length <= 160
+        )
+      ) {
+        dailyGames = parsed;
+      }
+    } catch {
+      dailyGames = null;
     }
   }
 
@@ -700,15 +727,27 @@ export function createTownServer(opts = {}) {
       events: { now: nowEvent, next: nextEvent },
     };
 
-    if (nightlyTopics) {
+    if (nightlyTopics || dailyGames) {
       const d = new Date(now * 1000);
       const utcMidnightMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
       const dayNumber = Math.floor(utcMidnightMs / 86400000);
-      const idx = ((dayNumber % nightlyTopics.length) + nightlyTopics.length) % nightlyTopics.length;
-      stateBody.nightly_call = {
-        date: d.toISOString().slice(0, 10),
-        topic: nightlyTopics[idx],
-      };
+      const dateStr = d.toISOString().slice(0, 10);
+      if (nightlyTopics) {
+        const idx = ((dayNumber % nightlyTopics.length) + nightlyTopics.length) % nightlyTopics.length;
+        stateBody.nightly_call = {
+          date: dateStr,
+          topic: nightlyTopics[idx],
+        };
+      }
+      if (dailyGames) {
+        const idx = ((dayNumber % dailyGames.length) + dailyGames.length) % dailyGames.length;
+        const game = dailyGames[idx];
+        stateBody.daily_game = {
+          date: dateStr,
+          format: game.format,
+          prompt: game.prompt,
+        };
+      }
     }
 
     sendJson(res, 200, stateBody);
