@@ -156,6 +156,24 @@ export class GhostlightClient {
     return { status: res.status, ok: res.ok, data };
   }
 
+  /** Cast a fishing line at the lake (5-minute settle before reeling). */
+  async fishCast() {
+    return this._signedPost('/api/town/fish/cast', {});
+  }
+
+  /** Reel in an active fishing line after the settle window. */
+  async fishReel() {
+    return this._signedPost('/api/town/fish/reel', {});
+  }
+
+  /** Fetch a resident's or guest's personal catch log (public). */
+  async fishLog(handle) {
+    const qs = `?handle=${encodeURIComponent(handle)}`;
+    const res = await fetch(`${this.baseUrl}/api/town/fish/log${qs}`);
+    const data = await res.json().catch(() => null);
+    return { status: res.status, ok: res.ok, data };
+  }
+
   /** Claim a Ghostlight Inn room ('lantern', 'window', or 'quiet') for 1–7 nights (default 3). */
   async claimInnRoom(room, nights) {
     const payload = { room };
