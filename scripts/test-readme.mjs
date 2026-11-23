@@ -422,14 +422,14 @@ test('scripts/README.md MANIFEST.json shape matches a real staging-polyfork dry 
     const summary = JSON.parse(stageOut.trim());
     assert.equal(summary.ok, true);
     assert.equal(summary.file_count, 195);
-    assert.equal(String(summary.staging_js_v), '40');
+    assert.equal(String(summary.staging_js_v), '41');
     assert.equal(summary.town_js_v, null);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
     );
     assert.equal(manifest.file_count, 195);
-    assert.equal(String(manifest.staging_js_v), '40');
+    assert.equal(String(manifest.staging_js_v), '41');
     assert.equal(manifest.files.length, 195);
 
     let sumBytes = 0;
@@ -505,7 +505,7 @@ test('scripts/README.md --verify rejection claims hold against a real tampered s
     const driftRes = runVerify();
     assert.equal(driftRes.exitCode, 1);
     assert.equal(driftRes.json.status, 'fail');
-    assert.equal(driftRes.json.staged_staging_js_v, '40');
+    assert.equal(driftRes.json.staged_staging_js_v, '41');
     assert.equal(driftRes.json.staging_js_v, '39');
     fs.writeFileSync(manifestPath, origManifestRaw);
 
