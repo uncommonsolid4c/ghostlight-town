@@ -752,6 +752,12 @@ export function createTownServer(opts = {}) {
         }
         return byPlot;
       })(),
+      // Moderation signal for the daily guestbook round (slice 329): the
+      // background check cannot list pending entries, so the count is what
+      // tells it something is waiting. A count leaks nothing — no bodies.
+      guestbook_pending: db
+        .prepare("SELECT COUNT(*) AS cnt FROM guestbook WHERE status = 'pending'")
+        .get().cnt,
       events: { now: nowEvent, next: nextEvent },
       garden: {
         slots: db
