@@ -221,3 +221,216 @@ test('daily game labels and host align with the state endpoint', async () => {
     await ctx.close();
   }
 });
+
+test('daily_game rotates at the UTC midnight boundary', async () => {
+  const games = JSON.parse(fs.readFileSync(GAMES_PATH, 'utf8'));
+  const ctx = await startTestServer({
+    baseNow: Math.floor(Date.UTC(2026, 10, 21, 23, 59, 0) / 1000),
+  });
+  try {
+    const client = new GhostlightClient({ baseUrl: ctx.baseUrl });
+    const first = await client.state();
+    assert.equal(first.status, 200);
+    assert.equal(first.data.daily_game.date, '2026-11-21');
+    assert.equal(
+      first.data.daily_game.prompt,
+      expectedGameForNow(games, ctx.nowSec()).game.prompt
+    );
+
+    ctx.advanceClock(120);
+    const second = await client.state();
+    assert.equal(second.status, 200);
+    assert.equal(second.data.daily_game.date, '2026-11-22');
+    assert.equal(
+      second.data.daily_game.prompt,
+      expectedGameForNow(games, ctx.nowSec()).game.prompt
+    );
+    assert.notEqual(second.data.daily_game.prompt, first.data.daily_game.prompt);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('daily_game is identical within one UTC day', async () => {
+  const ctx = await startTestServer({
+    baseNow: Math.floor(Date.UTC(2026, 10, 21, 0, 30, 0) / 1000),
+  });
+  try {
+    const client = new GhostlightClient({ baseUrl: ctx.baseUrl });
+    const first = await client.state();
+    assert.equal(first.status, 200);
+
+    ctx.advanceClock(23 * 3600);
+    const second = await client.state();
+    assert.equal(second.status, 200);
+    assert.deepEqual(second.data.daily_game, first.data.daily_game);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('a short games file rotates by its own length', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-short-games-'));
+  const gamesPath = path.join(tmpDir, 'games.json');
+  fs.writeFileSync(
+    gamesPath,
+    JSON.stringify([
+      { format: 'riddle', prompt: 'First game prompt' },
+      { format: 'word', prompt: 'Second game prompt' },
+    ]),
+    'utf8'
+  );
+
+  try {
+    const ctx = await startTestServer({
+      baseNow: Math.floor(Date.UTC(2026, 10, 21, 12, 0, 0) / 1000),
+      gamesPath,
+    });
+    try {
+      const client = new GhostlightClient({ baseUrl: ctx.baseUrl });
+      const prompts = [];
+      for (let i = 0; i < 3; i++) {
+        if (i > 0) ctx.advanceClock(DAY_SEC);
+        const res = await client.state();
+        assert.equal(res.status, 200);
+        prompts.push(res.data.daily_game.prompt);
+      }
+      assert.deepEqual(prompts, ['First game prompt', 'Second game prompt', 'First game prompt']);
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('an empty, non-array, or missing games file omits daily_game softly', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-soft-games-'));
+  const emptyPath = path.join(tmpDir, 'empty.json');
+  const objPath = path.join(tmpDir, 'object.json');
+  const missingPath = path.join(tmpDir, 'does-not-exist.json');
+  fs.writeFileSync(emptyPath, '[]', 'utf8');
+  fs.writeFileSync(objPath, JSON.stringify({ format: 'riddle', prompt: 'x' }), 'utf8');
+
+  try {
+    for (const gamesPath of [emptyPath, objPath, missingPath]) {
+      const ctx = await startTestServer({ gamesPath });
+      try {
+        const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+        assert.equal(res.status, 200);
+        assert.equal(res.data.daily_game, undefined);
+        assert.ok(res.data.nightly_call, 'nightly_call still present');
+      } finally {
+        await ctx.close();
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('one invalid entry poisons the whole games file', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-poison-games-'));
+  const cases = [
+    [{ format: 'riddle', prompt: 'x'.repeat(161) }],
+    [{ format: 'riddle', prompt: '   ' }],
+    [{ format: 'puzzle', prompt: 'Not a valid format' }],
+    [null],
+  ];
+
+  try {
+    for (let i = 0; i < cases.length; i++) {
+      const gamesPath = path.join(tmpDir, `case-${i}.json`);
+      fs.writeFileSync(gamesPath, JSON.stringify(cases[i]), 'utf8');
+      const ctx = await startTestServer({ gamesPath });
+      try {
+        const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+        assert.equal(res.status, 200);
+        assert.equal(res.data.daily_game, undefined);
+      } finally {
+        await ctx.close();
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('an empty-string gamesPath omits daily_game softly', async () => {
+  const ctx = await startTestServer({ gamesPath: '' });
+  try {
+    const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+    assert.equal(res.status, 200);
+    assert.equal(res.data.daily_game, undefined);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('daily game host cycles a full week and handles leap day', () => {
+  const week = [
+    '2026-11-21',
+    '2026-11-22',
+    '2026-11-23',
+    '2026-11-24',
+    '2026-11-25',
+    '2026-11-26',
+    '2026-11-27',
+  ].map(dailyGameHostForDate);
+  assert.deepEqual(week, ['wick', 'maren', 'tomas', 'wick', 'maren', 'tomas', 'wick']);
+  assert.notEqual(dailyGameHostForDate('2028-02-29'), null);
+  assert.equal(dailyGameHostForDate('2025-02-29'), null);
+  assert.notEqual(dailyGameHostForDate('2024-02-29'), null);
+});
+
+test('buildDailyGameLine preserves the prompt verbatim and isDailyGamePosted matches substrings', () => {
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: '  What has keys?  ' } }),
+    'Today\u0027s game \u2014 Riddle:   What has keys?  '
+  );
+
+  const promptBook = [
+    { body: 'Wick: quoting "Today\u0027s game \u2014 Riddle: What has keys but opens no locks?" for luck' },
+    { body: 42 },
+    null,
+    { body: 'What has key?' },
+  ];
+  assert.equal(isDailyGamePosted({ promptBook, dailyGame: { prompt: 'What has keys but opens no locks?' } }), true);
+  assert.equal(isDailyGamePosted({ promptBook, dailyGame: { prompt: 'What has keys' } }), true);
+  assert.equal(isDailyGamePosted({ promptBook, dailyGame: { prompt: 'What has keys but opens no locks??' } }), false);
+  assert.equal(isDailyGamePosted({ promptBook, dailyGame: { prompt: '  ' } }), false);
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ body: 'What has keys but opens no locks?' }],
+      dailyGame: { prompt: 'What has keys but opens no locks?' },
+    }),
+    true
+  );
+});
+
+test('daily_game survives a Prompt Book mutation unchanged', async () => {
+  const ctx = await startTestServer({ baseNow: Math.floor(Date.now() / 1000) });
+  try {
+    const alice = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      ...generateKeypair(),
+    });
+    const before = await alice.state();
+    assert.equal(before.status, 200);
+
+    const joined = await alice.join({ origin: 'musebook', bio: 'scratch' });
+    assert.equal(joined.status, 201);
+
+    const said = await alice.say('Hello, Bandstand.');
+    assert.equal(said.status, 201);
+
+    const after = await alice.state();
+    assert.equal(after.status, 200);
+    assert.deepEqual(after.data.daily_game, before.data.daily_game);
+    assert.ok(after.data.state_seq > before.data.state_seq);
+    assert.ok(Array.isArray(after.data.prompt_book) && after.data.prompt_book.length >= 1);
+  } finally {
+    await ctx.close();
+  }
+});
