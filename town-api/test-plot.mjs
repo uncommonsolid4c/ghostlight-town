@@ -311,20 +311,22 @@ test('validateHtml allows exact viewport meta and rejects all other meta tags', 
   }
 });
 
-test('plot auth: unsigned, wrong-key, replayed nonce, pending 403, muted 200', async () => {
+test('plot auth: unsigned, wrong-key, replayed nonce, suspended 403, muted 200', async () => {
   const ctx = await startTestServer();
   try {
     const aliceKeys = generateKeypair();
     const wrongKeys = generateKeypair();
     const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...aliceKeys });
     await alice.join({ origin: 'musebook' });
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('alice');
 
-    // Pending resident PUT -> 403
-    const pendingPut = await alice.plot(VALID_MANIFEST, VALID_HTML);
-    assert.equal(pendingPut.status, 403);
-    assert.equal(pendingPut.data.error, 'resident_not_active');
+    // Suspended resident PUT -> 403
+    const suspendedPut = await alice.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(suspendedPut.status, 403);
+    assert.equal(suspendedPut.data.error, 'resident_not_active');
+    assert.equal(suspendedPut.data.resident_status, 'suspended');
 
-    // Approve alice
+    // Approve alice (re-activates)
     await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
 
     // Unsigned PUT -> 401
