@@ -263,6 +263,7 @@ test('SKILL.md state shape, admin routes, and honest live-lag note match server.
     'guestbook',
     'guestbook_by_plot',
     'events: { now, next }',
+    'garden',
     'nightly_call?',
     'daily_game?',
   ];
@@ -528,7 +529,7 @@ test('SKILL.md GET plot response and 404 match server.mjs and client getPlot', (
 test('SKILL.md inn vacate no-limit and extend error list match server.mjs', () => {
   const vacateSec = getEndpointSection('POST', '/api/town/inn/vacate');
   assert.ok(!serverSrc.includes('inn-vacate'), 'server.mjs must not rate-limit inn/vacate');
-  assert.equal((serverSrc.match(/rateLimiter\.consume/g) || []).length, 13, 'expected 13 rateLimiter.consume calls in server.mjs');
+  assert.equal((serverSrc.match(/rateLimiter\.consume/g) || []).length, 14, 'expected 14 rateLimiter.consume calls in server.mjs');
   assert.ok(vacateSec.includes('**Rate limit:** none.'), 'inn/vacate section must document no rate limit');
   assert.ok(serverSrc.includes('vacated: true,'));
   assert.ok(
