@@ -60,15 +60,37 @@ const RATE_LIMITS = {
   guestSay: { max: 2, windowSec: 10 * 60 },
   guestInnClaim: { max: 2, windowSec: 60 * 60 },
   guestFishCast: { max: 2, windowSec: 60 * 60 },
+  guestGardenPlant: { max: 2, windowSec: 60 * 60 },
   joinIp: { max: 5, windowSec: 60 * 60 },
   plot: { max: 10, windowSec: 60 * 60 },
   fishCast: { max: 10, windowSec: 60 * 60 },
+  gardenPlant: { max: 10, windowSec: 60 * 60 },
   innClaim: { max: 10, windowSec: 60 * 60 },
   keyRotate: { max: 3, windowSec: 60 * 60 },
   guestbook: { max: 3, windowSec: 60 * 60 },
 };
 
 const SETTLE_SEC = 300;
+
+const GARDEN_SLOTS = 6;
+
+const GARDEN_SEEDS = Object.freeze([
+  Object.freeze({ kind: 'moonflower', label: 'Moonflower', color: '#dfe9ff' }),
+  Object.freeze({ kind: 'lantern_poppy', label: 'Lantern Poppy', color: '#ff9a3c' }),
+  Object.freeze({ kind: 'tea_mint', label: 'Tea Mint', color: '#7fb069' }),
+  Object.freeze({ kind: 'starwort', label: 'Starwort', color: '#c9a7eb' }),
+  Object.freeze({ kind: 'ghost_bell', label: 'Ghost Bell', color: '#a8d8ea' }),
+  Object.freeze({ kind: 'silver_thyme', label: 'Silver Thyme', color: '#b8c4b0' }),
+]);
+
+const GARDEN_SEED_SET = new Set(GARDEN_SEEDS.map((s) => s.kind));
+
+function gardenStageForAge(now, plantedAt) {
+  const ageDays = Math.floor((now - plantedAt) / 86400);
+  if (ageDays >= 4) return 'bloom';
+  if (ageDays >= 2) return 'leaf';
+  return 'sprout';
+}
 
 const POEM_BOTTLE_LINES = Object.freeze([
   'The lake keeps what the town forgets, and returns it damp.',
@@ -725,6 +747,18 @@ export function createTownServer(opts = {}) {
         return byPlot;
       })(),
       events: { now: nowEvent, next: nextEvent },
+      garden: {
+        slots: db
+          .prepare('SELECT slot, handle, seed, planted_at FROM garden_plants ORDER BY slot ASC')
+          .all()
+          .map((row) => ({
+            slot: row.slot,
+            handle: row.handle,
+            seed: row.seed,
+            planted_at: row.planted_at,
+            stage: gardenStageForAge(now, row.planted_at),
+          })),
+      },
     };
 
     if (nightlyTopics || dailyGames) {
@@ -1253,6 +1287,77 @@ export function createTownServer(opts = {}) {
       catches,
       count: catches.length,
     });
+  }
+
+  function plantSeedForHandle(handle, seed, now, rlBucket, rlRule, res) {
+    if (typeof seed !== 'string' || !GARDEN_SEED_SET.has(seed)) {
+      sendJson(res, 400, { error: 'invalid_seed' });
+      return;
+    }
+
+    const existing = db.prepare('SELECT slot, seed, planted_at FROM garden_plants WHERE handle = ?').get(handle);
+    if (existing) {
+      sendJson(res, 409, {
+        error: 'already_planted',
+        slot: existing.slot,
+        seed: existing.seed,
+        planted_at: existing.planted_at,
+      });
+      return;
+    }
+
+    const taken = new Set(
+      db.prepare('SELECT slot FROM garden_plants ORDER BY slot ASC').all().map((r) => r.slot)
+    );
+    let freeSlot = -1;
+    for (let i = 0; i < GARDEN_SLOTS; i++) {
+      if (!taken.has(i)) {
+        freeSlot = i;
+        break;
+      }
+    }
+    if (freeSlot === -1) {
+      sendJson(res, 409, { error: 'bed_full' });
+      return;
+    }
+
+    const rl = rateLimiter.consume(rlBucket, rlRule.max, rlRule.windowSec, now);
+    if (!rl.allowed) {
+      sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
+      return;
+    }
+
+    db.prepare(
+      'INSERT INTO garden_plants (slot, handle, seed, planted_at) VALUES (?, ?, ?, ?)'
+    ).run(freeSlot, handle, seed, now);
+    const stateSeq = bumpStateSeq();
+    sendJson(res, 201, {
+      handle,
+      slot: freeSlot,
+      seed,
+      planted_at: now,
+      stage: 'sprout',
+      state_seq: stateSeq,
+    });
+  }
+
+  function handleGardenPlant(req, res, body, auth) {
+    if (auth.resident.status === 'muted') {
+      sendJson(res, 403, { error: 'resident_muted' });
+      return;
+    }
+    plantSeedForHandle(auth.handle, body.seed, auth.now, `garden-plant:${auth.handle}`, RATE_LIMITS.gardenPlant, res);
+  }
+
+  function handleGuestGardenPlant(req, res, body, auth) {
+    const handle = body.handle ?? auth.handle;
+    const check = validateGuestHandle(handle);
+    if (!check.ok) {
+      sendJson(res, check.status, { error: check.error });
+      return;
+    }
+    const ip = getClientIp(req);
+    plantSeedForHandle(handle, body.seed, auth.now, `guest-garden-plant:${ip}`, RATE_LIMITS.guestGardenPlant, res);
   }
 
   function handleInnClaim(req, res, body, auth) {
@@ -1950,6 +2055,8 @@ export function createTownServer(opts = {}) {
     ['POST /api/town/fish/reel', { mode: 'resident', handler: handleFishReel }],
     ['POST /api/town/fish/guest/cast', { mode: 'guest', handler: handleGuestFishCast }],
     ['POST /api/town/fish/guest/reel', { mode: 'guest', handler: handleGuestFishReel }],
+    ['POST /api/town/garden/plant', { mode: 'resident', handler: handleGardenPlant }],
+    ['POST /api/town/garden/guest/plant', { mode: 'guest', handler: handleGuestGardenPlant }],
     ['POST /api/town/presence', { mode: 'resident', handler: handlePresence }],
     ['POST /api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }],
     ['POST /api/town/admin/invite', { mode: 'admin', handler: handleAdminInvite }],
