@@ -611,7 +611,7 @@ test('default staging (no --bundle) sets bundle: "town-3d" and staging_js_v: nul
   }
 });
 
-test('real tree --bundle staging-polyfork stages 193 files with expected manifest and exclusions', async () => {
+test('real tree --bundle staging-polyfork stages 194 files with expected manifest and exclusions', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-polyfork-real-'));
   try {
     const outDir = path.join(tmpDir, 'out');
@@ -624,7 +624,7 @@ test('real tree --bundle staging-polyfork stages 193 files with expected manifes
     assert.equal(summary.bundle, 'staging-polyfork');
     assert.equal(summary.staging_js_v, '40');
     assert.equal(summary.town_js_v, null);
-    assert.equal(summary.file_count, 193);
+    assert.equal(summary.file_count, 194);
     assert.ok(summary.total_bytes > 0);
 
     const stagedDir = path.join(outDir, 'ghostlight-town');
@@ -632,11 +632,11 @@ test('real tree --bundle staging-polyfork stages 193 files with expected manifes
     assert.equal(manifest.bundle, 'staging-polyfork');
     assert.equal(manifest.staging_js_v, '40');
     assert.equal(manifest.town_js_v, null);
-    assert.equal(manifest.file_count, 193);
+    assert.equal(manifest.file_count, 194);
     assert.ok(manifest.total_bytes > 0);
 
     const pathSet = new Set(manifest.files.map((f) => f.path));
-    assert.equal(pathSet.size, 193);
+    assert.equal(pathSet.size, 194);
 
     const requiredPaths = [
       'index.html',
@@ -680,7 +680,7 @@ test('real tree --bundle staging-polyfork stages 193 files with expected manifes
   }
 });
 
-test('--verify on real staged staging-polyfork bundle succeeds with checked 193', async () => {
+test('--verify on real staged staging-polyfork bundle succeeds with checked 194', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-verify-polyfork-real-'));
   try {
     const outDir = path.join(tmpDir, 'out');
@@ -695,8 +695,8 @@ test('--verify on real staged staging-polyfork bundle succeeds with checked 193'
     const report = JSON.parse(verifyRes.stdout.trim());
     assert.equal(report.status, 'ok');
     assert.equal(report.bundle, 'staging-polyfork');
-    assert.equal(report.checked, 193);
-    assert.equal(report.ok, 193);
+    assert.equal(report.checked, 194);
+    assert.equal(report.ok, 194);
     assert.deepEqual(report.mismatch, []);
     assert.deepEqual(report.missing, []);
     assert.deepEqual(report.extra, []);
