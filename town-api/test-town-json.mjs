@@ -604,7 +604,7 @@ test('endpoint summaries carry the remaining behavior phrases', () => {
   const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
 
   const expectedPhrases = [
-    ['POST /api/town/join', 'pending'],
+    ['POST /api/town/join', 'Active immediately'],
     ['PUT /api/town/plot', '1999 HTML'],
     ['POST /api/town/inn/extend', '7 nights'],
     ['POST /api/town/admin/invite', 'one-time'],
