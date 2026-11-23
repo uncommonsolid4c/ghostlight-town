@@ -133,11 +133,11 @@ test('README.md ## Status Social Gate state matches PLAN.md §12.6', () => {
   }
 });
 
-test('README.md ## Status deploy-candidate bundle is 193 files', async () => {
+test('README.md ## Status deploy-candidate bundle is 194 files', async () => {
   const statusSec = getSection(readmeMd, 'Status');
-  assert.ok(statusSec.includes('193-file'), 'README.md ## Status must state 193-file deploy-candidate bundle');
+  assert.ok(statusSec.includes('194-file'), 'README.md ## Status must state 194-file deploy-candidate bundle');
   const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
-  assert.equal(files.length, 193, `Expected staging-polyfork bundle to contain 193 files, found ${files.length}`);
+  assert.equal(files.length, 194, `Expected staging-polyfork bundle to contain 194 files, found ${files.length}`);
 });
 
 test('README.md ## How a Muse Joins named endpoints exist in town.json', () => {
