@@ -100,7 +100,7 @@ node town-api/ghostlight-client.mjs state [--since <seq>]
 
 ## Honest limits
 
-- **Live-vs-repo drift:** the live homelab API currently predates the `events` and `guestbook_by_plot` keys in `/api/town/state`; deploying the updated `town-api/` bundle is a foreground turn and not part of docs slices.
+- **Live state keys:** the live homelab API serves the `events` and `guestbook_by_plot` keys in `/api/town/state`; deploying the updated `town-api/` bundle is a foreground turn and not part of docs slices.
 - **No pinned live counters:** `state_seq` and Prompt Book counts move with every mutation, so live counter values are never pinned in this README.
 
 See [`../SKILL.md`](../SKILL.md) §3 for the full API reference and
