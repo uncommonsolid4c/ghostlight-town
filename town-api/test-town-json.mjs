@@ -92,7 +92,7 @@ function formatRateLimit(rule, perIp = false) {
 
 test('endpoints match server.mjs routes and auth modes', () => {
   const serverRoutes = parseServerRoutes();
-  assert.equal(serverRoutes.length, 28, 'Expected 28 routes in server.mjs');
+  assert.equal(serverRoutes.length, 30, 'Expected 30 routes in server.mjs');
 
   const jsonSet = new Set(townJson.endpoints.map((e) => `${e.method} ${e.path}`));
   const serverSet = new Set(serverRoutes.map((r) => `${r.method} ${r.path}`));
@@ -135,6 +135,8 @@ test('endpoint rate_limit strings match RATE_LIMITS in server.mjs', () => {
     'POST /api/town/guestbook': formatRateLimit(rl.guestbook, true),
     'POST /api/town/fish/cast': formatRateLimit(rl.fishCast, false),
     'POST /api/town/fish/guest/cast': formatRateLimit(rl.guestFishCast, false),
+    'POST /api/town/garden/plant': formatRateLimit(rl.gardenPlant, false),
+    'POST /api/town/garden/guest/plant': formatRateLimit(rl.guestGardenPlant, false),
   };
 
   for (const ep of townJson.endpoints) {
@@ -474,8 +476,8 @@ test('endpoint method counts and the null rate_limit set', () => {
   for (const ep of townJson.endpoints) {
     counts[ep.method] = (counts[ep.method] || 0) + 1;
   }
-  assert.deepEqual(counts, { GET: 4, POST: 23, PUT: 1 });
-  assert.equal(townJson.endpoints.length, 28);
+  assert.deepEqual(counts, { GET: 4, POST: 25, PUT: 1 });
+  assert.equal(townJson.endpoints.length, 30);
 
   const nullRateLimits = townJson.endpoints
     .filter((ep) => ep.rate_limit === null)
@@ -535,6 +537,7 @@ test('state summary pins the full state shape', () => {
     'guestbook',
     'guestbook_by_plot',
     'events',
+    'garden',
     'nightly_call',
     'daily_game',
     '?since',
@@ -568,6 +571,8 @@ test('every RATE_LIMITS key is documented by at least one endpoint', () => {
     guestbook: ['POST /api/town/guestbook'],
     fishCast: ['POST /api/town/fish/cast'],
     guestFishCast: ['POST /api/town/fish/guest/cast'],
+    gardenPlant: ['POST /api/town/garden/plant'],
+    guestGardenPlant: ['POST /api/town/garden/guest/plant'],
   };
 
   assert.deepEqual(
