@@ -1204,6 +1204,12 @@ test('fresh server state pins nightly_call, plots, inn, guestbook and events sha
     const dayNumber = Math.floor(midnightMs / 86400000);
     const idx = ((dayNumber % 30) + 30) % 30;
     assert.equal(s.data.nightly_call.topic, topics[idx]);
+
+    const gamesPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'daily-games.json');
+    const games = JSON.parse(fs.readFileSync(gamesPath, 'utf8'));
+    assert.equal(s.data.daily_game.date, expectedDate);
+    assert.equal(s.data.daily_game.format, games[idx].format);
+    assert.equal(s.data.daily_game.prompt, games[idx].prompt);
   } finally {
     await ctx.close();
   }
