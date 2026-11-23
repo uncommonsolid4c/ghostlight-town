@@ -777,3 +777,494 @@ test('GARDEN_SEEDS table pins all six seeds and matches the 3D SEED_COLORS', () 
     );
   }
 });
+
+test('guest plant response carries the exact keys and bumps state_seq by one', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await joinResident(ctx, 'alice');
+    const st0 = await alice.state();
+    assert.equal(st0.status, 200);
+    const seqBefore = st0.data.state_seq;
+
+    const guestKeys = generateKeypair();
+    const res = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_rose', pubkey: guestKeys.pubkey, seed: 'starwort' },
+      'guest_rose',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(res.status, 201);
+    assert.deepEqual(
+      Object.keys(res.data).sort(),
+      ['handle', 'planted_at', 'seed', 'slot', 'stage', 'state_seq']
+    );
+    assert.equal(res.data.handle, 'guest_rose');
+    assert.equal(res.data.slot, 0);
+    assert.equal(res.data.seed, 'starwort');
+    assert.equal(res.data.stage, 'sprout');
+    assert.ok(Number.isInteger(res.data.planted_at));
+    assert.equal(res.data.state_seq, seqBefore + 1);
+
+    const st1 = await alice.state();
+    assert.equal(st1.status, 200);
+    assert.equal(st1.data.garden.slots.length, 1);
+    assert.equal(st1.data.garden.slots[0].handle, 'guest_rose');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest plant auth failures: missing pubkey 400, handle mismatch 401, wrong-key signature 401', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const keysB = generateKeypair();
+
+    const missingPubkey = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { seed: 'moonflower' },
+      'guest_x',
+      keysA.privateKeyPem
+    );
+    assert.equal(missingPubkey.status, 400);
+    assert.equal(missingPubkey.data.error, 'missing_pubkey');
+
+    const handleMismatch = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_other', pubkey: keysA.pubkey, seed: 'moonflower' },
+      'guest_x',
+      keysA.privateKeyPem
+    );
+    assert.equal(handleMismatch.status, 401);
+    assert.equal(handleMismatch.data.error, 'handle_mismatch');
+
+    const wrongKey = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { pubkey: keysA.pubkey, seed: 'moonflower' },
+      'guest_x',
+      keysB.privateKeyPem
+    );
+    assert.equal(wrongKey.status, 401);
+    assert.equal(wrongKey.data.error, 'invalid_signature');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('resident plant auth failures: unknown resident 401, unsigned 401, suspended 403', async () => {
+  const ctx = await startTestServer();
+  try {
+    const unknownKeys = generateKeypair();
+    const unknown = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'never_joined',
+      unknownKeys.privateKeyPem
+    );
+    assert.equal(unknown.status, 401);
+    assert.equal(unknown.data.error, 'unknown_resident');
+
+    const unsignedRes = await fetch(`${ctx.baseUrl}/api/town/garden/plant`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seed: 'moonflower' }),
+    });
+    const unsignedData = await unsignedRes.json();
+    assert.equal(unsignedRes.status, 401);
+    assert.equal(unsignedData.error, 'missing_auth_headers');
+
+    const { keys: suspKeys } = await joinResident(ctx, 'suspended_gardener');
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspended_gardener');
+
+    const suspended = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'suspended_gardener',
+      suspKeys.privateKeyPem
+    );
+    assert.equal(suspended.status, 403);
+    assert.deepEqual(suspended.data, {
+      error: 'resident_not_active',
+      resident_status: 'suspended',
+    });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('error precedence on a full bed: invalid seed, then already-planted, then bed-full', async () => {
+  const ctx = await startTestServer();
+  try {
+    const seeds = ['moonflower', 'lantern_poppy', 'tea_mint', 'starwort', 'ghost_bell', 'silver_thyme'];
+    const gardeners = [];
+    for (let i = 0; i < 6; i++) {
+      if (i > 0 && i % 4 === 0) ctx.advanceClock(3601);
+      const joined = await joinResident(ctx, `gardener_${i}`);
+      gardeners.push(joined);
+      const res = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: seeds[i] },
+        `gardener_${i}`,
+        joined.keys.privateKeyPem
+      );
+      assert.equal(res.status, 201);
+    }
+
+    ctx.advanceClock(3601);
+    const { client: seventhClient, keys: seventhKeys } = await joinResident(ctx, 'gardener_6');
+    const stBefore = await seventhClient.state();
+    assert.equal(stBefore.status, 200);
+    const seqAfterJoin = stBefore.data.state_seq;
+    const slot0PlantedAt = stBefore.data.garden.slots[0].planted_at;
+
+    const badSeed = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'rose' },
+      'gardener_6',
+      seventhKeys.privateKeyPem
+    );
+    assert.equal(badSeed.status, 400);
+    assert.deepEqual(badSeed.data, { error: 'invalid_seed' });
+
+    const alreadyPlanted = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'tea_mint' },
+      'gardener_0',
+      gardeners[0].keys.privateKeyPem
+    );
+    assert.equal(alreadyPlanted.status, 409);
+    assert.deepEqual(alreadyPlanted.data, {
+      error: 'already_planted',
+      slot: 0,
+      seed: 'moonflower',
+      planted_at: slot0PlantedAt,
+    });
+
+    const lateKeys = generateKeypair();
+    const bedFull = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_late', pubkey: lateKeys.pubkey, seed: 'moonflower' },
+      'guest_late',
+      lateKeys.privateKeyPem
+    );
+    assert.equal(bedFull.status, 409);
+    assert.deepEqual(bedFull.data, { error: 'bed_full' });
+
+    const stAfter = await seventhClient.state();
+    assert.equal(stAfter.status, 200);
+    assert.equal(stAfter.data.state_seq, seqAfterJoin);
+    assert.equal(stAfter.data.garden.slots.length, 6);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('failed guest attempts do not consume the 2-per-hour guest bucket', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const keysB = generateKeypair();
+    const keysC = generateKeypair();
+
+    for (let i = 0; i < 2; i++) {
+      const bad = await signedPostAt(
+        ctx,
+        '/api/town/garden/guest/plant',
+        { handle: 'guest_a', pubkey: keysA.pubkey, seed: 'rose' },
+        'guest_a',
+        keysA.privateKeyPem
+      );
+      assert.equal(bad.status, 400);
+      assert.equal(bad.data.error, 'invalid_seed');
+    }
+
+    const okA = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: keysA.pubkey, seed: 'starwort' },
+      'guest_a',
+      keysA.privateKeyPem
+    );
+    assert.equal(okA.status, 201);
+    assert.equal(okA.data.slot, 0);
+
+    const dupA = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: keysA.pubkey, seed: 'moonflower' },
+      'guest_a',
+      keysA.privateKeyPem
+    );
+    assert.equal(dupA.status, 409);
+    assert.equal(dupA.data.error, 'already_planted');
+
+    const okB = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b', pubkey: keysB.pubkey, seed: 'tea_mint' },
+      'guest_b',
+      keysB.privateKeyPem
+    );
+    assert.equal(okB.status, 201);
+    assert.equal(okB.data.slot, 1);
+
+    const limitedC = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_c', pubkey: keysC.pubkey, seed: 'moonflower' },
+      'guest_c',
+      keysC.privateKeyPem
+    );
+    assert.equal(limitedC.status, 429);
+    assert.equal(limitedC.data.error, 'rate_limited');
+    assert.ok(limitedC.data.retry_after > 0 && limitedC.data.retry_after <= 3600);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('resident and guest garden buckets are independent', async () => {
+  const ctxA = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const ga = await signedPostAt(
+      ctxA,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: keysA.pubkey, seed: 'moonflower' },
+      'guest_a',
+      keysA.privateKeyPem
+    );
+    assert.equal(ga.status, 201);
+    assert.equal(ga.data.slot, 0);
+
+    const keysB = generateKeypair();
+    const gb = await signedPostAt(
+      ctxA,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b', pubkey: keysB.pubkey, seed: 'tea_mint' },
+      'guest_b',
+      keysB.privateKeyPem
+    );
+    assert.equal(gb.status, 201);
+    assert.equal(gb.data.slot, 1);
+
+    const { keys: resKeys } = await joinResident(ctxA, 'resident_planter');
+    const resPlant = await signedPostAt(
+      ctxA,
+      '/api/town/garden/plant',
+      { seed: 'starwort' },
+      'resident_planter',
+      resKeys.privateKeyPem
+    );
+    assert.equal(resPlant.status, 201);
+    assert.equal(resPlant.data.slot, 2);
+
+    const keysC = generateKeypair();
+    const gc = await signedPostAt(
+      ctxA,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_c', pubkey: keysC.pubkey, seed: 'ghost_bell' },
+      'guest_c',
+      keysC.privateKeyPem
+    );
+    assert.equal(gc.status, 429);
+    assert.equal(gc.data.error, 'rate_limited');
+  } finally {
+    await ctxA.close();
+  }
+
+  const ctxB = await startTestServer();
+  try {
+    const { keys: firstKeys } = await joinResident(ctxB, 'first_resident');
+    const first = await signedPostAt(
+      ctxB,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'first_resident',
+      firstKeys.privateKeyPem
+    );
+    assert.equal(first.status, 201);
+    assert.equal(first.data.slot, 0);
+
+    const keysA = generateKeypair();
+    const ga = await signedPostAt(
+      ctxB,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: keysA.pubkey, seed: 'tea_mint' },
+      'guest_a',
+      keysA.privateKeyPem
+    );
+    assert.equal(ga.status, 201);
+    assert.equal(ga.data.slot, 1);
+
+    const keysB = generateKeypair();
+    const gb = await signedPostAt(
+      ctxB,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b', pubkey: keysB.pubkey, seed: 'starwort' },
+      'guest_b',
+      keysB.privateKeyPem
+    );
+    assert.equal(gb.status, 201);
+    assert.equal(gb.data.slot, 2);
+
+    const keysC = generateKeypair();
+    const gc = await signedPostAt(
+      ctxB,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_c', pubkey: keysC.pubkey, seed: 'ghost_bell' },
+      'guest_c',
+      keysC.privateKeyPem
+    );
+    assert.equal(gc.status, 429);
+    assert.equal(gc.data.error, 'rate_limited');
+  } finally {
+    await ctxB.close();
+  }
+});
+
+test('guest plant planted_at is server now and state entry carries the exact keys', async () => {
+  let now = 1795000000;
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const guestKeys = generateKeypair();
+    const res = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_timed', pubkey: guestKeys.pubkey, seed: 'ghost_bell' },
+      'guest_timed',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(res.status, 201);
+    assert.equal(res.data.planted_at, 1795000000);
+    assert.equal(res.data.stage, 'sprout');
+
+    const guestClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'guest_timed',
+      ...guestKeys,
+    });
+    const st = await guestClient.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.garden.slots.length, 1);
+    assert.deepEqual(
+      Object.keys(st.data.garden.slots[0]).sort(),
+      ['handle', 'planted_at', 'seed', 'slot', 'stage']
+    );
+    assert.equal(st.data.garden.slots[0].planted_at, 1795000000);
+    assert.equal(st.data.garden.slots[0].stage, 'sprout');
+    assert.equal(st.data.garden.slots[0].handle, 'guest_timed');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('garden plants persist across a server restart on the same database', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-garden-restart-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+  const nowFn = () => 1795000000;
+  let s1 = null;
+  let s2 = null;
+
+  try {
+    s1 = createTownServer({
+      dbPath,
+      plotsDir,
+      operatorPubkey: operatorKeys.pubkey,
+      nowFn,
+    });
+    await new Promise((resolve) => s1.server.listen(0, '127.0.0.1', resolve));
+    const baseUrl1 = `http://127.0.0.1:${s1.server.address().port}`;
+    const ctx1 = { baseUrl: baseUrl1, nowSec: nowFn };
+
+    const { client: alice1, keys: aliceKeys } = await joinResident(ctx1, 'alice');
+    const planted = await signedPostAt(
+      ctx1,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(planted.status, 201);
+
+    const st1 = await alice1.state();
+    assert.equal(st1.status, 200);
+    assert.equal(st1.data.garden.slots.length, 1);
+    const seqBefore = st1.data.state_seq;
+    const plantedAt = st1.data.garden.slots[0].planted_at;
+
+    await new Promise((resolve) => s1.server.close(resolve));
+    s1 = null;
+
+    s2 = createTownServer({
+      dbPath,
+      plotsDir,
+      operatorPubkey: operatorKeys.pubkey,
+      nowFn,
+    });
+    await new Promise((resolve) => s2.server.listen(0, '127.0.0.1', resolve));
+    const baseUrl2 = `http://127.0.0.1:${s2.server.address().port}`;
+
+    const alice2 = new GhostlightClient({ baseUrl: baseUrl2, handle: 'alice', ...aliceKeys });
+    const st2 = await alice2.state();
+    assert.equal(st2.status, 200);
+    assert.equal(st2.data.garden.slots.length, 1);
+    assert.deepEqual(st2.data.garden.slots[0], {
+      handle: 'alice',
+      slot: 0,
+      seed: 'moonflower',
+      planted_at: plantedAt,
+      stage: 'sprout',
+    });
+    assert.equal(st2.data.state_seq, seqBefore);
+  } finally {
+    if (s1) await new Promise((resolve) => s1.server.close(resolve));
+    if (s2) await new Promise((resolve) => s2.server.close(resolve));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('state?since= reflects a planting: 200 with garden after, 304 once caught up', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const st0 = await alice.state();
+    assert.equal(st0.status, 200);
+    assert.deepEqual(st0.data.garden, { slots: [] });
+    const seq0 = st0.data.state_seq;
+
+    const p1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(p1.status, 201);
+    const seq1 = p1.data.state_seq;
+    assert.equal(seq1, seq0 + 1);
+
+    const stSince0 = await alice.state(seq0);
+    assert.equal(stSince0.status, 200);
+    assert.equal(stSince0.data.garden.slots.length, 1);
+    assert.equal(stSince0.data.garden.slots[0].seed, 'moonflower');
+
+    const stSince1 = await alice.state(seq1);
+    assert.equal(stSince1.status, 304);
+    assert.equal(stSince1.data, null);
+  } finally {
+    await ctx.close();
+  }
+});
