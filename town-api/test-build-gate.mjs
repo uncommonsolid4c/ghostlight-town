@@ -1189,6 +1189,7 @@ test('fresh server state pins nightly_call, plots, inn, guestbook and events sha
     assert.deepEqual(s.data.guestbook, { signed: 0, letters: 0 });
     assert.deepEqual(s.data.guestbook_by_plot, {});
     assert.deepEqual(s.data.events, { now: null, next: null });
+    assert.deepEqual(s.data.garden, { slots: [] });
 
     const nowSec = ctx.nowSec();
     const expectedDate = new Date(nowSec * 1000).toISOString().slice(0, 10);
