@@ -352,6 +352,8 @@ export function createTownServer(opts = {}) {
     }
   }
 
+  db.exec("UPDATE residents SET status = 'active' WHERE status = 'pending'");
+
   // In-memory nonce cache: key = `${handle}:${nonce}` -> { nonce, handle, expiresAt }
   const nonces = new Map();
   const rateLimiter = new RateLimiter();
@@ -675,7 +677,7 @@ export function createTownServer(opts = {}) {
       return;
     }
 
-    let status = 'pending';
+    const status = 'active';
     if (inviteCode !== undefined && inviteCode !== null && inviteCode !== '') {
       if (typeof inviteCode !== 'string') {
         sendJson(res, 400, { error: 'invalid_invite' });
@@ -692,7 +694,6 @@ export function createTownServer(opts = {}) {
         return;
       }
       db.prepare('UPDATE invitations SET used_by = ?, used_at = ? WHERE code = ?').run(handle, now, inviteCode);
-      status = 'active';
     }
 
     db.prepare(
@@ -701,7 +702,7 @@ export function createTownServer(opts = {}) {
 
     db.prepare(
       "INSERT INTO key_history (handle, pubkey, action, created_at, note) VALUES (?, ?, 'register', ?, ?)"
-    ).run(handle, body.pubkey, now, inviteCode ? 'joined with invite' : 'joined pending approval');
+    ).run(handle, body.pubkey, now, inviteCode ? 'joined with invite' : 'joined');
 
     const stateSeq = bumpStateSeq();
     sendJson(res, 201, { handle, status, origin, state_seq: stateSeq });
