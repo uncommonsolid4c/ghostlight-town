@@ -480,6 +480,38 @@ test('per-plot validation rejects unknown_plot, letter+plot, empty/non-string pl
   }
 });
 
+test('owner cottage plot=milo is a valid guestbook plot without a resident row (slice 327)', async () => {
+  const ctx = await startTestServer();
+  try {
+    // No resident is registered at all — 'milo' must still work, because the
+    // owner's cottage (pad 1) has a guestbook but holds no resident row by
+    // design. Before the fix, GET ?plot=milo 400'd unknown_plot and the
+    // cottage overlay showed the "couldn't be reached" fallback.
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const ipHeader = { 'X-Forwarded-For': '203.0.113.99' };
+
+    const getRes = await visitor.getGuestbook(undefined, 'milo');
+    assert.equal(getRes.status, 200);
+    assert.deepEqual(getRes.data, { entries: [] });
+
+    const postRes = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Alice', body: 'Lovely cottage!', plot: 'milo' },
+      ipHeader
+    );
+    assert.equal(postRes.status, 201);
+    assert.equal(postRes.data.status, 'pending');
+
+    // A genuinely unknown handle still 400s.
+    const getUnknown = await visitor.getGuestbook(undefined, 'nobody');
+    assert.equal(getUnknown.status, 400);
+    assert.equal(getUnknown.data.error, 'unknown_plot');
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('GET /api/town/guestbook composes ?kind= and ?plot= filters', async () => {
   const ctx = await startTestServer();
   try {
