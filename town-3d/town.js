@@ -5,7 +5,7 @@
 
 import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js?v=2';
-import { buildConceptBandstand } from './concept-bandstand.js';
+import { buildConceptBandstand, lightFootlightSlot } from './concept-bandstand.js';
 
 export const TOWN_LAYOUT = {
   clearingRadius: 30,
@@ -2427,26 +2427,6 @@ function splitNightlyCallLines(topic, maxLineLen = 60) {
   return [topic.slice(0, splitIdx).trim(), topic.slice(splitIdx + 1).trim()];
 }
 
-function formatFootlightStatusLines(statusText) {
-  const trimmed = typeof statusText === 'string' ? statusText.trim() : '';
-  if (!trimmed) return [];
-  const maxChars = 20;
-  const source = trimmed.length > maxChars * 2 ? trimmed.slice(0, maxChars * 2) : trimmed;
-  const lines = splitNightlyCallLines(source, maxChars).slice(0, 2);
-  const truncated = trimmed.length > maxChars * 2 || lines.some((l) => l.length > maxChars);
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].length > maxChars) {
-      lines[i] = lines[i].slice(0, maxChars - 1).trimEnd() + '…';
-    }
-  }
-  if (truncated && lines.length > 0 && !lines[lines.length - 1].endsWith('…')) {
-    const lastIdx = lines.length - 1;
-    const last = lines[lastIdx];
-    lines[lastIdx] = (last.length >= maxChars ? last.slice(0, maxChars - 1) : last).trimEnd() + '…';
-  }
-  return lines;
-}
-
 /**
  * Redraw the Bandstand's Nightly Call card texture from live state.nightly_call.
  * Missing card, missing/malformed nightlyCall, or unchanged topic is a no-op.
@@ -2527,29 +2507,11 @@ export function applyState(town, state = {}, options = {}) {
         flGroup.userData.handle !== row.handle ||
         (flGroup.userData.statusText ?? null) !== statusText
       ) {
-        const statusLines = statusText ? formatFootlightStatusLines(statusText) : [];
-        const textureLines = statusLines.length > 0 ? [row.handle, ...statusLines] : [row.handle];
-        const textureOpts = statusLines.length > 0
-          ? {
-              width: 256,
-              height: 96,
-              titleSize: 22,
-              subSize: 16,
-              bg: '#3b2b1d',
-              border: '#b59449',
-              fg: '#f4ead5',
-            }
-          : {
-              width: 256,
-              height: 96,
-              titleSize: 28,
-              bg: '#3b2b1d',
-              border: '#b59449',
-              fg: '#f4ead5',
-            };
-        placard.material.map = makeTextTexture(THREE, textureLines, textureOpts);
-        setMaterialColor(placard.material, 'color', '#ffffff');
-        placard.material.needsUpdate = true;
+        lightFootlightSlot(THREE, flGroup, {
+          handle: row.handle,
+          role,
+          statusText: statusText ?? undefined,
+        });
       }
       flGroup.userData.lit = true;
       flGroup.userData.handle = row.handle;
