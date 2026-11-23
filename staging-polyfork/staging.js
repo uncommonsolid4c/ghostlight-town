@@ -30,6 +30,7 @@ import {
 } from './inn-nightly-call.mjs?v=39';
 import { buildDaylightDrift } from './daylight-drift.mjs?v=40';
 import { findFishingSpot, buildFishingSpot } from './fishing.mjs?v=40';
+import { GARDEN_BED, buildGardenBed } from './garden.mjs?v=40';
 import { createAsset as createFishingRod } from './kit-campground/propped-fishing-rod.mjs';
 import { createAsset as createTackleBox } from './kit-campground/tackle-box.mjs';
 import {
@@ -1117,6 +1118,11 @@ async function init() {
       createTackleBox,
     }));
   }
+  const gardenBed = buildGardenBed(THREE, {
+    garden: { slots: [] },
+    y: camp.groundAt(GARDEN_BED.x, GARDEN_BED.z),
+  });
+  scene.add(gardenBed);
   const keepClear = [
     [-11, 20, 10],
     [17.92, 4.60, 9],
