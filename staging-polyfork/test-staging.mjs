@@ -122,12 +122,12 @@ test('staging.js places Milo cottage at live plot-1 (17.92, 4.60) and NPCs at ra
   }
 });
 
-test('staging.html references staging.js?v=40, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
+test('staging.html references staging.js?v=41, uses live title/HUD copy, includes Prompt Book and plot-overlay UI, updates HUD copy, collapsible HUD, and contains no banned term', async () => {
   const [html, self] = await Promise.all([
     fs.readFile(INDEX_HTML_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
-  assert.match(html, /src=["']\.\/staging\.js\?v=40["']/, 'index.html must reference ./staging.js?v=40');
+  assert.match(html, /src=["']\.\/staging\.js\?v=41["']/, 'index.html must reference ./staging.js?v=41');
   assert.match(html, /id=["']interior-exit["'][^>]*\bhidden\b/, 'index.html must include #interior-exit hidden');
   assert.match(html, /<title>Ghostlight Town — a walkable 3D town for muses<\/title>/, 'index.html <title> must match live copy');
   assert.match(html, /<h1>Ghostlight Town &mdash; a walkable 3D town for muses<\/h1>/, 'index.html HUD <h1> must match live copy');
@@ -1056,6 +1056,39 @@ test('Slice 90: index.html has plot-overlay tabs with 44px mobile tap targets an
     const branchRe = new RegExp(`kind === '${kind}'\\)[\\s\\S]*?setPlotTabs\\(null\\)`);
     assert.match(codeOnly, branchRe, `staging.js ${kind} opener must call setPlotTabs(null)`);
   }
+});
+
+test('Nov 23 hotfix: plot-overlay tab handlers must not reference liveStore (module scope), and onState must refresh garden plants', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  // liveStore is created inside init(); the tab handlers are registered at
+  // module scope, so a liveStore reference there throws ReferenceError and
+  // the click silently does nothing (both tabs were dead in the ?v=40 bundle).
+  for (const el of ['plotOverlayTabNoteEl', 'plotOverlayTabGuestbookEl']) {
+    const handlerRe = new RegExp(
+      `${el}\\?\\.\\s*addEventListener\\s*\\(\\s*['"]click['"][\\s\\S]*?\\n\\}\\);`
+    );
+    const handler = codeOnly.match(handlerRe);
+    assert.ok(handler, `staging.js must wire ${el} click handler`);
+    assert.ok(
+      !handler[0].includes('liveStore'),
+      `${el} click handler must not reference liveStore (module scope has none)`
+    );
+  }
+
+  // The bed is built once with empty slots; without this call no plant ever
+  // renders (the moonflower was in API state but invisible in 3D).
+  assert.match(
+    codeOnly,
+    /import\s*\{\s*GARDEN_BED\s*,\s*buildGardenBed\s*,\s*updateGardenBed\s*\}\s*from\s*['"]\.\/garden\.mjs\?v=40['"]/,
+    'staging.js must import updateGardenBed from garden.mjs'
+  );
+  assert.match(
+    codeOnly,
+    /onState:\s*\(state\)\s*=>\s*\{[\s\S]*?updateGardenBed\s*\(\s*THREE\s*,\s*gardenBed\s*,\s*state\.garden\s*\)/,
+    'staging.js onState must call updateGardenBed(THREE, gardenBed, state.garden)'
+  );
 });
 
 test('Slice 92: index.html includes #info-strip and staging.js wires empty-pad markers and open_plot click', async () => {
