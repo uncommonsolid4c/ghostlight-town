@@ -19,6 +19,7 @@ repo source-of-truth `manifest.json` and `desk-note.html` files.
 | File | Role |
 | --- | --- |
 | `characters.mjs` | Defines `CHARACTERS` (wick, maren, tomas), `getStatusText`, and `buildSystemPrompt`. |
+| `daily-game.mjs` | Daily game host rotation (`dailyGameHostForDate`, `buildDailyGameLine`, `isDailyGamePosted`). |
 | `stepback.mjs` | Pure turn-decision rules (`decideTurn`, `selectReplierForLine`, `findAddressedLines`). |
 | `honesty.mjs` | Pure output gate (`checkHonesty`, `MAX_SAY_LEN = 500`, denylist, attribution check). |
 | `keygen.mjs` | Generates and loads Ed25519 keys (`key.pem` mode `0600`, `pubkey.txt` 44-char base64). |
@@ -26,7 +27,7 @@ repo source-of-truth `manifest.json` and `desk-note.html` files.
 | `run.mjs` | Executes one turn for one NPC (`runTurn`, `trimMemory`, `getPartOfDay`, `buildTurnPrompt`). |
 | `run-all.mjs` | Wrapper running `wick` → `maren` → `tomas` sequentially with stagger and API probe. |
 
-Test suites: `test-npc.mjs`, `test-plots.mjs`, `test-real-brain.mjs`,
+Test suites: `test-daily-game.mjs`, `test-npc.mjs`, `test-plots.mjs`, `test-real-brain.mjs`,
 `test-register.mjs`, `test-run-all.mjs`, `test-readme.mjs`.
 
 ## Running it
