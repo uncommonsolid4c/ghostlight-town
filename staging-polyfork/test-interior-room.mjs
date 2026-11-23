@@ -743,3 +743,157 @@ test('setter coercion and dressing edges', () => {
     assert.equal(group.children.length, 3);
   }
 });
+
+test('interior accent colors match the plot manifests', async () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const backWall = room.children.find((m) => m.name === 'interior_wall_back');
+
+  const manifestFields = [
+    ['milo', 'wall'],
+    ['wick', 'trim'],
+    ['maren', 'roof'],
+    ['tomas', 'roof'],
+  ];
+  const manifestColors = {};
+  for (const [handle, field] of manifestFields) {
+    const raw = await fs.readFile(
+      path.join(REPO_ROOT, 'town-npc', 'plots', handle, 'manifest.json'),
+      'utf8'
+    );
+    const manifest = JSON.parse(raw);
+    const expected = manifest[field];
+    manifestColors[handle] = expected;
+    assert.equal(setInteriorPalette(room, handle), true);
+    assert.equal(backWall.material.color, expected, `${handle} manifest ${field}`);
+  }
+
+  const miloRoom = buildInteriorRoom(THREE, { palette: 'milo' });
+  const miloBack = miloRoom.children.find((m) => m.name === 'interior_wall_back');
+  assert.equal(miloBack.material.color, '#a8d8ea');
+  assert.equal(miloBack.material.color, manifestColors.milo);
+});
+
+test('every hex in interior-room.mjs is a ledgered CONCEPT.md color', async () => {
+  const [roomSrc, conceptSrc] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8'),
+    fs.readFile(path.join(REPO_ROOT, 'CONCEPT.md'), 'utf8'),
+  ]);
+
+  const found = [...new Set((roomSrc.match(/#[0-9a-fA-F]{6}/g) ?? []).map((h) => h.toLowerCase()))].sort();
+
+  // CONCEPT.md palette (#6b492b #f5efe0 #a8d8ea #c8922e #43505c #b5633a #ffbe5c #5a4332),
+  // brass (#b59449), cat (#2b2b2b), vendored dressing colors (#9a7b3e #fff1c9 #ffcf70 #2b2f33 #d8d2c5 #8f6b47).
+  const vendored = ['#9a7b3e', '#fff1c9', '#ffcf70', '#2b2f33', '#d8d2c5', '#8f6b47'];
+  const allowed = [
+    '#6b492b',
+    '#f5efe0',
+    '#a8d8ea',
+    '#c8922e',
+    '#43505c',
+    '#b5633a',
+    '#ffbe5c',
+    '#5a4332',
+    '#b59449',
+    '#2b2b2b',
+    ...vendored,
+  ].sort();
+
+  assert.equal(found.length, 16);
+  assert.deepEqual(found, allowed);
+
+  const conceptLower = conceptSrc.toLowerCase();
+  for (const hex of vendored) {
+    assert.ok(conceptLower.includes(hex), `CONCEPT.md must name vendored dressing color ${hex}`);
+  }
+});
+
+test('shared material instances', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  const woodMat = byName.get('interior_floor').material;
+  for (const name of [
+    'interior_rafter_1',
+    'interior_rafter_2',
+    'interior_rafter_3',
+    'interior_rafter_4',
+    'interior_desk',
+  ]) {
+    assert.equal(byName.get(name).material, woodMat, `${name} must share woodMat`);
+  }
+
+  const plasterMat = byName.get('interior_wall_left').material;
+  for (const name of [
+    'interior_wall_right',
+    'interior_wall_front_left',
+    'interior_wall_front_right',
+    'interior_wall_front_lintel',
+  ]) {
+    assert.equal(byName.get(name).material, plasterMat, `${name} must share plasterMat`);
+  }
+
+  const backMat = byName.get('interior_wall_back').material;
+  assert.equal(backMat.color, plasterMat.color);
+  assert.notEqual(backMat, plasterMat, 'back wall accentMat must be distinct from plasterMat');
+
+  const glowMat = byName.get('interior_window_glow_left').material;
+  assert.equal(byName.get('interior_window_glow_right').material, glowMat, 'window glows must share glowMat');
+  assert.notEqual(glowMat, woodMat, 'glowMat must be distinct from woodMat');
+  assert.notEqual(glowMat, plasterMat, 'glowMat must be distinct from plasterMat');
+});
+
+test('furniture rests exactly on surfaces, nothing floats or sinks', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  const floorTop = meshBounds(byName.get('interior_floor')).maxY;
+  assertNear(floorTop, 0.08, 'floor top');
+  assertNear(meshBounds(byName.get('interior_desk')).minY, floorTop, 'desk minY');
+  assertNear(meshBounds(byName.get('interior_rug')).minY, floorTop, 'rug minY');
+
+  const miloCat = byName.get('interior_dressing_milo').children.find((m) => m.name === 'interior_cat');
+  assertNear(meshBounds(miloCat).minY, floorTop, 'milo cat minY');
+
+  const deskTop = meshBounds(byName.get('interior_desk')).maxY;
+  assertNear(deskTop, 0.8, 'desk top');
+
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const group = byName.get(`interior_dressing_${handle}`);
+    const worldBase = group.position.y + Math.min(...group.children.map((c) => meshBounds(c).minY));
+    assertNear(worldBase, deskTop, `${handle} dressing world base`);
+  }
+});
+
+test('rafters rest exactly on wall tops', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const rafters = room.children.filter((m) => m.name.startsWith('interior_rafter_'));
+  assert.equal(rafters.length, 4);
+
+  for (const rafter of rafters) {
+    const b = meshBounds(rafter);
+    assertNear(b.minY, 2.6, `${rafter.name} minY`);
+    assertNear(b.maxY, 2.72, `${rafter.name} maxY`);
+    assertNear(b.maxX - b.minX, 3.46, `${rafter.name} length`);
+  }
+});
+
+test('interior-room.mjs stays dependency-free with exactly 7 exports', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8');
+  assert.equal(/^\s*import\s/m.test(src), false, 'Must not contain import statements');
+  assert.equal(src.includes('require('), false, 'Must not contain require(');
+
+  const mod = await import('./interior-room.mjs');
+  assert.deepEqual(Object.keys(mod).sort(), [
+    'buildInteriorRoom',
+    'buildProceduralOilLamp',
+    'buildProceduralTeapot',
+    'buildProceduralTypewriter',
+    'setInteriorDressing',
+    'setInteriorPalette',
+    'setInteriorVisible',
+  ]);
+});
