@@ -235,7 +235,7 @@ test('town-3d/README.md models section names every committed CC0 prop', async ()
   );
 });
 
-test('town-3d/README.md Behaviour functions exist in town.js', () => {
+test('town-3d/README.md Behaviour functions exist in their modules', () => {
   const readme = readReadme();
   const behaviourMatch = readme.match(/## Behaviour\r?\n([\s\S]*?)(?:\r?\n## |\s*$)/);
   assert.ok(behaviourMatch, 'town-3d/README.md must have a ## Behaviour section');
@@ -243,11 +243,11 @@ test('town-3d/README.md Behaviour functions exist in town.js', () => {
   const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
   const fns = [
     'buildWanderState',
-    'formatFootlightStatusLines',
     'commonWindowMaterial',
     'formatPlotGuestbookTabLabel',
     'resolvePlotGuestbookOverlayContent',
     'buildNoticeBoardOverlayHtml',
+    'setAvatarStatusText',
   ];
   for (const fn of fns) {
     assert.ok(
@@ -259,6 +259,28 @@ test('town-3d/README.md Behaviour functions exist in town.js', () => {
       `town-3d/town.js must contain ${fn}`
     );
   }
+  // Slice 319: the footlight placard render moved out of town.js — the
+  // Behaviour bullet now names lightFootlightSlot in concept-bandstand.js,
+  // which owns formatFootlightStatusLines; town.js applyState delegates to it.
+  const bandstandJs = fs.readFileSync(path.join(__dirname, 'concept-bandstand.js'), 'utf8');
+  assert.ok(
+    behaviourSection.includes('lightFootlightSlot'),
+    'town-3d/README.md Behaviour section must mention lightFootlightSlot'
+  );
+  assert.ok(
+    bandstandJs.includes('function formatFootlightStatusLines(statusText)'),
+    'town-3d/concept-bandstand.js must contain formatFootlightStatusLines'
+  );
+  assert.match(
+    bandstandJs,
+    /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/,
+    'town-3d/concept-bandstand.js lightFootlightSlot must accept statusText'
+  );
+  assert.equal(
+    townJs.includes('function formatFootlightStatusLines'),
+    false,
+    'town-3d/town.js must no longer define formatFootlightStatusLines'
+  );
 });
 
 test('town-3d/README.md shipped-table files exist on disk', () => {
