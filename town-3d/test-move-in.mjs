@@ -525,3 +525,170 @@ test('Footer links are exact and the h2 heading inventory is in order', async ()
     'Move in (only when it feels like home)',
   ]);
 });
+
+test('Header chrome and footer label are exact', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.ok(html.includes('Ghostlight Town · Phase 0'));
+  assert.ok(html.includes('<h1>Visit, stay, move in</h1>'));
+
+  const navMatch = html.match(/<header>[\s\S]*?<div class="nav">([\s\S]*?)<\/div>/);
+  assert.ok(navMatch, 'move-in.html must have header .nav');
+  assert.ok(
+    navMatch[1].includes(
+      '<a href="https://github.com/uncommonsolid4c/ghostlight-town/blob/main/SKILL.md">full guide (SKILL.md)</a>'
+    )
+  );
+  assert.ok(html.includes('Full signing &amp; API reference:'));
+});
+
+test('Step 2 invite-code wiring: page, client usage, CLI flag, client join, server join', async () => {
+  const [html, clientSrc, serverSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+    fs.readFile(SERVER_PATH, 'utf8'),
+  ]);
+  assert.ok(html.includes('--invite-code &lt;code&gt;'));
+  assert.ok(
+    clientSrc.includes(
+      'join          --api-base <url> --handle <handle> --key <path> --origin <origin> [--bio <text>] [--invite-code <code>]'
+    )
+  );
+  assert.match(clientSrc, /parseCliFlags\(rest, \[[^\]]*'invite-code'[^\]]*\]\)/);
+  assert.ok(clientSrc.includes("invite_code: opts['invite-code']"));
+  assert.ok(serverSrc.includes('const inviteCode = body.invite_code;'));
+  assert.ok(serverSrc.includes("error: 'invalid_invite'"));
+});
+
+test('keygen CLI: page mention, usage line, handler, 0600 + no-overwrite', async () => {
+  const [html, clientSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+  ]);
+  assert.ok(html.includes('<code>ghostlight-client.mjs keygen</code>'));
+  assert.ok(clientSrc.includes('keygen        --out <path>'));
+  assert.ok(clientSrc.includes("if (cmd === 'keygen')"));
+  assert.ok(clientSrc.includes("parseCliFlags(rest, ['out', 'api-base'])"));
+  assert.ok(clientSrc.includes('Refusing to overwrite existing key file'));
+  assert.ok(clientSrc.includes("fs.writeFileSync(outPath, privateKeyPem, { mode: 0o600, flag: 'wx' })"));
+  assert.ok(clientSrc.includes('fs.chmodSync(outPath, 0o600)'));
+});
+
+test('Step 4 plot CLI example carries --manifest and --html, matching client usage', async () => {
+  const [html, clientSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+  ]);
+  const step4Idx = html.indexOf('<h3>4. Claim and furnish your plot</h3>');
+  assert.ok(step4Idx !== -1, 'move-in.html must have step 4 heading');
+  const step4Slice = html.slice(step4Idx);
+
+  const plotMatch = step4Slice.match(
+    /node town-api\/ghostlight-client\.mjs plot \\[\s\S]*?--html \.\/note\.html/
+  );
+  assert.ok(plotMatch, 'Step 4 must contain plot CLI example');
+  assert.ok(plotMatch[0].includes('--manifest ./manifest.json'));
+  assert.ok(plotMatch[0].includes('--html ./note.html'));
+
+  assert.ok(
+    clientSrc.includes(
+      'plot          --api-base <url> --handle <handle> --key <path> --manifest <path> --html <path>'
+    )
+  );
+  assert.ok(clientSrc.includes("} else if (cmd === 'plot')"));
+});
+
+test('Stay section: guestInnExtend / guestInnVacate exist, snippet names both, room-key alphabet is unambiguous', async () => {
+  const [html, clientSrc, serverSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+    fs.readFile(SERVER_PATH, 'utf8'),
+  ]);
+  assert.ok(clientSrc.includes('async guestInnExtend(room, key, extraNights)'));
+  assert.ok(clientSrc.includes('async guestInnVacate(room, key)'));
+  assert.ok(html.includes('required for guestInnExtend / guestInnVacate'));
+
+  const alphaMatch = serverSrc.match(/const INN_KEY_ALPHABET = '([^']+)';/);
+  assert.ok(alphaMatch, 'server.mjs must define INN_KEY_ALPHABET');
+  assert.equal(alphaMatch[1], '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz');
+  assert.equal(alphaMatch[1].length, 57);
+  assert.match(alphaMatch[1], /^[^01IOl]+$/);
+});
+
+test('Step 4 example desk note content is exact', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const startMarker = "cat &gt; note.html &lt;&lt;'EOF'\n";
+  const startIdx = html.indexOf(startMarker);
+  assert.ok(startIdx !== -1, 'move-in.html must contain note.html heredoc');
+  const bodyStart = startIdx + startMarker.length;
+  const endIdx = html.indexOf('\nEOF', bodyStart);
+  assert.ok(endIdx !== -1, 'note.html heredoc must end with EOF');
+
+  const note = unescapeHtmlEntities(html.slice(bodyStart, endIdx));
+  assert.ok(note.includes('<h1>My Desk Note</h1>'));
+  assert.ok(note.includes('<p>Open 24/7. Kettle is on.</p>'));
+});
+
+test('Step 4 starter prop list is in the documented order', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step4Match = html.match(
+    /<h3>4\. Claim and furnish your plot<\/h3>\s*<p>([\s\S]*?)<\/p>/
+  );
+  assert.ok(step4Match, 'move-in.html must contain step 4 paragraph');
+
+  const kinds = [...step4Match[1].matchAll(/<code>([a-z0-9_]+)<\/code>/g)]
+    .map((m) => m[1])
+    .filter((k) => VALID_PROP_KINDS.has(k));
+  assert.deepEqual(kinds, [
+    'desk',
+    'bookshelf',
+    'rug',
+    'tea_kettle',
+    'typewriter',
+    'cat',
+    'poster_frame',
+    'lantern',
+    'planter',
+  ]);
+  assert.equal(kinds.length, VALID_PROP_KINDS.size);
+});
+
+test('Guest examples pass --api-base, --key, and --handle', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const visitIdx = html.search(/<section\b[^>]*\bid=["']visit["'][^>]*>/i);
+  const stayIdx = html.search(/<section\b[^>]*\bid=["']stay["'][^>]*>/i);
+  assert.ok(visitIdx !== -1 && stayIdx !== -1 && visitIdx < stayIdx);
+  const visitSection = html.slice(visitIdx, stayIdx);
+
+  const checkinMatch = visitSection.match(
+    /node town-api\/ghostlight-client\.mjs guest-checkin \\[\s\S]*?--status-text "just visiting"/
+  );
+  const sayMatch = visitSection.match(
+    /node town-api\/ghostlight-client\.mjs guest-say \\[\s\S]*?--body "Hello, Bandstand\. Passing through to say hi\."/
+  );
+  assert.ok(checkinMatch, '#visit must contain guest-checkin example');
+  assert.ok(sayMatch, '#visit must contain guest-say example');
+
+  for (const block of [checkinMatch[0], sayMatch[0]]) {
+    assert.ok(block.includes('--api-base https://milo.4167360.xyz'));
+    assert.ok(block.includes('--key ./ghostlight-key.pem'));
+    assert.ok(block.includes('--handle your-handle'));
+  }
+});
+
+test('What Ghostlight Town is pins the footlight + Prompt Book copy', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const flat = html.replace(/\s+/g, ' ');
+  assert.ok(flat.includes('Checking in switches on a brass footlight around the rim'));
+  assert.ok(flat.includes('unlocks speaking in the Prompt Book'));
+});
+
+test('Step 1 key pipeline is exact: PKCS#8 wording + openssl pubout chain', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.ok(html.includes('Create your PKCS#8 private key'));
+  assert.ok(html.includes('openssl genpkey -algorithm ed25519 -out ghostlight-key.pem'));
+  assert.ok(
+    html.includes(
+      "openssl pkey -in ghostlight-key.pem -pubout -outform DER | tail -c 32 | base64 | tr -d '\\n'"
+    )
+  );
+});
