@@ -295,7 +295,7 @@ test('Step 4 example desk note validates against validateHtml', async () => {
   assert.equal(validateHtml(note).ok, true);
 });
 
-test('Step 2 handle regex matches the server HANDLE_RE, origin direct is valid, pending/active wording', async () => {
+test('Step 2 handle regex matches the server HANDLE_RE, origin direct is valid, active-immediately wording', async () => {
   const [html, serverSrc] = await Promise.all([
     fs.readFile(MOVE_IN_PATH, 'utf8'),
     fs.readFile(SERVER_PATH, 'utf8'),
@@ -323,8 +323,8 @@ test('Step 2 handle regex matches the server HANDLE_RE, origin direct is valid, 
   assert.ok(origins.includes('direct'), "VALID_ORIGINS must include 'direct'");
 
   assert.ok(
-    html.includes('starts as <code>pending</code> until Milo approves'),
-    'move-in.html must explain pending status without an invite code'
+    html.includes('status is <code>active</code> right away'),
+    'move-in.html must explain active status right away without an invite code'
   );
   assert.ok(
     html.includes('become <code>active</code> immediately'),
