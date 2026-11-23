@@ -548,3 +548,101 @@ test('createPointerTracker second-pointer right mouse is a pinch, pen starts, se
   seqTracker.onPointerDown(2, 100, 100, { pointerType: 'touch' });
   assert.deepEqual(seqTracker.onPointerUp(2, 100, 100), { ended: true, shouldClick: true });
 });
+
+test('stepGlide snaps to the target from far away when arriveDist covers the remaining distance', () => {
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 5, z: 0 }, 0.1, { speed: 7.5, arriveDist: 5 }),
+    { x: 5, z: 0, arrived: true }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 5, z: 0 }, 0.1, { speed: 7.5 }),
+    { x: 0.75, z: 0, arrived: false }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: -5, z: 0 }, 0.1, { speed: 7.5, arriveDist: 5 }),
+    { x: -5, z: 0, arrived: true }
+  );
+});
+
+test('stepGlide collapses an out-of-bounds position onto a clamped target and arrives, and clamps a negative diagonal', () => {
+  assert.deepEqual(
+    stepGlide({ x: 60, z: 0 }, { x: 60, z: 0 }, 1, { speed: 7.5, maxRadius: 28.5 }),
+    { x: 28.5, z: 0, arrived: true }
+  );
+
+  const negDiag = stepGlide({ x: 0, z: 0 }, { x: -60, z: -80 }, 10);
+  assert.ok(Math.abs(negDiag.x - -17.1) < 1e-9);
+  assert.ok(Math.abs(negDiag.z - -22.8) < 1e-9);
+  assert.equal(negDiag.arrived, true);
+
+  assert.deepEqual(
+    stepGlide({ x: -28.5, z: 0 }, { x: -60, z: 0 }, 10),
+    { x: -28.5, z: 0, arrived: true }
+  );
+});
+
+test('deriveGlideMaxRadius linear middle values, cap above 128, and Infinity fallback', () => {
+  assert.equal(deriveGlideMaxRadius({ width: 116 }), 32);
+  assert.equal(deriveGlideMaxRadius({ width: 113 }), 30.5);
+  assert.equal(deriveGlideMaxRadius({ width: 111 }), 29.5);
+  assert.equal(deriveGlideMaxRadius({ width: 129 }), 38);
+  assert.equal(deriveGlideMaxRadius({ width: 130 }), 38);
+  assert.equal(deriveGlideMaxRadius({ width: 140 }), 38);
+  assert.equal(deriveGlideMaxRadius({ width: Infinity }), 38);
+});
+
+test('clampGlideTarget zero radius, negative diagonal, and custom-radius interior', () => {
+  assert.deepEqual(clampGlideTarget(10, 0, 0), { x: 0, z: 0 });
+
+  const negDiag = clampGlideTarget(-30, -30, 38);
+  const expected = -38 / Math.SQRT2;
+  assert.ok(Math.abs(negDiag.x - expected) < 1e-9);
+  assert.ok(Math.abs(negDiag.z - expected) < 1e-9);
+  assert.ok(Math.abs(Math.hypot(negDiag.x, negDiag.z) - 38) < 1e-9);
+
+  assert.deepEqual(clampGlideTarget(3, 4, 10), { x: 3, z: 4 });
+  assert.deepEqual(clampGlideTarget(-60, 0, 20), { x: -20, z: 0 });
+});
+
+test('stepOrbitGlide translates the camera diagonally by the exact step delta, holds still on invalid dt, and moves it by the snap delta on arrival', () => {
+  const diag = stepOrbitGlide({ x: 0, z: 0 }, { x: 100, z: -50 }, { x: 30, z: 40 }, 1, {
+    speed: 14,
+  });
+  assert.ok(Math.abs(diag.targetX - 8.4) < 1e-9);
+  assert.ok(Math.abs(diag.targetZ - 11.2) < 1e-9);
+  assert.ok(Math.abs(diag.cameraX - 108.4) < 1e-9);
+  assert.ok(Math.abs(diag.cameraZ - -38.8) < 1e-9);
+  assert.equal(diag.arrived, false);
+
+  assert.deepEqual(
+    stepOrbitGlide({ x: 2, z: -3 }, { x: 10, z: 45 }, { x: 15, z: 5 }, NaN),
+    { targetX: 2, targetZ: -3, cameraX: 10, cameraZ: 45, arrived: false }
+  );
+
+  assert.deepEqual(
+    stepOrbitGlide({ x: 0, z: 0 }, { x: 10, z: 20 }, { x: 0.2, z: 0 }, 1, { speed: 14 }),
+    { targetX: 0.2, targetZ: 0, cameraX: 10.2, cameraZ: 20, arrived: true }
+  );
+});
+
+test('createPointerTracker ignores an overlay-open second pointer so the tap still clicks, and reset mid-pinch clears cleanly', () => {
+  const tracker = createPointerTracker();
+  tracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(
+    tracker.onPointerDown(2, 200, 200, { pointerType: 'touch', overlayHidden: false }),
+    { started: false, isPinch: false, cancelGlide: false }
+  );
+  assert.equal(tracker.size, 1);
+  assert.deepEqual(tracker.onPointerUp(2, 200, 200), { ended: false, shouldClick: false });
+  assert.deepEqual(tracker.onPointerUp(1, 100, 100), { ended: true, shouldClick: true });
+
+  const pinchTracker = createPointerTracker();
+  pinchTracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  pinchTracker.onPointerDown(2, 150, 100, { pointerType: 'touch' });
+  assert.equal(pinchTracker.size, 2);
+  pinchTracker.reset();
+  assert.equal(pinchTracker.size, 0);
+  assert.deepEqual(pinchTracker.onPointerUp(1, 100, 100), { ended: false, shouldClick: false });
+  pinchTracker.onPointerDown(3, 50, 50, { pointerType: 'touch' });
+  assert.deepEqual(pinchTracker.onPointerUp(3, 50, 50), { ended: true, shouldClick: true });
+});
