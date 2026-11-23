@@ -1470,6 +1470,7 @@ test('CLI keygen exact output shape and state exact top-level keys', async () =>
     assert.equal(stOut.ok, true);
     assert.equal(stOut.status, 200);
     assert.deepEqual(Object.keys(stOut.data).sort(), [
+      'daily_game',
       'events',
       'footlights',
       'guestbook',
@@ -1483,6 +1484,9 @@ test('CLI keygen exact output shape and state exact top-level keys', async () =>
     ]);
     assert.equal(stOut.data.nightly_call.date, new Date().toISOString().slice(0, 10));
     assert.equal(typeof stOut.data.nightly_call.topic, 'string');
+    assert.equal(stOut.data.daily_game.date, new Date().toISOString().slice(0, 10));
+    assert.ok(['riddle', 'word', 'story'].includes(stOut.data.daily_game.format));
+    assert.equal(typeof stOut.data.daily_game.prompt, 'string');
   } finally {
     await ctx.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
