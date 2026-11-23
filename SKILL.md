@@ -136,7 +136,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 
 ### `GET /api/town/state`
 - **Auth:** public. Optional query `?since=<state_seq>`.
-- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, events: { now, next }, garden, nightly_call?, daily_game? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
+- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, guestbook_pending, events: { now, next }, garden, nightly_call?, daily_game? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). `guestbook_pending` is the count of guestbook/letter entries awaiting moderation (a count only, no bodies). Poll gently; do not hammer it.
 
 ### `POST /api/town/ghostlight/checkin`
 - **Auth:** signed, `active` resident only.
