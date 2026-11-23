@@ -191,7 +191,8 @@ test('SKILL.md contains required facts and omits forbidden claims', () => {
   assert.ok(md.includes('http://127.0.0.1:8124'));
   assert.ok(md.includes('https://milo.4167360.xyz'));
   assert.ok(md.includes('ghostlight-client.mjs'));
-  assert.ok(md.includes('pending'));
+  assert.match(md, /Without an invite code, `join` ALSO returns `201` with `status: "active"` immediately/);
+  assert.match(md, /POST \/api\/town\/guestbook[\s\S]*status: "pending"/);
   assert.ok(md.includes('invite_code'));
   assert.ok(md.includes('admin/approve'));
   assert.ok(lower.includes('losing your private key means losing your plot'));
@@ -247,7 +248,7 @@ test('SKILL.md 5-minute quickstart works end-to-end against a booted server', as
     // Step 1: Generate keypair
     const { pubkey, privateKeyPem } = generateKeypair();
 
-    // Step 2: Join (pending without invite code)
+    // Step 2: Join (active immediately, even without invite code)
     const client = new GhostlightClient({
       baseUrl: srv.baseUrl,
       handle: 'newcomer-muse',
@@ -259,9 +260,9 @@ test('SKILL.md 5-minute quickstart works end-to-end against a booted server', as
       bio: 'Tinkering with small-web pages.',
     });
     assert.equal(joined.status, 201);
-    assert.equal(joined.data.status, 'pending');
+    assert.equal(joined.data.status, 'active');
 
-    // Step 3: Admin approves
+    // Step 3: Admin approve on already-active resident still returns 200 active
     const approved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
       handle: 'newcomer-muse',
     });
@@ -359,17 +360,17 @@ test('openssl CLI keygen from SKILL.md produces a valid 32-byte pubkey and signs
 test('direct origin works on join and admin/invite, and invalid origins are rejected 400', async () => {
   const srv = await startTestServer();
   try {
-    // Join with origin: 'direct' without invite -> 201 pending
+    // Join with origin: 'direct' without invite -> 201 active
     const k1 = generateKeypair();
     const c1 = new GhostlightClient({
       baseUrl: srv.baseUrl,
-      handle: 'direct-pending',
+      handle: 'direct-open',
       pubkey: k1.pubkey,
       privateKeyPem: k1.privateKeyPem,
     });
     const j1 = await c1.join({ origin: 'direct', bio: 'Arrived from the town page.' });
     assert.equal(j1.status, 201);
-    assert.equal(j1.data.status, 'pending');
+    assert.equal(j1.data.status, 'active');
     assert.equal(j1.data.origin, 'direct');
 
     // admin/invite with origin: 'direct' -> 201
@@ -448,7 +449,7 @@ test('startup migration upgrades old residents origin CHECK while preserving exi
     .prepare(
       'INSERT INTO residents (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    .run('milo-friend', kMusebook.pubkey, 'musebook', 'pending', 'muse', 'Founding neighbor', null, 1700000050);
+    .run('milo-friend', kMusebook.pubkey, 'musebook', 'suspended', 'muse', 'Founding neighbor', null, 1700000050);
   seedDb.close();
 
   const { server, db } = createTownServer({
@@ -467,7 +468,7 @@ test('startup migration upgrades old residents origin CHECK while preserving exi
       handle: 'milo-friend',
       pubkey: kMusebook.pubkey,
       origin: 'musebook',
-      status: 'pending',
+      status: 'suspended',
       role: 'muse',
       bio: 'Founding neighbor',
       plot_updated_at: null,
@@ -761,39 +762,41 @@ test('presence zones round-trip through state, and bad zones are rejected', asyn
   }
 });
 
-test('a pending resident cannot check in or say', async () => {
+test('a suspended resident cannot check in or say', async () => {
   const srv = await startTestServer();
   try {
     const keys = generateKeypair();
     const client = new GhostlightClient({
       baseUrl: srv.baseUrl,
-      handle: 'pending-tester',
+      handle: 'suspended-tester',
       pubkey: keys.pubkey,
       privateKeyPem: keys.privateKeyPem,
     });
 
     const joined = await client.join({ origin: 'colony' });
     assert.equal(joined.status, 201);
-    assert.equal(joined.data.status, 'pending');
+    assert.equal(joined.data.status, 'active');
+
+    srv.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspended-tester');
 
     const checkinRes = await client.checkin({ status_text: 'trying to light up' });
     assert.equal(checkinRes.status, 403);
     assert.equal(checkinRes.data?.error, 'resident_not_active');
-    assert.equal(checkinRes.data?.resident_status, 'pending');
+    assert.equal(checkinRes.data?.resident_status, 'suspended');
 
-    const sayRes = await client.say('hello before approval');
+    const sayRes = await client.say('hello while suspended');
     assert.equal(sayRes.status, 403);
     assert.equal(sayRes.data?.error, 'resident_not_active');
-    assert.equal(sayRes.data?.resident_status, 'pending');
+    assert.equal(sayRes.data?.resident_status, 'suspended');
 
     const stateRes = await client.state();
     assert.equal(stateRes.status, 200);
     assert.equal(
-      stateRes.data.footlights.some((f) => f.handle === 'pending-tester'),
+      stateRes.data.footlights.some((f) => f.handle === 'suspended-tester'),
       false
     );
     assert.equal(
-      stateRes.data.prompt_book.some((line) => line.handle === 'pending-tester'),
+      stateRes.data.prompt_book.some((line) => line.handle === 'suspended-tester'),
       false
     );
   } finally {
@@ -1342,7 +1345,7 @@ test('join rejects invalid handles and accepts a bio at exactly the cap', async 
       ['handle', 'origin', 'state_seq', 'status']
     );
     assert.equal(ok.data.handle, 'bio-edge');
-    assert.equal(ok.data.status, 'pending');
+    assert.equal(ok.data.status, 'active');
     assert.equal(ok.data.origin, 'colony');
   } finally {
     await srv.close();
