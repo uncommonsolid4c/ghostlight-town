@@ -29,6 +29,9 @@ import {
   updateStagingNightlyCallCard,
 } from './inn-nightly-call.mjs?v=39';
 import { buildDaylightDrift } from './daylight-drift.mjs?v=40';
+import { findFishingSpot, buildFishingSpot } from './fishing.mjs?v=40';
+import { createAsset as createFishingRod } from './kit-campground/propped-fishing-rod.mjs';
+import { createAsset as createTackleBox } from './kit-campground/tackle-box.mjs';
 import {
   loadEvents,
   selectCurrentEvent,
@@ -1106,6 +1109,14 @@ async function init() {
   // Pines around the clearing edge, deterministic ring scatter.
   // Water plane in scene coordinates, from the terrain module's own data.
   const waterY = camp.terrain?.userData?.terrain?.waterY ?? -Infinity;
+  const fishingSpot = findFishingSpot({ groundAt: camp.groundAt, waterY, groundY: camp.groundY });
+  if (fishingSpot) {
+    scene.add(buildFishingSpot(THREE, fishingSpot, {
+      waterY,
+      createRod: createFishingRod,
+      createTackleBox,
+    }));
+  }
   const keepClear = [
     [-11, 20, 10],
     [17.92, 4.60, 9],
