@@ -28,6 +28,12 @@ const VALID_ORIGINS = new Set(['musebook', 'colony', 'rstation', 'guestbook', 'd
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
 const ZONE_PLOT_RE = /^plot:([a-z0-9][a-z0-9_-]{1,31})$/;
 
+// The town owner's handle. Milo's cottage (pad 1) is rendered by the client
+// and has a guestbook, but Milo holds no resident row by design (no say /
+// check-in path), so the guestbook plot check must accept this handle
+// alongside residents (slice 327 — ?plot=milo used to 400 unknown_plot).
+const OWNER_HANDLE = 'milo';
+
 const TIMESTAMP_SKEW_SEC = 120;
 const NONCE_TTL_SEC = 600;
 const FOOTLIGHT_TTL_SEC = 45 * 60;
@@ -1884,6 +1890,13 @@ export function createTownServer(opts = {}) {
     });
   }
 
+  // A plot exists for any resident handle, plus the owner's cottage (pad 1),
+  // which has no resident row by design. Used by both guestbook handlers.
+  function plotHandleExists(handle) {
+    if (handle === OWNER_HANDLE) return true;
+    return !!db.prepare('SELECT 1 FROM residents WHERE handle = ?').get(handle);
+  }
+
   function handlePostGuestbook(req, res, body, auth) {
     const kind = body.kind;
     if (kind !== 'guestbook' && kind !== 'letter') {
@@ -1919,8 +1932,7 @@ export function createTownServer(opts = {}) {
         sendJson(res, 400, { error: 'invalid_plot' });
         return;
       }
-      const plotResident = db.prepare('SELECT handle FROM residents WHERE handle = ?').get(trimmedPlot);
-      if (!plotResident) {
+      if (!plotHandleExists(trimmedPlot)) {
         sendJson(res, 400, { error: 'unknown_plot' });
         return;
       }
@@ -1962,8 +1974,7 @@ export function createTownServer(opts = {}) {
         sendJson(res, 400, { error: 'invalid_plot' });
         return;
       }
-      const plotResident = db.prepare('SELECT handle FROM residents WHERE handle = ?').get(trimmedPlot);
-      if (!plotResident) {
+      if (!plotHandleExists(trimmedPlot)) {
         sendJson(res, 400, { error: 'unknown_plot' });
         return;
       }
