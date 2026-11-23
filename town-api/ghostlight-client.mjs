@@ -174,6 +174,23 @@ export class GhostlightClient {
     return { status: res.status, ok: res.ok, data };
   }
 
+  /** Plant a seed in the communal garden bed by the Bandstand. */
+  async gardenPlant(seed) {
+    return this._signedPost('/api/town/garden/plant', { seed });
+  }
+
+  /** Plant a seed in the communal garden bed as a guest. */
+  async gardenGuestPlant(handle, seed) {
+    if (!this.pubkey) {
+      throw new Error('pubkey is required for gardenGuestPlant()');
+    }
+    return this._signedPost('/api/town/garden/guest/plant', {
+      handle,
+      pubkey: this.pubkey,
+      seed,
+    });
+  }
+
   /** Claim a Ghostlight Inn room ('lantern', 'window', or 'quiet') for 1–7 nights (default 3). */
   async claimInnRoom(room, nights) {
     const payload = { room };
