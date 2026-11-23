@@ -97,7 +97,7 @@ test('town.json is valid, matches server routes, auth constants, and caps', asyn
     // Verify every documented route exists on the booted server
     for (const ep of town.endpoints) {
       if (ep.auth === 'public') {
-        const qs = ep.path === '/api/town/plot' ? '?handle=nobody' : '';
+        const qs = ep.path === '/api/town/plot' || ep.path === '/api/town/fish/log' ? '?handle=nobody' : '';
         const res = await fetch(`${srv.baseUrl}${ep.path}${qs}`);
         const data = await res.json().catch(() => null);
         if (ep.path === '/api/town/plot') {
@@ -601,6 +601,8 @@ test('town.json limits, inn, handle pattern, and origins match the server consta
     ['POST /api/town/inn/guest/extend', fmtRateLimit(RATE_LIMITS.guestInnClaim)],
     ['POST /api/town/key/rotate', fmtRateLimit(RATE_LIMITS.keyRotate)],
     ['POST /api/town/guestbook', fmtRateLimit(RATE_LIMITS.guestbook, true)],
+    ['POST /api/town/fish/cast', fmtRateLimit(RATE_LIMITS.fishCast)],
+    ['POST /api/town/fish/guest/cast', fmtRateLimit(RATE_LIMITS.guestFishCast)],
   ]);
 
   for (const ep of town.endpoints) {
@@ -869,12 +871,12 @@ test('every server route is listed in town.json (reverse coverage)', () => {
   for (const [, routeKey, mode] of writeRoutesMatch[1].matchAll(/\['([^']+)',\s*\{\s*mode:\s*'([^']+)'/g)) {
     writeRoutes.set(routeKey, mode);
   }
-  assert.equal(writeRoutes.size, 20, 'WRITE_ROUTES must have 20 entries');
+  assert.equal(writeRoutes.size, 24, 'WRITE_ROUTES must have 24 entries');
 
   const getRoutes = [...serverSrc.matchAll(/req\.method === 'GET' && pathname === '([^']+)'/g)].map((m) => m[1]);
-  assert.deepEqual(getRoutes, ['/api/town/state', '/api/town/plot', '/api/town/guestbook']);
+  assert.deepEqual(getRoutes, ['/api/town/state', '/api/town/plot', '/api/town/fish/log', '/api/town/guestbook']);
 
-  assert.equal(town.endpoints.length, 23);
+  assert.equal(town.endpoints.length, 28);
   const endpointsByKey = new Map();
   for (const ep of town.endpoints) {
     const key = `${ep.method} ${ep.path}`;
