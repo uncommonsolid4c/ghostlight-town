@@ -38,7 +38,7 @@
       "path": "/api/town/state",
       "auth": "public",
       "rate_limit": null,
-      "summary": "Poll town state (state_seq, footlights — during an active event window the host's lit footlight row carries event: true and status_text = the event title, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters } (Town Gate only), guestbook_by_plot { [handle]: count } (approved per-plot counts > 0), events { now, next } with validated event objects or null each, and nightly_call { date, topic } derived daily and omitted when the topics file is absent); optional ?since=<state_seq> returns 304 if unchanged."
+      "summary": "Poll town state (state_seq, footlights — during an active event window the host's lit footlight row carries event: true and status_text = the event title, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters } (Town Gate only), guestbook_by_plot { [handle]: count } (approved per-plot counts > 0), events { now, next } with validated event objects or null each, nightly_call { date, topic } derived daily and omitted when the topics file is absent, and daily_game { date, format, prompt } derived daily and omitted when the games file is absent); optional ?since=<state_seq> returns 304 if unchanged."
     },
     {
       "method": "GET",
