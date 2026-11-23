@@ -13,6 +13,7 @@ import { GhostlightClient, generateKeypair, signRequest } from '../town-api/ghos
 import { ensureKeypair } from './keygen.mjs';
 import { checkHonesty, MAX_SAY_LEN } from './honesty.mjs';
 import { runTurn } from './run.mjs';
+import { localDateString } from './stepback.mjs';
 import {
   FORMAT_LABELS,
   dailyGameHostForDate,
@@ -356,6 +357,361 @@ test('runTurn integration: dryRun logs game line and posts nothing', async () =>
 
     const state = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
     assert.equal(state.prompt_book.length, 0);
+  } finally {
+    await env.close();
+  }
+});
+
+test('dailyGameHostForDate epoch, leap-day and invalid-shape edges', () => {
+  assert.equal(dailyGameHostForDate('1970-01-01'), 'wick');
+  assert.ok(['wick', 'maren', 'tomas'].includes(dailyGameHostForDate('2024-02-29')));
+  assert.equal(dailyGameHostForDate('2023-02-29'), null);
+
+  for (const bad of [
+    '2026-13-01',
+    '2026-00-10',
+    '2026-11-00',
+    '2026-11-32',
+    '2026-2-3',
+    '2026/11/21',
+    ' 2026-11-21',
+    20261121,
+    undefined,
+    {},
+    ['2026-11-21'],
+  ]) {
+    assert.equal(dailyGameHostForDate(bad), null, `expected null for ${JSON.stringify(bad)}`);
+  }
+
+  const three = ['2026-11-21', '2026-11-22', '2026-11-23'].map((d) => dailyGameHostForDate(d));
+  assert.equal(new Set(three).size, 3);
+  assert.equal(dailyGameHostForDate('2026-11-24'), dailyGameHostForDate('2026-11-21'));
+});
+
+test('buildDailyGameLine arg-less, non-object and non-string edges, whitespace preserved', () => {
+  assert.equal(buildDailyGameLine(), null);
+  assert.equal(buildDailyGameLine({}), null);
+  assert.equal(buildDailyGameLine({ dailyGame: 'riddle' }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: 42 }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { prompt: 'Hi' } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 123 } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: '' } }), null);
+
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: '  What am I?  ' } }),
+    "Today's game — Riddle:   What am I?  "
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'R?' } }),
+    "Today's game — Riddle: R?"
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'word', prompt: 'W?' } }),
+    "Today's game — Word game: W?"
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'story', prompt: 'S?' } }),
+    "Today's game — Story chain: S?"
+  );
+});
+
+test('isDailyGamePosted non-array promptBook, malformed lines and substring semantics', () => {
+  const dailyGame = { format: 'riddle', prompt: 'What gets wetter?' };
+  assert.equal(isDailyGamePosted({ promptBook: 'x', dailyGame }), false);
+  assert.equal(isDailyGamePosted({ promptBook: null, dailyGame }), false);
+  assert.equal(isDailyGamePosted({ promptBook: [{ body: null }], dailyGame }), false);
+  assert.equal(isDailyGamePosted({ promptBook: [{ body: 123 }], dailyGame }), false);
+  assert.equal(isDailyGamePosted({ promptBook: [null], dailyGame }), false);
+  assert.equal(isDailyGamePosted({ dailyGame }), false);
+
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: {} }), false);
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: { prompt: '   ' } }), false);
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: { prompt: 5 } }), false);
+
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ body: 'I loved "What gets wetter the more it dries?" — a towel!' }],
+      dailyGame: { format: 'riddle', prompt: 'What gets wetter the more it dries?' },
+    }),
+    true
+  );
+});
+
+test('runTurn integration: capped host still posts the daily game (silent bypass)', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const gameLine = buildDailyGameLine({ dailyGame: stateBefore.daily_game });
+
+    const hostDir = path.join(env.stateDir, host);
+    fs.mkdirSync(hostDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(hostDir, 'state.json'),
+      JSON.stringify({
+        ambient_today: 2,
+        ambient_date: localDateString(now),
+        last_turn_at: now - 3600,
+        turns: 2,
+      }) + '\n',
+      'utf8'
+    );
+
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => {
+        brainCalled = true;
+        return 'Should not be called';
+      },
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.posted, true);
+    assert.equal(res.postedGame, true);
+    assert.equal(brainCalled, false);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.filter((l) => l.body === gameLine).length, 1);
+
+    const npcState = JSON.parse(fs.readFileSync(path.join(hostDir, 'state.json'), 'utf8'));
+    assert.equal(npcState.ambient_today, 3);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: capped non-host stays silent and posts nothing', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const nonHost = ['wick', 'maren', 'tomas'].find((h) => h !== host);
+
+    const nonHostDir = path.join(env.stateDir, nonHost);
+    fs.mkdirSync(nonHostDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nonHostDir, 'state.json'),
+      JSON.stringify({
+        ambient_today: 2,
+        ambient_date: localDateString(now),
+        last_turn_at: now - 3600,
+        turns: 2,
+      }) + '\n',
+      'utf8'
+    );
+
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: nonHost,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => {
+        brainCalled = true;
+        return 'Sweeping the steps.';
+      },
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'silent');
+    assert.equal(res.posted, undefined);
+    assert.equal(brainCalled, false);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.length, 0);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: dry-run host after the game posted reports no would_post_game', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+
+    const first = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => 'NO',
+      logger: () => {},
+    });
+    assert.equal(first.ok, true);
+    assert.equal(first.postedGame, true);
+
+    const logs = [];
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      dryRun: true,
+      now,
+      brainImpl: async () => {
+        brainCalled = true;
+        return 'Should not be called';
+      },
+      logger: (obj) => logs.push(obj),
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'dry_run');
+    assert.equal(res.posted, false);
+    assert.equal(res.wouldPostGame, undefined);
+    assert.equal(brainCalled, false);
+    assert.equal(logs.some((l) => l.would_post_game === true), false);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: missing daily_game falls through to a normal brain turn', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const realState = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(realState.daily_game.date);
+    const brainLine = 'A quiet evening by the steps.';
+
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      fetchImpl: async (url, init) => {
+        if (String(url).endsWith('/api/town/state')) {
+          return { ok: true, json: async () => ({ ...realState, daily_game: null }) };
+        }
+        return globalThis.fetch(url, init);
+      },
+      brainImpl: async () => {
+        brainCalled = true;
+        return brainLine;
+      },
+      logger: () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'initiate');
+    assert.equal(res.posted, true);
+    assert.notEqual(res.postedGame, true);
+    assert.equal(brainCalled, true);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.some((l) => l.body.startsWith("Today's game —")), false);
+    assert.equal(stateAfter.prompt_book.some((l) => l.handle === host && l.body === brainLine), true);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: honesty-rejected game line is logged and the brain turn proceeds', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const realState = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(realState.daily_game.date);
+    const badGame = { date: realState.daily_game.date, format: 'riddle', prompt: 'A'.repeat(478) };
+    const overLongLine = buildDailyGameLine({ dailyGame: badGame });
+    assert.equal(overLongLine.length, 501);
+    const brainLine = 'Just a quiet evening by the steps.';
+
+    const logs = [];
+    let brainCalled = false;
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      fetchImpl: async (url, init) => {
+        if (String(url).endsWith('/api/town/state')) {
+          return {
+            ok: true,
+            json: async () => ({
+              ...realState,
+              daily_game: badGame,
+            }),
+          };
+        }
+        return globalThis.fetch(url, init);
+      },
+      brainImpl: async () => {
+        brainCalled = true;
+        return brainLine;
+      },
+      logger: (obj) => logs.push(obj),
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'initiate');
+    assert.equal(res.posted, true);
+    assert.notEqual(res.postedGame, true);
+    assert.equal(brainCalled, true);
+
+    assert.equal(
+      logs.some(
+        (l) =>
+          l.action === 'rejected' &&
+          typeof l.reason === 'string' &&
+          l.reason.includes('exceeds_max_length')
+      ),
+      true
+    );
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(stateAfter.prompt_book.some((l) => l.body === overLongLine), false);
+    assert.equal(stateAfter.prompt_book.some((l) => l.body.startsWith("Today's game —")), false);
+    assert.equal(stateAfter.prompt_book.some((l) => l.handle === host && l.body === brainLine), true);
+  } finally {
+    await env.close();
+  }
+});
+
+test('runTurn integration: game post lights the host footlight and records the line in memory', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const env = await setupNpcEnv(now);
+
+  try {
+    const stateBefore = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(stateBefore.daily_game.date);
+    const gameLine = buildDailyGameLine({ dailyGame: stateBefore.daily_game });
+
+    const res = await runTurn({
+      npcHandle: host,
+      apiBase: env.baseUrl,
+      stateDir: env.stateDir,
+      now,
+      brainImpl: async () => 'NO',
+      logger: () => {},
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.postedGame, true);
+
+    const stateAfter = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    assert.equal(
+      stateAfter.footlights.some((f) => f && f.handle === host && f.role === 'npc'),
+      true
+    );
+
+    const memory = fs.readFileSync(path.join(env.stateDir, host, 'memory.md'), 'utf8');
+    assert.equal(memory.includes(gameLine), true);
   } finally {
     await env.close();
   }
