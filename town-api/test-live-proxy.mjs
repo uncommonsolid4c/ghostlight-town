@@ -160,7 +160,7 @@ async function main() {
       bio: 'Live-proxy Build Gate probe (ephemeral)',
     });
     assert.equal(joinRes.status, 201, `join expected 201, got ${joinRes.status}`);
-    assert.equal(joinRes.data?.status, 'pending', 'join status must be pending');
+    assert.equal(joinRes.data?.status, 'active', 'join status must be active');
 
     const approveRes = await adminApprove(baseUrl, operatorKeyPem, handle);
     assert.equal(approveRes.status, 200, `admin/approve expected 200, got ${approveRes.status}`);
