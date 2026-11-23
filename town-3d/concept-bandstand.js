@@ -816,11 +816,51 @@ function setMaterialColor(mat, prop, hex) {
   }
 }
 
+function splitFootlightLines(topic, maxLineLen = 60) {
+  if (topic.length <= maxLineLen) return [topic];
+  const mid = Math.floor(topic.length / 2);
+  let splitIdx = -1;
+  for (let offset = 0; offset < topic.length; offset++) {
+    if (mid - offset > 0 && topic[mid - offset] === ' ') {
+      splitIdx = mid - offset;
+      break;
+    }
+    if (mid + offset < topic.length && topic[mid + offset] === ' ') {
+      splitIdx = mid + offset;
+      break;
+    }
+  }
+  if (splitIdx === -1) {
+    return [topic.slice(0, mid), topic.slice(mid)];
+  }
+  return [topic.slice(0, splitIdx).trim(), topic.slice(splitIdx + 1).trim()];
+}
+
+function formatFootlightStatusLines(statusText) {
+  const trimmed = typeof statusText === 'string' ? statusText.trim() : '';
+  if (!trimmed) return [];
+  const maxChars = 20;
+  const source = trimmed.length > maxChars * 2 ? trimmed.slice(0, maxChars * 2) : trimmed;
+  const lines = splitFootlightLines(source, maxChars).slice(0, 2);
+  const truncated = trimmed.length > maxChars * 2 || lines.some((l) => l.length > maxChars);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > maxChars) {
+      lines[i] = lines[i].slice(0, maxChars - 1).trimEnd() + '…';
+    }
+  }
+  if (truncated && lines.length > 0 && !lines[lines.length - 1].endsWith('…')) {
+    const lastIdx = lines.length - 1;
+    const last = lines[lastIdx];
+    lines[lastIdx] = (last.length >= maxChars ? last.slice(0, maxChars - 1) : last).trimEnd() + '…';
+  }
+  return lines;
+}
+
 /**
  * Helper to light a footlight slot and flip its placard up with a headless-safe
  * CanvasTexture (mirroring `buildMilosGhost` and `applyState` in `town-3d/town.js`).
  */
-export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'muse', permanent = false } = {}) {
+export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'muse', permanent = false, statusText } = {}) {
   if (!flGroup || !flGroup.userData) return flGroup;
   const { shell, placard } = flGroup.userData;
   const palette = BANDSTAND_FOOTLIGHT_COLORS[role === 'npc' ? 'npc' : 'muse'];
@@ -830,20 +870,35 @@ export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'mu
 
   placard.rotation.x = -0.55;
   placard.position.y = 0.14;
-  placard.material.map = makeBandstandTextTexture(THREE, [handle], {
-    width: 256,
-    height: 96,
-    titleSize: 28,
-    bg: BANDSTAND_PALETTE.placardBg,
-    border: BANDSTAND_PALETTE.placardBorder,
-    fg: BANDSTAND_PALETTE.placardFg,
-  });
+  const trimmedStatus = typeof statusText === 'string' && statusText.trim() ? statusText.trim() : null;
+  const statusLines = trimmedStatus ? formatFootlightStatusLines(trimmedStatus) : [];
+  const textureLines = statusLines.length > 0 ? [handle, ...statusLines] : [handle];
+  const textureOpts = statusLines.length > 0
+    ? {
+        width: 256,
+        height: 96,
+        titleSize: 22,
+        subSize: 16,
+        bg: BANDSTAND_PALETTE.placardBg,
+        border: BANDSTAND_PALETTE.placardBorder,
+        fg: BANDSTAND_PALETTE.placardFg,
+      }
+    : {
+        width: 256,
+        height: 96,
+        titleSize: 28,
+        bg: BANDSTAND_PALETTE.placardBg,
+        border: BANDSTAND_PALETTE.placardBorder,
+        fg: BANDSTAND_PALETTE.placardFg,
+      };
+  placard.material.map = makeBandstandTextTexture(THREE, textureLines, textureOpts);
   setMaterialColor(placard.material, 'color', '#ffffff');
   placard.material.needsUpdate = true;
 
   flGroup.userData.lit = true;
   flGroup.userData.handle = handle;
   flGroup.userData.role = role === 'npc' ? 'npc' : 'muse';
+  flGroup.userData.statusText = trimmedStatus;
   if (permanent) flGroup.userData.permanent = true;
   return flGroup;
 }
