@@ -820,3 +820,182 @@ test('decodeHtmlEntities decodes named entities case-insensitively and leaves un
   assert.equal(decodeHtmlEntities('&#x1F600;'), '\u{1F600}');
   assert.equal(decodeHtmlEntities('&#1114111;'), '\u{10FFFF}');
 });
+
+test('Milo desk note: traces to town facts — demolished cottage, founding law, footlight 0, neighbors', () => {
+  const html = readDeskNote('milo');
+  const patterns = [
+    /demolished for unpaid upkeep/,
+    /280 Musebucks/,
+    /no upkeep, no currency, no real money/,
+    /ice-blue and cream/,
+    /footlight 0/,
+    /translucent ice-blue ghost/,
+    /Ghostlight Gazette/,
+    /milo\.4167360\.xyz/,
+    /Wick, Maren, and Tomas/,
+    /Ghostlight bulb burns 24\/7/,
+  ];
+  for (const re of patterns) {
+    assert.match(html, re, `milo desk-note.html missing expected content matching ${re}`);
+  }
+});
+
+test('validateHtml rejects closing forbidden tags and space-split tag names', () => {
+  const cases = [
+    ['</script>', 'forbidden_tag:script'],
+    ['</iframe>', 'forbidden_tag:iframe'],
+    ['</form>', 'forbidden_tag:form'],
+    ['</meta>', 'forbidden_tag:meta'],
+    ['< /script>', 'forbidden_tag:script'],
+  ];
+  for (const [html, reason] of cases) {
+    assert.deepEqual(validateHtml(html), {
+      ok: false,
+      error: 'unsafe_html',
+      reason,
+    });
+  }
+});
+
+test('validateHtml rejects valueless, uppercase, and whitespace-split event handlers', () => {
+  assert.deepEqual(validateHtml('<p onclick>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:onclick',
+  });
+  assert.deepEqual(validateHtml('<p ONCLICK="x()">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:onclick',
+  });
+  assert.deepEqual(validateHtml('<div OnMouseOver="x()">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:onmouseover',
+  });
+  assert.deepEqual(validateHtml('<p on\tclick="x()">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:on',
+  });
+});
+
+test('validateHtml checks URI attrs beyond href: cite, src, poster', () => {
+  assert.deepEqual(validateHtml('<blockquote cite="https://evil.com">x</blockquote>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<img src="//evil.com/x.png">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<video poster="javascript:alert(1)">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="data:image/png;base64,AAA">x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<img src="plots/wick/cat.png">'), { ok: true });
+});
+
+test('validateHtml tolerates unterminated comments/tags and stray angle brackets', () => {
+  assert.deepEqual(validateHtml('<!-- never closed'), { ok: true });
+  assert.deepEqual(validateHtml('<!-- <script> -->'), { ok: true });
+  assert.deepEqual(validateHtml('<p title="unclosed'), { ok: true });
+  assert.deepEqual(validateHtml('a < b and 1 < 2'), { ok: true });
+});
+
+test('viewport meta: duplicate names, wrong content, and case/padding tolerance', () => {
+  assert.deepEqual(
+    validateHtml('<meta name="viewport" name="viewport" content="width=device-width, initial-scale=1.0">'),
+    { ok: false, error: 'unsafe_html', reason: 'forbidden_tag:meta' }
+  );
+  assert.deepEqual(validateHtml('<meta name="viewport" content="width=device-width">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:meta',
+  });
+  assert.deepEqual(
+    validateHtml('<meta name="author" content="width=device-width, initial-scale=1.0">'),
+    { ok: false, error: 'unsafe_html', reason: 'forbidden_tag:meta' }
+  );
+  assert.deepEqual(
+    validateHtml('<meta NAME="viewport" CONTENT="width=device-width, initial-scale=1.0">'),
+    { ok: true }
+  );
+  assert.deepEqual(
+    validateHtml('<meta name=" viewport " content=" width=device-width, initial-scale=1.0 ">'),
+    { ok: true }
+  );
+});
+
+test('validateManifest preserves color case, allows empty signpost and duplicate prop kinds', () => {
+  const upper = validateManifest({
+    ...BASE,
+    wall: '#A8D8EA',
+    roof: '#5A4332',
+    trim: '#F5EFE0',
+  });
+  assert.equal(upper.ok, true);
+  assert.equal(upper.manifest.wall, '#A8D8EA');
+  assert.equal(upper.manifest.roof, '#5A4332');
+  assert.equal(upper.manifest.trim, '#F5EFE0');
+
+  assert.deepEqual(validateManifest({ ...BASE, signpost_text: '' }), {
+    ok: true,
+    manifest: { ...BASE, signpost_text: '' },
+  });
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP }, { ...PROP }] }).ok, true);
+});
+
+test('decodeHtmlEntities decodes more named/numeric forms and returns lone surrogates', () => {
+  assert.equal(decodeHtmlEntities('&#38;'), '&');
+  assert.equal(decodeHtmlEntities('&#x26;'), '&');
+  assert.equal(decodeHtmlEntities('&#X26;'), '&');
+  assert.equal(decodeHtmlEntities('&#xD7FF;'), '\uD7FF');
+  assert.equal(decodeHtmlEntities('&#x0;'), '&#x0;');
+  assert.equal(decodeHtmlEntities('&GT;'), '>');
+  assert.equal(decodeHtmlEntities('&QUOT;'), '"');
+  assert.equal(decodeHtmlEntities('&#xD800;'), '\uD800');
+  assert.equal(decodeHtmlEntities('&#xDFFF;'), '\uDFFF');
+});
+
+test('seed plots: distinct signposts and pinned .sig lines per handle', () => {
+  const handles = ['wick', 'maren', 'tomas', 'milo'];
+  const signposts = handles.map((h) => readManifest(h).signpost_text);
+  assert.equal(new Set(signposts).size, 4);
+
+  const expectedSigs = {
+    wick: '&mdash; Wick, Stagehand / Lamp-Trimmer',
+    maren: '&mdash; Maren, Retired Typesetter',
+    tomas: '&mdash; Tomas, Props-Master / Tea-Urn Keeper',
+    milo: '&mdash; Milo, Founder &amp; Chief Editor, Ghostlight Gazette',
+  };
+  for (const handle of handles) {
+    const html = readDeskNote(handle);
+    const match = html.match(/<p class="sig">([\s\S]*?)<\/p>/);
+    assert.ok(match, `${handle} missing <p class="sig">`);
+    assert.equal(match[1].trim(), expectedSigs[handle], `${handle} .sig mismatch`);
+  }
+});
+
+test('validateHtml catches obfuscated CSS in <style> bodies and style attrs', () => {
+  assert.deepEqual(validateHtml('<style>div{background:javascript:alert(1)}</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<style>div{background:&#117;rl(x)}</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<div style="width:&#101;xpression(alert(1))">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('<style>div{color:#a8d8ea}</style>'), { ok: true });
+});
