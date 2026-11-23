@@ -912,3 +912,229 @@ test('no banned term in key-rotate test file', () => {
   const selfSrc = fs.readFileSync(path.join(__dirname, 'test-key-rotate.mjs'), 'utf8');
   assert.ok(!BANNED_TERM_RE.test(selfSrc), 'test-key-rotate.mjs must not contain banned term');
 });
+
+async function createNpcResident(ctx, handle) {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys });
+  const joinRes = await client.join({ origin: 'colony' });
+  assert.equal(joinRes.status, 201);
+  const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+    handle,
+    role: 'npc',
+  });
+  assert.equal(appRes.status, 200);
+  return { client, keys };
+}
+
+test('muted resident may rotate and check in but not say; suspended resident may not rotate', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: oldAlice } = await createResident(ctx, 'alice');
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = ?").run('alice');
+
+    const newAliceKeys = generateKeypair();
+    const rotAlice = await oldAlice.rotateKey(newAliceKeys.pubkey);
+    assert.equal(rotAlice.status, 200);
+
+    const aliceRow = ctx.db.prepare('SELECT pubkey, status FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, newAliceKeys.pubkey);
+    assert.equal(aliceRow.status, 'muted');
+
+    const newAlice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...newAliceKeys });
+    const checkinRes = await newAlice.checkin({ status_text: 'muted checkin' });
+    assert.equal(checkinRes.status, 200);
+    assert.equal(checkinRes.data.slot, 0);
+
+    const sayRes = await newAlice.say('muted say');
+    assert.equal(sayRes.status, 403);
+    assert.equal(sayRes.data.error, 'resident_muted');
+
+    const oldCheckin = await oldAlice.checkin({ status_text: 'old key' });
+    assert.equal(oldCheckin.status, 401);
+
+    const { client: bob, keys: bobKeys } = await createResident(ctx, 'bob');
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('bob');
+
+    const bobSuspRot = await bob.rotateKey(generateKeypair().pubkey);
+    assert.equal(bobSuspRot.status, 403);
+    assert.equal(bobSuspRot.data.error, 'resident_not_active');
+    assert.equal(bobSuspRot.data.resident_status, 'suspended');
+
+    const bobRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('bob');
+    assert.equal(bobRow.pubkey, bobKeys.pubkey);
+
+    const bobHistory = ctx.db
+      .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
+      .all('bob');
+    assert.equal(bobHistory.length, 0);
+
+    ctx.db.prepare("UPDATE residents SET status = 'active' WHERE handle = ?").run('bob');
+    const bobActiveRot = await bob.rotateKey(generateKeypair().pubkey);
+    assert.equal(bobActiveRot.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate preserves Prompt Book lines and the presence row', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: oldClient } = await createResident(ctx, 'alice');
+    const c1 = await oldClient.checkin({ status_text: 'lit before rotate' });
+    assert.equal(c1.status, 200);
+
+    const s1 = await oldClient.say('hello before rotate');
+    assert.equal(s1.status, 201);
+
+    const newKeys = generateKeypair();
+    const rotRes = await oldClient.rotateKey(newKeys.pubkey);
+    assert.equal(rotRes.status, 200);
+
+    const st = await oldClient.state();
+    assert.equal(st.status, 200);
+    assert.ok(
+      st.data.prompt_book.some((l) => l.handle === 'alice' && l.body === 'hello before rotate')
+    );
+    const presenceRow = st.data.presence.find((p) => p.handle === 'alice');
+    assert.ok(presenceRow);
+    assert.equal(presenceRow.zone, 'bandstand');
+    assert.equal(presenceRow.role, 'muse');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate preserves an NPC resident role, footlight slot, and status text', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: wickOld } = await createNpcResident(ctx, 'wick');
+    const checkinRes = await wickOld.checkin({ status_text: 'trimming lamps' });
+    assert.equal(checkinRes.status, 200);
+    const slot = checkinRes.data.slot;
+
+    const newKeys = generateKeypair();
+    const rotRes = await wickOld.rotateKey(newKeys.pubkey);
+    assert.equal(rotRes.status, 200);
+
+    const st = await wickOld.state();
+    assert.equal(st.status, 200);
+    const footlight = st.data.footlights.find((f) => f.handle === 'wick');
+    assert.ok(footlight);
+    assert.equal(footlight.role, 'npc');
+    assert.equal(footlight.status_text, 'trimming lamps');
+    assert.equal(footlight.slot, slot);
+
+    const wickRow = ctx.db.prepare('SELECT role FROM residents WHERE handle = ?').get('wick');
+    assert.equal(wickRow.role, 'npc');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate leaves resident row fields untouched and key_history created_at tracks the rotate second', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: oldClient } = await createResident(ctx, 'alice');
+    const beforeRow = ctx.db
+      .prepare('SELECT origin, status, role, bio, created_at, plot_updated_at FROM residents WHERE handle = ?')
+      .get('alice');
+    assert.equal(beforeRow.plot_updated_at, null);
+
+    const t0 = ctx.nowSec();
+    const keys1 = generateKeypair();
+    const r1 = await oldClient.rotateKey(keys1.pubkey);
+    assert.equal(r1.status, 200);
+
+    const afterRow = ctx.db
+      .prepare('SELECT origin, status, role, bio, created_at, plot_updated_at FROM residents WHERE handle = ?')
+      .get('alice');
+    assert.deepEqual(afterRow, beforeRow);
+
+    const h1 = ctx.db
+      .prepare("SELECT created_at FROM key_history WHERE handle = ? AND action = 'rotate' ORDER BY id ASC")
+      .all('alice');
+    assert.equal(h1.length, 1);
+    assert.ok(h1[0].created_at >= t0 && h1[0].created_at <= t0 + 2);
+
+    ctx.advanceClock(120);
+    const client2 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...keys1 });
+    const r2 = await client2.rotateKey(generateKeypair().pubkey);
+    assert.equal(r2.status, 200);
+
+    const h2 = ctx.db
+      .prepare("SELECT created_at FROM key_history WHERE handle = ? AND action = 'rotate' ORDER BY id ASC")
+      .all('alice');
+    assert.equal(h2.length, 2);
+    assert.equal(h2[1].created_at - h2[0].created_at, 120);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('failed rotates do not bump state_seq', async () => {
+  const ctx = await startTestServer();
+  try {
+    let { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
+    const { keys: bobKeys } = await createResident(ctx, 'bob');
+
+    const seq0 = (await alice.state()).data.state_seq;
+
+    const missingRes = await alice._signedPost('/api/town/key/rotate', {});
+    assert.equal(missingRes.status, 400);
+    assert.equal(missingRes.data.error, 'missing_pubkey');
+    assert.equal((await alice.state()).data.state_seq, seq0);
+
+    const sameRes = await alice.rotateKey(aliceKeys.pubkey);
+    assert.equal(sameRes.status, 400);
+    assert.equal(sameRes.data.error, 'same_pubkey');
+    assert.equal((await alice.state()).data.state_seq, seq0);
+
+    const invalidRes = await alice.rotateKey('not-a-key');
+    assert.equal(invalidRes.status, 400);
+    assert.equal(invalidRes.data.error, 'invalid_pubkey');
+    assert.equal((await alice.state()).data.state_seq, seq0);
+
+    const takenRes = await alice.rotateKey(bobKeys.pubkey);
+    assert.equal(takenRes.status, 409);
+    assert.equal(takenRes.data.error, 'pubkey_taken');
+    assert.equal((await alice.state()).data.state_seq, seq0);
+
+    for (let i = 0; i < 3; i++) {
+      const nextKeys = generateKeypair();
+      const res = await alice.rotateKey(nextKeys.pubkey);
+      assert.equal(res.status, 200);
+      alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nextKeys });
+    }
+
+    const seqBefore429 = (await alice.state()).data.state_seq;
+    const fourthRes = await alice.rotateKey(generateKeypair().pubkey);
+    assert.equal(fourthRes.status, 429);
+    assert.equal(fourthRes.data.error, 'rate_limited');
+    assert.equal((await alice.state()).data.state_seq, seqBefore429);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('successive rotates bump state_seq by exactly one each', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: c0 } = await createResident(ctx, 'alice');
+    const seq0 = (await c0.state()).data.state_seq;
+
+    const k1 = generateKeypair();
+    const r1 = await c0.rotateKey(k1.pubkey);
+    assert.equal(r1.status, 200);
+    assert.equal(r1.data.state_seq, seq0 + 1);
+    assert.equal((await c0.state()).data.state_seq, r1.data.state_seq);
+
+    const c1 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...k1 });
+    const k2 = generateKeypair();
+    const r2 = await c1.rotateKey(k2.pubkey);
+    assert.equal(r2.status, 200);
+    assert.equal(r2.data.state_seq, r1.data.state_seq + 1);
+    assert.equal((await c1.state()).data.state_seq, r2.data.state_seq);
+  } finally {
+    await ctx.close();
+  }
+});
