@@ -308,7 +308,7 @@ test('scripts/README.md staging-polyfork exclusions: test suites and README.md s
     );
     const summary = JSON.parse(stageOut.trim());
     assert.equal(summary.ok, true);
-    assert.equal(summary.file_count, 194);
+    assert.equal(summary.file_count, 195);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
@@ -421,16 +421,16 @@ test('scripts/README.md MANIFEST.json shape matches a real staging-polyfork dry 
     );
     const summary = JSON.parse(stageOut.trim());
     assert.equal(summary.ok, true);
-    assert.equal(summary.file_count, 194);
+    assert.equal(summary.file_count, 195);
     assert.equal(String(summary.staging_js_v), '40');
     assert.equal(summary.town_js_v, null);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
     );
-    assert.equal(manifest.file_count, 194);
+    assert.equal(manifest.file_count, 195);
     assert.equal(String(manifest.staging_js_v), '40');
-    assert.equal(manifest.files.length, 194);
+    assert.equal(manifest.files.length, 195);
 
     let sumBytes = 0;
     for (const entry of manifest.files) {
