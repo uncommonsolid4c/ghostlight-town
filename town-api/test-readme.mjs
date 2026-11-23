@@ -856,3 +856,27 @@ test('town-api/README.md join ignores role matches handleJoin vs handleAdminAppr
   assert.ok(readme.includes('`POST /api/town/join` (self-signed; ignores `role` in body)'));
   assert.ok(readme.includes('`join` ignores any `role` in the body'));
 });
+
+test('town-api/README.md Node >= 22.5 requirement matches server.mjs and the running Node', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+
+  const readmeMatch = readme.match(/requires Node >= (\d+)\.(\d+)/);
+  assert.ok(readmeMatch, 'town-api/README.md must state requires Node >= <major>.<minor>');
+  const serverMatch = serverSrc.match(/`node:sqlite` requires Node >= (\d+)\.(\d+)/);
+  assert.ok(serverMatch, 'town-api/server.mjs must state `node:sqlite` requires Node >= <major>.<minor>');
+
+  assert.equal(readmeMatch[1], serverMatch[1], 'README and server.mjs Node major version must agree');
+  assert.equal(readmeMatch[2], serverMatch[2], 'README and server.mjs Node minor version must agree');
+
+  const reqMajor = Number(readmeMatch[1]);
+  const reqMinor = Number(readmeMatch[2]);
+  const nodeMatch = process.version.match(/^v(\d+)\.(\d+)/);
+  assert.ok(nodeMatch, `Unexpected process.version format: ${process.version}`);
+  const curMajor = Number(nodeMatch[1]);
+  const curMinor = Number(nodeMatch[2]);
+  assert.ok(
+    curMajor > reqMajor || (curMajor === reqMajor && curMinor >= reqMinor),
+    `Running Node ${process.version} must satisfy >= ${reqMajor}.${reqMinor}`
+  );
+});
