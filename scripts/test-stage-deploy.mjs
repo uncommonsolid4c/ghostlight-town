@@ -739,7 +739,7 @@ test('--verify fails when staging.js?v= in staged index.html disagrees with mani
 
     const stagedDir = path.join(outDir, 'ghostlight-town');
     const indexPath = path.join(stagedDir, 'index.html');
-    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=40', 'staging.js?v=999');
+    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('staging.js?v=41', 'staging.js?v=999');
     await fs.writeFile(indexPath, updatedHtml, 'utf8');
 
     const manifestPath = path.join(stagedDir, 'MANIFEST.json');
