@@ -1473,6 +1473,7 @@ test('CLI keygen exact output shape and state exact top-level keys', async () =>
       'daily_game',
       'events',
       'footlights',
+      'garden',
       'guestbook',
       'guestbook_by_plot',
       'inn',
