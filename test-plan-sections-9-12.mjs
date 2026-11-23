@@ -510,7 +510,7 @@ test('PLAN.md §12.5 scope claims cross-check against §§3–4 body text', () =
   assert.match(planText, /`node town-api\/ghostlight-client\.mjs keygen/, 'PLAN.md body must include node town-api/ghostlight-client.mjs keygen');
 });
 
-test('PLAN.md §12.6 supersede details — deploy date, URL, state_seq 83, ?v=40 bundle', () => {
+test('PLAN.md §12.6 supersede details — deploy date, URL, state_seq 83, ?v=41 bundle', () => {
   const tail = readPlanTailSections();
   const sec126Match = tail.match(/### 12\.6[\s\S]*$/);
   assert.ok(sec126Match, 'PLAN.md must contain §12.6');
@@ -519,11 +519,11 @@ test('PLAN.md §12.6 supersede details — deploy date, URL, state_seq 83, ?v=40
   assert.match(sec126, /happened on\s+2026-11-13/, 'PLAN.md §12.6 must record deploy date 2026-11-13');
   assert.ok(sec126.includes('https://milo.4167360.xyz/api/town/state'), 'PLAN.md §12.6 must include live state URL');
   assert.match(sec126, /`state_seq` `83`/, 'PLAN.md §12.6 must record state_seq 83');
-  assert.match(sec126, /`staging\.js\?v=40`/, 'PLAN.md §12.6 must record staging.js?v=40');
-  assert.match(sec126, /195 files bundle deployed 2026-11-22/, 'PLAN.md §12.6 must record 195 files bundle deployed 2026-11-22');
+  assert.match(sec126, /`staging\.js\?v=41`/, 'PLAN.md §12.6 must record staging.js?v=41');
+  assert.match(sec126, /195 files bundle deployed 2026-11-23/, 'PLAN.md §12.6 must record 195 files bundle deployed 2026-11-23');
 
   const stagingHtml = fs.readFileSync(STAGING_HTML_PATH, 'utf8');
-  assert.ok(stagingHtml.includes('staging.js?v=40'), 'staging-polyfork/index.html must include staging.js?v=40');
+  assert.ok(stagingHtml.includes('staging.js?v=41'), 'staging-polyfork/index.html must include staging.js?v=41');
 });
 
 test('PLAN.md §12.4 deploy-brief corrections folded into session/live-api-deploy-brief.md', () => {
