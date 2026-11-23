@@ -19,7 +19,7 @@ import { runAll } from './run-all.mjs';
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ALL_SCRIPT = path.join(THIS_DIR, 'run-all.mjs');
 
-async function startTestServer() {
+async function startTestServer(opts = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-api-'));
   const dbPath = path.join(tmpDir, 'town.db');
   const plotsDir = path.join(tmpDir, 'plots');
@@ -29,6 +29,7 @@ async function startTestServer() {
     dbPath,
     plotsDir,
     operatorPubkey: operatorKeys.pubkey,
+    gamesPath: opts.gamesPath,
   });
 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -594,7 +595,7 @@ test('CLI TOWN_API_BASE env fallback runs dry-run and exits 0', async () => {
 });
 
 test('CLI partial failure exits 1 with ok: false summary', async () => {
-  const ctx = await startTestServer();
+  const ctx = await startTestServer({ gamesPath: '' });
   const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
   let stateDir = null;
   try {
