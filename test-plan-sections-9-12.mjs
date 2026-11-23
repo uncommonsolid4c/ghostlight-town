@@ -146,7 +146,7 @@ test('PLAN.md §12.5 keeps terminology-note history annotation and §12.4 keeps 
 test('PLAN.md §12.6 Phase 2 completion and §9 Q1/Q2/Q5 match repo state', () => {
   const planText = fs.readFileSync(PLAN_PATH, 'utf8');
   const tail = readPlanTailSections();
-  assert.match(planText.slice(0, 500), /Phase 2 code complete/, 'PLAN.md header must state Phase 2 code complete');
+  assert.match(planText.slice(0, planText.indexOf('\n---')), /Phase 2 code complete/, 'PLAN.md header must state Phase 2 code complete');
 
   const sec126Match = tail.match(/### 12\.6[\s\S]*$/);
   assert.ok(sec126Match, 'PLAN.md must contain §12.6');
