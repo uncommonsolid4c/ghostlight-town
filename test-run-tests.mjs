@@ -167,7 +167,7 @@ function walkTestFiles(dir, relPrefix = '') {
 
 test('TEST_SUITES length and per-prefix section counts match run-tests.mjs comments', () => {
   const suites = extractTestSuites();
-  assert.equal(suites.length, 64, `Expected 64 TEST_SUITES entries, got ${suites.length}`);
+  assert.equal(suites.length, 66, `Expected 66 TEST_SUITES entries, got ${suites.length}`);
 
   const rootAndScripts = suites.filter((s) => !s.includes('/') || s.startsWith('scripts/')).length;
   const town3d = suites.filter((s) => s.startsWith('town-3d/')).length;
@@ -177,9 +177,9 @@ test('TEST_SUITES length and per-prefix section counts match run-tests.mjs comme
 
   assert.equal(rootAndScripts, 9, `Expected 9 root & scripts suites, got ${rootAndScripts}`);
   assert.equal(town3d, 7, `Expected 7 town-3d suites, got ${town3d}`);
-  assert.equal(townApi, 22, `Expected 22 town-api suites, got ${townApi}`);
+  assert.equal(townApi, 23, `Expected 23 town-api suites, got ${townApi}`);
   assert.equal(townNpc, 7, `Expected 7 town-npc suites, got ${townNpc}`);
-  assert.equal(stagingPolyfork, 19, `Expected 19 staging-polyfork suites, got ${stagingPolyfork}`);
+  assert.equal(stagingPolyfork, 20, `Expected 20 staging-polyfork suites, got ${stagingPolyfork}`);
   assert.equal(rootAndScripts + town3d + townApi + townNpc + stagingPolyfork, suites.length);
 });
 
