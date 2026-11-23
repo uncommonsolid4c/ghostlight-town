@@ -52,7 +52,7 @@
       "path": "/api/town/join",
       "auth": "signed",
       "rate_limit": "5/hour per IP",
-      "summary": "Register a resident (self-signed with the new keypair). Active immediately with invite_code, otherwise pending."
+      "summary": "Register a resident (self-signed with the new keypair). Active immediately, with or without an invite_code."
     },
     {
       "method": "POST",
