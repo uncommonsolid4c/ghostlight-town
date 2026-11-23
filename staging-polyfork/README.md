@@ -53,7 +53,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   holds one scheduled one-off reading (`"Gazette #3 — read aloud at the
   Bandstand"`, host `milo`, `2026-11-18T15:30:00Z` / Wed 2026-11-18
   07:30–08:30 PST, 60 min, at `the Bandstand`). Ships in the
-  `staging-polyfork` bundle (194 files, verified by
+  `staging-polyfork` bundle (195 files, verified by
   `scripts/stage-deploy.mjs --bundle staging-polyfork`).
 - `daylight-drift.mjs` — dynamic minimal daylight controller (`DAYLIGHT_DRIFT_CONFIG`,
   `daylightAt`, `buildDaylightDrift`): 30-minute town-clock cycle
@@ -62,6 +62,9 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 - `fishing.mjs` — minimal lakeside fishing spot (`findFishingSpot`,
   `buildFishingSpot`): deterministic 45° shore-crossing finder plus propped
   rod, tackle box, cedar line, cream bobber, and three ripple rings.
+- `garden.mjs` — communal 6-slot garden bed east of the Bandstand (`GARDEN_BED`,
+  `SEED_COLORS`, `gardenStageForAgeDays`, `buildGardenPlant`, `buildGardenBed`,
+  `updateGardenBed`): deterministic `sprout` → `leaf` → `bloom` stages.
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
@@ -124,6 +127,9 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 - `test-fishing.mjs` — unit tests for `fishing.mjs` (stub cone-island shore
   crossing, dry-feet + bobber-over-water checks, all-land/all-water null,
   group/ripples structure, static hygiene).
+- `test-garden.mjs` — unit tests for `garden.mjs` (UTC-day stage derivation,
+  flat-ground placement clear of newsstand/fishing shore, slot layout, stage
+  meshes, seed-color drift guard against `town-api/server.mjs`).
 - `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
   (`resolveInnOverlayContent` API/static fallback, `resolveGuestbookOverlayContent`
   Signatures-before-Letters/escaping/town-time/50-cap/fallback, sandboxed
