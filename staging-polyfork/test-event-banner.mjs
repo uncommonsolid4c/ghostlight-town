@@ -611,3 +611,197 @@ test('formatEventWhen pins noon, midnight, and the epoch, and renderEventBannerH
     'Next: Midnight Reading on the Bandstand — Nov 15, 12:00 PM · hosted by @milo'
   );
 });
+
+test('loadEvents rejects 1-char and uppercase host handles, accepts underscore/dash interiors, and keeps duplicate events in order', async () => {
+  const load = (events) =>
+    loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return { events };
+      },
+    }));
+
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'a' }])).events.length, 0);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'a_b-c9' }])).events.length, 1);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'Aabc' }])).events.length, 0);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'a b' }])).events.length, 0);
+  assert.equal((await load([{ ...VALID_EVENT, host_handle: 'a'.repeat(31) + '_' }])).events.length, 1);
+
+  const dup = await load([VALID_EVENT, VALID_EVENT]);
+  assert.equal(dup.events.length, 2);
+  assert.deepEqual(dup.events[0], VALID_EVENT);
+  assert.deepEqual(dup.events[1], VALID_EVENT);
+});
+
+test('selectCurrentEvent pins a fractional-duration end boundary and a same-start next tie-break', () => {
+  const frac = {
+    ...VALID_EVENT,
+    start_at: '2026-11-15T20:00:00Z',
+    duration_min: 30.5,
+  };
+  assert.equal(selectCurrentEvent([frac], Date.parse('2026-11-15T20:30:00Z'))?.status, 'now');
+  assert.equal(selectCurrentEvent([frac], Date.parse('2026-11-15T20:30:30Z')), null);
+
+  const n1 = {
+    ...VALID_EVENT,
+    title: 'First',
+    start_at: '2026-11-16T18:00:00Z',
+    duration_min: 30,
+  };
+  const n2 = {
+    ...VALID_EVENT,
+    title: 'Second',
+    start_at: '2026-11-16T18:00:00Z',
+    duration_min: 30,
+  };
+  const tie = selectCurrentEvent([n2, n1], Date.parse('2026-11-16T12:00:00Z'));
+  assert.equal(tie?.status, 'next');
+  assert.equal(tie.event.title, 'Second');
+});
+
+test('updateEventBanner prefers eventBanner over group children, and tolerates null bandstandBuilt and null children', () => {
+  let redrawCount = 0;
+  const makeTextTexture = () => {
+    redrawCount += 1;
+    return {};
+  };
+  const makeCard = () => ({
+    name: 'event_banner',
+    visible: false,
+    material: { map: null, needsUpdate: false },
+  });
+
+  const cardA = makeCard();
+  const cardB = makeCard();
+  assert.equal(
+    updateEventBanner(
+      {
+        THREE: {},
+        bandstandBuilt: { eventBanner: cardA, group: { children: [cardB] } },
+        liveStore: { eventBannerKey: null },
+        makeTextTexture,
+      },
+      VALID_EVENT,
+      'next'
+    ),
+    true
+  );
+  assert.equal(cardA.visible, true);
+  assert.equal(cardB.visible, false);
+  assert.equal(redrawCount, 1);
+
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: null, liveStore: { eventBannerKey: null }, makeTextTexture },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: {}, liveStore: { eventBannerKey: null }, makeTextTexture },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+
+  let redrawC = 0;
+  const cardC = makeCard();
+  assert.equal(
+    updateEventBanner(
+      {
+        THREE: {},
+        bandstandBuilt: { group: { children: [null, { name: 'other' }, cardC] } },
+        liveStore: { eventBannerKey: null },
+        makeTextTexture: () => {
+          redrawC += 1;
+          return {};
+        },
+      },
+      VALID_EVENT,
+      'next'
+    ),
+    true
+  );
+  assert.equal(cardC.visible, true);
+  assert.equal(redrawC, 1);
+});
+
+test('renderEventBannerHeader renders missing host_handle and unparseable start_at verbatim', () => {
+  const el = { hidden: true, textContent: '' };
+  assert.equal(renderEventBannerHeader(el, { title: 'No Host' }, 'now'), true);
+  assert.equal(el.textContent, 'Now: No Host — hosted by @undefined');
+
+  assert.equal(
+    renderEventBannerHeader(el, { ...VALID_EVENT, start_at: 'not-a-date' }, 'next'),
+    true
+  );
+  assert.equal(
+    el.textContent,
+    'Next: Midnight Reading on the Bandstand —  · hosted by @milo'
+  );
+
+  assert.equal(renderEventBannerHeader(el, { ...VALID_EVENT, title: '' }, 'now'), true);
+  assert.equal(el.textContent, 'Now:  — hosted by @milo');
+});
+
+test('formatEventWhen returns empty for string, boolean, and null input, and eventBannerLines trims but preserves inner whitespace', () => {
+  assert.equal(formatEventWhen('2026-11-15T20:00:00Z'), '');
+  assert.equal(formatEventWhen(true), '');
+  assert.equal(formatEventWhen(null), '');
+
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: '  Midnight Reading  ' }, 'now'),
+    ['EVENTS', 'Midnight Reading']
+  );
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'word  word' }, 'now'),
+    ['EVENTS', 'word  word']
+  );
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'word\tword' }, 'now'),
+    ['EVENTS', 'word\tword']
+  );
+});
+
+test('updateEventBanner hide path runs before the material and liveStore guards', () => {
+  const card1 = { name: 'event_banner', visible: true };
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { eventBanner: card1 }, liveStore: null, makeTextTexture: () => ({}) },
+      null,
+      null
+    ),
+    false
+  );
+  assert.equal(card1.visible, false);
+
+  const card2 = { name: 'event_banner', visible: true };
+  assert.equal(
+    updateEventBanner(
+      {
+        THREE: {},
+        bandstandBuilt: { eventBanner: card2 },
+        liveStore: { eventBannerKey: 'stale' },
+        makeTextTexture: () => ({}),
+      },
+      VALID_EVENT,
+      'soon'
+    ),
+    false
+  );
+  assert.equal(card2.visible, false);
+
+  const card3 = { name: 'event_banner', visible: true };
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { eventBanner: card3 }, liveStore: null, makeTextTexture: () => ({}) },
+      VALID_EVENT,
+      'soon'
+    ),
+    false
+  );
+  assert.equal(card3.visible, false);
+});
