@@ -400,3 +400,446 @@ test('test-fish.mjs and server.mjs fishing code contain no random PRNG and no fo
   assert.equal(mathRndRe.test(testSrc), false);
   assert.equal(forbiddenRe.test(testSrc), false);
 });
+
+async function joinResident(ctx, handle) {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys });
+  const joined = await client.join({ origin: 'direct' });
+  assert.equal(joined.status, 201);
+  return { keys, client };
+}
+
+test('reel timing boundary: one second early fails, exactly at reel_at succeeds', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys } = await joinResident(ctx, 'alice');
+    const cast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(cast.status, 201);
+    assert.equal(cast.data.reel_at - cast.data.cast_at, 300);
+
+    ctx.advanceClock(299);
+    const early = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+    assert.equal(early.status, 409);
+    assert.equal(early.data.error, 'line_settling');
+    assert.equal(early.data.reel_at, cast.data.reel_at);
+
+    ctx.advanceClock(1);
+    const reel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+    assert.equal(reel.status, 200);
+    assert.ok(reel.data.caught_at >= cast.data.reel_at);
+    assert.ok(reel.data.caught_at - cast.data.reel_at <= 10);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('duplicate casts do not consume the resident rate limit', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys } = await joinResident(ctx, 'alice');
+
+    for (let i = 0; i < 10; i++) {
+      const c = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+      assert.equal(c.status, 201, `Cast ${i + 1} should succeed`);
+
+      const dup = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+      assert.equal(dup.status, 409);
+      assert.equal(dup.data.error, 'already_cast');
+      assert.equal(dup.data.cast_at, c.data.cast_at);
+      assert.equal(dup.data.reel_at, c.data.reel_at);
+
+      ctx.advanceClock(300);
+      const r = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+      assert.equal(r.status, 200, `Reel ${i + 1} should succeed`);
+      ctx.advanceClock(10);
+    }
+
+    const eleventh = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(eleventh.status, 429);
+    assert.equal(eleventh.data.error, 'rate_limited');
+    assert.ok(eleventh.data.retry_after > 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('resident fish rate limit resets after the hour window', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys } = await joinResident(ctx, 'alice');
+
+    for (let i = 0; i < 10; i++) {
+      const c = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+      assert.equal(c.status, 201, `Cast ${i + 1} should succeed`);
+      ctx.advanceClock(300);
+      const r = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+      assert.equal(r.status, 200, `Reel ${i + 1} should succeed`);
+      ctx.advanceClock(10);
+    }
+
+    const eleventh = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(eleventh.status, 429);
+    assert.equal(eleventh.data.error, 'rate_limited');
+    assert.ok(
+      eleventh.data.retry_after >= 490 && eleventh.data.retry_after <= 500,
+      `Expected retry_after in [490, 500], got ${eleventh.data.retry_after}`
+    );
+
+    ctx.advanceClock(3600);
+    const resetCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(resetCast.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest fish rate limit resets after the hour window', async () => {
+  const ctx = await startTestServer();
+  try {
+    const guestKeys = generateKeypair();
+
+    for (let i = 0; i < 2; i++) {
+      const c = await signedPostAt(
+        ctx,
+        '/api/town/fish/guest/cast',
+        { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+        'visitor_1',
+        guestKeys.privateKeyPem
+      );
+      assert.equal(c.status, 201);
+      ctx.advanceClock(300);
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/fish/guest/reel',
+        { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+        'visitor_1',
+        guestKeys.privateKeyPem
+      );
+      assert.equal(r.status, 200);
+      ctx.advanceClock(10);
+    }
+
+    const third = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(third.status, 429);
+    assert.equal(third.data.error, 'rate_limited');
+    assert.ok(
+      third.data.retry_after >= 2970 && third.data.retry_after <= 2980,
+      `Expected retry_after in [2970, 2980], got ${third.data.retry_after}`
+    );
+
+    ctx.advanceClock(3600);
+    const resetCast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(resetCast.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest reel errors: no active cast 404, early reel 409, duplicate cast 409', async () => {
+  const ctx = await startTestServer();
+  try {
+    const guestKeys = generateKeypair();
+
+    const noCast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(noCast.status, 404);
+    assert.equal(noCast.data.error, 'no_active_cast');
+
+    const c1 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(c1.status, 201);
+
+    const dup = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(dup.status, 409);
+    assert.equal(dup.data.error, 'already_cast');
+    assert.equal(dup.data.cast_at, c1.data.cast_at);
+
+    ctx.advanceClock(100);
+    const early = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(early.status, 409);
+    assert.equal(early.data.error, 'line_settling');
+
+    ctx.advanceClock(200);
+    const reel = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(reel.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest cast and reel reject invalid handles', async () => {
+  const ctx = await startTestServer();
+  try {
+    const guestKeys = generateKeypair();
+
+    for (const bad of ['BAD!', 'a', 'UPPER', 'has space']) {
+      const badCast = await signedPostAt(
+        ctx,
+        '/api/town/fish/guest/cast',
+        { handle: bad, pubkey: guestKeys.pubkey },
+        bad,
+        guestKeys.privateKeyPem
+      );
+      assert.equal(badCast.status, 400, `Cast for ${JSON.stringify(bad)} should be 400`);
+      assert.equal(badCast.data.error, 'invalid_handle');
+
+      const badReel = await signedPostAt(
+        ctx,
+        '/api/town/fish/guest/reel',
+        { handle: bad, pubkey: guestKeys.pubkey },
+        bad,
+        guestKeys.privateKeyPem
+      );
+      assert.equal(badReel.status, 400, `Reel for ${JSON.stringify(bad)} should be 400`);
+      assert.equal(badReel.data.error, 'invalid_handle');
+    }
+
+    const emptyCast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: '', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(emptyCast.status, 400);
+    assert.equal(emptyCast.data.error, 'invalid_handle');
+
+    const mismatchCast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_2', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(mismatchCast.status, 401);
+    assert.equal(mismatchCast.data.error, 'handle_mismatch');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest cast without a body handle uses the signed handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const guestKeys = generateKeypair();
+
+    const noPubkey = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      {},
+      'visitor_9',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(noPubkey.status, 400);
+    assert.equal(noPubkey.data.error, 'missing_pubkey');
+
+    const cast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { pubkey: guestKeys.pubkey },
+      'visitor_9',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(cast.status, 201);
+    assert.equal(cast.data.handle, 'visitor_9');
+
+    ctx.advanceClock(300);
+    const reel = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { pubkey: guestKeys.pubkey },
+      'visitor_9',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(reel.status, 200);
+    assert.equal(reel.data.handle, 'visitor_9');
+
+    const logRes = await fetch(`${ctx.baseUrl}/api/town/fish/log?handle=visitor_9`);
+    assert.equal(logRes.status, 200);
+    const logData = await logRes.json();
+    assert.equal(logData.count, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('every catch label and flavor matches the catch table', async () => {
+  const TABLE = {
+    old_boot: {
+      label: 'An old boot.',
+      flavor: 'It has seen things. It has been places. It is, technically, a catch.',
+    },
+    tin_kettle: {
+      label: 'A tin kettle.',
+      flavor: 'Dented, but the spout still whistles in a stiff breeze. Tomas would approve.',
+    },
+    rusty_spoon: {
+      label: 'A rusty spoon.',
+      flavor: "Somebody's soup, a long time ago.",
+    },
+    soggy_glove: {
+      label: 'A soggy glove.',
+      flavor: 'One glove. The other one is still out there, living its best life.',
+    },
+    tangled_string: {
+      label: 'A tangle of string.',
+      flavor: 'It was a fishing line once. It has come home.',
+    },
+    poem_in_a_bottle: {
+      label: 'A poem in a bottle.',
+      flavor: null,
+    },
+    silver_minnow: {
+      label: 'A silver minnow.',
+      flavor: 'It flashes once in your palm and slips back into the lake. You were faster this time.',
+    },
+    glass_float: {
+      label: 'A glass float.',
+      flavor: 'Sea-green, perfect, older than the town. The lake gives up its treasures rarely.',
+    },
+  };
+  const POEMS = new Set([
+    'The lake keeps what the town forgets, and returns it damp.',
+    'If you are reading this, the water was kinder than the road.',
+    'Someone loved this shore enough to write it down.',
+    'The minnows know the way home. Ask them nicely.',
+  ]);
+
+  const ctx = await startTestServer();
+  try {
+    const anglers = [];
+    for (let i = 0; i < 5; i++) {
+      const handle = `angler_${i}`;
+      const { keys } = await joinResident(ctx, handle);
+      anglers.push({ handle, keys });
+    }
+
+    let total = 0;
+    for (const { handle, keys } of anglers) {
+      for (let i = 0; i < 10; i++) {
+        const c = await signedPostAt(ctx, '/api/town/fish/cast', {}, handle, keys.privateKeyPem);
+        assert.equal(c.status, 201);
+        ctx.advanceClock(300);
+        const r = await signedPostAt(ctx, '/api/town/fish/reel', {}, handle, keys.privateKeyPem);
+        assert.equal(r.status, 200);
+        ctx.advanceClock(10);
+
+        const entry = TABLE[r.data.catch.kind];
+        assert.ok(entry, `Unknown catch kind: ${r.data.catch.kind}`);
+        assert.equal(r.data.catch.label, entry.label);
+        if (entry.flavor === null) {
+          assert.ok(POEMS.has(r.data.catch.flavor), `Unexpected poem flavor: ${r.data.catch.flavor}`);
+        } else {
+          assert.equal(r.data.catch.flavor, entry.flavor);
+        }
+        total += 1;
+      }
+    }
+
+    assert.equal(total, 50);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('two residents and a guest fish independently; logs are per-handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await joinResident(ctx, 'alice');
+    const bob = await joinResident(ctx, 'bob');
+    const guestKeys = generateKeypair();
+
+    const aliceCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(aliceCast.status, 201);
+    const bobCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'bob', bob.keys.privateKeyPem);
+    assert.equal(bobCast.status, 201);
+
+    const aliceDup = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(aliceDup.status, 409);
+
+    ctx.advanceClock(100);
+    const aliceEarly = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(aliceEarly.status, 409);
+
+    ctx.advanceClock(200);
+    const aliceReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(aliceReel.status, 200);
+    const bobReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'bob', bob.keys.privateKeyPem);
+    assert.equal(bobReel.status, 200);
+
+    const guestCast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(guestCast.status, 201);
+    ctx.advanceClock(300);
+    const guestReel = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(guestReel.status, 200);
+
+    const aliceLog = await alice.client.fishLog('alice');
+    assert.equal(aliceLog.status, 200);
+    assert.equal(aliceLog.data.count, 1);
+    assert.equal(aliceLog.data.catches[0].kind, aliceReel.data.catch.kind);
+
+    const bobLog = await alice.client.fishLog('bob');
+    assert.equal(bobLog.status, 200);
+    assert.equal(bobLog.data.count, 1);
+    assert.equal(bobLog.data.catches[0].kind, bobReel.data.catch.kind);
+
+    const guestLog = await alice.client.fishLog('visitor_1');
+    assert.equal(guestLog.status, 200);
+    assert.equal(guestLog.data.count, 1);
+    assert.equal(guestLog.data.catches[0].kind, guestReel.data.catch.kind);
+  } finally {
+    await ctx.close();
+  }
+});
