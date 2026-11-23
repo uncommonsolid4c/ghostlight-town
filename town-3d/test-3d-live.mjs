@@ -28,6 +28,7 @@ import {
   formatPlotGuestbookTabLabel,
   TownLive,
 } from './town.js';
+import { lightFootlightSlot, buildConceptBandstand } from './concept-bandstand.js';
 import { createTownServer } from '../town-api/server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from '../town-api/ghostlight-client.mjs';
 
@@ -1552,5 +1553,197 @@ test('Slice 102: setAvatarStatusText and applyState presence wire 2-line nametag
 
     applyState(town, { state_seq: 3, footlights: [], presence: [] });
     assert.equal(live.avatars.has('alice'), false);
+  });
+});
+
+function makeFakeFootlightSlot(slot = 1) {
+  return {
+    userData: {
+      slot,
+      shell: {
+        material: {
+          color: { value: '#7a6230', set(v) { this.value = v; } },
+          emissive: { value: '#000000', set(v) { this.value = v; } },
+          emissiveIntensity: 0,
+        },
+      },
+      placard: {
+        rotation: { x: 0 },
+        position: { y: 0.06 },
+        material: {
+          map: null,
+          color: { value: '#4d301c', set(v) { this.value = v; } },
+          needsUpdate: false,
+        },
+      },
+      lit: false,
+      handle: null,
+      role: null,
+      statusText: null,
+    },
+  };
+}
+
+test('Slice 319: fallback lightFootlightSlot renders handle-only placard unchanged when statusText is absent or empty', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const fl = makeFakeFootlightSlot(1);
+
+    for (const opts of [
+      { handle: 'wick', role: 'npc' },
+      { handle: 'wick', role: 'npc', statusText: '' },
+      { handle: 'wick', role: 'npc', statusText: '   ' },
+    ]) {
+      draws.length = 0;
+      lightFootlightSlot(THREE, fl, opts);
+      assert.equal(fl.userData.lit, true);
+      assert.equal(fl.userData.handle, 'wick');
+      assert.equal(fl.userData.role, 'npc');
+      assert.equal(fl.userData.statusText, null);
+      assert.equal(draws.length, 1);
+      assert.equal(draws[0].text, 'wick');
+      assert.equal(draws[0].font, 'bold 28px monospace');
+      assert.equal(draws[0].width, 256);
+      assert.equal(draws[0].height, 96);
+    }
+  });
+});
+
+test('Slice 319: fallback lightFootlightSlot wraps statusText with smaller subSize and updates on change', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const fl = makeFakeFootlightSlot(1);
+
+    draws.length = 0;
+    lightFootlightSlot(THREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: 'Listening by the gatehouse',
+    });
+    assert.equal(fl.userData.statusText, 'Listening by the gatehouse');
+    assert.equal(draws.length, 3);
+    assert.equal(draws[0].text, 'maren');
+    assert.equal(draws[0].font, 'bold 22px monospace');
+    assert.equal(draws[1].font, 'bold 16px monospace');
+    assert.equal(draws[2].font, 'bold 16px monospace');
+    assert.ok(draws[1].text.length <= 20);
+    assert.ok(draws[2].text.length <= 20);
+    assert.equal(draws[1].text, 'Listening by');
+    assert.equal(draws[2].text, 'the gatehouse');
+
+    draws.length = 0;
+    lightFootlightSlot(THREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: 'Quiet tea',
+    });
+    assert.equal(fl.userData.statusText, 'Quiet tea');
+    assert.equal(draws.length, 2);
+    assert.equal(draws[1].text, 'Quiet tea');
+    assert.equal(draws[1].font, 'bold 16px monospace');
+  });
+});
+
+test('Slice 319: fallback lightFootlightSlot truncates long status with ellipsis (fallback 40-char semantics)', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const fl = makeFakeFootlightSlot(1);
+
+    draws.length = 0;
+    lightFootlightSlot(THREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: 'Reading old letters beside the warm lantern while the night wind moves across the quiet town square',
+    });
+    assert.equal(draws.length, 3);
+    assert.ok(draws[1].text.length <= 20);
+    assert.ok(draws[2].text.length <= 20);
+    assert.equal(draws[2].text, 'beside the warm lan…');
+
+    draws.length = 0;
+    lightFootlightSlot(THREE, fl, {
+      handle: 'maren',
+      role: 'npc',
+      statusText: 'Reading old letters beside the warm lantern while the night wind moves across the quiet town square and cobbles',
+    });
+    assert.equal(draws.length, 3);
+    assert.equal(draws[2].text, 'beside the warm lan…');
+  });
+});
+
+test('Slice 319: fallback lightFootlightSlot sets npc palette, permanent flag, and statusText transitions', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const fl = makeFakeFootlightSlot(1);
+
+    lightFootlightSlot(THREE, fl, { handle: 'wick', role: 'npc', permanent: true });
+    assert.equal(fl.userData.shell.material.color.value, '#ffbe55');
+    assert.equal(fl.userData.shell.material.emissive.value, '#ffaa33');
+    assert.equal(fl.userData.shell.material.emissiveIntensity, 1.0);
+    assert.equal(fl.userData.permanent, true);
+
+    lightFootlightSlot(THREE, fl, { handle: 'wick', role: 'muse' });
+    assert.equal(fl.userData.shell.material.color.value, '#bfeaff');
+    assert.equal(fl.userData.shell.material.emissive.value, '#9be0ff');
+    assert.equal(fl.userData.shell.material.emissiveIntensity, 0.9);
+
+    lightFootlightSlot(THREE, fl, { handle: 'wick', role: 'muse', statusText: 'At the bandstand' });
+    assert.equal(fl.userData.statusText, 'At the bandstand');
+
+    draws.length = 0;
+    lightFootlightSlot(THREE, fl, { handle: 'wick', role: 'muse', statusText: null });
+    assert.equal(fl.userData.statusText, null);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, 'wick');
+    assert.equal(draws[0].font, 'bold 28px monospace');
+  });
+});
+
+test('Slice 319: town.js applyState delegates lit footlight placards to lightFootlightSlot', () => {
+  const townJs = fsSync.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  const applyStart = townJs.indexOf('export function applyState(');
+  assert.notEqual(applyStart, -1);
+  const applyBody = townJs.slice(applyStart);
+  assert.match(applyBody, /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/);
+  assert.equal(townJs.includes('function formatFootlightStatusLines'), false);
+  assert.equal(townJs.includes('function splitNightlyCallLines'), true);
+
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    const town = buildTown(THREE);
+    const fl = town.parts.footlights[1];
+    draws.length = 0;
+    applyState(town, {
+      state_seq: 1,
+      footlights: [{ handle: 'dave', status_text: '  Listening by the gatehouse  ', slot: 1, role: 'muse' }],
+      presence: [],
+    });
+    assert.equal(draws.length, 3);
+    assert.equal(draws[0].text, 'dave');
+    assert.equal(draws[0].font, 'bold 22px monospace');
+    assert.equal(draws[1].font, 'bold 16px monospace');
+    assert.equal(draws[2].font, 'bold 16px monospace');
+    assert.equal(draws[1].text, 'Listening by');
+    assert.equal(draws[2].text, 'the gatehouse');
+    assert.equal(fl.userData.statusText, 'Listening by the gatehouse');
+  });
+});
+
+test('Slice 319: fallback concept-bandstand stays dependency-free and Milo pre-light stays handle-only', () => {
+  const bandstandJs = fsSync.readFileSync(path.join(__dirname, 'concept-bandstand.js'), 'utf8');
+  assert.equal(/^\s*import\b/m.test(bandstandJs), false);
+
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    draws.length = 0;
+    const built = buildConceptBandstand(THREE, { lightMiloFootlight: true });
+    const fl0 = built.footlights[0];
+    assert.equal(fl0.userData.handle, 'milo');
+    assert.equal(fl0.userData.statusText, null);
+    assert.equal(fl0.userData.permanent, true);
+    const placardDraws = draws.filter((d) => d.text !== 'The Ghostlight Bandstand');
+    assert.equal(placardDraws.length, 1);
+    assert.equal(placardDraws[0].text, 'milo');
+    assert.equal(placardDraws[0].font, 'bold 28px monospace');
   });
 });
