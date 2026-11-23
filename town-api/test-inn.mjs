@@ -72,6 +72,8 @@ async function createResident(ctx, handle, { approved = true } = {}) {
   if (approved) {
     const appRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle });
     assert.equal(appRes.status, 200);
+  } else {
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run(handle);
   }
   return { client, keys };
 }
@@ -141,13 +143,14 @@ test('inn claim happy path, state exposure, default nights, and state_seq', asyn
   }
 });
 
-test('inn claim validation, conflicts, and pending resident gate', async () => {
+test('inn claim validation, conflicts, and suspended resident gate', async () => {
   const ctx = await startTestServer();
   try {
-    const { client: pending } = await createResident(ctx, 'pending_muse', { approved: false });
-    const pendingRes = await pending.claimInnRoom('lantern', 2);
-    assert.equal(pendingRes.status, 403);
-    assert.equal(pendingRes.data.error, 'resident_not_active');
+    const { client: suspended } = await createResident(ctx, 'suspended_muse', { approved: false });
+    const suspendedRes = await suspended.claimInnRoom('lantern', 2);
+    assert.equal(suspendedRes.status, 403);
+    assert.equal(suspendedRes.data.error, 'resident_not_active');
+    assert.equal(suspendedRes.data.resident_status, 'suspended');
 
     const { client: alice } = await createResident(ctx, 'alice');
     const { client: bob } = await createResident(ctx, 'bob');
@@ -692,11 +695,11 @@ test('all three inn rooms claimed at once, key never in state, claimed_at fresh'
   }
 });
 
-test('inn auth failures: missing headers, unknown resident, bad signature, stale timestamp, pending', async () => {
+test('inn auth failures: missing headers, unknown resident, bad signature, stale timestamp, suspended', async () => {
   const ctx = await startTestServer();
   try {
     const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
-    const { client: pending } = await createResident(ctx, 'pending_guest', { approved: false });
+    const { client: suspended } = await createResident(ctx, 'suspended_guest', { approved: false });
 
     const setup = await alice.claimInnRoom('lantern', 2);
     assert.equal(setup.status, 201);
@@ -745,14 +748,16 @@ test('inn auth failures: missing headers, unknown resident, bad signature, stale
     assert.equal(staleRes.status, 401);
     assert.equal(staleData.error, 'stale_timestamp');
 
-    // Pending resident extend & vacate -> 403 resident_not_active
-    const pendingExt = await pending.extendInnStay('lantern', 'AAAAAAAAAAAA', 1);
-    assert.equal(pendingExt.status, 403);
-    assert.equal(pendingExt.data.error, 'resident_not_active');
+    // Suspended resident extend & vacate -> 403 resident_not_active
+    const suspendedExt = await suspended.extendInnStay('lantern', 'AAAAAAAAAAAA', 1);
+    assert.equal(suspendedExt.status, 403);
+    assert.equal(suspendedExt.data.error, 'resident_not_active');
+    assert.equal(suspendedExt.data.resident_status, 'suspended');
 
-    const pendingVac = await pending.vacateInnRoom('lantern', 'AAAAAAAAAAAA');
-    assert.equal(pendingVac.status, 403);
-    assert.equal(pendingVac.data.error, 'resident_not_active');
+    const suspendedVac = await suspended.vacateInnRoom('lantern', 'AAAAAAAAAAAA');
+    assert.equal(suspendedVac.status, 403);
+    assert.equal(suspendedVac.data.error, 'resident_not_active');
+    assert.equal(suspendedVac.data.resident_status, 'suspended');
   } finally {
     await ctx.close();
   }
