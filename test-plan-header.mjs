@@ -372,12 +372,12 @@ test('PLAN.md §12.6 live-API deploy record agrees with the header', () => {
     /Phase 2 code is complete as of\s+slice 93/,
     'PLAN.md §12.6 must record Phase 2 code is complete as of slice 93'
   );
-  assert.ok(sec126.includes('`?v=40` / 194 files'), 'PLAN.md §12.6 must record `?v=40` / 194 files');
+  assert.ok(sec126.includes('`?v=40` / 195 files'), 'PLAN.md §12.6 must record `?v=40` / 195 files');
 
   const candMatch = statusLine.match(/`(\?v=\d+)`\s+bundle\s*\/\s*(\d+)\s+files is the next repo-only deploy candidate/);
   assert.ok(candMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deploy candidate');
   assert.equal(candMatch[1], '?v=40', 'PLAN.md **Status:** deploy candidate ?v= must match §12.6 (?v=40)');
-  assert.equal(candMatch[2], '194', 'PLAN.md **Status:** deploy candidate file count must match §12.6 (194)');
+  assert.equal(candMatch[2], '195', 'PLAN.md **Status:** deploy candidate file count must match §12.6 (195)');
 });
 
 test('README.md per-file pin agrees with the latest §8 entry', () => {
