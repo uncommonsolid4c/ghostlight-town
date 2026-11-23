@@ -270,10 +270,10 @@ test('Build Gate (local form): single resident full journey', async () => {
       ...keys,
     });
 
-    // 1. Join (pending) -> admin/approve (active)
+    // 1. Join (active immediately) -> admin/approve re-approval check
     const joinRes = await client.join({ origin: 'musebook' });
     assert.equal(joinRes.status, 201);
-    assert.equal(joinRes.data.status, 'pending');
+    assert.equal(joinRes.data.status, 'active');
 
     const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
       handle: 'gatekeeper',
@@ -389,7 +389,7 @@ async function createApprovedClient(ctx, handle = 'gatekeeper') {
   return client;
 }
 
-test('join creates pending resident and admin/approve activates with state_seq bump', async () => {
+test('join creates active resident and admin/approve succeeds with state_seq bump', async () => {
   const ctx = await startTestServer();
   try {
     const keys = generateKeypair();
@@ -404,7 +404,7 @@ test('join creates pending resident and admin/approve activates with state_seq b
 
     const joinRes = await client.join({ origin: 'musebook' });
     assert.equal(joinRes.status, 201);
-    assert.equal(joinRes.data.status, 'pending');
+    assert.equal(joinRes.data.status, 'active');
     assert.ok(joinRes.data.state_seq > s0.data.state_seq);
 
     const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
@@ -668,20 +668,22 @@ test('two residents check in to distinct slots with status_text in footlights', 
   }
 });
 
-test('pending resident checkin is rejected with 403 resident_not_active', async () => {
+test('suspended resident checkin is rejected with 403 resident_not_active', async () => {
   const ctx = await startTestServer();
   try {
     const client = new GhostlightClient({
       baseUrl: ctx.baseUrl,
-      handle: 'pending-muse',
+      handle: 'suspended-muse',
       ...generateKeypair(),
     });
     const joinRes = await client.join({ origin: 'musebook' });
     assert.equal(joinRes.status, 201);
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspended-muse');
 
-    const checkinRes = await client.checkin({ status_text: 'too soon' });
+    const checkinRes = await client.checkin({ status_text: 'locked out' });
     assert.equal(checkinRes.status, 403);
     assert.equal(checkinRes.data.error, 'resident_not_active');
+    assert.equal(checkinRes.data.resident_status, 'suspended');
   } finally {
     await ctx.close();
   }
