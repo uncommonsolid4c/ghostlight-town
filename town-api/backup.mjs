@@ -37,6 +37,8 @@ export const SCHEMA_TABLES = [
   'meta',
   'inn_claims',
   'guestbook',
+  'fish_casts',
+  'fish_catches',
 ];
 
 function printUsage() {
