@@ -142,7 +142,7 @@ test('CLI join -> checkin -> say -> presence -> state -> leave round-trip', asyn
     const joinOut = JSON.parse(joined.stdout.trim());
     assert.equal(joinOut.ok, true);
     assert.equal(joinOut.status, 201);
-    assert.equal(joinOut.data.status, 'pending');
+    assert.equal(joinOut.data.status, 'active');
 
     const approved = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
       handle: 'shellmuse',
@@ -985,17 +985,18 @@ test('CLI join bio length, duplicate handle with a different key, missing --orig
   }
 });
 
-test('CLI pending resident gated from checkin/say/presence/leave; never-lit leave is 200', async () => {
+test('CLI suspended resident gated from checkin/say/presence/leave; never-lit leave is 200', async () => {
   const ctx = await startTestServer();
   try {
-    const pendingKey = path.join(ctx.tmpDir, 'pendingres.pem');
-    assert.equal((await runCli(['keygen', '--out', pendingKey])).code, 0);
+    const suspendedKey = path.join(ctx.tmpDir, 'suspendedres.pem');
+    assert.equal((await runCli(['keygen', '--out', suspendedKey])).code, 0);
     assert.equal(
-      (await runCli(['join', '--api-base', ctx.baseUrl, '--handle', 'pendingres', '--key', pendingKey, '--origin', 'colony'])).code,
+      (await runCli(['join', '--api-base', ctx.baseUrl, '--handle', 'suspendedres', '--key', suspendedKey, '--origin', 'colony'])).code,
       0
     );
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspendedres');
 
-    const ci = await runCli(['checkin', '--api-base', ctx.baseUrl, '--handle', 'pendingres', '--key', pendingKey]);
+    const ci = await runCli(['checkin', '--api-base', ctx.baseUrl, '--handle', 'suspendedres', '--key', suspendedKey]);
     assert.equal(ci.code, 0, ci.stderr);
     const ciOut = JSON.parse(ci.stdout.trim());
     assert.equal(ciOut.ok, false);
@@ -1003,7 +1004,7 @@ test('CLI pending resident gated from checkin/say/presence/leave; never-lit leav
     assert.equal(ciOut.data.error, 'resident_not_active');
 
     const say = await runCli([
-      'say', '--api-base', ctx.baseUrl, '--handle', 'pendingres', '--key', pendingKey, '--body', 'hello?',
+      'say', '--api-base', ctx.baseUrl, '--handle', 'suspendedres', '--key', suspendedKey, '--body', 'hello?',
     ]);
     assert.equal(say.code, 0, say.stderr);
     const sayOut = JSON.parse(say.stdout.trim());
@@ -1012,7 +1013,7 @@ test('CLI pending resident gated from checkin/say/presence/leave; never-lit leav
     assert.equal(sayOut.data.error, 'resident_not_active');
 
     const pres = await runCli([
-      'presence', '--api-base', ctx.baseUrl, '--handle', 'pendingres', '--key', pendingKey, '--zone', 'gate',
+      'presence', '--api-base', ctx.baseUrl, '--handle', 'suspendedres', '--key', suspendedKey, '--zone', 'gate',
     ]);
     assert.equal(pres.code, 0, pres.stderr);
     const presOut = JSON.parse(pres.stdout.trim());
@@ -1020,15 +1021,15 @@ test('CLI pending resident gated from checkin/say/presence/leave; never-lit leav
     assert.equal(presOut.status, 403);
     assert.equal(presOut.data.error, 'resident_not_active');
 
-    const pendingLeave = await runCli([
-      'leave', '--api-base', ctx.baseUrl, '--handle', 'pendingres', '--key', pendingKey,
+    const suspendedLeave = await runCli([
+      'leave', '--api-base', ctx.baseUrl, '--handle', 'suspendedres', '--key', suspendedKey,
     ]);
-    assert.equal(pendingLeave.code, 0, pendingLeave.stderr);
-    const pendingLeaveOut = JSON.parse(pendingLeave.stdout.trim());
-    assert.equal(pendingLeaveOut.ok, false);
-    assert.equal(pendingLeaveOut.status, 403);
-    assert.equal(pendingLeaveOut.data.error, 'resident_not_active');
-    assert.equal(pendingLeaveOut.data.resident_status, 'pending');
+    assert.equal(suspendedLeave.code, 0, suspendedLeave.stderr);
+    const suspendedLeaveOut = JSON.parse(suspendedLeave.stdout.trim());
+    assert.equal(suspendedLeaveOut.ok, false);
+    assert.equal(suspendedLeaveOut.status, 403);
+    assert.equal(suspendedLeaveOut.data.error, 'resident_not_active');
+    assert.equal(suspendedLeaveOut.data.resident_status, 'suspended');
 
     const neverLitKey = path.join(ctx.tmpDir, 'neverlit.pem');
     assert.equal((await runCli(['keygen', '--out', neverLitKey])).code, 0);
@@ -1054,7 +1055,7 @@ test('CLI pending resident gated from checkin/say/presence/leave; never-lit leav
   }
 });
 
-test('CLI plot invalid manifest content and script HTML rejected 400; pending plot 403', async () => {
+test('CLI plot invalid manifest content and script HTML rejected 400; suspended plot 403', async () => {
   const ctx = await startTestServer();
   try {
     const activeKey = path.join(ctx.tmpDir, 'plotactive.pem');
@@ -1097,22 +1098,23 @@ test('CLI plot invalid manifest content and script HTML rejected 400; pending pl
     assert.equal(unsafeHtmlOut.status, 400);
     assert.equal(unsafeHtmlOut.data.error, 'unsafe_html');
 
-    const pendingKey = path.join(ctx.tmpDir, 'plotpending.pem');
-    assert.equal((await runCli(['keygen', '--out', pendingKey])).code, 0);
+    const suspendedKey = path.join(ctx.tmpDir, 'plotsuspended.pem');
+    assert.equal((await runCli(['keygen', '--out', suspendedKey])).code, 0);
     assert.equal(
-      (await runCli(['join', '--api-base', ctx.baseUrl, '--handle', 'plotpending', '--key', pendingKey, '--origin', 'colony'])).code,
+      (await runCli(['join', '--api-base', ctx.baseUrl, '--handle', 'plotsuspended', '--key', suspendedKey, '--origin', 'colony'])).code,
       0
     );
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('plotsuspended');
 
-    const pendingPlot = await runCli([
-      'plot', '--api-base', ctx.baseUrl, '--handle', 'plotpending', '--key', pendingKey,
+    const suspendedPlot = await runCli([
+      'plot', '--api-base', ctx.baseUrl, '--handle', 'plotsuspended', '--key', suspendedKey,
       '--manifest', validManifestPath, '--html', validHtmlPath,
     ]);
-    assert.equal(pendingPlot.code, 0, pendingPlot.stderr);
-    const pendingPlotOut = JSON.parse(pendingPlot.stdout.trim());
-    assert.equal(pendingPlotOut.ok, false);
-    assert.equal(pendingPlotOut.status, 403);
-    assert.equal(pendingPlotOut.data.error, 'resident_not_active');
+    assert.equal(suspendedPlot.code, 0, suspendedPlot.stderr);
+    const suspendedPlotOut = JSON.parse(suspendedPlot.stdout.trim());
+    assert.equal(suspendedPlotOut.ok, false);
+    assert.equal(suspendedPlotOut.status, 403);
+    assert.equal(suspendedPlotOut.data.error, 'resident_not_active');
   } finally {
     await ctx.close();
   }
@@ -1195,7 +1197,7 @@ test('CLI join handle validation edges and duplicate pubkey 409', async () => {
     const okOut = JSON.parse(okJoin.stdout.trim());
     assert.equal(okOut.ok, true);
     assert.equal(okOut.status, 201);
-    assert.equal(okOut.data.status, 'pending');
+    assert.equal(okOut.data.status, 'active');
 
     const dupKey = await runCli([
       'join', '--api-base', ctx.baseUrl, '--handle', 'otherkey', '--key', keyPath, '--origin', 'colony',
