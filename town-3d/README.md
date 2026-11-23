@@ -58,8 +58,9 @@ Test suites (7, all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 - **Deterministic wandering:** Wick, Maren, and Tomas capsule wanderers plus
   Milo's ghost drifting the Bandstand deck (`buildWanderState`), yielding to
   live presence avatars.
-- **Footlight status:** `status_text` renders on the Bandstand placard and
-  avatar nametag (`formatFootlightStatusLines`).
+- **Footlight status:** `status_text` renders on the Bandstand placard
+  (`lightFootlightSlot` in `concept-bandstand.js`) and avatar nametag
+  (`setAvatarStatusText` in `town.js`).
 - **Inn common windows:** follow the any-occupancy rule (`commonWindowMaterial`
   lights when any room is claimed; the three room windows are per-room).
 - **Per-plot guestbook tabs:** overlay tabs per plot
