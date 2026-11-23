@@ -666,3 +666,238 @@ test('build-digest.mjs sorts lines by id across merged snapshots and speakers by
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('build-digest.mjs --out writes the file, prints the exact summary, and creates missing parent dirs', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-out-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const outPath = path.join(tmpDir, 'nested', 'deep', 'digest.md');
+    const ts = Math.floor(Date.parse('2026-11-12T19:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'first line', created_at: ts },
+          { id: 2, handle: 'wick', role: 'npc', kind: 'say', body: 'second line', created_at: ts + 60 },
+        ],
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+      '--out', outPath,
+    ]);
+
+    assert.equal(stdout, 'digest: 2 line(s), 2 speaker(s)\n');
+    assert.equal(stderr, '');
+
+    const fileContent = await fs.readFile(outPath, 'utf8');
+    assert.ok(
+      fileContent.startsWith('# Prompt Book digest — 2026-11-12 to 2026-11-12 (town time)\n'),
+      'written digest must start with window header'
+    );
+
+    const stdoutRun = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+    assert.equal(fileContent, stdoutRun.stdout, '--out file content must be byte-identical to stdout mode');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs defaults to a 7-day window ending today in town time', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-default-win-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const now = Math.floor(Date.now() / 1000);
+    const oldTs = now - (7 * 86400 + 3600);
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'today line', created_at: now },
+          { id: 2, handle: 'bob', role: 'muse', kind: 'say', body: 'seven days ago line', created_at: oldTs },
+        ],
+      })
+    );
+
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(now * 1000));
+    const y = Number(parts.find((p) => p.type === 'year').value);
+    const m = Number(parts.find((p) => p.type === 'month').value);
+    const d = Number(parts.find((p) => p.type === 'day').value);
+    const today = `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const since = new Date(Date.UTC(y, m - 1, d) - 6 * 86400 * 1000).toISOString().slice(0, 10);
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+    ]);
+
+    assert.ok(
+      stdout.startsWith(`# Prompt Book digest — ${since} to ${today} (town time)\n`),
+      `expected default 7-day header ${since} to ${today}`
+    );
+    assert.ok(stdout.includes('1 line(s) from 1 speaker(s) in the window.'));
+    assert.ok(stdout.includes('today line'));
+    assert.ok(!stdout.includes('seven days ago line'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs exits 1 on unparseable state JSON and on a state object without a prompt_book array', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-badjson-'));
+  try {
+    const badJsonPath = path.join(tmpDir, 'bad.json');
+    await fs.writeFile(badJsonPath, '{not json');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', badJsonPath]),
+      (err) => err.code === 1 && err.stdout === '' && /Failed to parse state JSON/.test(err.stderr)
+    );
+
+    const missingArrayPath = path.join(tmpDir, 'other.json');
+    await fs.writeFile(missingArrayPath, '{"other": []}');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', missingArrayPath]),
+      (err) => err.code === 1 && err.stdout === '' && /must be an object with a prompt_book array/.test(err.stderr)
+    );
+
+    const objectPbPath = path.join(tmpDir, 'obj-pb.json');
+    await fs.writeFile(objectPbPath, '{"prompt_book": {}}');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', objectPbPath]),
+      (err) => err.code === 1 && err.stdout === '' && /must be an object with a prompt_book array/.test(err.stderr)
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs groups lines into day buckets with full weekday headings, ordered by created_at then id', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-buckets-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const ts1 = Math.floor(Date.parse('2026-11-12T19:00:00Z') / 1000);
+    const ts2 = Math.floor(Date.parse('2026-11-12T20:00:00Z') / 1000);
+    const ts3 = Math.floor(Date.parse('2026-11-13T19:00:00Z') / 1000);
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 3, handle: 'bob', role: 'muse', kind: 'say', body: 'later created_at, smaller id', created_at: ts2 },
+          { id: 5, handle: 'alice', role: 'muse', kind: 'say', body: 'earlier created_at, bigger id', created_at: ts1 },
+          { id: 9, handle: 'carol', role: 'muse', kind: 'say', body: 'next day line', created_at: ts3 },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-13',
+    ]);
+
+    const thuIdx = stdout.indexOf('## Thursday, November 12, 2026');
+    const friIdx = stdout.indexOf('## Friday, November 13, 2026');
+    assert.ok(thuIdx > 0 && friIdx > thuIdx, 'day headings must appear in chronological order');
+
+    const p1 = stdout.indexOf('earlier created_at, bigger id');
+    const p2 = stdout.indexOf('later created_at, smaller id');
+    const p3 = stdout.indexOf('next day line');
+    assert.ok(p1 > thuIdx && p2 > p1 && friIdx > p2, 'Nov 12 lines must sort by created_at before id');
+    assert.ok(p3 > friIdx, 'Nov 13 line must appear under Friday heading');
+
+    assert.ok(stdout.includes('3 line(s) from 3 speaker(s) in the window.'));
+    assert.match(stdout, /## Speakers\s+- alice: 1 line\(s\)\s+- bob: 1 line\(s\)\s+- carol: 1 line\(s\)/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs town-time window boundaries include midnight edges and exclude the neighboring minutes', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-midnight-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'just before midnight start', created_at: Math.floor(Date.parse('2026-11-12T07:59:59Z') / 1000) },
+          { id: 2, handle: 'bob', role: 'muse', kind: 'say', body: 'exactly midnight start', created_at: Math.floor(Date.parse('2026-11-12T08:00:00Z') / 1000) },
+          { id: 3, handle: 'carol', role: 'muse', kind: 'say', body: 'just before midnight end', created_at: Math.floor(Date.parse('2026-11-13T07:59:59Z') / 1000) },
+          { id: 4, handle: 'dave', role: 'muse', kind: 'say', body: 'exactly midnight next day', created_at: Math.floor(Date.parse('2026-11-13T08:00:00Z') / 1000) },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.ok(stdout.includes('2 line(s) from 2 speaker(s) in the window.'));
+    assert.ok(stdout.includes('exactly midnight start'));
+    assert.ok(stdout.includes('just before midnight end'));
+    assert.ok(!stdout.includes('just before midnight start'));
+    assert.ok(!stdout.includes('exactly midnight next day'));
+    assert.ok(stdout.includes('- **bob** 00:00 — exactly midnight start'));
+    assert.ok(stdout.includes('- **carol** 23:59 — just before midnight end'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-feed.mjs prints the exact item summary and writes a single-trailing-newline channel in title-link-description-language-lastBuildDate order', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-feed-exact-'));
+  try {
+    const outPath = path.join(tmpDir, 'feed.xml');
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_FEED_PATH,
+      '--out', outPath,
+    ]);
+
+    assert.equal(stdout, 'feed.xml: 3 item(s)\n');
+    assert.equal(stderr, '');
+
+    const [generatedBuf, committedBuf] = await Promise.all([
+      fs.readFile(outPath),
+      fs.readFile(FEED_PATH),
+    ]);
+    const xml = generatedBuf.toString('utf8');
+    assert.ok(xml.endsWith('</rss>\n'), 'generated feed must end with a single trailing newline');
+    assert.ok(!xml.endsWith('</rss>\n\n'), 'generated feed must not end with multiple trailing newlines');
+
+    const iTitle = xml.indexOf('<title>The Ghostlight Gazette</title>');
+    const iLink = xml.indexOf('<link>https://milo.4167360.xyz/ghostlight-town/</link>');
+    const iDesc = xml.indexOf('<description>The paper of record');
+    const iLang = xml.indexOf('<language>en-us</language>');
+    const iLastBuild = xml.indexOf('<lastBuildDate>Wed, 18 Nov 2026 12:00:00 +0000</lastBuildDate>');
+    assert.ok(
+      iTitle >= 0 && iTitle < iLink && iLink < iDesc && iDesc < iLang && iLang < iLastBuild,
+      'channel elements must appear in title, link, description, language, lastBuildDate order'
+    );
+
+    assert.equal(Buffer.compare(generatedBuf, committedBuf), 0, 'generated feed.xml must be byte-identical to committed feed.xml');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
