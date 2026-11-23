@@ -173,7 +173,7 @@ test('PLAN.md header and README.md ## Status agree on Social Gate status', () =>
   const { statusLine } = readPlanHeader();
   const readmeStatus = readReadmeStatusSection();
 
-  for (const marker of ['~Nov 20', '1 of 2–3', 'lampmoth']) {
+  for (const marker of ['~Nov 20', '2 of 2–3', 'lampmoth', 'muse']) {
     assert.ok(statusLine.includes(marker), `PLAN.md **Status:** must include Social Gate marker "${marker}"`);
     assert.ok(readmeStatus.includes(marker), `README.md ## Status must include Social Gate marker "${marker}"`);
   }
