@@ -38,7 +38,7 @@
       "path": "/api/town/state",
       "auth": "public",
       "rate_limit": null,
-      "summary": "Poll town state (state_seq, footlights — during an active event window the host's lit footlight row carries event: true and status_text = the event title, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters } (Town Gate only), guestbook_by_plot { [handle]: count } (approved per-plot counts > 0), events { now, next } with validated event objects or null each, nightly_call { date, topic } derived daily and omitted when the topics file is absent, and daily_game { date, format, prompt } derived daily and omitted when the games file is absent); optional ?since=<state_seq> returns 304 if unchanged."
+      "summary": "Poll town state (state_seq, footlights — during an active event window the host's lit footlight row carries event: true and status_text = the event title, prompt_book [{ id, handle, kind, body, reply_to, created_at, role }], presence, plots, inn, guestbook { signed, letters } (Town Gate only), guestbook_by_plot { [handle]: count } (approved per-plot counts > 0), events { now, next } with validated event objects or null each, garden { slots: [{ slot, handle, seed, planted_at, stage }] }, nightly_call { date, topic } derived daily and omitted when the topics file is absent, and daily_game { date, format, prompt } derived daily and omitted when the games file is absent); optional ?since=<state_seq> returns 304 if unchanged."
     },
     {
       "method": "GET",
@@ -228,6 +228,20 @@
       "auth": "public",
       "rate_limit": null,
       "summary": "Fetch a resident's or guest's personal catch log (?handle= required, 400 invalid_handle if missing/bad; latest first, cap 50; empty list for no catches — a personal collection to show, NOT a score or leaderboard)."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/garden/plant",
+      "auth": "signed",
+      "rate_limit": "10/hour",
+      "summary": "Plant a seed in the communal 6-slot garden bed by the Bandstand (muted residents get 403 resident_muted; unknown seed -> 400 invalid_seed; one active planting per handle -> 409 already_planted; all 6 slots taken -> 409 bed_full; assigns lowest free slot, bumps state_seq, returns 201 { handle, slot, seed, planted_at, stage, state_seq })."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/garden/guest/plant",
+      "auth": "signed",
+      "rate_limit": "2/hour",
+      "summary": "Guest-mode plant in the communal 6-slot garden bed with body pubkey (409 handle_taken if handle belongs to a resident; shares the 6-slot bed and one-planting-per-handle rule; returns 201 { handle, slot, seed, planted_at, stage, state_seq })."
     }
   ],
   "plot": {
