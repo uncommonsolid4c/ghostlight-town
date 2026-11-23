@@ -652,3 +652,212 @@ test("CONCEPT.md Don'ts no-money rule holds in shipped sources", () => {
     'town-3d/town.js:908',
   ]);
 });
+
+const creditsText = fs.readFileSync(path.join(__dirname, 'town-3d', 'CREDITS.md'), 'utf8');
+const stagingJs = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'staging.js'), 'utf8');
+const townJs = fs.readFileSync(path.join(__dirname, 'town-3d', 'town.js'), 'utf8');
+const eventBannerText = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'event-banner.mjs'), 'utf8');
+const tavernText = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'kit-medieval', 'tavern.mjs'), 'utf8');
+
+test('CONCEPT.md Palette table — 9 rows, every row named, warm-windows sentence, hex-less rows named', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const lines = conceptText.split(/\r?\n/);
+  const paletteStart = lines.findIndex((line) => line.trim() === '## Palette');
+  assert.notEqual(paletteStart, -1, 'CONCEPT.md must have a ## Palette section');
+  const paletteEnd = lines.findIndex((line, idx) => idx > paletteStart && line.startsWith('## '));
+  const paletteLines = lines
+    .slice(paletteStart + 1, paletteEnd === -1 ? lines.length : paletteEnd)
+    .filter((line) => line.trim().startsWith('|'));
+  const dataRows = paletteLines.filter(
+    (line) => !line.startsWith('| Color |') && !line.startsWith('| --- |')
+  );
+  assert.equal(dataRows.length, 9, 'CONCEPT.md Palette table must have exactly 9 data rows');
+
+  const rowNames = [
+    'Ice blue',
+    'Cream',
+    'Roof brown',
+    'Cedar',
+    'Warm window',
+    'Amber lantern',
+    'Brass',
+    'Night',
+    'Interior accents',
+  ];
+  for (const name of rowNames) {
+    assert.ok(
+      dataRows.some((row) => row.includes(`| ${name} |`)),
+      `Palette table must include row | ${name} |`
+    );
+  }
+
+  assert.ok(conceptText.includes('The town is warm windows in a dark clearing.'));
+  const rowFor = (name) => dataRows.find((row) => row.includes(`| ${name} |`));
+  assert.ok(rowFor('Cedar').includes('Octagonal bandstand, gate, newsstand booth `#6b492b`'));
+  assert.ok(rowFor('Amber lantern').includes('amber glass'));
+  assert.ok(rowFor('Brass').includes('footlight shells'));
+  assert.ok(rowFor('Night').includes('dark clearing'));
+});
+
+test('CONCEPT.md Bandstand octagonal deck — 8-sided bandstand_base in both clients', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('octagonal cedar bandstand'));
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const bandstandJs = fs.readFileSync(path.join(__dirname, dir, 'concept-bandstand.js'), 'utf8');
+    assert.ok(bandstandJs.includes('bandstand_base'), `${dir}/concept-bandstand.js must include bandstand_base`);
+    assert.ok(
+      bandstandJs.includes('8-sided CylinderGeometry'),
+      `${dir}/concept-bandstand.js must document 8-sided CylinderGeometry`
+    );
+    assert.ok(
+      bandstandJs.includes('CylinderGeometry(4.5, 4.5, 0.6, 8)'),
+      `${dir}/concept-bandstand.js must use CylinderGeometry(4.5, 4.5, 0.6, 8)`
+    );
+  }
+});
+
+test('CONCEPT.md footlight placard shows the handle and optional status_text (staging); fallback is handle-only', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('showing the handle'));
+  assert.ok(conceptText.includes('optional `status_text`'));
+
+  const stagingBandstand = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'concept-bandstand.js'),
+    'utf8'
+  );
+  assert.ok(stagingBandstand.includes('function formatFootlightStatusLines(statusText)'));
+  assert.match(stagingBandstand, /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/);
+  assert.ok(stagingBandstand.includes('flGroup.userData.statusText'));
+
+  const fallbackBandstand = fs.readFileSync(
+    path.join(__dirname, 'town-3d', 'concept-bandstand.js'),
+    'utf8'
+  );
+  assert.doesNotMatch(fallbackBandstand, /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/);
+  assert.ok(fallbackBandstand.includes('makeBandstandTextTexture(THREE, [handle], {'));
+  assert.equal(fallbackBandstand.includes('formatFootlightStatusLines'), false);
+});
+
+test('CONCEPT.md ghost dome + 6-fold pleated sheet, no legs, just the wisp, in both clients', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('dome + flared pleated sheet'));
+  assert.ok(conceptText.includes('No legs, just the wisp.'));
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const ghostJs = fs.readFileSync(path.join(__dirname, dir, 'concept-ghost.js'), 'utf8');
+    assert.ok(ghostJs.includes('ghost_dome'), `${dir}/concept-ghost.js must include ghost_dome`);
+    assert.ok(ghostJs.includes('Math.cos(6 * theta)'), `${dir}/concept-ghost.js must use Math.cos(6 * theta)`);
+    assert.equal(ghostJs.match(/leg/gi), null, `${dir}/concept-ghost.js must have zero /leg/gi matches`);
+    assert.ok(ghostJs.includes('wisp'), `${dir}/concept-ghost.js must include wisp`);
+  }
+});
+
+test("CONCEPT.md cottage ridge runs straight with the widow's walk on the ridge in both clients", () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.match(conceptText, /Gable roofs\s+with the ridge running straight/);
+  assert.ok(conceptText.includes("rooftop terrace as a widow's walk on the ridge"));
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const cottageJs = fs.readFileSync(path.join(__dirname, dir, 'concept-cottage.js'), 'utf8');
+    assert.ok(cottageJs.includes('ridge along X'), `${dir}/concept-cottage.js must include ridge along X`);
+    assert.ok(
+      cottageJs.includes('ridge at (y = 5.62, z = 0)'),
+      `${dir}/concept-cottage.js must include ridge at (y = 5.62, z = 0)`
+    );
+    assert.ok(cottageJs.includes('straddling the ridge'), `${dir}/concept-cottage.js must include straddling the ridge`);
+    assert.ok(cottageJs.includes('ridge beam caps'), `${dir}/concept-cottage.js must include ridge beam caps`);
+  }
+});
+
+test('CONCEPT.md Props seven CC0 models match CREDITS.md names and Poly Pizza IDs', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('7 Poly Pizza CC0 `.glb` models'));
+
+  const formsText = extractSection(conceptText, '## Forms');
+  for (const kind of ['lanterns', 'bench', 'street light', 'bookshelf', 'oil lamp', 'teapot']) {
+    assert.ok(formsText.includes(kind), `CONCEPT.md ## Forms must mention ${kind}`);
+  }
+
+  for (const modelPath of [
+    'models/post-lantern.glb',
+    'models/lantern.glb',
+    'models/bench.glb',
+    'models/street-light.glb',
+    'models/bookshelf.glb',
+    'models/oil-lamp.glb',
+    'models/teapot.glb',
+  ]) {
+    assert.ok(creditsText.includes(modelPath), `CREDITS.md must include ${modelPath}`);
+  }
+
+  for (const polyId of [
+    'ZSQ65S4lEu',
+    'CtHBJ1ufeW',
+    '6d92UYCIC1',
+    'nFwrlcLvM5',
+    '30Iealxb0p',
+    'RsWYHKkDhD',
+    'XggUrd5f03',
+  ]) {
+    assert.ok(creditsText.includes(polyId), `CREDITS.md must include Poly Pizza ID ${polyId}`);
+  }
+
+  const propModels = fs
+    .readdirSync(path.join(__dirname, 'town-3d', 'models'))
+    .filter((name) => name.toLowerCase().endsWith('.glb') && name !== 'pine.glb')
+    .sort();
+  assert.deepEqual(propModels, [
+    'bench.glb',
+    'bookshelf.glb',
+    'lantern.glb',
+    'oil-lamp.glb',
+    'post-lantern.glb',
+    'street-light.glb',
+    'teapot.glb',
+  ]);
+});
+
+test('CONCEPT.md Inn fallback keeps the door lantern and warm windows on both floors', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('hanging door lantern'));
+
+  assert.ok(townJs.includes("doorLantern.name = 'inn_door_lantern'"));
+  assert.ok(townJs.includes("ground.name = 'inn_ground_floor'"));
+  assert.ok(townJs.includes("upper.name = 'inn_upper_floor'"));
+  assert.ok(townJs.includes('lantern: 4'));
+  assert.ok(townJs.includes('window: 5'));
+  assert.ok(townJs.includes('quiet: 6'));
+  assert.ok(townJs.includes("claimed: { color: '#ffbe5c', emissive: '#ffbe5c', emissiveIntensity: 1.4 }"));
+
+  assert.ok(tavernText.includes('function windowUnit('));
+  const windowUnitCalls = tavernText.match(/windowUnit\(/g) || [];
+  assert.ok(windowUnitCalls.length >= 6, `Expected >= 6 windowUnit( calls in tavern.mjs, got ${windowUnitCalls.length}`);
+  assert.ok(tavernText.includes('night.interior') || tavernText.includes('night'));
+});
+
+test('CONCEPT.md Notice Board faces the gate path and Event Banner hides with no event', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('facing the gate path'));
+  assert.ok(conceptText.includes('hidden when no event is scheduled'));
+
+  assert.ok(stagingJs.includes('group.rotation.y = Math.atan2(-x, -z);'));
+  assert.ok(townJs.includes('group.rotation.y = Math.atan2(-x, -z);'));
+
+  assert.ok(eventBannerText.includes('export function updateEventBanner('));
+  assert.ok(eventBannerText.includes("if (!event || (status !== 'now' && status !== 'next')) {"));
+  assert.ok(eventBannerText.includes('card.visible = false;'));
+  assert.ok(eventBannerText.includes('card.visible = true;'));
+});
+
+test('CONCEPT.md Visual reference captions and starfield mood match the sheet and staging', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('[The clearing at night, from the town gate](concept/town-clearing-wide.webp)'));
+  assert.ok(conceptText.includes("[Milo's cottage](concept/milos-cottage.webp)"));
+  assert.ok(conceptText.includes("[Milo's ghost on the bandstand](concept/milos-ghost-bandstand.webp)"));
+  assert.ok(conceptText.includes('starfield dark'));
+
+  assert.ok(stagingJs.includes("scene.getObjectByName('sky')?.getObjectByName('stars')"));
+  assert.ok(stagingJs.includes('stars.visible = true;'));
+  assert.equal(townJs.includes("getObjectByName('stars')"), false);
+});
