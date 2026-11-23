@@ -38,7 +38,7 @@ node scripts/stage-deploy.mjs --verify <dir> [--root <dir>]
   stay). Also excludes `gazette/*.mjs` build tools in `town-3d/`, `test-*.mjs`
   and `README.md` in `staging-polyfork/`, and blocks secret-like filenames or
   contents.
-- **Current staging facts:** staging bundle `staging-polyfork` stages **193
+- **Current staging facts:** staging bundle `staging-polyfork` stages **194
   files** with `staging_js_v` **40** (verified with `--bundle staging-polyfork`
   and `--verify`).
 
