@@ -688,6 +688,8 @@ test('SCHEMA_TABLES covers every table in schema.sql; backup verifies inn_claims
     'meta',
     'inn_claims',
     'guestbook',
+    'fish_casts',
+    'fish_catches',
   ];
 
   const schemaSql = fs.readFileSync(SCHEMA_PATH, 'utf8');
