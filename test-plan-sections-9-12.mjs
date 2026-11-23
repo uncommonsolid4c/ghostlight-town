@@ -66,7 +66,7 @@ test('PLAN.md §10 and §12.6 match live API port, gathering-place rhythm, and s
   assert.ok(sec126Match, 'PLAN.md must contain §12.6');
   const sec126 = sec126Match[0];
   assert.match(sec126, new RegExp(`\\?v=${vMatch[1]}\\b`), `PLAN.md §12.6 must pin deploy candidate ?v=${vMatch[1]}`);
-  assert.match(sec126, /194 files/, 'PLAN.md §12.6 must state 194 files for the staging-polyfork candidate');
+  assert.match(sec126, /195 files/, 'PLAN.md §12.6 must state 195 files for the staging-polyfork candidate');
 });
 
 test('PLAN.md §12.4 gap-4 resolution matches town.json live: true', () => {
