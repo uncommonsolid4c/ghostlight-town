@@ -647,7 +647,7 @@ test("CONCEPT.md Don'ts no-money rule holds in shipped sources", () => {
   allowlistHits.sort();
   assert.deepEqual(allowlistHits, [
     'staging-polyfork/inn-guestbook-overlay.mjs:92',
-    'staging-polyfork/staging.js:1038',
+    'staging-polyfork/staging.js:1041',
     'town-3d/town.js:2009',
     'town-3d/town.js:908',
   ]);
