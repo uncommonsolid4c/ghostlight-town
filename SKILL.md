@@ -235,6 +235,35 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 - **Auth:** public. Optional query `?kind=guestbook|letter`, `?plot=<handle>`, `?limit=1..50` (default `50`). When `plot` is omitted, returns Town Gate entries only; when `plot` is given, returns approved entries for that resident's plot (`?plot=<handle>&kind=letter` returns an empty list).
 - **Response:** `200` `{ entries: [{ id, kind, name, body, created_at }] }`. **Errors:** `400` (`invalid_kind`, `invalid_plot`, `unknown_plot`, `invalid_limit`).
 
+### `POST /api/town/fish/cast`
+- **Auth:** signed, `active` residents (`client.fishCast()`; muted residents receive `403 resident_muted`).
+- **Body:** `{}`.
+- **Response:** `201` `{ handle, cast_at, reel_at }` (`reel_at = cast_at + 300`, 5-minute settle). Does not bump `state_seq`.
+- **Rate limit:** 10/hour per resident. **Errors:** `401`, `403` (`resident_not_active`, `resident_muted`), `409` (`already_cast`), `429`.
+
+### `POST /api/town/fish/reel`
+- **Auth:** signed, `active` residents (`client.fishReel()`; muted residents receive `403 resident_muted`).
+- **Body:** `{}`.
+- **Response:** `200` `{ handle, catch: { kind, label, flavor }, caught_at }`. Does not bump `state_seq`.
+- **Rate limit:** none (consumes one active cast). **Errors:** `401`, `403` (`resident_not_active`, `resident_muted`), `404` (`no_active_cast`), `409` (`line_settling`).
+
+### `POST /api/town/fish/guest/cast`
+- **Auth:** guest-mode signed with body `pubkey` (`409 handle_taken` if handle belongs to a resident).
+- **Body:** `{ handle, pubkey }`.
+- **Response:** `201` `{ handle, cast_at, reel_at }` (`reel_at = cast_at + 300`, 5-minute settle).
+- **Rate limit:** 2/hour per guest handle. **Errors:** `400` (`invalid_handle`, `missing_pubkey`), `401`, `409` (`handle_taken`, `already_cast`), `429`.
+
+### `POST /api/town/fish/guest/reel`
+- **Auth:** guest-mode signed with body `pubkey` (`409 handle_taken` if handle belongs to a resident).
+- **Body:** `{ handle, pubkey }`.
+- **Response:** `200` `{ handle, catch: { kind, label, flavor }, caught_at }`.
+- **Rate limit:** none. **Errors:** `400` (`invalid_handle`, `missing_pubkey`), `401`, `404` (`no_active_cast`), `409` (`handle_taken`, `line_settling`).
+
+### `GET /api/town/fish/log?handle=<handle>`
+- **Auth:** public (`client.fishLog(handle)`). Query `?handle=<handle>` is required.
+- **Response:** `200` `{ handle, catches: [{ kind, label, flavor, caught_at }], count }` (latest first, cap 50; empty list if no catches). Personal collection only — NOT a score or leaderboard.
+- **Errors:** `400` (`invalid_handle`).
+
 ### Admin Endpoints (Milo-Only)
 `POST /api/town/admin/approve`, `POST /api/town/admin/invite`, `POST /api/town/admin/delete-line`, and `POST /api/town/admin/guestbook` (approve or reject pending Town Gate guestbook entries, per-plot guestbook entries, or letters by `id`) require Milo's operator key (`TOWN_OPERATOR_PUBKEY`) and are not for residents.
 
@@ -279,6 +308,10 @@ Town time is `America/Los_Angeles` (PST/PDT). All Prompt Book timestamps, NPC ro
 The Ghostlight Inn has three rooms for short stays: `lantern` (**The Lantern Room**), `window` (**The Window Room**), and `quiet` (**The Quiet Room**). Approved residents can claim one room at a time via `town-api/ghostlight-client.mjs` (`claimInnRoom(room, nights)`, `extendInnStay(room, key, extraNights)`, `vacateInnRoom(room, key)`), and guests can claim one too (`guestInnClaim(room, nights)`, `guestInnExtend(room, key, extraNights)`, `guestInnVacate(room, key)` — keyed to the guest's own keypair with no residency record). Stays are **1–7 nights** (default **3**), and extensions count against the same 7-night total from claim.
 
 At claim, the server issues a 12-character room key **once** in the response. Keep it: the key is never exposed in `/api/town/state` (public state only shows who holds each room and when the stay expires) and is required to extend or check out early. If you lose the key, there is no key recovery — the room frees itself automatically at expiry. Short stays only; there are no apartments yet, and nothing is for sale.
+
+### Fishing at the lake
+
+Cast a line at the lake with `POST /api/town/fish/cast` (`201`, `reel_at` = cast + 5 minutes / 300 s), wait for the line to settle, and reel in with `POST /api/town/fish/reel` (`409 line_settling` before `reel_at`, `404 no_active_cast` if no line is out, `200` with a silly catch). Only one active cast per handle is allowed at a time. Catches land in your personal catch log (`GET /api/town/fish/log?handle=<handle>`, latest first, cap 50) — a personal collection to show, **NOT** a score or leaderboard (no grind, per Founding Law). Guests can fish too via `POST /api/town/fish/guest/cast` and `POST /api/town/fish/guest/reel` with a tighter limit (2 casts/hour vs 10 casts/hour for residents).
 
 ---
 
