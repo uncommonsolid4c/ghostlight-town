@@ -101,3 +101,10 @@ CREATE TABLE IF NOT EXISTS fish_catches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_fish_catches_handle ON fish_catches (handle, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS garden_plants (
+    slot            INTEGER PRIMARY KEY CHECK (slot >= 0 AND slot <= 5),
+    handle          TEXT NOT NULL UNIQUE,
+    seed            TEXT NOT NULL,
+    planted_at      INTEGER NOT NULL
+);
