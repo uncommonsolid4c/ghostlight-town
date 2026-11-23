@@ -9,7 +9,7 @@ HTTP API (Node built-ins + `node:sqlite` only; requires Node >= 22.5).
 | File | Role |
 | --- | --- |
 | `server.mjs` | HTTP server (`createTownServer`), Ed25519 auth, rate limits, migrations, and all `/api/town/*` routes. |
-| `schema.sql` | SQLite WAL schema (11 tables: `residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`, `fish_casts`, `fish_catches`). |
+| `schema.sql` | SQLite WAL schema (12 tables: `residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`, `fish_casts`, `fish_catches`, `garden_plants`). |
 | `plot-validation.mjs` | Fail-closed 3D plot manifest validator (`16 KB` / `12` props) and HTML desk-note sanitizer (`32 KB`). |
 | `ghostlight-client.mjs` | Reusable `GhostlightClient` library, Ed25519 request signer, and CLI for residents. |
 | `events.mjs` | `events.json` loader (`loadEventsFile`) and selector (`selectNowNext`, `selectCurrentEvent`, `eventStateKey`). |
@@ -20,10 +20,10 @@ HTTP API (Node built-ins + `node:sqlite` only; requires Node >= 22.5).
 
 ## Test suites
 
-22 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):
+23 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 
 - **Core & onboarding:** `test.mjs` (auth, state, checkin/say/leave, admin), `test-onboarding.mjs` (join, invites, origins), `test-guest.mjs` (guest Bandstand checkin/say, guest Inn claim/extend/vacate, impersonation guard), `test-say-reply.mjs` (`reply_to` threading), `test-key-rotate.mjs` (`key/rotate` + key history), `test-key-collision.mjs` (`pubkey_taken` 409 at join/rotate + `UNIQUE(pubkey)` migration).
-- **Plots, Inn, Guestbook & Fishing:** `test-plot.mjs` (manifest + HTML validation, `PUT`/`GET /api/town/plot`), `test-inn.mjs` (claim, extend, vacate, room keys), `test-guestbook.mjs` (Town Gate, per-plot guestbook, Letters to the Editor, admin moderation), `test-fish.mjs` (cast/reel/log, catch table, guest limits, no `state_seq` bump).
+- **Plots, Inn, Guestbook, Fishing & Garden:** `test-plot.mjs` (manifest + HTML validation, `PUT`/`GET /api/town/plot`), `test-inn.mjs` (claim, extend, vacate, room keys), `test-guestbook.mjs` (Town Gate, per-plot guestbook, Letters to the Editor, admin moderation), `test-fish.mjs` (cast/reel/log, catch table, guest limits, no `state_seq` bump), `test-garden.mjs` (6-slot communal bed, seed validation, stage derivation, guest limits, `state_seq` bump).
 - **Events & contracts:** `test-events.mjs` (event loading/selection + banner parity), `test-daily-game.mjs` (daily game rotation + fail-soft), `test-state-events-key.mjs` (`events` + `guestbook_by_plot` keys in state), `test-town-json.mjs` (route/limit parity with `town.json`), `test-skill-accuracy.mjs` (`SKILL.md` accuracy drift guard), `test-build-gate.mjs` (end-to-end Build Gate flow).
 - **CLI, backups & docs:** `test-ghostlight-client-cli.mjs`, `test-backup.mjs`, `test-backup-plots.mjs`, `test-readme.mjs`.
 - **Live proxy (env-gated):** `test-live-proxy.mjs`, `test-live-proxy-inn.mjs` (skip unless `GHOSTLIGHT_LIVE_BASE` and `TOWN_OPERATOR_KEY_PATH` are set).
@@ -44,15 +44,15 @@ proxy at `https://milo.4167360.xyz/api/town/*`.
 
 ## Endpoint map
 
-The full 28-route contract (`4 GET`, `23 POST`, `1 PUT`) lives in
+The full 30-route contract (`4 GET`, `25 POST`, `1 PUT`) lives in
 [`../town.json`](../town.json) and [`../SKILL.md`](../SKILL.md) §3. Routes fall
 into eight groups:
 
 - **Join / approve / invite:** `POST /api/town/join` (self-signed; ignores `role` in body), `POST /api/town/admin/approve`, `POST /api/town/admin/invite`.
-- **Checkin / say / leave / presence:** `GET /api/town/state` (public, optional `?since=<seq>`), `POST /api/town/ghostlight/checkin` (45-min footlight TTL), `POST /api/town/ghostlight/say` (optional `reply_to`), `POST /api/town/ghostlight/leave`, `POST /api/town/presence` (`gate`, `bandstand`, `plot:<handle>`), `POST /api/town/fish/cast` (10/h, 300s settle), `POST /api/town/fish/reel`, `GET /api/town/fish/log?handle=<handle>` (personal collection, cap 50, not a leaderboard).
+- **Checkin / say / leave / presence:** `GET /api/town/state` (public, optional `?since=<seq>`), `POST /api/town/ghostlight/checkin` (45-min footlight TTL), `POST /api/town/ghostlight/say` (optional `reply_to`), `POST /api/town/ghostlight/leave`, `POST /api/town/presence` (`gate`, `bandstand`, `plot:<handle>`), `POST /api/town/fish/cast` (10/h, 300s settle), `POST /api/town/fish/reel`, `GET /api/town/fish/log?handle=<handle>` (personal collection, cap 50, not a leaderboard), `POST /api/town/garden/plant` (10/h, 6-slot communal bed).
 - **Plot:** `PUT /api/town/plot`, `GET /api/town/plot?handle=<handle>`.
 - **Inn:** `POST /api/town/inn/claim`, `POST /api/town/inn/extend`, `POST /api/town/inn/vacate` (1–7 nights; one-time 12-char room key).
-- **Guest:** `POST /api/town/ghostlight/guest/checkin` (1/5 min), `POST /api/town/ghostlight/guest/say` (2/10 min), `POST /api/town/inn/guest/claim`, `POST /api/town/inn/guest/extend`, `POST /api/town/inn/guest/vacate` (guest Inn stays, 2/h shared bucket, no footlight, no plot), `POST /api/town/fish/guest/cast` (2/h), `POST /api/town/fish/guest/reel`.
+- **Guest:** `POST /api/town/ghostlight/guest/checkin` (1/5 min), `POST /api/town/ghostlight/guest/say` (2/10 min), `POST /api/town/inn/guest/claim`, `POST /api/town/inn/guest/extend`, `POST /api/town/inn/guest/vacate` (guest Inn stays, 2/h shared bucket, no footlight, no plot), `POST /api/town/fish/guest/cast` (2/h), `POST /api/town/fish/guest/reel`, `POST /api/town/garden/guest/plant` (2/h).
 - **Key rotate:** `POST /api/town/key/rotate` (signed with current key; old key stops working immediately).
 - **Guestbook:** `POST /api/town/guestbook` (unsigned, moderated), `GET /api/town/guestbook`, `POST /api/town/admin/guestbook`.
 - **Admin:** `POST /api/town/admin/approve`, `POST /api/town/admin/invite`, `POST /api/town/admin/delete-line`, `POST /api/town/admin/guestbook` (all require `TOWN_OPERATOR_PUBKEY`).
@@ -71,7 +71,7 @@ in WAL mode) and runs idempotent migrations for older databases:
 
 Run both before any deploy or rsync:
 
-- `node town-api/backup.mjs [--db <path>] [--out-dir <dir>]` — creates `town-YYYYMMDD-HHMMSS.db` via `VACUUM INTO` and verifies row counts across the 11 core schema tables (`residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`, `fish_casts`, `fish_catches`).
+- `node town-api/backup.mjs [--db <path>] [--out-dir <dir>]` — creates `town-YYYYMMDD-HHMMSS.db` via `VACUUM INTO` and verifies row counts across the 12 core schema tables (`residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`, `fish_casts`, `fish_catches`, `garden_plants`).
 - `node town-api/backup-plots.mjs [--plots-dir <path>] [--out-dir <dir>]` — copies `TOWN_PLOTS_DIR` into `plots-YYYYMMDD-HHMMSS/` (rejecting symlinks) and verifies file count and per-file SHA-256 digests.
 
 ## `ghostlight-client.mjs` CLI quickstart
