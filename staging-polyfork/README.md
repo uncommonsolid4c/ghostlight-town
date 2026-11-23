@@ -53,12 +53,15 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   holds one scheduled one-off reading (`"Gazette #3 — read aloud at the
   Bandstand"`, host `milo`, `2026-11-18T15:30:00Z` / Wed 2026-11-18
   07:30–08:30 PST, 60 min, at `the Bandstand`). Ships in the
-  `staging-polyfork` bundle (193 files, verified by
+  `staging-polyfork` bundle (194 files, verified by
   `scripts/stage-deploy.mjs --bundle staging-polyfork`).
 - `daylight-drift.mjs` — dynamic minimal daylight controller (`DAYLIGHT_DRIFT_CONFIG`,
   `daylightAt`, `buildDaylightDrift`): 30-minute town-clock cycle
   (night → dawn → overcast → dawn → night), capped below noon so windows and
   ghostlight always win, with quantized `look.night` updates and star fade.
+- `fishing.mjs` — minimal lakeside fishing spot (`findFishingSpot`,
+  `buildFishingSpot`): deterministic 45° shore-crossing finder plus propped
+  rod, tackle box, cedar line, cream bobber, and three ripple rings.
 - `avatar.mjs` — verbatim copy of `TOWN_LAYOUT`, `SEED_HOME_PADS`, `makeCanvas`,
   `makeTextTexture`, `createAvatarCapsule`, `getPlotTargetPosition`, and
   `pickBandstandSpot` from `town-3d/town.js` (no THREE import; no top-level
@@ -118,6 +121,9 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 - `test-daylight-drift.mjs` — unit tests for `daylight-drift.mjs` (keyframe
   exactness, below-noon caps, wrap continuity, monotonic easing, star fade,
   stub `look` applier without calling `setTime`, static hygiene).
+- `test-fishing.mjs` — unit tests for `fishing.mjs` (stub cone-island shore
+  crossing, dry-feet + bobber-over-water checks, all-land/all-water null,
+  group/ripples structure, static hygiene).
 - `test-inn-guestbook-overlay.mjs` — unit tests for `inn-guestbook-overlay.mjs`
   (`resolveInnOverlayContent` API/static fallback, `resolveGuestbookOverlayContent`
   Signatures-before-Letters/escaping/town-time/50-cap/fallback, sandboxed
