@@ -1160,3 +1160,42 @@ test('GET /api/town/state does not bump state_seq on an identical-content rewrit
     await ctx.close();
   }
 });
+
+test('GET /api/town/state reports guestbook_pending count for the moderation queue (slice 329)', async () => {
+  const ctx = await startStateServer();
+
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl });
+
+    const s0 = await ctx.getState();
+    assert.equal(s0.status, 200);
+    assert.equal(s0.body.guestbook_pending, 0);
+
+    // Two pendings: one town-wide, one plot-scoped; neither approved yet.
+    const gate = await visitor.signGuestbook('guestbook', 'Guest A', 'Hello town');
+    const plot = await visitor.signGuestbook('guestbook', 'Guest B', 'Nice porch', 'wick');
+    assert.equal(gate.status, 201);
+    assert.equal(plot.status, 201);
+
+    const s1 = await ctx.getState();
+    assert.equal(s1.body.guestbook_pending, 2);
+    // Reader counts stay untouched by pendings.
+    assert.deepEqual(s1.body.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(s1.body.guestbook_by_plot, {});
+
+    // Approving one drops the count; rejecting the other clears it.
+    const mod1 = await ctx.admin.moderateGuestbook(gate.data.id, 'approve');
+    assert.equal(mod1.status, 200);
+    const s2 = await ctx.getState();
+    assert.equal(s2.body.guestbook_pending, 1);
+    assert.deepEqual(s2.body.guestbook, { signed: 1, letters: 0 });
+
+    const mod2 = await ctx.admin.moderateGuestbook(plot.data.id, 'reject');
+    assert.equal(mod2.status, 200);
+    const s3 = await ctx.getState();
+    assert.equal(s3.body.guestbook_pending, 0);
+  } finally {
+    await ctx.close();
+  }
+});
