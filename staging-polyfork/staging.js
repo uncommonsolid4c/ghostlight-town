@@ -30,7 +30,7 @@ import {
 } from './inn-nightly-call.mjs?v=39';
 import { buildDaylightDrift } from './daylight-drift.mjs?v=40';
 import { findFishingSpot, buildFishingSpot } from './fishing.mjs?v=40';
-import { GARDEN_BED, buildGardenBed } from './garden.mjs?v=40';
+import { GARDEN_BED, buildGardenBed, updateGardenBed } from './garden.mjs?v=40';
 import { createAsset as createFishingRod } from './kit-campground/propped-fishing-rod.mjs';
 import { createAsset as createTackleBox } from './kit-campground/tackle-box.mjs';
 import {
@@ -234,11 +234,10 @@ plotOverlayCloseEl?.addEventListener('click', handleClosePlotOverlay);
 plotOverlayTabNoteEl?.addEventListener('click', () => {
   if (!currentPlotHandle) return;
   const fetchFn = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
-  if (plotOverlayTabGuestbookEl) {
-    plotOverlayTabGuestbookEl.textContent = formatPlotGuestbookTabLabel(
-      liveStore.lastState?.guestbook_by_plot?.[currentPlotHandle]
-    );
-  }
+  // NOTE: no liveStore here — these handlers run at module scope, outside
+  // init() where liveStore lives. Referencing it threw a ReferenceError and
+  // killed both tabs (Nov 23 hotfix). The cottage opener sets the tab label
+  // fresh on every open, which is when it matters.
   setPlotTabs('note');
   openPlotOverlay(currentPlotHandle, {
     overlayEl: plotOverlayEl,
@@ -256,11 +255,7 @@ plotOverlayTabNoteEl?.addEventListener('click', () => {
 plotOverlayTabGuestbookEl?.addEventListener('click', () => {
   if (!currentPlotHandle) return;
   const fetchFn = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
-  if (plotOverlayTabGuestbookEl) {
-    plotOverlayTabGuestbookEl.textContent = formatPlotGuestbookTabLabel(
-      liveStore.lastState?.guestbook_by_plot?.[currentPlotHandle]
-    );
-  }
+  // NOTE: no liveStore here — see the Desk Note handler above (Nov 23 hotfix).
   setPlotTabs('guestbook');
   openPlotGuestbookOverlay(currentPlotHandle, {
     overlayEl: plotOverlayEl,
@@ -1263,6 +1258,10 @@ async function init() {
   const live = new StagingLive({
     onState: (state) => {
       liveStore.lastState = state;
+      // The bed is built once with empty slots at init; refresh its plants
+      // from live garden state on every state arrival (Nov 23 hotfix — the
+      // moonflower never rendered because this call didn't exist).
+      updateGardenBed(THREE, gardenBed, state.garden);
       const footlightSlotByHandle = applyStagingState(
         liveStore,
         bandstandBuilt,
