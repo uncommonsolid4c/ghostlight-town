@@ -1476,6 +1476,7 @@ test('CLI keygen exact output shape and state exact top-level keys', async () =>
       'garden',
       'guestbook',
       'guestbook_by_plot',
+      'guestbook_pending',
       'inn',
       'nightly_call',
       'plots',
