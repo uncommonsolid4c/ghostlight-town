@@ -739,3 +739,274 @@ test('staging-polyfork/README.md UI parity move-in CTA, footer bar, mobile pass,
   assert.equal(DEFAULT_ORBIT_GLIDE_MAX_RADIUS, 38);
   assert.match(tapGlideSrc, /dragThreshold\s*=\s*4\b/, 'tap-glide.mjs must default dragThreshold = 4');
 });
+
+test('staging-polyfork/README.md fishing.mjs bullet (45-degree finder, rod, tackle, cedar line, cream bobber, three ripples) matches fishing.mjs', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`fishing.mjs`'));
+  assert.ok(bullet, '## Contents must have a `fishing.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  for (const phrase of [
+    '`findFishingSpot`',
+    '`buildFishingSpot`',
+    'deterministic 45° shore-crossing finder plus propped rod, tackle box, cedar line, cream bobber, and three ripple rings',
+  ]) {
+    assert.ok(norm.includes(phrase), `fishing.mjs bullet must include "${phrase}"`);
+  }
+
+  const fishingSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'fishing.mjs'), 'utf8');
+  const mod = await import('./fishing.mjs');
+  assert.equal(typeof mod.findFishingSpot, 'function');
+  assert.equal(typeof mod.buildFishingSpot, 'function');
+
+  assert.ok(fishingSrc.includes('45 degrees measured from south (+z) toward east (+x)'));
+  assert.ok(fishingSrc.includes('const BEARING_RAD = Math.PI / 4;'));
+  assert.ok(fishingSrc.includes("rod.name = 'propped-fishing-rod';"));
+  assert.ok(fishingSrc.includes("tackleBox.name = 'tackle-box';"));
+  assert.ok(fishingSrc.includes("const CEDAR = '#6b492b';"));
+  assert.match(fishingSrc, /lineMat\s*=\s*new THREE\.MeshStandardMaterial\(\{\s*color:\s*CEDAR\b/);
+  assert.match(fishingSrc, /bobber\s*=\s*new THREE\.Mesh\(bobberGeom,\s*creamMat\)/);
+  assert.ok(fishingSrc.includes('const RIPPLE_RADII = [0.3, 0.6, 0.9];'));
+  assert.ok(fishingSrc.includes('ripple.name = `ripple-${i}`;'));
+});
+
+test('staging-polyfork/README.md garden.mjs bullet (6-slot east bed, exports, sprout-leaf-bloom stages) matches garden.mjs and server.mjs', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`garden.mjs`'));
+  assert.ok(bullet, '## Contents must have a `garden.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  for (const phrase of [
+    'communal 6-slot garden bed east of the Bandstand',
+    '`GARDEN_BED`',
+    '`SEED_COLORS`',
+    '`gardenStageForAgeDays`',
+    '`buildGardenPlant`',
+    '`buildGardenBed`',
+    '`updateGardenBed`',
+    'deterministic `sprout` → `leaf` → `bloom` stages',
+  ]) {
+    assert.ok(norm.includes(phrase), `garden.mjs bullet must include "${phrase}"`);
+  }
+
+  const gardenSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'garden.mjs'), 'utf8');
+  const mod = await import('./garden.mjs');
+  assert.deepEqual(mod.GARDEN_BED, { x: 6.5, z: 0 });
+  assert.ok(mod.GARDEN_BED.x > 0, 'GARDEN_BED must be east (+x) of the Bandstand');
+  assert.equal(typeof mod.SEED_COLORS, 'object');
+  for (const fn of ['gardenStageForAgeDays', 'buildGardenPlant', 'buildGardenBed', 'updateGardenBed']) {
+    assert.equal(typeof mod[fn], 'function', `garden.mjs must export ${fn}`);
+  }
+
+  assert.ok(gardenSrc.includes("if (!Number.isFinite(ageDays) || ageDays < 2) return 'sprout';"));
+  assert.ok(gardenSrc.includes("if (ageDays < 4) return 'leaf';"));
+  assert.ok(gardenSrc.includes("return 'bloom';"));
+
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
+  assert.ok(serverSrc.includes('const GARDEN_SLOTS = 6;'), 'town-api/server.mjs must define GARDEN_SLOTS = 6');
+});
+
+test('staging-polyfork/README.md empty-pad.mjs bullet (stone slab, OPEN PLOT #N, plots 2-8) matches empty-pad.mjs', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`empty-pad.mjs`'));
+  assert.ok(bullet, '## Contents must have a `empty-pad.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  assert.ok(
+    norm.includes('stone slab + `OPEN PLOT #N` signpost markers (`buildEmptyPadMarker`, `syncEmptyPadMarkers`) for unclaimed pads in plots 2–8'),
+    'empty-pad.mjs bullet must document stone slab, OPEN PLOT #N, exports, and plots 2–8'
+  );
+
+  const emptyPadSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'empty-pad.mjs'), 'utf8');
+  const mod = await import('./empty-pad.mjs');
+  assert.equal(typeof mod.buildEmptyPadMarker, 'function');
+  assert.equal(typeof mod.syncEmptyPadMarkers, 'function');
+  assert.ok(emptyPadSrc.includes('for plots 2..8'));
+  assert.ok(emptyPadSrc.includes('label: `OPEN PLOT #${plot.plotNumber}`'));
+  assert.ok(emptyPadSrc.includes('for (const plot of TOWN_LAYOUT.plots.slice(1))'));
+});
+
+test('staging-polyfork/README.md interior-room.mjs bullet (4.0x3.4 envelope, builders, procedural lamp/typewriter/teapot) matches interior-room.mjs and concept-cottage.js', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`interior-room.mjs`'));
+  assert.ok(bullet, '## Contents must have a `interior-room.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  for (const phrase of [
+    '`buildInteriorRoom`',
+    '`setInteriorVisible`',
+    '`setInteriorPalette`',
+    '`setInteriorDressing`',
+    '4.0×3.4 m envelope',
+    'procedural oil lamp, typewriter, and teapot builders',
+  ]) {
+    assert.ok(norm.includes(phrase), `interior-room.mjs bullet must include "${phrase}"`);
+  }
+
+  const interiorRoomSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'interior-room.mjs'), 'utf8');
+  const conceptCottageSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'concept-cottage.js'), 'utf8');
+  const mod = await import('./interior-room.mjs');
+  for (const fn of [
+    'buildInteriorRoom',
+    'setInteriorVisible',
+    'setInteriorPalette',
+    'setInteriorDressing',
+    'buildProceduralOilLamp',
+    'buildProceduralTypewriter',
+    'buildProceduralTeapot',
+  ]) {
+    assert.equal(typeof mod[fn], 'function', `interior-room.mjs must export ${fn}`);
+  }
+
+  assert.match(
+    interiorRoomSrc,
+    /4\.0 x 3\.4 m for Milo's cottage[\s\S]*?\(widthX = 4\.0, halfSpanZ = 1\.7 in concept-cottage\.js\)/
+  );
+  assert.match(conceptCottageSrc, /widthX\s*=\s*4\.0,\s*halfSpanZ\s*=\s*1\.7\b/);
+  assert.ok(interiorRoomSrc.includes('const ROOM_WIDTH = 3.7;'));
+  assert.ok(interiorRoomSrc.includes('const ROOM_DEPTH = 3.0;'));
+});
+
+test('staging-polyfork/README.md interior-visit.mjs bullet (isDoorHit, rayHitsInteriorDoor, createInteriorVisit) matches interior-visit.mjs', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`interior-visit.mjs`'));
+  assert.ok(bullet, '## Contents must have a `interior-visit.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  assert.ok(
+    norm.includes('door hit-test (`isDoorHit`), look-around, and interior doorway exit ray-test (`rayHitsInteriorDoor`, `createInteriorVisit`)'),
+    'interior-visit.mjs bullet must document isDoorHit, look-around, rayHitsInteriorDoor, and createInteriorVisit'
+  );
+
+  const mod = await import('./interior-visit.mjs');
+  assert.equal(typeof mod.isDoorHit, 'function');
+  assert.equal(typeof mod.rayHitsInteriorDoor, 'function');
+  assert.equal(typeof mod.createInteriorVisit, 'function');
+  assert.equal(typeof mod.INTERIOR_EYE_LOCAL, 'object');
+  assert.equal(typeof mod.INTERIOR_TARGET_LOCAL, 'object');
+  assert.equal(mod.INTERIOR_LOOK_SENSITIVITY, 0.005);
+});
+
+test('staging-polyfork/README.md kit .glb stripped claim matches kit-campground/ and kit-medieval/', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const campBullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`kit-campground/`'));
+  const medBullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`kit-medieval/`'));
+  assert.ok(campBullet, '## Contents must have a `kit-campground/` bullet');
+  assert.ok(medBullet, '## Contents must have a `kit-medieval/` bullet');
+  assert.ok(campBullet.replace(/\s+/g, ' ').includes('`.glb` files stripped — no code references them'));
+  assert.ok(medBullet.replace(/\s+/g, ' ').includes('`.glb` stripped'));
+
+  const walk = (dir) => {
+    const files = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) files.push(...walk(full));
+      else if (entry.isFile()) files.push(full);
+    }
+    return files;
+  };
+
+  for (const kitDir of ['kit-campground', 'kit-medieval']) {
+    const files = walk(path.join(BUNDLE_DIR, kitDir));
+    const glbs = files.filter((f) => f.endsWith('.glb'));
+    assert.equal(glbs.length, 0, `${kitDir}/ must have zero .glb files`);
+    for (const f of files.filter((p) => p.endsWith('.mjs'))) {
+      const src = fs.readFileSync(f, 'utf8');
+      assert.ok(!src.includes('.glb'), `${path.relative(BUNDLE_DIR, f)} must not reference .glb`);
+    }
+  }
+});
+
+test('staging-polyfork/README.md two-story house NOT placed matches staging.js and kit-medieval/', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  assert.ok(limitsSec.includes('The two-story house from the kit was NOT placed'));
+
+  assert.ok(fs.existsSync(path.join(BUNDLE_DIR, 'kit-medieval/house-two-story.mjs')));
+  assert.doesNotMatch(stagingJs, /house-two-story|HouseTwoStory/);
+  assert.doesNotMatch(indexHtml, /house-two-story|HouseTwoStory/);
+  assert.ok(stagingJs.includes('./kit-medieval/cottage-small.mjs'));
+});
+
+test('staging-polyfork/README.md seed door-side props procedural-only matches seed-door-props.mjs and town-3d/town.js', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  for (const phrase of [
+    'Seed door-side character props are procedural-only in staging',
+    'attachSeedDoorProp',
+    'seed-door-props.mjs',
+    'interior-room.mjs',
+    '`models/oil-lamp.glb`, `models/teapot.glb`',
+    'no `staging-polyfork/models/` directory',
+  ]) {
+    assert.ok(limitsSec.includes(phrase), `## Known limits must include "${phrase}"`);
+  }
+
+  const seedPropsSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'seed-door-props.mjs'), 'utf8');
+  for (const fn of ['buildProceduralOilLamp', 'buildProceduralTypewriter', 'buildProceduralTeapot']) {
+    assert.ok(seedPropsSrc.includes(fn), `seed-door-props.mjs must import ${fn}`);
+  }
+  assert.ok(seedPropsSrc.includes("from './interior-room.mjs';"));
+
+  const expected = [
+    ['wick', 'wick_oil_lamp', 'buildProceduralOilLamp', '-1.1733'],
+    ['maren', 'maren_typewriter', 'buildProceduralTypewriter', '-0.6525'],
+    ['tomas', 'tomas_teapot', 'buildProceduralTeapot', '-0.1322'],
+  ];
+  const townJsSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/town.js'), 'utf8');
+  for (const [handle, propId, builder, rotY] of expected) {
+    assert.match(
+      seedPropsSrc,
+      new RegExp(`${handle}:\\s*\\{\\s*build:\\s*${builder},\\s*rotY:\\s*${rotY}\\s*\\}`),
+      `seed-door-props.mjs must map ${handle} to ${builder} with rotY ${rotY}`
+    );
+    assert.match(
+      townJsSrc,
+      new RegExp(`id:\\s*'${propId}'[\\s\\S]*?rotY:\\s*${rotY}\\b`),
+      `town-3d/town.js PROP_PLACEMENTS ${propId} must have rotY ${rotY}`
+    );
+  }
+
+  assert.ok(!fs.existsSync(path.join(BUNDLE_DIR, 'models')), 'staging-polyfork/models/ must not exist');
+  assert.ok(!stagingJs.includes('models/'), 'staging.js must not reference models/');
+});
+
+test('staging-polyfork/README.md empty-pad click info-strip claim matches staging.js', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  assert.ok(
+    limitsSec.includes('Clicking an empty pad displays `OPEN PLOT #<N> — no resident yet` in `#info-strip` (all other click/overlay branches hide `#info-strip`)'),
+    '## Known limits must document empty-pad #info-strip behavior'
+  );
+
+  assert.match(
+    stagingJs,
+    /if\s*\(kind\s*===\s*'open_plot'\)\s*\{[\s\S]*?infoStripEl\.textContent\s*=\s*`OPEN PLOT #\$\{target\.userData\.plotNumber\} — no resident yet`;[\s\S]*?infoStripEl\.hidden\s*=\s*false;/
+  );
+  const hideMatches = stagingJs.match(/if\s*\(infoStripEl\)\s*infoStripEl\.hidden\s*=\s*true;/g) || [];
+  assert.ok(hideMatches.length >= 4, `Expected >= 4 infoStripEl.hidden = true sites, found ${hideMatches.length}`);
+});
+
+test('staging-polyfork/README.md no polyfork.dev import claim matches the bundle (imports only, comments excluded)', () => {
+  const verSec = getSection(readmeMd, 'Verification done locally (no browser here — no visual check claimed)').replace(/\s+/g, ' ');
+  assert.ok(
+    verSec.includes("No polyfork.dev import anywhere in the page chain (`clips.mjs` is used via `staging.js` / `npc-animation.mjs` with `base: './anim/'` against local `anim/` JSONs, no CDN fetch)"),
+    '## Verification done locally must state no polyfork.dev import'
+  );
+
+  const walkBundleJs = (dir) => {
+    const files = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) files.push(...walkBundleJs(full));
+      else if (entry.isFile() && /\.(mjs|js)$/.test(entry.name) && !entry.name.startsWith('test-')) files.push(full);
+    }
+    return files;
+  };
+
+  const importRe = /(?:from\s+['"]https?:\/\/[^'"]*polyfork\.dev|import\s*\(\s*['"]https?:\/\/[^'"]*polyfork\.dev)/;
+  let commentMentionCount = 0;
+  for (const file of walkBundleJs(BUNDLE_DIR)) {
+    const src = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(src, importRe, `${path.relative(BUNDLE_DIR, file)} must not import from polyfork.dev`);
+    if (src.includes('polyfork.dev')) commentMentionCount++;
+  }
+  assert.ok(commentMentionCount >= 1, 'Expected at least one bundle file to mention polyfork.dev in comments');
+
+  const npcAnimSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'npc-animation.mjs'), 'utf8');
+  assert.ok(npcAnimSrc.includes("base = './anim/'"));
+  assert.ok(npcAnimSrc.includes("import('./kit-medieval/clips.mjs')"));
+  assert.ok(npcAnimSrc.includes('fn(group, { clips, base })'));
+});
