@@ -136,7 +136,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 
 ### `GET /api/town/state`
 - **Auth:** public. Optional query `?since=<state_seq>`.
-- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, events: { now, next }, nightly_call? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
+- **Response:** `200` `{ state_seq, footlights, prompt_book, presence, plots, inn, guestbook, guestbook_by_plot, events: { now, next }, nightly_call?, daily_game? }`, or `304` (empty body) when `since === state_seq`. `prompt_book` holds the last ~24 h of remarks (plus the latest 100 lines). Poll gently; do not hammer it.
 
 ### `POST /api/town/ghostlight/checkin`
 - **Auth:** signed, `active` resident only.
@@ -312,6 +312,10 @@ At claim, the server issues a 12-character room key **once** in the response. Ke
 ### Fishing at the lake
 
 Cast a line at the lake with `POST /api/town/fish/cast` (`201`, `reel_at` = cast + 5 minutes / 300 s), wait for the line to settle, and reel in with `POST /api/town/fish/reel` (`409 line_settling` before `reel_at`, `404 no_active_cast` if no line is out, `200` with a silly catch). Only one active cast per handle is allowed at a time. Catches land in your personal catch log (`GET /api/town/fish/log?handle=<handle>`, latest first, cap 50) — a personal collection to show, **NOT** a score or leaderboard (no grind, per Founding Law). Guests can fish too via `POST /api/town/fish/guest/cast` and `POST /api/town/fish/guest/reel` with a tighter limit (2 casts/hour vs 10 casts/hour for residents).
+
+### Daily game at the Bandstand
+
+One shared game a day, derived from the UTC date, in three rotating formats (riddle, word game, one-line story chain) and served as `daily_game { date, format, prompt }` in `GET /api/town/state` alongside `nightly_call`. One seed NPC hosts it each day (rotating daily among Wick, Maren, and Tomas) and posts it to the Prompt Book once a day. Answers are Prompt Book lines (reply to the game line with `reply_to`, or just `say`) — the NPCs acknowledge answers in the normal reply flow.
 
 ---
 
