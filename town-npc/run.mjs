@@ -23,6 +23,7 @@ import { getCharacter, buildSystemPrompt, getStatusText } from './characters.mjs
 import { decideTurn, findAddressedLines, localDateString } from './stepback.mjs';
 import { checkHonesty, MAX_SAY_LEN } from './honesty.mjs';
 import { ensureKeypair, loadKeypair } from './keygen.mjs';
+import { dailyGameHostForDate, buildDailyGameLine, isDailyGamePosted } from './daily-game.mjs';
 
 export const MEMORY_MAX_BYTES = 2048;
 export const MEMORY_LINE_MAX_CHARS = 140;
@@ -223,6 +224,79 @@ function writeNpcState(statePath, npcState) {
   fs.writeFileSync(statePath, JSON.stringify(npcState, null, 2) + '\n', 'utf8');
 }
 
+async function postNpcLine({
+  npc,
+  base,
+  keypair,
+  townState,
+  partOfDay,
+  line,
+  replyTo,
+  isInitiate,
+  today,
+  now,
+  memoryPath,
+  memoryText,
+  statePath,
+  npcState,
+  decision,
+  logger,
+}) {
+  const client = new GhostlightClient({
+    baseUrl: base,
+    handle: npc.handle,
+    privateKeyPem: keypair.privateKeyPem,
+    pubkey: keypair.pubkey,
+  });
+
+  const isLit = Array.isArray(townState.footlights)
+    && townState.footlights.some((f) => f && f.handle === npc.handle);
+
+  if (!isLit) {
+    const statusText = getStatusText(npc, partOfDay).slice(0, 80);
+    try {
+      const checkinRes = await client.checkin({ status_text: statusText });
+      if (!checkinRes.ok) {
+        logger({
+          npc: npc.handle,
+          action: 'checkin_failed',
+          reason: `HTTP ${checkinRes.status}: ${checkinRes.data?.error || 'unknown'}`,
+        });
+      }
+    } catch (err) {
+      logger({ npc: npc.handle, action: 'checkin_failed', reason: err.message });
+    }
+  }
+
+  try {
+    const sayRes = await client.say(line, 'say', replyTo);
+    if (!sayRes.ok) {
+      logger({
+        npc: npc.handle,
+        action: 'say_failed',
+        reason: `HTTP ${sayRes.status}: ${sayRes.data?.error || 'unknown'}`,
+      });
+      return { ok: false, exitCode: 1, action: 'say_failed', decision, draft: line, posted: false };
+    }
+  } catch (err) {
+    logger({ npc: npc.handle, action: 'say_failed', reason: err.message });
+    return { ok: false, exitCode: 1, action: 'say_failed', decision, draft: line, posted: false };
+  }
+
+  const memLine = formatMemoryEntry(today, line);
+  const nextMemory = trimMemory(`${memoryText}${memoryText && !memoryText.endsWith('\n') ? '\n' : ''}${memLine}\n`);
+  fs.writeFileSync(memoryPath, nextMemory, 'utf8');
+
+  const nextState = {
+    ambient_today: isInitiate ? npcState.ambient_today + 1 : npcState.ambient_today,
+    ambient_date: today,
+    last_turn_at: now,
+    turns: npcState.turns + 1,
+  };
+  writeNpcState(statePath, nextState);
+  return null;
+}
+
 /**
  * Execute one NPC turn.
  * @param {object} opts
@@ -304,6 +378,70 @@ export async function runTurn({
     }
   }
 
+  const partOfDay = getPartOfDay(now);
+
+  // Daily game at the Bandstand: scheduled duty for today's host.
+  // Bypasses `silent` (ambient caps must not swallow the one daily game),
+  // respects `retired` (10-muse handover), and never steals a `reply` turn.
+  if (
+    decision.action !== 'retired' &&
+    decision.action !== 'reply' &&
+    townState.daily_game &&
+    dailyGameHostForDate(townState.daily_game.date) === npc.handle &&
+    !isDailyGamePosted({ promptBook: townState.prompt_book, dailyGame: townState.daily_game })
+  ) {
+    const gameLine = buildDailyGameLine({ dailyGame: townState.daily_game });
+    if (gameLine) {
+      const gameHonesty = checkHonesty({ text: gameLine, npc, promptBook: townState.prompt_book });
+      if (!gameHonesty.ok) {
+        logger({
+          npc: npc.handle,
+          action: 'rejected',
+          reason: gameHonesty.reasons.join('; '),
+        });
+      } else if (dryRun) {
+        logger({
+          npc: npc.handle,
+          action: 'dry_run',
+          would_act: 'initiate',
+          would_post_game: true,
+          reason: 'daily game',
+          line: gameLine,
+        });
+        return { ok: true, exitCode: 0, action: 'dry_run', decision, draft: gameLine, posted: false, wouldPostGame: true };
+      } else {
+        const errResult = await postNpcLine({
+          npc,
+          base,
+          keypair,
+          townState,
+          partOfDay,
+          line: gameLine,
+          replyTo: undefined,
+          isInitiate: true,
+          today,
+          now,
+          memoryPath,
+          memoryText,
+          statePath,
+          npcState,
+          decision,
+          logger,
+        });
+        if (errResult) return errResult;
+
+        logger({
+          npc: npc.handle,
+          action: 'initiate',
+          reason: 'daily game',
+          posted: true,
+          postedGame: true,
+        });
+        return { ok: true, exitCode: 0, action: 'initiate', decision, draft: gameLine, posted: true, postedGame: true };
+      }
+    }
+  }
+
   if (decision.action === 'silent' || decision.action === 'retired') {
     logger({ npc: npc.handle, action: decision.action, reason: decision.reason });
     if (!dryRun) {
@@ -312,7 +450,6 @@ export async function runTurn({
     return { ok: true, exitCode: 0, action: decision.action, decision };
   }
 
-  const partOfDay = getPartOfDay(now);
   const prompt = buildTurnPrompt({
     npc,
     partOfDay,
@@ -361,63 +498,29 @@ export async function runTurn({
   }
 
   // Post to town-api using GhostlightClient
-  const client = new GhostlightClient({
-    baseUrl: base,
-    handle: npc.handle,
-    privateKeyPem: keypair.privateKeyPem,
-    pubkey: keypair.pubkey,
+  const replyTo =
+    decision.action === 'reply' && decision.replyLine && decision.replyLine.id != null
+      ? decision.replyLine.id
+      : undefined;
+  const errResult = await postNpcLine({
+    npc,
+    base,
+    keypair,
+    townState,
+    partOfDay,
+    line: draft,
+    replyTo,
+    isInitiate: decision.action === 'initiate',
+    today,
+    now,
+    memoryPath,
+    memoryText,
+    statePath,
+    npcState,
+    decision,
+    logger,
   });
-
-  const isLit = Array.isArray(townState.footlights)
-    && townState.footlights.some((f) => f && f.handle === npc.handle);
-
-  if (!isLit) {
-    const statusText = getStatusText(npc, partOfDay).slice(0, 80);
-    try {
-      const checkinRes = await client.checkin({ status_text: statusText });
-      if (!checkinRes.ok) {
-        logger({
-          npc: npc.handle,
-          action: 'checkin_failed',
-          reason: `HTTP ${checkinRes.status}: ${checkinRes.data?.error || 'unknown'}`,
-        });
-      }
-    } catch (err) {
-      logger({ npc: npc.handle, action: 'checkin_failed', reason: err.message });
-    }
-  }
-
-  try {
-    const replyTo =
-      decision.action === 'reply' && decision.replyLine && decision.replyLine.id != null
-        ? decision.replyLine.id
-        : undefined;
-    const sayRes = await client.say(draft, 'say', replyTo);
-    if (!sayRes.ok) {
-      logger({
-        npc: npc.handle,
-        action: 'say_failed',
-        reason: `HTTP ${sayRes.status}: ${sayRes.data?.error || 'unknown'}`,
-      });
-      return { ok: false, exitCode: 1, action: 'say_failed', decision, draft, posted: false };
-    }
-  } catch (err) {
-    logger({ npc: npc.handle, action: 'say_failed', reason: err.message });
-    return { ok: false, exitCode: 1, action: 'say_failed', decision, draft, posted: false };
-  }
-
-  // Persist memory & state after successful post
-  const memLine = formatMemoryEntry(today, draft);
-  const nextMemory = trimMemory(`${memoryText}${memoryText && !memoryText.endsWith('\n') ? '\n' : ''}${memLine}\n`);
-  fs.writeFileSync(memoryPath, nextMemory, 'utf8');
-
-  const nextState = {
-    ambient_today: decision.action === 'initiate' ? npcState.ambient_today + 1 : npcState.ambient_today,
-    ambient_date: today,
-    last_turn_at: now,
-    turns: npcState.turns + 1,
-  };
-  writeNpcState(statePath, nextState);
+  if (errResult) return errResult;
 
   logger({
     npc: npc.handle,
