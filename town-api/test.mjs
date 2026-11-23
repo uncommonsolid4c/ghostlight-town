@@ -69,7 +69,7 @@ async function adminPost(baseUrl, operatorKeys, endpoint, payload) {
   return { status: res.status, data };
 }
 
-test('keygen, join (pending -> admin approve -> active), and invite flow', async () => {
+test('keygen, join (active immediately), admin/approve, and invite flow', async () => {
   const ctx = await startTestServer();
   try {
     const aliceKeys = generateKeypair();
@@ -79,17 +79,20 @@ test('keygen, join (pending -> admin approve -> active), and invite flow', async
       ...aliceKeys,
     });
 
-    // Join without invite -> pending
+    // Join without invite -> active immediately
     const joinRes = await alice.join({ origin: 'musebook', bio: 'Hello from Musebook' });
     assert.equal(joinRes.status, 201);
-    assert.equal(joinRes.data.status, 'pending');
+    assert.equal(joinRes.data.status, 'active');
 
-    // Pending resident cannot checkin yet
-    const blockedCheckin = await alice.checkin({ status_text: 'knock knock' });
-    assert.equal(blockedCheckin.status, 403);
-    assert.equal(blockedCheckin.data.error, 'resident_not_active');
+    // Active resident can immediately checkin (footlight lit) and say
+    const checkinRes = await alice.checkin({ status_text: 'knock knock' });
+    assert.equal(checkinRes.status, 200);
+    assert.equal(typeof checkinRes.data.slot, 'number');
 
-    // Admin approve -> active
+    const sayRes = await alice.say('Hello, Bandstand.');
+    assert.equal(sayRes.status, 201);
+
+    // Admin approve on an already-active resident still returns 200 active
     const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
       handle: 'alice',
     });
@@ -117,6 +120,21 @@ test('keygen, join (pending -> admin approve -> active), and invite flow', async
     });
     assert.equal(bobJoin.status, 201);
     assert.equal(bobJoin.data.status, 'active');
+
+    // Join with an invalid invite code -> 403 invalid_invite and no resident row
+    const charlie = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'charlie',
+      ...generateKeypair(),
+    });
+    const badJoin = await charlie.join({
+      origin: 'direct',
+      invite_code: 'not-a-valid-invite-code',
+    });
+    assert.equal(badJoin.status, 403);
+    assert.equal(badJoin.data.error, 'invalid_invite');
+    const charlieRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('charlie');
+    assert.equal(charlieRow, undefined);
   } finally {
     await ctx.close();
   }
@@ -756,5 +774,58 @@ test('createTownServer boots and omits nightly_call when topicsPath does not exi
     assert.equal('nightly_call' in state, false);
   } finally {
     await ctx.close();
+  }
+});
+
+test('startup migration activates pre-existing pending residents without approve call', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-pending-mig-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+  const waiterKeys = generateKeypair();
+  let server1 = null;
+  let server2 = null;
+
+  try {
+    const first = createTownServer({
+      dbPath,
+      plotsDir,
+      operatorPubkey: operatorKeys.pubkey,
+    });
+    server1 = first.server;
+    await new Promise((resolve) => server1.listen(0, '127.0.0.1', resolve));
+
+    first.db
+      .prepare(
+        "INSERT INTO residents (handle, pubkey, origin, status, bio, plot_updated_at, created_at) VALUES (?, ?, 'colony', 'pending', 'waiting muse', NULL, ?)"
+      )
+      .run('waiter', waiterKeys.pubkey, Math.floor(Date.now() / 1000));
+
+    await new Promise((resolve) => server1.close(resolve));
+    server1 = null;
+
+    const second = createTownServer({
+      dbPath,
+      plotsDir,
+      operatorPubkey: operatorKeys.pubkey,
+    });
+    server2 = second.server;
+    await new Promise((resolve) => server2.listen(0, '127.0.0.1', resolve));
+
+    const row = second.db.prepare('SELECT status FROM residents WHERE handle = ?').get('waiter');
+    assert.equal(row?.status, 'active');
+
+    const { port } = server2.address();
+    const client = new GhostlightClient({
+      baseUrl: `http://127.0.0.1:${port}`,
+      handle: 'waiter',
+      ...waiterKeys,
+    });
+    const checkinRes = await client.checkin({ status_text: 'door is open' });
+    assert.equal(checkinRes.status, 200);
+  } finally {
+    if (server1) await new Promise((resolve) => server1.close(resolve));
+    if (server2) await new Promise((resolve) => server2.close(resolve));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
