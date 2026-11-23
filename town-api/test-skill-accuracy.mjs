@@ -262,6 +262,7 @@ test('SKILL.md state shape, admin routes, and honest live-lag note match server.
     'inn',
     'guestbook',
     'guestbook_by_plot',
+    'guestbook_pending',
     'events: { now, next }',
     'garden',
     'nightly_call?',
