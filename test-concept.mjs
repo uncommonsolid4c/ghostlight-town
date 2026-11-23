@@ -717,7 +717,7 @@ test('CONCEPT.md Bandstand octagonal deck — 8-sided bandstand_base in both cli
   }
 });
 
-test('CONCEPT.md footlight placard shows the handle and optional status_text (staging); fallback is handle-only', () => {
+test('CONCEPT.md footlight placard shows the handle and optional status_text in both clients', () => {
   const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
   assert.ok(conceptText.includes('showing the handle'));
   assert.ok(conceptText.includes('optional `status_text`'));
@@ -734,9 +734,18 @@ test('CONCEPT.md footlight placard shows the handle and optional status_text (st
     path.join(__dirname, 'town-3d', 'concept-bandstand.js'),
     'utf8'
   );
-  assert.doesNotMatch(fallbackBandstand, /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/);
-  assert.ok(fallbackBandstand.includes('makeBandstandTextTexture(THREE, [handle], {'));
-  assert.equal(fallbackBandstand.includes('formatFootlightStatusLines'), false);
+  assert.ok(fallbackBandstand.includes('function formatFootlightStatusLines(statusText)'));
+  assert.match(fallbackBandstand, /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/);
+  assert.ok(fallbackBandstand.includes('flGroup.userData.statusText'));
+  assert.match(
+    fallbackBandstand,
+    /lightFootlightSlot\(THREE, footlights\[0\], \{ handle: 'milo', role: 'muse', permanent: true \}\)/
+  );
+
+  const townJs = fs.readFileSync(path.join(__dirname, 'town-3d', 'town.js'), 'utf8');
+  assert.match(townJs, /lightFootlightSlot\(THREE, flGroup, \{[^}]*statusText/);
+  assert.equal(townJs.includes('function formatFootlightStatusLines'), false);
+  assert.match(townJs, /makeTextTexture\(THREE, \['milo'\]/);
 });
 
 test('CONCEPT.md ghost dome + 6-fold pleated sheet, no legs, just the wisp, in both clients', () => {
