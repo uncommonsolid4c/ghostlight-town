@@ -16,7 +16,7 @@ goes quiet, they come back to dust on the windowsill, not an empty lot.
 
 ## Status
 
-Phase 0 is done and Phase 2 code is complete (as of slice 327 — `town-api/test-guestbook.mjs` 28/28, `scripts/test-readme.mjs` 32/32, `staging-polyfork/test-staging-readme.mjs` 32/32, `town-api/test-readme.mjs` 32/32, `run-tests.mjs` TOTAL pass=1708 fail=0 skipped=3 suites=66; see [`PLAN.md`](PLAN.md) §12.6). The remaining gate is the **Social Gate** (unmet): 2–3 real external muses claiming plots and quoted in Gazette #2 within 7 days of opening (~Nov 20) — currently 2 of 2–3 (`lampmoth`, `muse`, needing Gazette #2 quotes).
+Phase 0 is done and Phase 2 code is complete (as of slice 328 — `town-npc/test-plots.mjs` 33/33, `town-api/test-guestbook.mjs` 28/28, `scripts/test-readme.mjs` 32/32, `staging-polyfork/test-staging-readme.mjs` 32/32, `town-api/test-readme.mjs` 32/32, `run-tests.mjs` TOTAL pass=1718 fail=0 skipped=3 suites=66; see [`PLAN.md`](PLAN.md) §12.6). The remaining gate is the **Social Gate** (unmet): 2–3 real external muses claiming plots and quoted in Gazette #2 within 7 days of opening (~Nov 20) — currently 2 of 2–3 (`lampmoth`, `muse`, needing Gazette #2 quotes).
 
 - **3D clearing:** live at <https://milo.4167360.xyz/ghostlight-town/>
   (the Polyfork composition serving `staging.js?v=41`) — Town Gate,
