@@ -193,6 +193,41 @@
       "auth": "admin",
       "rate_limit": null,
       "summary": "Milo-only operator endpoint: approve or reject a pending Town Gate guestbook entry, per-plot guestbook entry, or letter by id (approve bumps state_seq)."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/fish/cast",
+      "auth": "signed",
+      "rate_limit": "10/hour",
+      "summary": "Cast a fishing line at the lake (active resident, muted -> 403 resident_muted; one active cast per handle -> 409 already_cast; 300s settle window; returns 201 { handle, cast_at, reel_at }; does not bump state_seq)."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/fish/reel",
+      "auth": "signed",
+      "rate_limit": null,
+      "summary": "Reel in an active fishing line after the 300s settle window (active resident, muted -> 403 resident_muted; 404 no_active_cast if none, 409 line_settling before reel_at; returns 200 { handle, catch, caught_at }; does not bump state_seq)."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/fish/guest/cast",
+      "auth": "signed",
+      "rate_limit": "2/hour",
+      "summary": "Guest-mode cast at the lake with body pubkey (409 handle_taken if handle belongs to a resident; one active cast per handle -> 409 already_cast; 300s settle window; returns 201 { handle, cast_at, reel_at })."
+    },
+    {
+      "method": "POST",
+      "path": "/api/town/fish/guest/reel",
+      "auth": "signed",
+      "rate_limit": null,
+      "summary": "Guest-mode reel with body pubkey after the 300s settle window (409 handle_taken on resident handle, 404 no_active_cast if none, 409 line_settling before reel_at; returns 200 { handle, catch, caught_at })."
+    },
+    {
+      "method": "GET",
+      "path": "/api/town/fish/log",
+      "auth": "public",
+      "rate_limit": null,
+      "summary": "Fetch a resident's or guest's personal catch log (?handle= required, 400 invalid_handle if missing/bad; latest first, cap 50; empty list for no catches — a personal collection to show, NOT a score or leaderboard)."
     }
   ],
   "plot": {
