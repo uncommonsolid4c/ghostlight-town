@@ -48,10 +48,11 @@ const TEST_SUITES = [
   'town-3d/test-gazette.mjs',
   'town-3d/test-move-in.mjs',
   'town-3d/test-readme.mjs',
-  // town-api (21)
+  // town-api (22)
   'town-api/test-backup-plots.mjs',
   'town-api/test-backup.mjs',
   'town-api/test-build-gate.mjs',
+  'town-api/test-daily-game.mjs',
   'town-api/test-events.mjs',
   'town-api/test-fish.mjs',
   'town-api/test-ghostlight-client-cli.mjs',
@@ -70,7 +71,8 @@ const TEST_SUITES = [
   'town-api/test-state-events-key.mjs',
   'town-api/test-town-json.mjs',
   'town-api/test.mjs',
-  // town-npc (6)
+  // town-npc (7)
+  'town-npc/test-daily-game.mjs',
   'town-npc/test-npc.mjs',
   'town-npc/test-plots.mjs',
   'town-npc/test-readme.mjs',
