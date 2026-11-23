@@ -807,3 +807,177 @@ test('setAvatarStatusText undefined clears, disposes once per change, and keeps 
     assert.deepEqual({ x: sprite.scale.x, y: sprite.scale.y, z: sprite.scale.z }, { x: 1.5, y: 0.375, z: 1 });
   });
 });
+
+test('pickBandstandSpot preferred slot on a short spots array and when full', () => {
+  const spots = Array.from({ length: 3 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set();
+
+  const s1 = pickBandstandSpot(spots, used, 1);
+  assert.equal(s1.slot, 1);
+  assert.equal(s1.nametagLift, 0.5);
+
+  const s5 = pickBandstandSpot(spots, used, 5);
+  assert.equal(s5.slot, 0);
+  assert.equal(s5.nametagLift, 0);
+
+  pickBandstandSpot(spots, used, null);
+  assert.equal(used.size, 3);
+
+  const overflow = pickBandstandSpot(spots, used, 1);
+  assert.equal(overflow.slot, 3);
+  assert.equal(overflow.y, 0);
+  const r = Math.hypot(overflow.x, overflow.z);
+  assert.ok(Math.abs(r - 5.7) < 0.01, `expected overflow radius ~5.7, got ${r}`);
+  assert.equal(overflow.x, +(Math.sin((3 / 10) * Math.PI * 2 + 0.15) * 5.7).toFixed(4));
+  assert.equal(overflow.z, +(Math.cos((3 / 10) * Math.PI * 2 + 0.15) * 5.7).toFixed(4));
+});
+
+test('getPlotTargetPosition synthetic rotY 0 and rotY PI/2 layouts pin the forward/side basis', () => {
+  const gate = { x: 0, y: 0, z: 27, rotY: 0 };
+  assert.deepEqual(getPlotTargetPosition(gate, 0), { x: 0, y: 0, z: 30.6, rotY: 0 });
+  assert.deepEqual(getPlotTargetPosition(gate, 1), { x: 0.9, y: 0, z: 30.6, rotY: 0 });
+  assert.deepEqual(getPlotTargetPosition(gate, 2), { x: -0.9, y: 0, z: 30.6, rotY: 0 });
+
+  const east = { x: 0, y: 0, z: 0, rotY: Math.PI / 2 };
+  assert.deepEqual(getPlotTargetPosition(east, 0), { x: 3.6, y: 0, z: 0, rotY: Math.PI / 2 });
+  assert.deepEqual(getPlotTargetPosition(east, 1), { x: 3.6, y: 0, z: -0.9, rotY: Math.PI / 2 });
+});
+
+test('getPlotTargetPosition indices 9 and 10 continue the ±0.9 stagger ladder', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const p0 = getPlotTargetPosition(plot1, 0);
+  const sideX = Math.cos(plot1.rotY);
+  const sideZ = -Math.sin(plot1.rotY);
+
+  const p9 = getPlotTargetPosition(plot1, 9);
+  const p10 = getPlotTargetPosition(plot1, 10);
+  assert.equal(p9.y, 0);
+  assert.equal(p10.rotY, plot1.rotY);
+
+  const proj9 = (p9.x - p0.x) * sideX + (p9.z - p0.z) * sideZ;
+  const proj10 = (p10.x - p0.x) * sideX + (p10.z - p0.z) * sideZ;
+  assert.ok(Math.abs(proj9 - 4.5) < 0.01, `expected index 9 lateral +4.5, got ${proj9}`);
+  assert.ok(Math.abs(proj10 + 4.5) < 0.01, `expected index 10 lateral -4.5, got ${proj10}`);
+});
+
+test('setAvatarStatusText null/undefined avatar and null material return silently', () => {
+  const THREE = createFakeTHREE();
+  setAvatarStatusText(THREE, null, 'x');
+  setAvatarStatusText(THREE, undefined, 'x');
+  setAvatarStatusText(THREE, {}, 'x');
+
+  const noSprite = { userData: { handle: 'x' } };
+  setAvatarStatusText(THREE, noSprite, 'x');
+  assert.equal('statusText' in noSprite.userData, false);
+
+  const nullMat = { userData: { handle: 'y', nametagSprite: { material: null } } };
+  setAvatarStatusText(THREE, nullMat, 'x');
+  assert.equal('statusText' in nullMat.userData, false);
+});
+
+test('setAvatarStatusText whitespace-only clears a set status; same status with new padding is idempotent', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument((drawnTexts) => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    const sprite = muse.userData.nametagSprite;
+
+    setAvatarStatusText(THREE, muse, 'Tea is on');
+    assert.equal(muse.userData.statusText, 'Tea is on');
+
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, muse, '   ');
+    assert.equal(muse.userData.statusText, null);
+    assert.equal(sprite.material.map.canvas.height, 96);
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[MUSE] sol']);
+
+    setAvatarStatusText(THREE, muse, 'Tea is on');
+    const statusMap = sprite.material.map;
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, muse, '  Tea is on  ');
+    assert.equal(sprite.material.map, statusMap);
+    assert.equal(drawnTexts.length, 0);
+    assert.equal(muse.userData.statusText, 'Tea is on');
+  });
+});
+
+test('setAvatarStatusText trims before truncating and tolerates a map without dispose', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument(() => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    const sprite = muse.userData.nametagSprite;
+    assert.equal(typeof sprite.material.map.dispose, 'undefined');
+
+    setAvatarStatusText(THREE, muse, 'First status here');
+    const firstMap = sprite.material.map;
+
+    setAvatarStatusText(THREE, muse, 'Second status here');
+    assert.notEqual(sprite.material.map, firstMap);
+    assert.equal(muse.userData.statusText, 'Second status here');
+
+    setAvatarStatusText(THREE, muse, `  ${'a'.repeat(30)}  `);
+    assert.equal(muse.userData.statusText, `${'a'.repeat(23)}…`);
+    assert.equal(muse.userData.statusText.length, 24);
+  });
+});
+
+test('setAvatarStatusText missing handle defaults badge to muse', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument((drawnTexts) => {
+    const npc = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    npc.userData.handle = undefined;
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, npc, 'Hi');
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[NPC] muse', 'Hi']);
+
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    muse.userData.handle = '';
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, muse, 'Hello');
+    assert.deepEqual(drawnTexts.map((d) => d.text), ['[MUSE] muse', 'Hello']);
+  });
+});
+
+test('setAvatarStatusText 24-char status with trailing spaces keeps full text; 25-char trims then truncates', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument(() => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+
+    setAvatarStatusText(THREE, muse, `${'x'.repeat(24)}   `);
+    assert.equal(muse.userData.statusText, 'x'.repeat(24));
+    assert.equal(muse.userData.statusText.includes('…'), false);
+
+    setAvatarStatusText(THREE, muse, `${'y'.repeat(25)}   `);
+    assert.equal(muse.userData.statusText, `${'y'.repeat(23)}…`);
+    assert.equal(muse.userData.statusText.length, 24);
+  });
+});
+
+test('createAvatarCapsule muse badge texture draws bg, border, and centered badge text (full call list)', () => {
+  const THREE = createFakeTHREE();
+  withRecordingDocument((calls) => {
+    createAvatarCapsule(THREE, { handle: 'sol' });
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 96],
+      ['strokeRect', '#9be0ff', 8, 8, 8, 368, 80],
+      ['fillText', 'bold 30px monospace', '#9be0ff', '[MUSE] sol', 192, 48],
+    ]);
+  });
+});
+
+test('getPlotTargetPosition every plot target sits 3.6 m toward the centre at radius 14.9', () => {
+  for (const plot of TOWN_LAYOUT.plots) {
+    const t = getPlotTargetPosition(plot, 0);
+    const dist = Math.hypot(t.x - plot.x, t.z - plot.z);
+    assert.ok(Math.abs(dist - 3.6) < 0.01, `plot ${plot.plotNumber} dist=${dist} should be ~3.6`);
+    const r = Math.hypot(t.x, t.z);
+    assert.ok(Math.abs(r - 14.9) < 0.01, `plot ${plot.plotNumber} target radius=${r} should be ~14.9`);
+    assert.equal(t.y, 0);
+    assert.equal(t.rotY, plot.rotY);
+  }
+});
