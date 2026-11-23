@@ -405,3 +405,160 @@ test('PLAN.md §12.4 gap 5 CLI entrypoint and gap 3 registration', () => {
   assert.ok(resMatch, 'PLAN.md §12.4 must contain Resolution (2026-11-15, slice 127)');
   assert.match(resMatch[0], /\(5\) CLI entrypoint\s+shipped at `town-api\/ghostlight-client\.mjs` \(`process\.argv` guard\)\./, 'PLAN.md §12.4 Resolution must record gap 5 as shipped');
 });
+
+test('PLAN.md §9 Q6 The 3D bet question text and straight-to-3D decision', () => {
+  const tail = readPlanTailSections();
+  const q6Match = tail.match(/6\.\s*\*\*The 3D bet:\*\*[\s\S]*?(?=\n7\.\s*\*\*Homelab load:)/);
+  assert.ok(q6Match, 'PLAN.md §9 must contain Q6 The 3D bet');
+  const q6 = q6Match[0];
+
+  assert.match(q6, /6–8 Milo-days vs\. 3–4 for pages/, 'PLAN.md §9 Q6 must state 6–8 Milo-days vs. 3–4 for pages');
+  assert.match(q6, /straight\s+to 3D per his redirect/, 'PLAN.md §9 Q6 must record straight to 3D per his redirect');
+  assert.match(q6, /explicit checkpoint/, 'PLAN.md §9 Q6 must mention explicit checkpoint');
+
+  const sec11Match = tail.match(/## 11\. Decisions[\s\S]*?(?=\n---)/);
+  assert.ok(sec11Match, 'PLAN.md must contain §11 Decisions');
+  assert.ok(sec11Match[0].includes('Q6 — 3D bet: yes, straight to 3D'), 'PLAN.md §11 must record Q6 — 3D bet: yes, straight to 3D');
+
+  assert.ok(fs.existsSync(path.join(__dirname, 'town-3d', 'index.html')), 'town-3d/index.html must exist');
+  assert.ok(fs.existsSync(STAGING_HTML_PATH), 'staging-polyfork/index.html must exist');
+});
+
+test('PLAN.md §12.2 fix #1 replace campfire — no campfire in schema, server, town.json, town.js', () => {
+  const tail = readPlanTailSections();
+  const fix1Match = tail.match(/1\.\s*\*\*Replace the campfire before writing schema or 3D code\*\*[\s\S]*?(?=\n2\.\s*\*\*Fix auth)/);
+  assert.ok(fix1Match, 'PLAN.md §12.2 must contain fix #1');
+  assert.match(fix1Match[0], /No `campfire_\*` table, endpoint, or centerpiece\s+gets built/, 'PLAN.md §12.2 fix #1 must state no campfire_* table, endpoint, or centerpiece gets built');
+
+  for (const relPath of ['town-api/schema.sql', 'town-api/server.mjs', 'town.json', 'town-3d/town.js']) {
+    const content = fs.readFileSync(path.join(__dirname, relPath), 'utf8');
+    assert.doesNotMatch(content, /campfire/i, `${relPath} must not contain campfire`);
+  }
+});
+
+test('PLAN.md §12.2 fix #2 SPKI wire format in code and SKILL.md, §3 keygen text', () => {
+  const spkiHex = '302a300506032b6570032100';
+  const spkiDecl = `const ED25519_SPKI_PREFIX = Buffer.from('${spkiHex}', 'hex')`;
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(serverMjs.includes(spkiDecl), 'town-api/server.mjs must define ED25519_SPKI_PREFIX');
+
+  const clientMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'ghostlight-client.mjs'), 'utf8');
+  assert.ok(clientMjs.includes(spkiDecl), 'town-api/ghostlight-client.mjs must define ED25519_SPKI_PREFIX');
+
+  const skillMd = fs.readFileSync(path.join(__dirname, 'SKILL.md'), 'utf8');
+  assert.match(skillMd, /raw 32-byte Ed25519 keys, base64-encoded/, 'SKILL.md must specify raw 32-byte Ed25519 keys, base64-encoded');
+  assert.ok(skillMd.includes(spkiHex), 'SKILL.md must include SPKI hex prefix');
+  assert.doesNotMatch(skillMd, /3-line Python/i, 'SKILL.md must not retain 3-line Python claim');
+
+  const planText = fs.readFileSync(PLAN_PATH, 'utf8');
+  assert.match(planText, /`node town-api\/ghostlight-client\.mjs keygen/, 'PLAN.md must reference node town-api/ghostlight-client.mjs keygen');
+  assert.match(planText, /openssl genpkey -algorithm ed25519/, 'PLAN.md must reference openssl genpkey -algorithm ed25519');
+  assert.match(planText, /Python stdlib has no Ed25519 support/, 'PLAN.md must note Python stdlib has no Ed25519 support');
+});
+
+test('PLAN.md §12.4 gaps 1+2 resolution — overlay API wiring + plotCache invalidation', () => {
+  const tail = readPlanTailSections();
+  const sec124Match = tail.match(/### 12\.4[\s\S]*?(?=\n### 12\.5)/);
+  assert.ok(sec124Match, 'PLAN.md must contain §12.4');
+  const resMatch = sec124Match[0].match(/- \*\*Resolution \(2026-11-15, slice 127\):\*\*[\s\S]*$/);
+  assert.ok(resMatch, 'PLAN.md §12.4 must contain Resolution (2026-11-15, slice 127)');
+  const res = resMatch[0];
+
+  assert.match(res, /\(1\)\s+`openPlotOverlay` wired to `GET \/api\/town\/plot` via sandboxed\s+`srcdoc` with static fallback in slice 30/, 'PLAN.md §12.4 Resolution must record gap 1');
+  assert.match(res, /\(2\)\s+`plotCache`\s+invalidated on `plot_updated_at` in slice 30/, 'PLAN.md §12.4 Resolution must record gap 2');
+
+  const townJs = fs.readFileSync(path.join(__dirname, 'town-3d', 'town.js'), 'utf8');
+  assert.match(townJs, /export async function resolvePlotOverlayContent/, 'town-3d/town.js must export resolvePlotOverlayContent');
+  assert.ok(townJs.includes('/api/town/plot?handle='), 'town-3d/town.js must query /api/town/plot?handle=');
+  assert.match(townJs, /kind: 'api', html: data\.html/, 'town-3d/town.js must return api html');
+  assert.match(townJs, /kind: 'static', url: staticUrl/, 'town-3d/town.js must return static fallback url');
+  assert.match(townJs, /if \(!hasPlotTimestamp \|\| stateUpdatedAt === cached\.plotUpdatedAt\) \{\s+continue;\s+\}/, 'town-3d/town.js must skip refetch only while plot_updated_at is unchanged');
+  assert.ok(townJs.includes('plotUpdatedAt: data.plot_updated_at'), 'town-3d/town.js must store plotUpdatedAt: data.plot_updated_at');
+});
+
+test('PLAN.md §12.3 WASD amendment — deterministic first-free slot, no (0,0,0) stacking', () => {
+  const tail = readPlanTailSections();
+  const sec123Match = tail.match(/### 12\.3[\s\S]*?(?=\n### 12\.4)/);
+  assert.ok(sec123Match, 'PLAN.md must contain §12.3');
+  const sec123 = sec123Match[0];
+
+  assert.match(sec123, /Agents don't press WASD/, 'PLAN.md §12.3 must state Agents don\'t press WASD');
+  assert.match(sec123, /four capsules must not stack at `\(0,0,0\)`/, 'PLAN.md §12.3 must prohibit stacking at (0,0,0)');
+  assert.match(sec123, /deterministically assign\s+seats\/slots/, 'PLAN.md §12.3 must specify deterministic slot assignment');
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.match(serverMjs, /for \(let i = 0; i <= 9; i\+\+\) \{\s+if \(!usedSlots\.has\(i\)\) \{/, 'town-api/server.mjs must assign first free slot 0–9');
+  assert.ok(serverMjs.includes('body.slot > 9'), 'town-api/server.mjs must reject slot > 9');
+  assert.ok(serverMjs.includes("error: 'slot_occupied'"), 'town-api/server.mjs must return 409 slot_occupied on taken slot');
+});
+
+test('PLAN.md §12.5 scope claims cross-check against §§3–4 body text', () => {
+  const tail = readPlanTailSections();
+  const sec125Match = tail.match(/### 12\.5[\s\S]*?(?=\n### 12\.6)/);
+  assert.ok(sec125Match, 'PLAN.md must contain §12.5');
+  const sec125 = sec125Match[0];
+
+  assert.match(sec125, /Header status updated to slice 31/, 'PLAN.md §12.5 must record header status updated to slice 31');
+  assert.match(sec125, /§3 keygen updated to `town-api\/ghostlight-client\.mjs keygen`/, 'PLAN.md §12.5 must record §3 keygen update');
+  assert.match(sec125, /removing the Python stdlib\s+claim/, 'PLAN.md §12.5 must record removing the Python stdlib claim');
+  assert.match(sec125, /§4 updated for homelab port `127\.0\.0\.1:8125`/, 'PLAN.md §12.5 must record §4 port 127.0.0.1:8125');
+  assert.match(sec125, /is now resolved; §§1–8 body text and §12\s+are aligned/, 'PLAN.md §12.5 must state §§1–8 body text and §12 are aligned');
+
+  const planText = fs.readFileSync(PLAN_PATH, 'utf8');
+  assert.ok(planText.includes('127.0.0.1:8125'), 'PLAN.md body must include 127.0.0.1:8125');
+  assert.match(planText, /`node town-api\/ghostlight-client\.mjs keygen/, 'PLAN.md body must include node town-api/ghostlight-client.mjs keygen');
+});
+
+test('PLAN.md §12.6 supersede details — deploy date, URL, state_seq 83, ?v=40 bundle', () => {
+  const tail = readPlanTailSections();
+  const sec126Match = tail.match(/### 12\.6[\s\S]*$/);
+  assert.ok(sec126Match, 'PLAN.md must contain §12.6');
+  const sec126 = sec126Match[0];
+
+  assert.match(sec126, /happened on\s+2026-11-13/, 'PLAN.md §12.6 must record deploy date 2026-11-13');
+  assert.ok(sec126.includes('https://milo.4167360.xyz/api/town/state'), 'PLAN.md §12.6 must include live state URL');
+  assert.match(sec126, /`state_seq` `83`/, 'PLAN.md §12.6 must record state_seq 83');
+  assert.match(sec126, /`staging\.js\?v=40`/, 'PLAN.md §12.6 must record staging.js?v=40');
+  assert.match(sec126, /195 files bundle deployed 2026-11-22/, 'PLAN.md §12.6 must record 195 files bundle deployed 2026-11-22');
+
+  const stagingHtml = fs.readFileSync(STAGING_HTML_PATH, 'utf8');
+  assert.ok(stagingHtml.includes('staging.js?v=40'), 'staging-polyfork/index.html must include staging.js?v=40');
+});
+
+test('PLAN.md §12.4 deploy-brief corrections folded into session/live-api-deploy-brief.md', () => {
+  const tail = readPlanTailSections();
+  const sec124Match = tail.match(/### 12\.4[\s\S]*?(?=\n### 12\.5)/);
+  assert.ok(sec124Match, 'PLAN.md must contain §12.4');
+  const sec124 = sec124Match[0];
+
+  assert.match(sec124, /Deploy-brief corrections \(folded into\s+`session\/live-api-deploy-brief\.md` the same session\)/, 'PLAN.md §12.4 must record deploy-brief corrections folded into session/live-api-deploy-brief.md');
+  assert.match(sec124, /the API copy list must\s+include `backup\.mjs` \+ `backup-plots\.mjs`/, 'PLAN.md §12.4 must record backup.mjs + backup-plots.mjs in API copy list');
+  assert.match(sec124, /`register\.mjs` alone\s+does NOT place NPC cottages/, 'PLAN.md §12.4 must record register.mjs alone does NOT place NPC cottages');
+
+  const briefPath = path.join(__dirname, 'session', 'live-api-deploy-brief.md');
+  assert.ok(fs.existsSync(briefPath), 'session/live-api-deploy-brief.md must exist');
+  const brief = fs.readFileSync(briefPath, 'utf8');
+  for (const token of ['backup.mjs', 'backup-plots.mjs', 'register.mjs', 'admin/approve']) {
+    assert.ok(brief.includes(token), `session/live-api-deploy-brief.md must include ${token}`);
+  }
+});
+
+test('PLAN.md §12.4 gaps list completeness — all 5 gaps named, all 5 resolved', () => {
+  const tail = readPlanTailSections();
+  const sec124Match = tail.match(/### 12\.4[\s\S]*?(?=\n### 12\.5)/);
+  assert.ok(sec124Match, 'PLAN.md must contain §12.4');
+  const sec124 = sec124Match[0];
+
+  const resMatch = sec124.match(/- \*\*Resolution \(2026-11-15, slice 127\):\*\*[\s\S]*$/);
+  assert.ok(resMatch, 'PLAN.md §12.4 must contain Resolution (2026-11-15, slice 127)');
+  const res = resMatch[0];
+
+  assert.match(res, /all 5 gaps resolved/, 'PLAN.md §12.4 Resolution must state all 5 gaps resolved');
+  for (const n of [1, 2, 3, 4, 5]) {
+    assert.match(sec124, new RegExp(`^  ${n}\\. `, 'm'), `PLAN.md §12.4 must number gap ${n}`);
+    assert.ok(res.includes(`(${n})`), `PLAN.md §12.4 Resolution must include (${n})`);
+  }
+
+  assert.match(sec124, /true suite total is 109 pass, not 97/, 'PLAN.md §12.4 gap 3 must record true suite total is 109 pass, not 97');
+});
