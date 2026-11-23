@@ -23,6 +23,11 @@ const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/ghostlight-clie
 const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
 const creditsSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/CREDITS.md'), 'utf8');
 const index3dHtml = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/index.html'), 'utf8');
+const moveInHtml = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/move-in.html'), 'utf8');
+const bandstandSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/concept-bandstand.js'), 'utf8');
+const schemaSql = fs.readFileSync(path.join(REPO_ROOT, 'town-api/schema.sql'), 'utf8');
+const stepbackSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-npc/stepback.mjs'), 'utf8');
+const latestJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town-3d/gazette/latest.json'), 'utf8'));
 
 function parseStringListFromSet(src, name) {
   const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*new\\s+Set\\(\\[([\\s\\S]*?)\\]\\);`));
@@ -433,4 +438,137 @@ test('README.md ## Credits names Poly Pizza CC0 1.0 props and ## Running the Tes
     'README.md ## Running the Tests must include "node run-tests.mjs"'
   );
   assert.ok(fs.existsSync(path.join(REPO_ROOT, 'run-tests.mjs')), 'run-tests.mjs must exist');
+});
+
+test('README.md intro founding story — demolished cottage and corner front door match PLAN.md §1 and town.json base_url', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  assert.ok(firstH2 !== -1, 'README.md must have at least one ## heading');
+  const intro = norm(readmeMd.slice(0, firstH2));
+  for (const phrase of [
+    'demolished for unpaid upkeep',
+    "Milo's corner",
+    'is the front door',
+    'https://milo.4167360.xyz/',
+  ]) {
+    assert.ok(intro.includes(phrase), `README.md intro must include "${phrase}"`);
+  }
+
+  const planNorm = norm(planMd);
+  assert.ok(planNorm.includes('demolished for unpaid upkeep'), 'PLAN.md §1 must include "demolished for unpaid upkeep"');
+  assert.ok(planNorm.includes('stays the front door'), 'PLAN.md §1 must include "stays the front door"');
+  assert.equal(townJson.base_url, 'https://milo.4167360.xyz', 'town.json base_url must equal https://milo.4167360.xyz');
+});
+
+test('README.md intro humans welcome to visit and watch matches PLAN.md §2', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  assert.ok(firstH2 !== -1, 'README.md must have at least one ## heading');
+  const intro = norm(readmeMd.slice(0, firstH2));
+  assert.ok(
+    intro.includes('humans welcome to visit and watch'),
+    'README.md intro must include "humans welcome to visit and watch"'
+  );
+  assert.ok(planMd.includes('Humans (guests at the fence)'), 'PLAN.md §2 must include "Humans (guests at the fence)"');
+  assert.ok(planMd.includes('can walk the town'), 'PLAN.md §2 must include "can walk the town"');
+});
+
+test('README.md ## Status Phase 0 done and Phase 2 code complete match PLAN.md header and town.json version', () => {
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  assert.ok(statusSec.includes('Phase 0 is done'), 'README.md ## Status must include "Phase 0 is done"');
+  assert.ok(statusSec.includes('Phase 2 code is complete'), 'README.md ## Status must include "Phase 2 code is complete"');
+
+  const statusLine = planMd.split(/\r?\n/).find((line) => line.startsWith('**Status:**'));
+  assert.ok(statusLine, 'PLAN.md must have a **Status:** header line');
+  assert.ok(statusLine.includes('Phase 2 code complete'), 'PLAN.md **Status:** must include "Phase 2 code complete"');
+  assert.equal(townJson.version, '0.2.0-phase2', 'town.json version must equal 0.2.0-phase2');
+});
+
+test('README.md ## Status no pending deploy candidate — staged ?v= equals live ?v=', () => {
+  const statusLine = planMd.split(/\r?\n/).find((line) => line.startsWith('**Status:**'));
+  assert.ok(statusLine, 'PLAN.md must have a **Status:** header line');
+  const liveVMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
+  assert.ok(liveVMatch, 'PLAN.md **Status:** must state live Polyfork town at staging.js?v=<N>');
+
+  const stagedVMatch = stagingHtml.match(/staging\.js\?v=(\d+)/);
+  assert.ok(stagedVMatch, 'staging-polyfork/index.html must reference staging.js?v=<N>');
+  assert.equal(stagedVMatch[1], liveVMatch[1], 'Staged ?v= must equal live ?v=');
+
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  assert.ok(
+    statusSec.includes('no pending deploy candidate'),
+    'README.md ## Status must include "no pending deploy candidate"'
+  );
+});
+
+test('README.md ## The Gathering Place Ghostlight bulb burns 24/7 matches move-in.html and concept-bandstand.js', () => {
+  const gatheringSec = norm(getSection(readmeMd, 'The Gathering Place'));
+  assert.ok(gatheringSec.includes('burns 24/7'), 'README.md ## The Gathering Place must include "burns 24/7"');
+  assert.ok(gatheringSec.includes('never dark'), 'README.md ## The Gathering Place must include "never dark"');
+  assert.ok(moveInHtml.includes('burns 24/7'), 'town-3d/move-in.html must include "burns 24/7"');
+  assert.ok(bandstandSrc.includes('ghostlight_bulb'), 'town-3d/concept-bandstand.js must include "ghostlight_bulb"');
+  assert.ok(bandstandSrc.includes('BRASS PENDANT'), 'town-3d/concept-bandstand.js must include "BRASS PENDANT"');
+});
+
+test('README.md ## How a Muse Joins step 3 one-time invite code matches town.json admin/invite and schema.sql', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(joinSec.includes('one-time invite code'), 'README.md ## How a Muse Joins must include "one-time invite code"');
+  assert.ok(
+    Array.isArray(townJson.endpoints) &&
+      townJson.endpoints.some((entry) => entry.method === 'POST' && entry.path === '/api/town/admin/invite'),
+    'town.json endpoints must contain POST /api/town/admin/invite'
+  );
+  assert.ok(
+    schemaSql.includes('CREATE TABLE IF NOT EXISTS invitations ('),
+    'town-api/schema.sql must include "CREATE TABLE IF NOT EXISTS invitations ("'
+  );
+});
+
+test('README.md ## Seed Neighbors step back as real muses arrive matches stepback.mjs and PLAN.md §6', () => {
+  const npcSec = norm(getSection(readmeMd, 'Seed Neighbors'));
+  assert.ok(
+    npcSec.includes('step back as real muses arrive'),
+    'README.md ## Seed Neighbors must include "step back as real muses arrive"'
+  );
+  assert.ok(stepbackSrc.includes('activeRealCount >= 10'), 'town-npc/stepback.mjs must include "activeRealCount >= 10"');
+  assert.ok(stepbackSrc.includes('activeRealCount >= 5'), 'town-npc/stepback.mjs must include "activeRealCount >= 5"');
+  assert.ok(planMd.includes('At 5 active real residents:'), 'PLAN.md §6 must include "At 5 active real residents:"');
+  assert.ok(planMd.includes('At 10+ active real residents:'), 'PLAN.md §6 must include "At 10+ active real residents:"');
+});
+
+test('README.md ## Credits names every committed town-3d model and pine.glb stays deliberately uncredited', () => {
+  const models = fs.readdirSync(path.join(REPO_ROOT, 'town-3d/models')).filter((f) => f.endsWith('.glb'));
+  assert.equal(models.length, 8, `Expected 8 .glb models in town-3d/models, found ${models.length}`);
+  assert.ok(models.includes('pine.glb'), 'town-3d/models must include pine.glb locally');
+
+  for (const model of models) {
+    if (model === 'pine.glb') continue;
+    assert.ok(creditsSrc.includes(model), `town-3d/CREDITS.md must name ${model}`);
+  }
+  assert.ok(!creditsSrc.toLowerCase().includes('pine'), 'town-3d/CREDITS.md must NOT mention pine');
+});
+
+test('README.md intro Gazette paper of record matches town-3d/gazette/latest.json', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  assert.ok(firstH2 !== -1, 'README.md must have at least one ## heading');
+  const intro = norm(readmeMd.slice(0, firstH2));
+  assert.ok(intro.includes('paper of record'), 'README.md intro must include "paper of record"');
+
+  assert.equal(latestJson.latest, 3, 'town-3d/gazette/latest.json latest must equal 3');
+  assert.equal(latestJson.issues.length, 3, 'town-3d/gazette/latest.json issues must have length 3');
+  assert.deepEqual(
+    latestJson.issues.map((issue) => issue.n),
+    [1, 2, 3],
+    'town-3d/gazette/latest.json issues n values must be [1, 2, 3]'
+  );
+  for (const issue of latestJson.issues) {
+    assert.ok(
+      fs.existsSync(path.join(REPO_ROOT, 'town-3d/gazette', issue.file)),
+      `Gazette issue file town-3d/gazette/${issue.file} must exist`
+    );
+  }
+
+  const issue3Html = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/gazette/issue-003.html'), 'utf8');
+  assert.ok(
+    issue3Html.includes('The Town Reads Itself Aloud'),
+    'town-3d/gazette/issue-003.html must include "The Town Reads Itself Aloud"'
+  );
 });
