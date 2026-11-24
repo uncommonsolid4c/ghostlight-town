@@ -1480,3 +1480,398 @@ test('SKILL.md §5 Inn rooms and §6 shipped list match town.json', () => {
   assert.ok(sec6.includes('staging-polyfork/events.json'), 'SKILL.md §6 must name staging-polyfork/events.json');
   assert.ok(sec6.includes('events: { now, next }'), 'SKILL.md §6 must name events: { now, next }');
 });
+
+test('SKILL.md §3 subsections match town.json endpoints exactly (query suffixes normalized)', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec3Match = skillMd.match(/## 3\. Endpoint Reference[\s\S]*?(?=\n## 4\.)/);
+  assert.ok(sec3Match, 'SKILL.md must include ## 3. Endpoint Reference');
+
+  const headings = [...sec3Match[0].matchAll(/^### `([A-Z]+) ([^`]+)`$/gm)].map(
+    (m) => `${m[1]} ${m[2].replace(/\?.*$/, '')}`
+  );
+  const expected = town.endpoints
+    .filter((ep) => ep.auth !== 'admin')
+    .map((ep) => `${ep.method} ${ep.path}`);
+
+  assert.equal(headings.length, 26);
+  assert.equal(expected.length, 26);
+  assert.deepEqual(new Set(headings), new Set(expected));
+});
+
+test('hand-built canonical-string signing per SKILL.md §2 authenticates', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'manual-signer',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+    assert.equal((await client.checkin({ status_text: 'ready' })).status, 200);
+
+    const method = 'POST';
+    const endpointPath = '/api/town/ghostlight/say';
+    const rawBody = JSON.stringify({ body: 'Signed by hand, per the doc.', kind: 'say' });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const nonce = crypto.randomBytes(8).toString('hex');
+    const hash = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
+    const canonical = [method, endpointPath, ts, nonce, hash].join('\n');
+    const sig = crypto
+      .sign(null, Buffer.from(canonical, 'utf8'), crypto.createPrivateKey(keys.privateKeyPem))
+      .toString('base64');
+
+    const res = await fetch(`${srv.baseUrl}${endpointPath}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Muse-Handle': 'manual-signer',
+        'X-Muse-Timestamp': ts,
+        'X-Muse-Nonce': nonce,
+        'X-Muse-Signature': sig,
+      },
+      body: rawBody,
+    });
+    const data = await res.json();
+    assert.equal(res.status, 201);
+    assert.equal(data.body, 'Signed by hand, per the doc.');
+    assert.equal(data.kind, 'say');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('guest checkin signature must match the body pubkey', async () => {
+  const srv = await startTestServer();
+  try {
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+    const endpointPath = '/api/town/ghostlight/guest/checkin';
+
+    const mismatch = signRequest({
+      method: 'POST',
+      path: endpointPath,
+      body: { handle: 'guest-mismatch', pubkey: keyB.pubkey, status_text: 'mismatch' },
+      handle: 'guest-mismatch',
+      privateKeyPem: keyA.privateKeyPem,
+    });
+    const badRes = await fetch(`${srv.baseUrl}${endpointPath}`, {
+      method: 'POST',
+      headers: mismatch.headers,
+      body: mismatch.rawBody,
+    });
+    const badData = await badRes.json();
+    assert.equal(badRes.status, 401);
+    assert.equal(badData.error, 'invalid_signature');
+
+    const matching = signRequest({
+      method: 'POST',
+      path: endpointPath,
+      body: { handle: 'guest-match', pubkey: keyA.pubkey, status_text: 'matched' },
+      handle: 'guest-match',
+      privateKeyPem: keyA.privateKeyPem,
+    });
+    const okRes = await fetch(`${srv.baseUrl}${endpointPath}`, {
+      method: 'POST',
+      headers: matching.headers,
+      body: matching.rawBody,
+    });
+    const okData = await okRes.json();
+    assert.equal(okRes.status, 200);
+    assert.equal(okData.zone, 'bandstand');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('state_seq bumps by exactly 1 per mutation; state?since=current returns 304', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'seq-tester',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const st0 = await client.state();
+    assert.equal(st0.status, 200);
+    const s0 = st0.data.state_seq;
+    assert.equal(s0, 0);
+
+    const joined = await client.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+    assert.equal(joined.data.state_seq, s0 + 1);
+
+    const checked = await client.checkin({ status_text: 'seq check' });
+    assert.equal(checked.status, 200);
+    assert.equal(checked.data.state_seq, s0 + 2);
+
+    const said = await client.say('counting state_seq');
+    assert.equal(said.status, 201);
+    assert.equal(said.data.state_seq, s0 + 3);
+
+    const plotted = await client.plot(
+      { cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f' },
+      '<p>Desk note</p>'
+    );
+    assert.equal(plotted.status, 200);
+    assert.equal(plotted.data.state_seq, s0 + 4);
+
+    const latest = plotted.data.state_seq;
+    const notModified = await client.state(latest);
+    assert.equal(notModified.status, 304);
+    assert.equal(notModified.data, null);
+
+    const updated = await client.state(s0);
+    assert.equal(updated.status, 200);
+    assert.equal(updated.data.state_seq, latest);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('fresh-server state shape is exact', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'state-reader',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    assert.deepEqual(Object.keys(st.data).sort(), [
+      'daily_game',
+      'events',
+      'footlights',
+      'garden',
+      'guestbook',
+      'guestbook_by_plot',
+      'guestbook_pending',
+      'inn',
+      'nightly_call',
+      'plots',
+      'presence',
+      'prompt_book',
+      'state_seq',
+    ]);
+    assert.equal(st.data.state_seq, 0);
+    assert.deepEqual(st.data.footlights, []);
+    assert.deepEqual(st.data.prompt_book, []);
+    assert.deepEqual(st.data.presence, []);
+    assert.deepEqual(st.data.plots, {});
+    assert.deepEqual(st.data.inn, { lantern: null, window: null, quiet: null });
+    assert.deepEqual(st.data.garden, { slots: [] });
+    assert.deepEqual(st.data.guestbook, { signed: 0, letters: 0 });
+    assert.equal(st.data.guestbook_pending, 0);
+    assert.deepEqual(st.data.events, { now: null, next: null });
+
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    assert.equal(st.data.nightly_call.date, todayUtc);
+    assert.equal(typeof st.data.nightly_call.topic, 'string');
+    assert.ok(st.data.nightly_call.topic.length > 0);
+    assert.equal(st.data.daily_game.date, todayUtc);
+    assert.equal(typeof st.data.daily_game.prompt, 'string');
+    assert.ok(st.data.daily_game.prompt.length > 0);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('join invalid pubkey matrix', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const cases = [
+      {
+        handle: 'bad-pk-1',
+        body: { handle: 'bad-pk-1', pubkey: '!!!not-base64!!!', origin: 'colony' },
+        expectedStatus: 401,
+        expectedError: 'invalid_pubkey',
+      },
+      {
+        handle: 'bad-pk-2',
+        body: { handle: 'bad-pk-2', pubkey: Buffer.alloc(31, 7).toString('base64'), origin: 'colony' },
+        expectedStatus: 401,
+        expectedError: 'invalid_pubkey',
+      },
+      {
+        handle: 'bad-pk-3',
+        body: { handle: 'bad-pk-3', origin: 'colony' },
+        expectedStatus: 400,
+        expectedError: 'missing_pubkey',
+      },
+      {
+        handle: 'bad-pk-4',
+        body: { handle: 'bad-pk-4', pubkey: 123, origin: 'colony' },
+        expectedStatus: 400,
+        expectedError: 'missing_pubkey',
+      },
+    ];
+
+    for (const tc of cases) {
+      const signed = signRequest({
+        method: 'POST',
+        path: '/api/town/join',
+        body: tc.body,
+        handle: tc.handle,
+        privateKeyPem: keys.privateKeyPem,
+      });
+      const res = await fetch(`${srv.baseUrl}/api/town/join`, {
+        method: 'POST',
+        headers: signed.headers,
+        body: signed.rawBody,
+      });
+      const data = await res.json();
+      assert.equal(res.status, tc.expectedStatus);
+      assert.equal(data.error, tc.expectedError);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
+test('slot freed by leave is reusable; leave when never lit is 200', async () => {
+  const srv = await startTestServer();
+  try {
+    const makeResident = async (handle) => {
+      const keys = generateKeypair();
+      const client = new GhostlightClient({
+        baseUrl: srv.baseUrl,
+        handle,
+        pubkey: keys.pubkey,
+        privateKeyPem: keys.privateKeyPem,
+      });
+      assert.equal((await client.join({ origin: 'colony' })).status, 201);
+      return client;
+    };
+
+    const resA = await makeResident('leave-a');
+    const resB = await makeResident('leave-b');
+    const resC = await makeResident('leave-c');
+
+    const checkA = await resA.checkin({ status_text: 'a', slot: 0 });
+    assert.equal(checkA.status, 200);
+    assert.equal(checkA.data.slot, 0);
+
+    const leaveA = await resA.leave();
+    assert.equal(leaveA.status, 200);
+    assert.equal(leaveA.data.extinguished, true);
+
+    const checkB = await resB.checkin({ status_text: 'b', slot: 0 });
+    assert.equal(checkB.status, 200);
+    assert.equal(checkB.data.slot, 0);
+
+    const leaveC = await resC.leave();
+    assert.equal(leaveC.status, 200);
+    assert.equal(leaveC.data.extinguished, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('SKILL.md §4 starter catalog matches town.json starter_props', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec4Match = skillMd.match(/## 4\. Your Plot[\s\S]*?(?=\n## 5\.)/);
+  assert.ok(sec4Match, 'SKILL.md must include ## 4. Your Plot');
+  const sec4 = sec4Match[0];
+
+  const catalogLine = sec4.split('\n').find((l) => l.includes('**Starter prop catalog:**'));
+  assert.ok(catalogLine, 'SKILL.md §4 must include **Starter prop catalog:**');
+
+  const kinds = [...catalogLine.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
+  assert.equal(kinds.length, town.plot.starter_props.length);
+  assert.deepEqual(new Set(kinds), new Set(town.plot.starter_props));
+  assert.ok(sec4.includes('up to **12** items'), 'SKILL.md §4 must state up to **12** items');
+});
+
+test('join bio edges: multibyte counts as chars, non-string rejected, missing defaults to empty', async () => {
+  const srv = await startTestServer();
+  try {
+    const makeClient = (handle) => {
+      const keys = generateKeypair();
+      return {
+        keys,
+        client: new GhostlightClient({
+          baseUrl: srv.baseUrl,
+          handle,
+          pubkey: keys.pubkey,
+          privateKeyPem: keys.privateKeyPem,
+        }),
+      };
+    };
+
+    const multi = makeClient('bio-multi');
+    const okMulti = await multi.client.join({ origin: 'colony', bio: 'é'.repeat(500) });
+    assert.equal(okMulti.status, 201);
+    const multiRow = srv.db.prepare('SELECT bio FROM residents WHERE handle = ?').get('bio-multi');
+    assert.equal(multiRow.bio.length, 500);
+
+    const num = makeClient('bio-num');
+    const badNum = await num.client.join({ origin: 'colony', bio: 123 });
+    assert.equal(badNum.status, 400);
+    assert.equal(badNum.data.error, 'bio_too_long');
+    assert.equal(badNum.data.max, 500);
+
+    const none = makeClient('bio-none');
+    const okNone = await none.client._signedPost('/api/town/join', {
+      handle: 'bio-none',
+      pubkey: none.keys.pubkey,
+      origin: 'colony',
+    });
+    assert.equal(okNone.status, 201);
+    const noneRow = srv.db.prepare('SELECT bio FROM residents WHERE handle = ?').get('bio-none');
+    assert.equal(noneRow.bio, '');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('expired invite is rejected; empty-string invite is ignored', async () => {
+  const srv = await startTestServer();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    srv.db
+      .prepare(
+        'INSERT INTO invitations (code, intended_handle, origin, created_by, used_by, expires_at, used_at) VALUES (?, ?, ?, ?, NULL, ?, NULL)'
+      )
+      .run('expiredcode1234567890ab', 'expired-one', 'direct', 'milo', now - 60);
+
+    const keysA = generateKeypair();
+    const clientA = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'expired-one',
+      pubkey: keysA.pubkey,
+      privateKeyPem: keysA.privateKeyPem,
+    });
+    const badInvite = await clientA.join({
+      origin: 'direct',
+      invite_code: 'expiredcode1234567890ab',
+    });
+    assert.equal(badInvite.status, 403);
+    assert.equal(badInvite.data.error, 'invalid_invite');
+
+    const keysB = generateKeypair();
+    const clientB = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'empty-invite',
+      pubkey: keysB.pubkey,
+      privateKeyPem: keysB.privateKeyPem,
+    });
+    const emptyInvite = await clientB.join({ origin: 'direct', invite_code: '' });
+    assert.equal(emptyInvite.status, 201);
+    assert.equal(emptyInvite.data.status, 'active');
+  } finally {
+    await srv.close();
+  }
+});
