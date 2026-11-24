@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { createTownServer } from './server.mjs';
-import { generateKeypair, signRequest } from './ghostlight-client.mjs';
+import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1492,5 +1492,473 @@ test('CLI keygen exact output shape and state exact top-level keys', async () =>
   } finally {
     await ctx.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+async function startClockServer(nowFn) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-cli-test-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+
+  const { server, db } = createTownServer({
+    dbPath,
+    plotsDir,
+    operatorPubkey: operatorKeys.pubkey,
+    now: nowFn,
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  return {
+    tmpDir,
+    baseUrl,
+    operatorKeys,
+    db,
+    async close() {
+      await new Promise((resolve) => server.close(resolve));
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    },
+  };
+}
+
+const CATCH_KINDS = new Set([
+  'old_boot',
+  'tin_kettle',
+  'rusty_spoon',
+  'soggy_glove',
+  'tangled_string',
+  'poem_in_a_bottle',
+  'silver_minnow',
+  'glass_float',
+]);
+
+const NIGHT_SEC = 86400;
+
+async function joinResident(ctx, handle) {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys });
+  const res = await client.join({ origin: 'direct' });
+  assert.equal(res.status, 201);
+  return { keys, client };
+}
+
+function guestClient(ctx, handle) {
+  const keys = generateKeypair();
+  const client = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys });
+  return { keys, client };
+}
+
+function operatorClient(ctx) {
+  return new GhostlightClient({
+    baseUrl: ctx.baseUrl,
+    handle: 'milo-op',
+    privateKeyPem: ctx.operatorKeys.privateKeyPem,
+  });
+}
+
+test('GhostlightClient fish round-trip: cast -> early reel 409 -> reel 200 -> log -> second reel 404', async () => {
+  const origDateNow = Date.now;
+  let fakeNowMs = origDateNow();
+  Date.now = () => fakeNowMs;
+  const ctx = await startClockServer(() => Math.floor(Date.now() / 1000));
+  try {
+    const { client } = await joinResident(ctx, 'angler');
+    const cast = await client.fishCast();
+    assert.equal(cast.status, 201);
+    assert.equal(cast.data.handle, 'angler');
+    assert.equal(cast.data.reel_at - cast.data.cast_at, 300);
+
+    const early = await client.fishReel();
+    assert.equal(early.status, 409);
+    assert.equal(early.data.error, 'line_settling');
+
+    fakeNowMs += 301_000;
+    const reel = await client.fishReel();
+    assert.equal(reel.status, 200);
+    assert.ok(CATCH_KINDS.has(reel.data.catch.kind));
+    assert.equal(typeof reel.data.caught_at, 'number');
+
+    const log = await client.fishLog('angler');
+    assert.equal(log.status, 200);
+    assert.equal(log.data.count, 1);
+    assert.equal(log.data.catches[0].kind, reel.data.catch.kind);
+    assert.equal(log.data.catches[0].label, reel.data.catch.label);
+    assert.equal(log.data.catches[0].flavor, reel.data.catch.flavor);
+
+    const secondReel = await client.fishReel();
+    assert.equal(secondReel.status, 404);
+    assert.equal(secondReel.data.error, 'no_active_cast');
+  } finally {
+    Date.now = origDateNow;
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient fish error edges', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await joinResident(ctx, 'bobber');
+
+    const noCast = await client.fishReel();
+    assert.equal(noCast.status, 404);
+    assert.equal(noCast.data.error, 'no_active_cast');
+
+    const firstCast = await client.fishCast();
+    assert.equal(firstCast.status, 201);
+
+    const dupCast = await client.fishCast();
+    assert.equal(dupCast.status, 409);
+    assert.equal(dupCast.data.error, 'already_cast');
+    assert.equal(dupCast.data.reel_at, firstCast.data.reel_at);
+
+    const nobodyLog = await client.fishLog('nobody');
+    assert.equal(nobodyLog.status, 200);
+    assert.equal(nobodyLog.data.count, 0);
+    assert.deepEqual(nobodyLog.data.catches, []);
+
+    const badHandle = await client.fishLog('BAD HANDLE!');
+    assert.equal(badHandle.status, 400);
+    assert.equal(badHandle.data.error, 'invalid_handle');
+
+    const emptyHandle = await client.fishLog('');
+    assert.equal(emptyHandle.status, 400);
+    assert.equal(emptyHandle.data.error, 'invalid_handle');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient.gardenPlant round-trip', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await joinResident(ctx, 'carol');
+
+    const planted = await client.gardenPlant('moonflower');
+    assert.equal(planted.status, 201);
+    assert.equal(planted.data.slot, 0);
+    assert.equal(planted.data.stage, 'sprout');
+    assert.equal(planted.data.seed, 'moonflower');
+    assert.equal(typeof planted.data.planted_at, 'number');
+    assert.equal(typeof planted.data.state_seq, 'number');
+
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    const slot0 = st.data.garden.slots.find((s) => s.slot === 0);
+    assert.ok(slot0);
+    assert.equal(slot0.handle, 'carol');
+    assert.equal(slot0.seed, 'moonflower');
+    assert.equal(slot0.stage, 'sprout');
+
+    const dup = await client.gardenPlant('lantern_poppy');
+    assert.equal(dup.status, 409);
+    assert.equal(dup.data.error, 'already_planted');
+    assert.equal(dup.data.seed, 'moonflower');
+
+    const bad = await client.gardenPlant('not-a-seed');
+    assert.equal(bad.status, 400);
+    assert.equal(bad.data.error, 'invalid_seed');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient.gardenGuestPlant', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = guestClient(ctx, 'dave');
+
+    const planted = await client.gardenGuestPlant('dave', 'lantern_poppy');
+    assert.equal(planted.status, 201);
+    assert.equal(planted.data.slot, 0);
+    assert.equal(planted.data.stage, 'sprout');
+
+    const dup = await client.gardenGuestPlant('dave', 'moonflower');
+    assert.equal(dup.status, 409);
+    assert.equal(dup.data.error, 'already_planted');
+
+    const bad = await client.gardenGuestPlant('dave', 'bad-seed');
+    assert.equal(bad.status, 400);
+    assert.equal(bad.data.error, 'invalid_seed');
+
+    const noKeyClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'nokey',
+      privateKeyPem: generateKeypair().privateKeyPem,
+    });
+    await assert.rejects(
+      noKeyClient.gardenGuestPlant('nokey', 'moonflower'),
+      /pubkey is required for gardenGuestPlant\(\)/,
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient resident Inn round-trip', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await joinResident(ctx, 'eve');
+
+    const claim = await client.claimInnRoom('lantern');
+    assert.equal(claim.status, 201);
+    assert.equal(claim.data.nights, 3);
+    assert.equal(typeof claim.data.key, 'string');
+    assert.equal(claim.data.key.length, 12);
+    assert.equal(claim.data.expires_at, claim.data.claimed_at + 3 * NIGHT_SEC);
+
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.inn.lantern.handle, 'eve');
+    assert.equal(JSON.stringify(st.data).includes(claim.data.key), false);
+
+    const ext = await client.extendInnStay('lantern', claim.data.key, 2);
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.nights, 5);
+
+    const badKey = await client.extendInnStay('lantern', 'AAAAAAAAAAAAAAAA', 1);
+    assert.equal(badKey.status, 403);
+    assert.equal(badKey.data.error, 'invalid_key');
+
+    const vac = await client.vacateInnRoom('lantern', claim.data.key);
+    assert.equal(vac.status, 200);
+    assert.equal(vac.data.vacated, true);
+
+    const reclaim = await client.claimInnRoom('lantern');
+    assert.equal(reclaim.status, 201);
+    assert.notEqual(reclaim.data.key, claim.data.key);
+
+    const badRoom = await client.claimInnRoom('attic');
+    assert.equal(badRoom.status, 400);
+    assert.equal(badRoom.data.error, 'invalid_room');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient guest Inn round-trip', async () => {
+  const origDateNow = Date.now;
+  let fakeNowMs = origDateNow();
+  Date.now = () => fakeNowMs;
+  const ctx = await startClockServer(() => Math.floor(Date.now() / 1000));
+  try {
+    const { client } = guestClient(ctx, 'frank');
+
+    const claim = await client.guestInnClaim('window', 2);
+    assert.equal(claim.status, 201);
+    assert.equal(claim.data.nights, 2);
+    assert.equal(typeof claim.data.key, 'string');
+    assert.equal(claim.data.key.length, 12);
+
+    const ext = await client.guestInnExtend('window', claim.data.key, 1);
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.nights, 3);
+
+    fakeNowMs += 3601_000;
+
+    const { client: otherClient } = guestClient(ctx, 'frank');
+    const mismatch = await otherClient.guestInnExtend('window', claim.data.key, 1);
+    assert.equal(mismatch.status, 403);
+    assert.equal(mismatch.data.error, 'pubkey_mismatch');
+
+    const badKey = await client.guestInnExtend('window', 'AAAAAAAAAAAAAAAA', 1);
+    assert.equal(badKey.status, 403);
+    assert.equal(badKey.data.error, 'invalid_key');
+
+    const vac = await client.guestInnVacate('window', claim.data.key);
+    assert.equal(vac.status, 200);
+    assert.equal(vac.data.vacated, true);
+
+    const badRoom = await client.guestInnClaim('attic', 1);
+    assert.equal(badRoom.status, 400);
+    assert.equal(badRoom.data.error, 'invalid_room');
+  } finally {
+    Date.now = origDateNow;
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient guestbook sign / get / moderate', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await joinResident(ctx, 'gina');
+    const op = operatorClient(ctx);
+
+    const sign = await client.signGuestbook('guestbook', 'Gate Tester', 'Hello from the gate');
+    assert.equal(sign.status, 201);
+    assert.equal(sign.data.status, 'pending');
+    assert.equal(typeof sign.data.id, 'number');
+
+    const before = await client.getGuestbook();
+    assert.equal(before.status, 200);
+    assert.deepEqual(before.data.entries, []);
+
+    const app = await op.moderateGuestbook(sign.data.id, 'approve');
+    assert.equal(app.status, 200);
+    assert.equal(app.data.status, 'approved');
+
+    const after = await client.getGuestbook();
+    assert.equal(after.status, 200);
+    assert.equal(after.data.entries.length, 1);
+    assert.deepEqual(Object.keys(after.data.entries[0]).sort(), ['body', 'created_at', 'id', 'kind', 'name']);
+    assert.equal(after.data.entries[0].kind, 'guestbook');
+    assert.equal(after.data.entries[0].name, 'Gate Tester');
+
+    const dupApp = await op.moderateGuestbook(sign.data.id, 'approve');
+    assert.equal(dupApp.status, 409);
+    assert.equal(dupApp.data.error, 'already_decided');
+
+    const missing = await op.moderateGuestbook(99999, 'approve');
+    assert.equal(missing.status, 404);
+    assert.equal(missing.data.error, 'guestbook_not_found');
+
+    const letter = await client.signGuestbook('letter', 'Letter Writer', 'Dear Milo, hello.');
+    assert.equal(letter.status, 201);
+    const badAct = await op.moderateGuestbook(letter.data.id, 'bogus');
+    assert.equal(badAct.status, 400);
+    assert.equal(badAct.data.error, 'invalid_action');
+
+    const badKind = await client.signGuestbook('sign', 'X', 'hello');
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data.error, 'invalid_kind');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient.getGuestbook kind/plot filters', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await joinResident(ctx, 'hank');
+    const op = operatorClient(ctx);
+
+    const s1 = await client.signGuestbook('letter', 'Letter Writer', 'Dear Milo, hello.');
+    assert.equal(s1.status, 201);
+    const s2 = await client.signGuestbook('guestbook', 'Gate Fan', 'Lovely gate');
+    assert.equal(s2.status, 201);
+    const s3 = await client.signGuestbook('guestbook', 'Plot Fan', 'Nice cottage', 'milo');
+    assert.equal(s3.status, 201);
+
+    for (const id of [s1.data.id, s2.data.id, s3.data.id]) {
+      const mod = await op.moderateGuestbook(id, 'approve');
+      assert.equal(mod.status, 200);
+    }
+
+    const letters = await client.getGuestbook('letter');
+    assert.equal(letters.status, 200);
+    assert.equal(letters.data.entries.length, 1);
+    assert.equal(letters.data.entries[0].kind, 'letter');
+
+    const gateOnly = await client.getGuestbook('guestbook');
+    assert.equal(gateOnly.status, 200);
+    assert.equal(gateOnly.data.entries.length, 1);
+    assert.equal(gateOnly.data.entries[0].name, 'Gate Fan');
+
+    const plotOnly = await client.getGuestbook('guestbook', 'milo');
+    assert.equal(plotOnly.status, 200);
+    assert.equal(plotOnly.data.entries.length, 1);
+    assert.equal(plotOnly.data.entries[0].name, 'Plot Fan');
+
+    const allGate = await client.getGuestbook();
+    assert.equal(allGate.status, 200);
+    assert.equal(allGate.data.entries.length, 2);
+
+    const badKind = await client.getGuestbook('bogus');
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data.error, 'invalid_kind');
+
+    const badPlot = await client.getGuestbook('guestbook', 'nobody');
+    assert.equal(badPlot.status, 400);
+    assert.equal(badPlot.data.error, 'unknown_plot');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient.rotateKey round-trip', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await joinResident(ctx, 'grace');
+    const newKeys = generateKeypair();
+
+    const rot = await client.rotateKey(newKeys.pubkey);
+    assert.equal(rot.status, 200);
+    assert.equal(rot.data.rotated, true);
+    assert.equal(rot.data.handle, 'grace');
+
+    const oldCheck = await client.checkin({ status_text: 'old key' });
+    assert.equal(oldCheck.status, 401);
+    assert.equal(oldCheck.data.error, 'invalid_signature');
+
+    const newClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'grace', ...newKeys });
+    const newCheck = await newClient.checkin({ status_text: 'new key' });
+    assert.equal(newCheck.status, 200);
+
+    const same = await newClient.rotateKey(newKeys.pubkey);
+    assert.equal(same.status, 400);
+    assert.equal(same.data.error, 'same_pubkey');
+
+    const bad = await newClient.rotateKey('AAAA');
+    assert.equal(bad.status, 400);
+    assert.equal(bad.data.error, 'invalid_pubkey');
+
+    const missing = await newClient.rotateKey('');
+    assert.equal(missing.status, 400);
+    assert.equal(missing.data.error, 'missing_pubkey');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient guestCheckin / guestSay', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = guestClient(ctx, 'heidi');
+
+    const check = await client.guestCheckin({ status_text: 'just visiting' });
+    assert.equal(check.status, 200);
+    assert.equal(check.data.zone, 'bandstand');
+    assert.equal(check.data.handle, 'heidi');
+
+    const st1 = await client.state();
+    assert.equal(st1.status, 200);
+    const pres = st1.data.presence.find((p) => p.handle === 'heidi');
+    assert.ok(pres);
+    assert.equal(pres.zone, 'bandstand');
+    assert.equal(st1.data.footlights.some((f) => f.handle === 'heidi'), false);
+
+    const say = await client.guestSay('Hello, Bandstand.');
+    assert.equal(say.status, 201);
+    assert.equal(say.data.kind, 'say');
+    assert.equal(say.data.reply_to, null);
+
+    const st2 = await client.state();
+    assert.equal(st2.status, 200);
+    const line = st2.data.prompt_book.find((l) => l.id === say.data.id);
+    assert.ok(line);
+    assert.equal(line.role, 'guest');
+    assert.equal(line.body, 'Hello, Bandstand.');
+
+    const tooLong = await client.guestSay('x'.repeat(501));
+    assert.equal(tooLong.status, 400);
+    assert.equal(tooLong.data.error, 'invalid_body');
+
+    const noKeyClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'nokey',
+      privateKeyPem: generateKeypair().privateKeyPem,
+    });
+    await assert.rejects(
+      noKeyClient.guestCheckin({}),
+      /pubkey is required for guestCheckin\(\)/,
+    );
+    await assert.rejects(
+      noKeyClient.guestSay('hi'),
+      /pubkey is required for guestSay\(\)/,
+    );
+  } finally {
+    await ctx.close();
   }
 });
