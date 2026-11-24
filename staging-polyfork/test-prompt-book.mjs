@@ -705,3 +705,194 @@ test('renderPromptBook gives system kind an NPC pill for npc role, a guest pill 
   );
   assert.equal(line2.children[0].textContent, '\u21a9 #1 @wick');
 });
+
+test('formatPromptBookEntries passes id through verbatim for falsy/NaN values and normalizes non-string handles and bodies', () => {
+  const f = formatPromptBookEntries([
+    { id: false, handle: { x: 1 }, kind: 'say', body: ['a'], role: 'muse' },
+    { id: NaN, handle: ['h'], kind: 'say', body: { b: 1 }, role: 'muse' },
+    { id: -5, handle: true, kind: 'say', body: 0, role: 'muse' },
+    { id: 0, handle: Symbol('s'), kind: 'say', body: '', role: 'muse' },
+  ]);
+
+  assert.equal(f[0].id, false);
+  assert.equal(Number.isNaN(f[1].id), true);
+  assert.equal(f[2].id, -5);
+  assert.equal(f[3].id, 0);
+
+  for (const entry of f) {
+    assert.equal(typeof entry.handle, 'string');
+    assert.equal(entry.handle, 'unknown');
+    assert.equal(typeof entry.body, 'string');
+    assert.equal(entry.body, '');
+  }
+});
+
+test('formatPromptBookEntries keeps float integers, huge integers, and -0 as 0 in reply_to while rejecting fractional floats', () => {
+  const f = formatPromptBookEntries([
+    { id: 1, reply_to: 1.0 },
+    { id: 2, reply_to: 2 ** 53 },
+    { id: 3, reply_to: 2.5 },
+    { id: 4, reply_to: -0 },
+    { id: 5, reply_to: Number.MAX_SAFE_INTEGER },
+  ]);
+
+  assert.equal(f[0].reply_to, 1);
+  assert.equal(f[1].reply_to, 2 ** 53);
+  assert.equal(f[2].reply_to, null);
+  assert.equal(f[3].reply_to === 0, true);
+  assert.equal(Number.isInteger(f[4].reply_to), true);
+  assert.equal(f[4].reply_to, Number.MAX_SAFE_INTEGER);
+});
+
+test('formatPromptBookEntries passes created_at through verbatim for negative, fractional, zero, and object values while defaulting undefined to 0', () => {
+  const stamp = { when: 'then' };
+  const f = formatPromptBookEntries([
+    { id: 1, created_at: undefined },
+    { id: 2, created_at: -100 },
+    { id: 3, created_at: stamp },
+    { id: 4, created_at: 1.5 },
+    { id: 5, created_at: 0 },
+  ]);
+
+  assert.equal(f[0].created_at, 0);
+  assert.equal(f[1].created_at, -100);
+  assert.equal(f[2].created_at, stamp);
+  assert.equal(f[3].created_at, 1.5);
+  assert.equal(f[4].created_at, 0);
+});
+
+test('renderPromptBook renders [null] as one unknown line and undefined input as the empty state', () => {
+  const doc = createFakeDoc();
+  const c1 = doc.makeContainer();
+  renderPromptBook(c1, [null], doc);
+  assert.equal(c1.children.length, 1);
+  assert.equal(c1.children[0].className, 'pb-line pb-kind-say');
+  assert.equal(c1.children[0].children.find((c) => c.className === 'pb-handle').textContent, 'unknown');
+
+  const c2 = doc.makeContainer();
+  renderPromptBook(c2, undefined, doc);
+  assert.equal(c2.children.length, 1);
+  assert.equal(c2.children[0].className, 'pb-empty');
+});
+
+test('renderPromptBook renders reply targets with normalized unknown handle as @unknown and empty-string handle bare', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 3, handle: 42, kind: 'say', body: 'hi', role: 'muse' },
+      { id: 4, handle: '', kind: 'say', body: 'yo', role: 'muse' },
+      { id: 5, handle: 'q', kind: 'say', body: 'r1', role: 'muse', reply_to: 3 },
+      { id: 6, handle: 'r', kind: 'say', body: 'r2', role: 'muse', reply_to: 4 },
+    ],
+    doc,
+  );
+
+  assert.equal(
+    container.children[2].children.find((c) => c.className === 'pb-reply-to').textContent,
+    '\u21a9 #3 @unknown',
+  );
+  assert.equal(
+    container.children[3].children.find((c) => c.className === 'pb-reply-to').textContent,
+    '\u21a9 #4',
+  );
+});
+
+test('renderPromptBook calls removeChild once per stale child and zero times on an empty container', () => {
+  const doc = createFakeDoc();
+  const c1 = doc.makeContainer();
+  c1.appendChild(doc.createElement('div'));
+  c1.appendChild(doc.createElement('div'));
+  c1.appendChild(doc.createElement('div'));
+
+  let calls1 = 0;
+  const orig1 = c1.removeChild.bind(c1);
+  c1.removeChild = (child) => {
+    calls1++;
+    return orig1(child);
+  };
+
+  renderPromptBook(c1, [{ id: 1, handle: 'ada', kind: 'say', body: 'one', role: 'muse' }], doc);
+  assert.equal(calls1, 3);
+  assert.equal(c1.children.length, 1);
+  assert.equal(c1.children[0].className, 'pb-line pb-kind-say');
+
+  const c2 = doc.makeContainer();
+  let calls2 = 0;
+  const orig2 = c2.removeChild.bind(c2);
+  c2.removeChild = (child) => {
+    calls2++;
+    return orig2(child);
+  };
+
+  renderPromptBook(c2, [{ id: 1, handle: 'ada', kind: 'say', body: 'one', role: 'muse' }], doc);
+  assert.equal(calls2, 0);
+  assert.equal(c2.children.length, 1);
+});
+
+test('renderPromptBook renders a guest emote with reply in exact child order with pill, target, and space separator', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 10, handle: 'wick', kind: 'say', body: 'lanterns lit', role: 'npc' },
+      { id: 11, handle: 'vis', kind: 'emote', body: 'waves', role: 'guest', reply_to: 10 },
+    ],
+    doc,
+  );
+
+  const line1 = container.children[1];
+  assert.equal(line1.className, 'pb-line pb-kind-emote');
+  assert.equal(line1.children.map((c) => c.className).join(','), 'pb-guest-pill,pb-reply-to,pb-handle,pb-body');
+  assert.equal(line1.children[0].textContent, '[guest]');
+  assert.equal(line1.children[1].textContent, '\u21a9 #10 @wick');
+  assert.equal(line1.children[3].textContent, ' waves');
+});
+
+test('formatPromptBookEntries preserves arbitrary unsorted input order and duplicate ids', () => {
+  const f = formatPromptBookEntries([
+    { id: 9, handle: 'a' },
+    { id: 3, handle: 'b' },
+    { id: 7, handle: 'c' },
+    { id: 3, handle: 'd' },
+  ]);
+
+  assert.equal(f.map((e) => e.id).join(','), '9,3,7,3');
+  assert.equal(f.map((e) => e.handle).join(','), 'a,b,c,d');
+});
+
+test('renderPromptBook produces exact full line textContent for a mixed three-role render', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+
+  renderPromptBook(
+    container,
+    [
+      { id: 10, handle: 'wick', kind: 'say', body: 'lanterns lit', role: 'npc' },
+      { id: 11, handle: 'vis', kind: 'emote', body: 'waves', role: 'guest', reply_to: 10 },
+      { id: 12, handle: 'bell', kind: 'system', body: 'chimes', role: 'muse', reply_to: 10 },
+    ],
+    doc,
+  );
+
+  assert.equal(container.children[0].textContent, '[NPC]wick: lanterns lit');
+  assert.equal(container.children[1].textContent, '[guest]\u21a9 #10 @wickvis waves');
+  assert.equal(container.children[2].textContent, '\u21a9 #10 @wickbell: chimes');
+});
+
+test('prompt-book.mjs has no fetch, Math.random, innerHTML, or imports, exports exactly two functions, and names its sync source', async () => {
+  const src = await fs.readFile(PROMPT_BOOK_PATH, 'utf8');
+  assert.equal(/fetch\s*\(/.test(src), false);
+  assert.equal(/Math\.random/.test(src), false);
+  assert.equal(/\.innerHTML\b/.test(src), false);
+  assert.equal(/^import /m.test(src), false);
+  assert.equal(
+    [...src.matchAll(/^export function (\w+)/gm)].map((m) => m[1]).join(','),
+    'formatPromptBookEntries,renderPromptBook',
+  );
+  assert.equal(src.includes('Copied verbatim from town-3d/town.js'), true);
+});
