@@ -702,3 +702,186 @@ test('version phase label matches PLAN.md and auth constants are well-formed', (
     'auth.canonical_string must include {SHA256_HEX(raw_body)}'
   );
 });
+
+test('endpoint objects have exactly the keys method, path, auth, rate_limit, summary', () => {
+  assert.equal(townJson.endpoints.length, 30);
+  const expectedKeys = ['auth', 'method', 'path', 'rate_limit', 'summary'];
+  for (const ep of townJson.endpoints) {
+    assert.deepEqual(
+      Object.keys(ep).sort(),
+      expectedKeys,
+      `Unexpected keys for ${ep.method} ${ep.path}`
+    );
+  }
+});
+
+test('endpoint summaries carry the fish behavior phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const expectedPhrases = [
+    ['POST /api/town/fish/cast', ['300s settle window', '409 already_cast', 'does not bump state_seq', 'muted -> 403 resident_muted', 'returns 201']],
+    ['POST /api/town/fish/reel', ['409 line_settling', '404 no_active_cast', 'does not bump state_seq', 'returns 200']],
+    ['POST /api/town/fish/guest/cast', ['409 handle_taken', 'body pubkey', '300s settle window', 'returns 201']],
+    ['POST /api/town/fish/guest/reel', ['409 handle_taken', 'body pubkey', 'returns 200']],
+    ['GET /api/town/fish/log', ['?handle= required', 'cap 50', 'latest first', 'NOT a score or leaderboard', '400 invalid_handle']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('endpoint summaries carry the garden behavior phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const expectedPhrases = [
+    ['POST /api/town/garden/plant', ['6-slot', 'invalid_seed', '409 already_planted', '409 bed_full', 'lowest free slot', 'bumps state_seq', 'returns 201']],
+    ['POST /api/town/garden/guest/plant', ['shares the 6-slot bed', 'body pubkey', 'one-planting-per-handle', 'returns 201']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('endpoint summaries carry the remaining inn behavior phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const expectedPhrases = [
+    ['POST /api/town/inn/claim', ['one-time room key']],
+    ['POST /api/town/inn/guest/claim', ['no residency record', '12-character room key']],
+    ['POST /api/town/inn/guest/extend', ['shared rate limit with guest claim', 'claiming keypair']],
+    ['POST /api/town/inn/vacate', ['room key']],
+    ['POST /api/town/inn/guest/vacate', ['room key', 'claiming keypair']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('endpoint summaries carry the checkin/say/presence/plot/guestbook remaining phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const expectedPhrases = [
+    ['POST /api/town/ghostlight/checkin', ['unlock speaking']],
+    ['POST /api/town/ghostlight/say', ['refresh your footlight TTL']],
+    ['POST /api/town/presence', ['gate', 'bandstand']],
+    ['GET /api/town/plot', ['?handle=<handle>']],
+    ['PUT /api/town/plot', ['muted residents']],
+    ['POST /api/town/guestbook', ['stays pending until approved']],
+    ['GET /api/town/guestbook', ['default 50']],
+    ['POST /api/town/admin/guestbook', ['approve bumps state_seq']],
+    ['POST /api/town/ghostlight/guest/checkin', ['[guest]']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('endpoint summaries carry the rotate and returns-shape phrases', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const expectedPhrases = [
+    ['POST /api/town/key/rotate', ['signed with your current key']],
+    ['POST /api/town/fish/cast', ['returns 201 { handle, cast_at, reel_at }']],
+    ['POST /api/town/fish/reel', ['returns 200 { handle, catch, caught_at }']],
+    ['POST /api/town/garden/plant', ['returns 201 { handle, slot, seed, planted_at, stage, state_seq }']],
+    ['GET /api/town/fish/log', ['400 invalid_handle if missing/bad']],
+  ];
+
+  for (const [key, phrases] of expectedPhrases) {
+    const ep = byKey.get(key);
+    assert.ok(ep, `Missing endpoint ${key}`);
+    for (const phrase of phrases) {
+      assert.ok(
+        ep.summary.includes(phrase),
+        `${key} summary must include ${JSON.stringify(phrase)}`
+      );
+    }
+  }
+});
+
+test('handle_pattern accepts leading digits and trailing underscores, rejects leading _ and -', () => {
+  const re = new RegExp(townJson.handle_pattern);
+
+  for (const valid of ['1abc', 'a_', 'a-b_c9']) {
+    assert.match(valid, re, `Expected handle_pattern to accept ${JSON.stringify(valid)}`);
+  }
+
+  for (const invalid of ['_ab', '-ab']) {
+    assert.doesNotMatch(invalid, re, `Expected handle_pattern to reject ${JSON.stringify(invalid)}`);
+  }
+});
+
+test('CAPS key set is exactly the five limits town.json documents', () => {
+  const capsMatch = serverSrc.match(/const\s+CAPS\s*=\s*\{([\s\S]*?)\};/);
+  assert.ok(capsMatch, 'Could not find CAPS in server.mjs');
+  const capsKeys = [...capsMatch[1].matchAll(/(\w+):\s*\d+/g)].map((m) => m[1]).sort();
+  assert.deepEqual(capsKeys, ['bio', 'guestbookBody', 'guestbookName', 'say', 'statusText']);
+});
+
+test('fish settle window and garden slot count follow the server constants', () => {
+  const settleSec = parseServerConstNumber('SETTLE_SEC');
+  const gardenSlots = parseServerConstNumber('GARDEN_SLOTS');
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+
+  for (const route of ['POST /api/town/fish/cast', 'POST /api/town/fish/guest/cast']) {
+    const ep = byKey.get(route);
+    assert.ok(ep, `Missing endpoint ${route}`);
+    assert.ok(
+      ep.summary.includes(`${settleSec}s settle window`),
+      `${route} summary must include ${settleSec}s settle window`
+    );
+  }
+
+  for (const route of ['POST /api/town/garden/plant', 'POST /api/town/garden/guest/plant']) {
+    const ep = byKey.get(route);
+    assert.ok(ep, `Missing endpoint ${route}`);
+    assert.ok(
+      ep.summary.includes(`${gardenSlots}-slot`),
+      `${route} summary must include ${gardenSlots}-slot`
+    );
+  }
+});
+
+test('exactly the join and guestbook endpoints advertise a per-IP rate limit', () => {
+  const perIpRoutes = townJson.endpoints
+    .filter((ep) => ep.rate_limit && ep.rate_limit.includes('per IP'))
+    .map((ep) => `${ep.method} ${ep.path}`)
+    .sort();
+
+  assert.deepEqual(perIpRoutes, ['POST /api/town/guestbook', 'POST /api/town/join']);
+  assert.ok(
+    serverSrc.includes('rateLimiter.consume(`join:${ip}`'),
+    'server.mjs must rate-limit join by IP'
+  );
+  assert.ok(
+    serverSrc.includes('rateLimiter.consume(`guestbook:${ip}`'),
+    'server.mjs must rate-limit guestbook by IP'
+  );
+});
