@@ -870,3 +870,136 @@ test('CONCEPT.md Visual reference captions and starfield mood match the sheet an
   assert.ok(stagingJs.includes('stars.visible = true;'));
   assert.equal(townJs.includes("getObjectByName('stars')"), false);
 });
+
+test('CONCEPT.md Palette table has exactly 9 data rows and 3 hex-less rows', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const paletteText = extractSection(conceptText, '## Palette');
+  const tableRows = paletteText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|'));
+  const dataRows = tableRows.filter(
+    (row) => !row.startsWith('| Color |') && !/^\|\s*---/.test(row)
+  );
+  assert.equal(dataRows.length, 9);
+  const hexLessNames = dataRows
+    .filter((row) => !/#[0-9a-fA-F]{6}/.test(row))
+    .map((row) => row.split('|')[1].trim());
+  assert.deepEqual(hexLessNames, ['Amber lantern', 'Brass', 'Night']);
+});
+
+test("CONCEPT.md section heading order and The rule's first sentences match", () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const headings = conceptText
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('## '))
+    .map((line) => line.slice(3).trim());
+  assert.deepEqual(headings, ['The rule', 'Palette', 'Forms', 'Mood', "Don'ts", 'Visual reference']);
+
+  const ruleNorm = extractSection(conceptText, '## The rule').replace(/\s+/g, ' ').trim();
+  assert.ok(
+    ruleNorm.includes('Every visual slice ends with a comparison: open the live page, look at the render next to this sheet.')
+  );
+  assert.ok(
+    ruleNorm.includes('A mismatch gets fixed in the same slice, not logged as a nit for later.')
+  );
+});
+
+test('CONCEPT.md cottage windowless-miss sentence and 8 emissive windows match both clients', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const formsNorm = extractSection(conceptText, '## Forms').replace(/\s+/g, ' ').trim();
+  assert.ok(
+    formsNorm.includes(
+      "No cottage ships windowless — that was a real miss, caught by Werther's eye, and it stays a test assertion (Milo's cottage ≥ 6 windows, all emissive)."
+    )
+  );
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const cottageJs = fs.readFileSync(path.join(__dirname, dir, 'concept-cottage.js'), 'utf8');
+    const match = cottageJs.match(/const windows = \[([\s\S]*?)\];/);
+    assert.ok(match, `${dir}/concept-cottage.js must define const windows = [...]`);
+    const entries = match[1].match(/\{\s*x:/g) || [];
+    assert.equal(entries.length, 8, `${dir}/concept-cottage.js must have exactly 8 window entries`);
+    assert.ok(cottageJs.includes("warmWindow: '#ffbe5c'"));
+    assert.ok(cottageJs.includes('emissive: CONCEPT_PALETTE.warmWindow'));
+    assert.ok(cottageJs.includes('emissiveIntensity: 1.4'));
+  }
+});
+
+test('CONCEPT.md bandstand ghostlight and footlight placard sentences match', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const formsNorm = extractSection(conceptText, '## Forms').replace(/\s+/g, ' ').trim();
+  assert.ok(formsNorm.includes('The light no landlord can turn off.'));
+  assert.ok(
+    formsNorm.includes(
+      'Presence is a brass footlight switching on, not an avatar teleporting in; lit footlights flip up a dark `#3b2b1d` placard (`#b59449` border, `#f4ead5` ink) showing the handle and optional `status_text`.'
+    )
+  );
+});
+
+test("CONCEPT.md Don'ts scoped note (slice 139) matches", () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const dontsNorm = extractSection(conceptText, "## Don'ts").replace(/\s+/g, ' ').trim();
+  assert.ok(dontsNorm.includes('Scoped 2026-11-15, slice 139: the rule governs the visible material palette.'));
+  assert.ok(
+    dontsNorm.includes(
+      'Functional accents — footlight glow states, ghost cheek/blush tints, unlit-state darks, emissive variants — live in code, not the table: 90 such hexes ship as of this slice'
+    )
+  );
+  assert.ok(dontsNorm.includes("If a hex has no line in the palette table, it doesn't ship."));
+});
+
+test('CONCEPT.md Visual reference caption descriptions match verbatim', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const refNorm = extractSection(conceptText, '## Visual reference').replace(/\s+/g, ' ').trim();
+  assert.ok(refNorm.includes('— bandstand, ghostlight, ghost, cottage, newsstand, fence, pines.'));
+  assert.ok(refNorm.includes('— ice-blue ground floor, cream upper, brown gable roof, rooftop terrace, warm windows.'));
+  assert.ok(refNorm.includes('— the cute version: big eyes, small smile, pink cheeks, matching the avatar.'));
+});
+
+test('CONCEPT.md Visual reference deviations closing sentences match', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const refNorm = extractSection(conceptText, '## Visual reference').replace(/\s+/g, ' ').trim();
+  assert.ok(refNorm.includes('the images are the mood reference, not a literal render'));
+  assert.ok(
+    refNorm.includes(
+      'Later slices compare against these images for mood and palette, and against the live town for exact geometry.'
+    )
+  );
+});
+
+test('CONCEPT.md Resolved A-frame line and A-frame wording match in both bandstand files', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const refNorm = extractSection(conceptText, '## Visual reference').replace(/\s+/g, ' ').trim();
+  assert.ok(
+    refNorm.includes(
+      '(Resolved 2026-11-15: the bandstand timber A-frame roof structure `bandstand_aframe` is now built in both `staging-polyfork/` and `town-3d/`.)'
+    )
+  );
+
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const bandstandJs = fs.readFileSync(path.join(__dirname, dir, 'concept-bandstand.js'), 'utf8');
+    assert.ok(bandstandJs.includes('A-frame'), `${dir}/concept-bandstand.js must contain A-frame`);
+  }
+});
+
+test('CONCEPT.md props fallback sentences and fallback builders in town.js match', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const formsNorm = extractSection(conceptText, '## Forms').replace(/\s+/g, ' ').trim();
+  assert.ok(formsNorm.includes('with procedural fallbacks so a failed load never leaves a hole.'));
+  assert.ok(formsNorm.includes('In `staging-polyfork/` (live), all props are procedural (no `.glb` loader)'));
+  assert.ok(townJs.includes('loadTownProps'));
+  assert.ok(townJs.includes('buildProceduralLantern'));
+});
+
+test('CONCEPT.md status block authorship and draft baseline match', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(
+    conceptNorm.includes("Written by Milo (owner), 2026-11-12, from Werther's takeaway on the Little Prince tutorial")
+  );
+  assert.ok(
+    conceptNorm.includes(
+      "It becomes law only after Werther has looked at it — until then it's a draft, and the live town as it stands is the visual baseline."
+    )
+  );
+});
