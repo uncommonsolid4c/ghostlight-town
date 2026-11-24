@@ -939,3 +939,217 @@ test('overlay HTML pins inn note, guestbook headings, and empty plot guestbook c
   assert.ok(plotRes.html.includes('No letters yet.'));
   assert.ok(plotRes.html.includes('"plot": "wick"'));
 });
+
+test('resolveGuestbookOverlayContent renders dates in America/Los_Angeles, tolerates float created_at, and omits the date span for NaN created_at', async () => {
+  const entries = [
+    { kind: 'guestbook', name: 'UtcNov15', body: 'B', created_at: 1700011200 },
+    { kind: 'guestbook', name: 'Float', body: 'B', created_at: 1700000000.5 },
+    { kind: 'guestbook', name: 'NanDate', body: 'B', created_at: NaN },
+  ];
+  const res = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries }) }),
+  });
+  assert.equal(res.kind, 'api');
+  assert.equal(res.html.split('Nov 14, 2023').length - 1, 2);
+  assert.ok(!res.html.includes('Nov 15, 2023'));
+  assert.ok(!res.html.includes('NanDate</strong> <span class="meta">'));
+});
+
+test('resolveGuestbookOverlayContent escapes & first, renders numeric names, and renders null bodies empty', async () => {
+  const entries = [
+    { kind: 'guestbook', name: '&lt;already&gt;', body: 'B', created_at: 1700000000 },
+    { kind: 'guestbook', name: 42, body: null, created_at: 1700000000 },
+  ];
+  const res = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries }) }),
+  });
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes('&amp;lt;already&amp;gt;'));
+  assert.ok(res.html.includes('<strong>42</strong>'));
+  assert.ok(res.html.includes('<li><strong>42</strong> <span class="meta">&middot; Nov 14, 2023</span><br></li>'));
+});
+
+test('resolveInnOverlayContent handles usable-inn-state edges: undefined/zero room values and a function innState', async () => {
+  const nowSec = 1_700_000_000;
+
+  const undefRes = await resolveInnOverlayContent({
+    innState: { lantern: undefined },
+    nowSec,
+  });
+  assert.equal(undefRes.kind, 'api');
+  assert.match(undefRes.html, /The Lantern Room[\s\S]*?Vacant — free tonight\./);
+
+  const zeroRes = await resolveInnOverlayContent({
+    innState: { lantern: 0 },
+    nowSec,
+  });
+  assert.equal(zeroRes.kind, 'api');
+  assert.match(zeroRes.html, /The Lantern Room[\s\S]*?Vacant — free tonight\./);
+
+  let fetchCalled = false;
+  const fnRes = await resolveInnOverlayContent({
+    innState: Object.assign(() => {}, { lantern: { handle: 'wick', nights: 1 } }),
+    nowSec,
+    fetchFn: async () => {
+      fetchCalled = true;
+      return { status: 404 };
+    },
+  });
+  assert.equal(fetchCalled, true);
+  assert.deepEqual(fnRes, { kind: 'static', url: 'inn/index.html' });
+});
+
+test('resolveInnOverlayContent handles occupancy-line finite and boundary edges', async () => {
+  const nowSec = 1_700_000_000;
+
+  const nonFiniteRes = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'nanexp', expires_at: NaN, nights: 3 },
+      window: { handle: 'infexp', expires_at: Infinity, nights: 2 },
+      quiet: { handle: 'seven', nights: 7 },
+    },
+    nowSec,
+  });
+  assert.equal(nonFiniteRes.kind, 'api');
+  assert.match(nonFiniteRes.html, /@nanexp, 3 nights left\./);
+  assert.match(nonFiniteRes.html, /@infexp, 2 nights left\./);
+  assert.match(nonFiniteRes.html, /@seven, 7 nights left\./);
+
+  const boundaryRes = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'one', expires_at: nowSec + 86400 },
+      window: { handle: 'two', expires_at: nowSec + 86401 },
+      quiet: null,
+    },
+    nowSec,
+  });
+  assert.equal(boundaryRes.kind, 'api');
+  assert.match(boundaryRes.html, /@one, 1 night left\./);
+  assert.match(boundaryRes.html, /@two, 2 nights left\./);
+});
+
+test('resolveGuestbookOverlayContent renders one-sided empty blocks for letters-only and signatures-only lists', async () => {
+  const lettersOnlyRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [{ kind: 'letter', name: 'Maren', body: 'L', created_at: 1700000000 }],
+      }),
+    }),
+  });
+  assert.equal(lettersOnlyRes.kind, 'api');
+  assert.ok(lettersOnlyRes.html.includes('No signatures yet — be the first to sign.'));
+  assert.ok(lettersOnlyRes.html.includes('<strong>Maren</strong>'));
+
+  const sigsOnlyRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [{ kind: 'guestbook', name: 'Wick', body: 'S', created_at: 1700000000 }],
+      }),
+    }),
+  });
+  assert.equal(sigsOnlyRes.kind, 'api');
+  assert.ok(sigsOnlyRes.html.includes('<p class="meta">No letters yet.</p>'));
+  assert.ok(sigsOnlyRes.html.includes('<strong>Wick</strong>'));
+});
+
+test('resolveGuestbookOverlayContent handles non-string and undefined apiBase', async () => {
+  let numUrl = null;
+  const numRes = await resolveGuestbookOverlayContent({
+    apiBase: 42,
+    fetchFn: async (url) => {
+      numUrl = url;
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(numRes.kind, 'api');
+  assert.equal(numUrl, '/api/town/guestbook?limit=50');
+
+  let undefUrl = null;
+  const undefRes = await resolveGuestbookOverlayContent({
+    apiBase: undefined,
+    fetchFn: async (url) => {
+      undefUrl = url;
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(undefRes.kind, 'api');
+  assert.equal(undefUrl, '/api/town/guestbook?limit=50');
+});
+
+test('resolveInnOverlayContent handles fetch json edges: array json and mixed known/unknown rooms', async () => {
+  const arrRes = await resolveInnOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => [] }),
+  });
+  assert.deepEqual(arrRes, { kind: 'static', url: 'inn/index.html' });
+
+  const mixedRes = await resolveInnOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        inn: { attic: { handle: 'g', nights: 2 }, lantern: { handle: 'wick', nights: 1 } },
+      }),
+    }),
+  });
+  assert.equal(mixedRes.kind, 'api');
+  assert.match(mixedRes.html, /@wick, 1 night left\./);
+  assert.ok(!mixedRes.html.includes('attic'));
+  assert.ok(!mixedRes.html.includes('The Attic'));
+});
+
+test('resolvePlotGuestbookOverlayContent handles non-string handles without fetching', async () => {
+  for (const h of [42, null, undefined]) {
+    let called = false;
+    const res = await resolvePlotGuestbookOverlayContent(h, {
+      fetchFn: async () => {
+        called = true;
+        return { status: 200, json: async () => ({ entries: [] }) };
+      },
+    });
+    assert.equal(called, false);
+    assert.equal(res.kind, 'fallback');
+  }
+
+  const numTitleRes = await resolvePlotGuestbookOverlayContent(42, {});
+  assert.ok(numTitleRes.html.includes("<title>@42's Guestbook</title>"));
+
+  const nullTitleRes = await resolvePlotGuestbookOverlayContent(null, {});
+  assert.ok(nullTitleRes.html.includes("<title>@'s Guestbook</title>"));
+});
+
+test('resolvePlotGuestbookOverlayContent accepts HANDLE_RE valid edges: two-char, leading digit, underscore and hyphen', async () => {
+  for (const h of ['ab', '1abc', 'a_b-c']) {
+    let recordedUrl = null;
+    const res = await resolvePlotGuestbookOverlayContent(h, {
+      fetchFn: async (url) => {
+        recordedUrl = url;
+        return { status: 200, json: async () => ({ entries: [] }) };
+      },
+    });
+    assert.equal(res.kind, 'api');
+    assert.equal(recordedUrl, `/api/town/guestbook?plot=${h}&limit=50`);
+  }
+});
+
+test('overlay HTML pins guestbook title and POST line, inn vacant occupancy spans, and plot title', async () => {
+  const gbRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  assert.ok(gbRes.html.includes('<title>Town Gate Guestbook</title>'));
+  assert.ok(gbRes.html.includes('<code>/api/town/guestbook</code>'));
+  assert.ok(gbRes.html.includes('Entries are approved by Milo before they appear.'));
+
+  const innRes = await resolveInnOverlayContent({
+    innState: { lantern: null, window: null, quiet: null },
+  });
+  assert.equal(innRes.kind, 'api');
+  assert.equal(innRes.html.split('<span class="occupancy">Vacant — free tonight.</span>').length - 1, 3);
+
+  const plotRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(plotRes.kind, 'api');
+  assert.ok(plotRes.html.includes("<title>@wick's Guestbook</title>"));
+});
