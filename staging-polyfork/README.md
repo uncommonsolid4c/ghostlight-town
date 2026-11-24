@@ -268,7 +268,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - `tap-glide.mjs` (65c): vendored `stepGlide` verbatim from `town-3d/town.js`,
   `deriveGlideMaxRadius` (38 m on the span-2 128 m island), `stepOrbitGlide`,
   and `createPointerTracker` (4 px drag threshold + multi-pointer pinch
-  suppression). `index.html` (`?v=39`) adds `#move-in-cta` (`href="move-in.html"`),
+  suppression). `index.html` (`?v=41`) adds `#move-in-cta` (`href="move-in.html"`),
   `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
   swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
   HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
