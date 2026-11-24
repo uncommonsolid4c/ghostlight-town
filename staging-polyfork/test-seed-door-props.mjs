@@ -577,3 +577,190 @@ test("door-prop kinds trace to each NPC's own record, as written", async () => {
   assert.ok(tomasKinds.includes('tea_kettle'));
   assert.ok(!tomasKinds.includes('teapot'));
 });
+
+function makeRecordingThree() {
+  const THREE = makeFakeThree();
+  const BaseGroup = THREE.Group;
+  THREE.Group = class RecordingGroup extends BaseGroup {
+    constructor() {
+      super();
+      this.positionSetCalls = [];
+      const origPosSet = this.position.set.bind(this.position);
+      this.position.set = (...args) => {
+        this.positionSetCalls.push(args);
+        origPosSet(...args);
+      };
+      this.rotationSetCalls = [];
+      this.rotation.set = (...args) => {
+        this.rotationSetCalls.push(args);
+      };
+    }
+  };
+  return THREE;
+}
+
+test('invalid handle never reaches the builder', () => {
+  const THREE = makeFakeThree();
+  THREE.MeshStandardMaterial = class {
+    constructor() {
+      throw new Error('builder must not run');
+    }
+  };
+  for (const handle of ['milo', 'lampmoth', '', 42, null, undefined]) {
+    const cottage = new THREE.Group();
+    const res = attachSeedDoorProp(THREE, cottage, handle);
+    assert.equal(res, null);
+    assert.equal(cottage.children.length, 0);
+  }
+  assert.throws(
+    () => attachSeedDoorProp(THREE, new THREE.Group(), 'wick'),
+    /builder must not run/
+  );
+});
+
+test('attachSeedDoorProp rejects prototype keys, String objects, and object handles', () => {
+  const THREE = makeFakeThree();
+  for (const handle of ['hasOwnProperty', 'valueOf', '42', new String('wick'), {}, ['wick']]) {
+    const cottage = new THREE.Group();
+    const res = attachSeedDoorProp(THREE, cottage, handle);
+    assert.equal(res, null, `expected null for handle ${String(handle)}`);
+    assert.equal(cottage.children.length, 0);
+  }
+});
+
+test('attachSeedDoorProp sets the prop position with exactly one set call', () => {
+  const THREE = makeRecordingThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.deepEqual(prop.positionSetCalls, [[-2.9, 0, 2.9]]);
+  }
+});
+
+test('name, position, and rotation are set before cottage.add', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const origAdd = cottage.add.bind(cottage);
+  const snapshots = [];
+  cottage.add = (child) => {
+    snapshots.push({
+      name: child.name,
+      x: child.position.x,
+      y: child.position.y,
+      z: child.position.z,
+      rotY: child.rotation.y,
+    });
+    origAdd(child);
+  };
+  const prop = attachSeedDoorProp(THREE, cottage, 'maren');
+  assert.deepEqual(snapshots, [
+    { name: 'seed_door_prop_maren', x: -2.9, y: 0, z: 2.9, rotY: -0.6525 },
+  ]);
+  assert.equal(cottage.children[0], prop);
+});
+
+test('rotation is assigned directly, never via rotation.set', () => {
+  const THREE = makeRecordingThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.deepEqual(prop.rotationSetCalls, []);
+    assert.equal(prop.rotation.x, 0);
+    assert.equal(prop.rotation.z, 0);
+  }
+  const wickProp = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  assert.equal(wickProp.rotation.y, -1.1733);
+});
+
+test("the builder receives the caller's THREE, not a cached one", () => {
+  const THREE_A = makeFakeThree();
+  const THREE_B = makeFakeThree();
+  const a = attachSeedDoorProp(THREE_A, new THREE_A.Group(), 'wick');
+  const b = attachSeedDoorProp(THREE_B, new THREE_B.Group(), 'wick');
+
+  assert.ok(a instanceof THREE_A.Group);
+  assert.ok(!(a instanceof THREE_B.Group));
+  assert.ok(b instanceof THREE_B.Group);
+  assert.ok(!(b instanceof THREE_A.Group));
+  assert.ok(a.children[0] instanceof THREE_A.Mesh);
+  assert.ok(b.children[0] instanceof THREE_B.Mesh);
+  assert.ok(!(b.children[0] instanceof THREE_A.Mesh));
+});
+
+test('all three handles in one cottage keep attach order', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const pMaren = attachSeedDoorProp(THREE, cottage, 'maren');
+  const pWick = attachSeedDoorProp(THREE, cottage, 'wick');
+  const pTomas = attachSeedDoorProp(THREE, cottage, 'tomas');
+
+  assert.deepEqual(cottage.children, [pMaren, pWick, pTomas]);
+  assert.deepEqual(
+    cottage.children.map((c) => c.name),
+    ['seed_door_prop_maren', 'seed_door_prop_wick', 'seed_door_prop_tomas']
+  );
+  assert.deepEqual(
+    cottage.children.map((c) => c.rotation.y),
+    [-0.6525, -1.1733, -0.1322]
+  );
+  for (const prop of cottage.children) {
+    assertPos(prop, -2.9, 0, 2.9);
+  }
+});
+
+test('door prop clears the live porch deck laterally, derived from cottage-props.mjs', async () => {
+  const { attachPorchDeck } = await import('./cottage-props.mjs');
+  const THREE = makeFakeThree();
+  const deck = attachPorchDeck(THREE, new THREE.Group());
+  assert.deepEqual(deck.geometry.args, [4.8, 0.18, 1.2]);
+  assertPos(deck, 0, 0.09, 2.9);
+
+  const [w, h, d] = deck.geometry.args;
+  const xRange = [deck.position.x - w / 2, deck.position.x + w / 2];
+  const zRange = [deck.position.z - d / 2, deck.position.z + d / 2];
+  const deckTopY = deck.position.y + h / 2;
+  assert.deepEqual(xRange, [-2.4, 2.4]);
+  assert.deepEqual(zRange, [2.3, 3.5]);
+  assert.equal(deckTopY, 0.18);
+
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.ok(prop.position.x < xRange[0]);
+    assert.ok(prop.position.z >= zRange[0] && prop.position.z <= zRange[1]);
+    assert.equal(prop.position.y, 0);
+    assert.ok(prop.position.y < deckTopY);
+  }
+});
+
+test('a throwing cottage.add propagates and leaves prior children intact', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const existing = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: '#000000' })
+  );
+  cottage.add(existing);
+  cottage.add = () => {
+    throw new Error('add boom');
+  };
+
+  assert.throws(() => attachSeedDoorProp(THREE, cottage, 'wick'), /add boom/);
+  assert.equal(cottage.children.length, 1);
+  assert.equal(cottage.children[0], existing);
+});
+
+test('a duck-typed cottage works, with no instanceof gate', () => {
+  const THREE = makeFakeThree();
+  const added = [];
+  const cottage = {
+    children: [],
+    add(child) {
+      this.children.push(child);
+      added.push(child);
+    },
+  };
+  const prop = attachSeedDoorProp(THREE, cottage, 'tomas');
+  assert.ok(prop);
+  assert.equal(added.length, 1);
+  assert.equal(added[0], prop);
+  assert.equal(cottage.children[0], prop);
+  assert.equal(prop.name, 'seed_door_prop_tomas');
+});
