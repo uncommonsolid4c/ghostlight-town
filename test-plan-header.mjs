@@ -589,3 +589,103 @@ test('PLAN.md header Social Gate deadline ~Nov 20 agrees with §12.6 and README 
   assert.ok(readmeStatus.includes('within 7 days of opening'), 'README.md ## Status must include within 7 days of opening');
   assert.ok(readmeStatus.includes('(unmet)'), 'README.md ## Status must include (unmet)');
 });
+
+test('PLAN.md latest §8 entry records the quota line', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(latestLine, /Quota at session start: Gemini weekly \d+%/, 'Latest §8 entry must record "Quota at session start: Gemini weekly <N>%"');
+  assert.match(latestLine, /five-hour \d+% \(resets [^)]+\)/, 'Latest §8 entry must record "five-hour <N>% (resets ...)"');
+});
+
+test('PLAN.md latest §8 entry records the full live API state', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  for (const field of ['state_seq', 'Prompt Book', 'nightly_call', 'daily_game', 'garden', 'plots', 'inn', 'guestbook', 'events', 'index 200']) {
+    assert.ok(latestLine.includes(field), `Latest §8 entry must record the live API field "${field}"`);
+  }
+});
+
+test('PLAN.md latest §8 entry records the Social Gate check', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.ok(latestLine.includes('Colony story post'), 'Latest §8 entry must record Colony story post');
+  assert.ok(latestLine.includes('421526bb'), 'Latest §8 entry must record Colony story post id 421526bb');
+  assert.ok(latestLine.includes('rStation'), 'Latest §8 entry must record rStation');
+  assert.match(latestLine, /(posts\/122|post\/122)/, 'Latest §8 entry must record rStation story post 122');
+  assert.ok(latestLine.includes('2 of 2–3'), 'Latest §8 entry must record "2 of 2–3"');
+});
+
+test('PLAN.md latest §8 entry records NOT deployed and the live ?v=', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(latestLine, /NOT deployed/, 'Latest §8 entry must record NOT deployed');
+  assert.match(latestLine, /`\?v=\d+` live/, 'Latest §8 entry must record `?v=<N>` live');
+});
+
+test('PLAN.md latest §8 entry records the tier status', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(latestLine, /\d+-test tier/, 'Latest §8 entry must record "<N>-test tier"');
+  assert.match(latestLine, /next thinnest is the \d+-test tier/, 'Latest §8 entry must record "next thinnest is the <N>-test tier"');
+});
+
+test('PLAN.md latest §8 entry records the scratch verification', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(latestLine, /Scratch verification: \d+\/\d+ checks passed/, 'Latest §8 entry must record "Scratch verification: <N>/<M> checks passed"');
+});
+
+test('PLAN.md latest §8 entry records the per-file test result', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(latestLine, /node --test [^`]+` reports `\d+\/\d+` pass/, 'Latest §8 entry must record "`node --test <file>` reports `<N>/<M>` pass"');
+});
+
+test('README.md named-list pins match actual top-level test counts', () => {
+  const readmeStatus = readReadmeStatusSection();
+  const pins = [...readmeStatus.matchAll(/`([^`]+\.mjs)` (\d+)\/(\d+)/g)];
+  assert.ok(pins.length > 0, 'README.md ## Status must contain per-file test-count pins');
+  for (const [, file, a, b] of pins) {
+    const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    const count = src.split('\n').filter((l) => l.startsWith('test(')).length;
+    assert.ok(
+      Number(a) === count && Number(b) === count,
+      `README.md pin for ${file} (${a}/${b}) must match actual top-level test count (${count})`
+    );
+  }
+});
+
+test('PLAN.md header ?v= values equal the staged bundle pair', () => {
+  const { statusLine } = readPlanHeader();
+  const stagingHtml = fs.readFileSync(STAGING_HTML_PATH, 'utf8');
+  const stagingMatch = stagingHtml.match(/staging\.js\?v=(\d+)/);
+  assert.ok(stagingMatch, 'staging-polyfork/index.html must include staging.js?v=<N>');
+  const stagingV = stagingMatch[1];
+
+  const town3dHtml = fs.readFileSync(TOWN3D_HTML_PATH, 'utf8');
+  const townMatch = town3dHtml.match(/\.\/town\.js\?v=(\d+)/);
+  assert.ok(townMatch, 'town-3d/index.html must include ./town.js?v=<N>');
+  const townV = townMatch[1];
+
+  const headerVs = [...statusLine.matchAll(/\?v=(\d+)/g)].map((m) => m[1]);
+  assert.equal(new Set(headerVs).size, 2, 'PLAN.md **Status:** must contain exactly two distinct ?v= values');
+  assert.ok(headerVs.includes(stagingV), `PLAN.md **Status:** must include staging ?v=${stagingV}`);
+  assert.ok(headerVs.includes(townV), `PLAN.md **Status:** must include town-3d ?v=${townV}`);
+  assert.ok(statusLine.includes(`staging.js?v=${stagingV}`), `PLAN.md **Status:** must include staging.js?v=${stagingV}`);
+  assert.ok(statusLine.includes(`town.js?v=${townV}`), `PLAN.md **Status:** must include town.js?v=${townV}`);
+});
+
+test('PLAN.md §8 last 30 entries each carry the core record fields', () => {
+  const { planText } = readPlanHeader();
+  const sec8 = readSection8(planText);
+  const entries = [...sec8.matchAll(/^\*Slice (\d+)([a-z]?)\b[^\n]*/gm)];
+  const recent = entries.slice(-30);
+  assert.equal(recent.length, 30, 'PLAN.md §8 must have at least 30 slice entries');
+  for (const m of recent) {
+    const line = m[0];
+    const num = m[1];
+    for (const field of ['Quota at session start', 'NOT deployed', 'check-live', 'staging rehearsal', '-test tier']) {
+      assert.ok(line.includes(field), `PLAN.md §8 Slice ${num} must record "${field}"`);
+    }
+  }
+});
