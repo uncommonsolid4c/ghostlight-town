@@ -855,3 +855,332 @@ test('multiple simultaneous failures accumulate with exact ok count', async () =
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+async function startPathRecordingFixtureServer(servedFiles, { apiStatus = 200 } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const urlPath = (req.url || '/').split('?')[0];
+    requests.push(urlPath);
+    if (urlPath === '/api/town/state') {
+      res.writeHead(apiStatus, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: apiStatus === 200 }));
+      return;
+    }
+
+    const prefix = '/ghostlight-town/';
+    if (urlPath.startsWith(prefix)) {
+      const relPath = urlPath.slice(prefix.length);
+      if (Object.prototype.hasOwnProperty.call(servedFiles, relPath)) {
+        res.writeHead(200);
+        res.end(servedFiles[relPath]);
+        return;
+      }
+    }
+
+    res.writeHead(404);
+    res.end('Not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    getRequests: () => requests.slice(),
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+async function startFileCloseFixtureServer(servedFiles, closeRelPath) {
+  const server = http.createServer((req, res) => {
+    const urlPath = (req.url || '/').split('?')[0];
+    if (urlPath === '/api/town/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    const prefix = '/ghostlight-town/';
+    if (urlPath.startsWith(prefix)) {
+      const relPath = urlPath.slice(prefix.length);
+      if (relPath === closeRelPath) {
+        req.socket.destroy();
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(servedFiles, relPath)) {
+        res.writeHead(200);
+        res.end(servedFiles[relPath]);
+        return;
+      }
+    }
+
+    res.writeHead(404);
+    res.end('Not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+test('getExpectedFiles exported contract validates bundles and excludes dev-only files', async () => {
+  await assert.rejects(() => getExpectedFiles(REPO_ROOT, 'bogus'), /Unknown bundle: bogus/);
+
+  const town3d = await getExpectedFiles(REPO_ROOT, 'town-3d');
+  assert.ok(town3d.includes('index.html'));
+  assert.ok(town3d.includes('town.js'));
+  assert.ok(!town3d.includes('models/pine.glb'));
+  assert.ok(town3d.every((p) => !p.startsWith('test-')));
+
+  const staging = await getExpectedFiles(REPO_ROOT, 'staging-polyfork');
+  assert.ok(staging.includes('staging.js'));
+  assert.ok(staging.includes('gazette/latest.json'));
+  assert.ok(!staging.includes('test-staging.mjs'));
+  assert.ok(!staging.includes('README.md'));
+});
+
+test('missing-value errors for --bundle and --root print JSON error on stderr and exit 1', async () => {
+  const cases = [
+    { args: ['--bundle'], expectedError: '--bundle requires a bundle name argument' },
+    { args: ['--root'], expectedError: '--root requires a directory argument' },
+    { args: ['--bundle', '--root', '/tmp'], expectedError: '--bundle requires a bundle name argument' },
+  ];
+
+  for (const { args, expectedError } of cases) {
+    const res = await runCheck(args);
+    assert.equal(res.status, 1, `Expected exit 1 for ${args.join(' ')}, got ${res.status}`);
+    assert.equal(res.stdout, '');
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.equal(errObj.error, expectedError);
+  }
+});
+
+test('duplicate --base flag uses last value', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-dupbase-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served);
+
+    const res = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', 'http://127.0.0.1:1',
+      '--base', server.baseUrl,
+      '--root', tmpDir,
+    ]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'ok');
+    assert.equal(summary.base, server.baseUrl);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('version-mismatch mirrors: repo without ?v= and live with non-numeric ?v=', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-vmirror-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    const repoIndexPath = path.join(tmpDir, 'town-3d', 'index.html');
+    await fs.writeFile(repoIndexPath, '<!doctype html><script type="module">import "./town.js";</script>\n');
+    server = await startFixtureServer(served);
+
+    const resRepoNull = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resRepoNull.status, 1, `Expected exit 1, got ${resRepoNull.status}`);
+    const summaryRepoNull = JSON.parse(resRepoNull.stdout.trim());
+    assert.equal(summaryRepoNull.town_js_v, null);
+    const failRepoNull = summaryRepoNull.failures.find(
+      (f) => f.file === 'index.html' && f.problem === 'town_js_v',
+    );
+    assert.ok(failRepoNull, `Expected town_js_v failure, got: ${JSON.stringify(summaryRepoNull.failures)}`);
+    assert.equal(failRepoNull.detail, 'repo_v=null vs live_v=13');
+
+    await fs.writeFile(repoIndexPath, '<!doctype html><script type="module">import "./town.js?v=13";</script>\n');
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js?v=abc";</script>\n';
+
+    const resLiveNonNum = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resLiveNonNum.status, 1, `Expected exit 1, got ${resLiveNonNum.status}`);
+    const summaryLiveNonNum = JSON.parse(resLiveNonNum.stdout.trim());
+    assert.equal(summaryLiveNonNum.town_js_v, 13);
+    const failLiveNonNum = summaryLiveNonNum.failures.find(
+      (f) => f.file === 'index.html' && f.problem === 'town_js_v',
+    );
+    assert.ok(failLiveNonNum, `Expected town_js_v failure, got: ${JSON.stringify(summaryLiveNonNum.failures)}`);
+    assert.equal(failLiveNonNum.detail, 'repo_v=13 vs live_v=null');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('summary exact key sets for both town-3d and staging-polyfork bundles', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-keys-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served);
+
+    const resTown3d = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resTown3d.status, 0, `Expected exit 0, got ${resTown3d.status}: ${resTown3d.stderr}`);
+    const summaryTown3d = JSON.parse(resTown3d.stdout.trim());
+    assert.deepEqual(Object.keys(summaryTown3d).sort(), [
+      'api',
+      'base',
+      'bundle',
+      'checked',
+      'failures',
+      'ok',
+      'status',
+      'town_js_v',
+    ]);
+
+    const resStaging = await runCheck([
+      '--bundle', 'staging-polyfork',
+      '--base', 'http://127.0.0.1:1',
+      '--root', REPO_ROOT,
+    ]);
+    assert.equal(resStaging.status, 1, `Expected exit 1, got ${resStaging.status}`);
+    const summaryStaging = JSON.parse(resStaging.stdout.trim());
+    assert.deepEqual(Object.keys(summaryStaging).sort(), [
+      'api',
+      'base',
+      'bundle',
+      'checked',
+      'failures',
+      'ok',
+      'staging_js_v',
+      'status',
+    ]);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('town-3d all-ok run makes exact request count and never requests excluded files', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-reqcount-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startPathRecordingFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const requests = server.getRequests();
+    assert.equal(requests.length, 11);
+    assert.equal(requests.filter((p) => p === '/api/town/state').length, 1);
+    assert.ok(requests.every((p) => !p.includes('pine.glb') && !p.includes('test-dev.mjs')));
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('API returning 500 reports not-live and exits 0 by default, or exits 1 with --require-api', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-api500-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served, { apiStatus: 500 });
+
+    const resDefault = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resDefault.status, 0, `Expected exit 0, got ${resDefault.status}: ${resDefault.stderr}`);
+    const summaryDefault = JSON.parse(resDefault.stdout.trim());
+    assert.equal(summaryDefault.status, 'ok');
+    assert.equal(summaryDefault.api, 'not-live');
+    assert.equal(summaryDefault.ok, summaryDefault.checked);
+
+    const resRequired = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', server.baseUrl,
+      '--root', tmpDir,
+      '--require-api',
+    ]);
+    assert.equal(resRequired.status, 1, `Expected exit 1, got ${resRequired.status}`);
+    const summaryRequired = JSON.parse(resRequired.stdout.trim());
+    const apiFail = summaryRequired.failures.find(
+      (f) => f.file === '/api/town/state' && f.problem === 'bad-status',
+    );
+    assert.ok(apiFail, `Expected /api/town/state bad-status failure, got: ${JSON.stringify(summaryRequired.failures)}`);
+    assert.equal(apiFail.detail, 'HTTP 500');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('extra-issue fetch returning 500 fails with bad-status HTTP 500', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-issue500-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['gazette/latest.json'] = JSON.stringify({
+      latest: 4,
+      issues: [{ n: 4, file: 'issue-004.html', date: '2026-11-24', headline: 'Issue 4' }],
+    });
+    server = await startFixtureServer(served, { fileStatus: { 'gazette/issue-004.html': 500 } });
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    const issueFail = summary.failures.find(
+      (f) => f.file === 'gazette/issue-004.html' && f.problem === 'bad-status',
+    );
+    assert.ok(issueFail, `Expected gazette/issue-004.html bad-status failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(issueFail.detail, 'HTTP 500');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('file fetch with destroyed socket fails with bad-status and decrements ok count', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-fileclose-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFileCloseFixtureServer(served, 'models/bench.glb');
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.ok, 9);
+    const fileFail = summary.failures.find(
+      (f) => f.file === 'models/bench.glb' && f.problem === 'bad-status',
+    );
+    assert.ok(fileFail, `Expected models/bench.glb bad-status failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(typeof fileFail.detail, 'string');
+    assert.ok(fileFail.detail.length > 0, 'Expected non-empty detail on file socket failure');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('multiple trailing slashes are normalized on --base and --api-base', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-slashes-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served);
+
+    const res = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', `${server.baseUrl}///`,
+      '--api-base', `${server.baseUrl}///`,
+      '--root', tmpDir,
+    ]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'ok');
+    assert.equal(summary.base, server.baseUrl);
+    assert.equal(summary.api, 'live');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
