@@ -901,3 +901,265 @@ test('build-feed.mjs prints the exact item summary and writes a single-trailing-
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+function epochSec(iso) {
+  return Math.floor(Date.parse(iso) / 1000);
+}
+
+test('gazette/latest.json pins issue #2 entry, ascending n, exact entry keys, and max latest', async () => {
+  const latest = JSON.parse(await fs.readFile(LATEST_PATH, 'utf8'));
+  assert.deepEqual(latest.issues.map((i) => i.n), [1, 2, 3]);
+
+  const issue2 = latest.issues.find((i) => i.n === 2);
+  assert.ok(issue2, 'issue #2 entry must exist in latest.json');
+  assert.equal(issue2.file, 'issue-002.html');
+  assert.equal(issue2.date, '2026-11-14');
+  assert.equal(issue2.headline, 'The Light Reached Someone');
+
+  assert.equal(latest.latest, 3);
+  assert.equal(latest.latest, Math.max(...latest.issues.map((i) => i.n)));
+
+  for (const entry of latest.issues) {
+    assert.deepEqual(Object.keys(entry).sort(), ['date', 'file', 'headline', 'n']);
+  }
+});
+
+test('each gazette issue has exactly one <title> tag matching The Ghostlight Gazette — Issue #N', async () => {
+  const issuePaths = [
+    [1, ISSUE_PATH],
+    [2, ISSUE_002_PATH],
+    [3, ISSUE_003_PATH],
+  ];
+  for (const [n, filePath] of issuePaths) {
+    const html = await fs.readFile(filePath, 'utf8');
+    const titles = html.match(/<title>[^<]*<\/title>/g) || [];
+    assert.equal(titles.length, 1, `issue #${n} must have exactly one <title> tag`);
+    assert.equal(titles[0], `<title>The Ghostlight Gazette — Issue #${n}</title>`);
+  }
+});
+
+test('build-digest.mjs wraps muse-role emote in *...* and zero-pads single-digit town-time hours', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-muse-emote-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'emote', body: 'waves hello', created_at: epochSec('2026-11-12T17:05:00Z') },
+          { id: 2, handle: 'bob', role: 'muse', kind: 'say', body: 'good morning', created_at: epochSec('2026-11-12T17:06:00Z') },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.ok(stdout.includes('- **alice** 09:05 — *waves hello*'));
+    assert.ok(stdout.includes('- **bob** 09:06 — good morning'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs passes non-say and non-emote kinds through plain without *...* wrapping', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-kinds-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'leave', body: 'alice left the bandstand', created_at: epochSec('2026-11-12T19:00:00Z') },
+          { id: 2, handle: 'bob', role: 'muse', body: 'no kind at all', created_at: epochSec('2026-11-12T19:01:00Z') },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.ok(stdout.includes('- **alice** 11:00 — alice left the bandstand'));
+    assert.ok(stdout.includes('- **bob** 11:01 — no kind at all'));
+    assert.ok(!stdout.includes('*alice left the bandstand*'));
+    assert.ok(!stdout.includes('*no kind at all*'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs tags mixed-role speaker as [NPC] in Speakers while keeping bullets per-line', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-mixed-role-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'speaking as a muse', created_at: epochSec('2026-11-12T19:00:00Z') },
+          { id: 2, handle: 'alice', role: 'npc', kind: 'say', body: 'speaking as an npc', created_at: epochSec('2026-11-12T19:01:00Z') },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.ok(stdout.includes('- **alice** 11:00 — speaking as a muse'));
+    assert.ok(stdout.includes('- **alice** [NPC] 11:01 — speaking as an npc'));
+    assert.match(stdout, /## Speakers\s+- alice \[NPC\]: 2 line\(s\)/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs sorts string ids lexicographically with "10" before "9" on tied created_at', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-str-ids-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const ts = epochSec('2026-11-12T19:00:00Z');
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: '9', handle: 'bob', role: 'muse', kind: 'say', body: 'string nine', created_at: ts },
+          { id: '10', handle: 'alice', role: 'muse', kind: 'say', body: 'string ten', created_at: ts },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    const tenIdx = stdout.indexOf('string ten');
+    const nineIdx = stdout.indexOf('string nine');
+    assert.ok(tenIdx > 0 && tenIdx < nineIdx, 'string id "10" must sort lexicographically before "9"');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs keeps valid second occurrence when first duplicate id is malformed', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-malformed-dup-'));
+  try {
+    const snap1 = path.join(tmpDir, 'snap1.json');
+    const snap2 = path.join(tmpDir, 'snap2.json');
+    const ts = epochSec('2026-11-12T19:00:00Z');
+
+    await fs.writeFile(
+      snap1,
+      JSON.stringify({
+        prompt_book: [
+          { id: 10, handle: 'alice', role: 'muse', kind: 'say', body: '   ', created_at: ts },
+        ],
+      })
+    );
+    await fs.writeFile(
+      snap2,
+      JSON.stringify({
+        prompt_book: [
+          { id: 10, handle: 'alice', role: 'muse', kind: 'say', body: 'second snapshot valid', created_at: ts },
+        ],
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snap1,
+      '--state', snap2,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    assert.equal(stderr, 'skipped 1 malformed line(s)\n');
+    assert.ok(stdout.includes('second snapshot valid'));
+    assert.ok(stdout.includes('1 line(s) from 1 speaker(s) in the window.'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs with --since only defaults --until to today in town time', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-since-only-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const now = Math.floor(Date.now() / 1000);
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'today line', created_at: now },
+        ],
+      })
+    );
+
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(now * 1000));
+    const y = parts.find((p) => p.type === 'year').value;
+    const m = parts.find((p) => p.type === 'month').value;
+    const d = parts.find((p) => p.type === 'day').value;
+    const today = `${y}-${m}-${d}`;
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+    ]);
+
+    assert.ok(
+      stdout.startsWith(`# Prompt Book digest — 2026-11-12 to ${today} (town time)\n`),
+      `expected header ending at ${today}`
+    );
+    assert.ok(stdout.includes('today line'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs rejects unknown argument and missing --state path with exact error strings', async () => {
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', '/dev/null', '--bogus']),
+    (err) => err.code === 1 && err.stdout === '' && err.stderr === 'build-digest error: Unknown argument: --bogus\n'
+  );
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state']),
+    (err) => err.code === 1 && err.stdout === '' && err.stderr === 'build-digest error: Missing path after --state\n'
+  );
+});
+
+test('build-feed.mjs --out into missing nested directory exits 1 with ENOENT and creates nothing', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-feed-missing-dir-'));
+  try {
+    const outPath = path.join(tmpDir, 'nested', 'deep', 'feed.xml');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_FEED_PATH, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && /ENOENT/.test(err.stderr)
+    );
+    await assert.rejects(
+      () => fs.access(path.join(tmpDir, 'nested')),
+      (err) => err.code === 'ENOENT'
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
