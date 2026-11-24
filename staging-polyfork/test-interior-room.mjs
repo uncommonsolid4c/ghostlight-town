@@ -897,3 +897,266 @@ test('interior-room.mjs stays dependency-free with exactly 7 exports', async () 
     'setInteriorVisible',
   ]);
 });
+
+test('setInteriorPalette uses color.set when present and assigns when absent', () => {
+  const fakeColor = {
+    value: '#f5efe0',
+    set(hex) {
+      this.value = hex;
+    },
+  };
+  const mat1 = { color: fakeColor };
+  const room1 = { children: [{ name: 'interior_wall_back', material: mat1 }] };
+  assert.equal(setInteriorPalette(room1, 'wick'), true);
+  assert.equal(fakeColor.value, '#c8922e');
+  assert.equal(room1.children[0].material, mat1);
+  assert.equal(room1.children[0].material.color, fakeColor);
+
+  const room2 = { children: [{ name: 'interior_wall_back', material: {} }] };
+  assert.equal(setInteriorPalette(room2, 'milo'), true);
+  assert.equal(room2.children[0].material.color, '#a8d8ea');
+
+  const room3 = { children: [{ name: 'interior_wall_back', material: { color: null } }] };
+  assert.equal(setInteriorPalette(room3, 'maren'), true);
+  assert.equal(room3.children[0].material.color, '#43505c');
+
+  const room4 = {
+    children: [{ name: 'interior_wall_back', material: { color: { value: '#f5efe0' } } }],
+  };
+  assert.equal(setInteriorPalette(room4, 'tomas'), true);
+  assert.equal(room4.children[0].material.color, '#b5633a');
+});
+
+test('two rooms built from one THREE stub are independent', () => {
+  const THREE = makeFakeThree();
+  const roomA = buildInteriorRoom(THREE);
+  const roomB = buildInteriorRoom(THREE);
+
+  const byNameA = new Map(roomA.children.map((c) => [c.name, c]));
+  const byNameB = new Map(roomB.children.map((c) => [c.name, c]));
+
+  assert.notEqual(byNameA.get('interior_floor').material, byNameB.get('interior_floor').material);
+  assert.notEqual(
+    byNameA.get('interior_wall_back').material,
+    byNameB.get('interior_wall_back').material
+  );
+
+  assert.equal(setInteriorVisible(roomA, true), true);
+  assert.equal(roomB.visible, false);
+
+  assert.equal(setInteriorPalette(roomA, 'wick'), true);
+  assert.equal(byNameA.get('interior_wall_back').material.color, '#c8922e');
+  assert.equal(byNameB.get('interior_wall_back').material.color, '#f5efe0');
+
+  assert.equal(setInteriorDressing(roomA, 'tomas'), true);
+  for (const handle of ['milo', 'wick', 'maren', 'tomas']) {
+    assert.equal(byNameB.get(`interior_dressing_${handle}`).visible, false);
+  }
+});
+
+test('door opening has exact edges and no mesh blocks the passage', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  const frontLeft = byName.get('interior_wall_front_left');
+  const frontRight = byName.get('interior_wall_front_right');
+  const frontLintel = byName.get('interior_wall_front_lintel');
+
+  const bLeft = meshBounds(frontLeft);
+  const bRight = meshBounds(frontRight);
+  const bLintel = meshBounds(frontLintel);
+
+  assertNear(bLeft.maxX, -0.5, 'frontLeft maxX');
+  assertNear(bRight.minX, 0.5, 'frontRight minX');
+  assertNear(bLintel.minY, 2.0, 'lintel minY');
+  assertNear(bLintel.maxY, 2.6, 'lintel maxY');
+  assert.equal(frontLintel.geometry.args[0], 1.0);
+
+  for (const [label, seg, b] of [
+    ['frontLeft', frontLeft, bLeft],
+    ['frontRight', frontRight, bRight],
+    ['frontLintel', frontLintel, bLintel],
+  ]) {
+    assertNear(b.minZ, 1.38, `${label} minZ`);
+    assertNear(b.maxZ, 1.5, `${label} maxZ`);
+    assertNear(seg.position.z, 1.44, `${label} position.z`);
+  }
+
+  for (const child of room.children) {
+    const b = Array.isArray(child.children) ? computeGroupBounds(child) : meshBounds(child);
+    const overlapsX = b.minX < 0.5 - 1e-9 && b.maxX > -0.5 + 1e-9;
+    const overlapsY = b.minY < 2.0 - 1e-9 && b.maxY > 0.08 + 1e-9;
+    const overlapsZ = b.minZ < 1.5 - 1e-9 && b.maxZ > 1.38 + 1e-9;
+    assert.equal(overlapsX && overlapsY && overlapsZ, false, `${child.name} blocks door passage`);
+  }
+});
+
+test('side walls, back wall, and floor are flush in z', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  const bLeft = meshBounds(byName.get('interior_wall_left'));
+  const bRight = meshBounds(byName.get('interior_wall_right'));
+  assertNear(bLeft.minZ, -1.38, 'left wall minZ');
+  assertNear(bLeft.maxZ, 1.38, 'left wall maxZ');
+  assertNear(bRight.minZ, -1.38, 'right wall minZ');
+  assertNear(bRight.maxZ, 1.38, 'right wall maxZ');
+
+  const bBack = meshBounds(byName.get('interior_wall_back'));
+  assertNear(bBack.minZ, -1.5, 'back wall minZ');
+  assertNear(bBack.maxZ, -1.38, 'back wall maxZ');
+
+  const bFloor = meshBounds(byName.get('interior_floor'));
+  assertNear(bFloor.minX, -1.85, 'floor minX');
+  assertNear(bFloor.maxX, 1.85, 'floor maxX');
+  assertNear(bFloor.minZ, -1.5, 'floor minZ');
+  assertNear(bFloor.maxZ, 1.5, 'floor maxZ');
+});
+
+test('dressing builders return fresh unnamed groups on every call', () => {
+  const THREE = makeFakeThree();
+  for (const builder of [
+    buildProceduralOilLamp,
+    buildProceduralTypewriter,
+    buildProceduralTeapot,
+  ]) {
+    const g1 = builder(THREE);
+    const g2 = builder(THREE);
+    assert.notEqual(g1, g2);
+    assert.equal(g1.children.length, 3);
+    assert.equal(g2.children.length, 3);
+
+    for (let i = 0; i < 3; i++) {
+      assert.notEqual(g1.children[i], g2.children[i]);
+      assert.notEqual(g1.children[i].material, g2.children[i].material);
+      assert.equal(g1.children[i].name, '');
+    }
+
+    assert.equal(g1.visible, true);
+    assertNear(g1.position.x, 0, 'position.x');
+    assertNear(g1.position.y, 0, 'position.y');
+    assertNear(g1.position.z, 0, 'position.z');
+  }
+});
+
+test('kettle, cat, floor, and window-glow material colors are exact', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+
+  assert.equal(byName.get('interior_floor').material.color, '#6b492b');
+  assert.equal(byName.get('interior_window_glow_left').material.color, '#ffbe5c');
+  assert.equal(byName.get('interior_window_glow_right').material.color, '#ffbe5c');
+
+  const miloGroup = byName.get('interior_dressing_milo');
+  const byMiloName = new Map(miloGroup.children.map((c) => [c.name, c]));
+  assert.equal(byMiloName.get('interior_tea_kettle').material.color, '#b59449');
+  assert.equal(byMiloName.get('interior_cat').material.color, '#2b2b2b');
+});
+
+test('setInteriorDressing failure leaves group visibility untouched', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  assert.equal(setInteriorDressing(room, 'wick'), true);
+  const marenIdx = room.children.findIndex((c) => c.name === 'interior_dressing_maren');
+  assert.ok(marenIdx >= 0);
+  room.children.splice(marenIdx, 1);
+
+  assert.equal(setInteriorDressing(room, 'tomas'), false);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+  assert.equal(byName.get('interior_dressing_wick').visible, true);
+  assert.equal(byName.get('interior_dressing_milo').visible, false);
+  assert.equal(byName.get('interior_dressing_tomas').visible, false);
+});
+
+test('staging.js imports the four interior-room functions and interior-visit does not', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const visitSrc = await fs.readFile(path.join(__dirname, 'interior-visit.mjs'), 'utf8');
+
+  assert.ok(
+    stagingSrc.includes(
+      "import { buildInteriorRoom, setInteriorVisible, setInteriorPalette, setInteriorDressing } from './interior-room.mjs?v=34';"
+    )
+  );
+  for (const name of [
+    'buildInteriorRoom',
+    'setInteriorVisible',
+    'setInteriorPalette',
+    'setInteriorDressing',
+  ]) {
+    assert.equal(
+      stagingSrc.split(name).length - 1,
+      2,
+      `Expected 2 occurrences of ${name} in staging.js`
+    );
+  }
+  assert.equal(stagingSrc.split('interior-room.mjs').length - 1, 1);
+  assert.equal(visitSrc.includes('interior-room'), false);
+});
+
+test('header envelope-fit numbers match the kit and Milo cottage sources', async () => {
+  const roomSrc = await fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8');
+  const kitSrc = await fs.readFile(
+    path.join(__dirname, 'kit-medieval', 'cottage-small.mjs'),
+    'utf8'
+  );
+  const miloSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'concept-cottage.js'), 'utf8');
+
+  assert.ok(roomSrc.includes('4.8 x 3.2'));
+  assert.ok(roomSrc.includes('4.0 x 3.4'));
+
+  const hxMatch = kitSrc.match(/const HX = ([\d.]+);/);
+  const hzMatch = kitSrc.match(/const HZ = ([\d.]+);/);
+  assert.ok(hxMatch && hzMatch, 'Expected HX and HZ in cottage-small.mjs');
+  assertNear(2 * Number(hxMatch[1]), 4.8, '2 * HX');
+  assertNear(2 * Number(hzMatch[1]), 3.2, '2 * HZ');
+
+  const wxMatch = miloSrc.match(/widthX = ([\d.]+)/);
+  const hszMatch = miloSrc.match(/halfSpanZ = ([\d.]+)/);
+  assert.ok(wxMatch && hszMatch, 'Expected widthX and halfSpanZ in concept-cottage.js');
+  assertNear(Number(wxMatch[1]), 4.0, 'widthX');
+  assertNear(2 * Number(hszMatch[1]), 3.4, '2 * halfSpanZ');
+});
+
+test('interior-room header vendored line ranges match town.js and child count is exact', async () => {
+  const roomSrc = await fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8');
+  const townSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8');
+
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  let firstStart = null;
+  let lastEnd = null;
+  for (const fn of [
+    'buildProceduralOilLamp',
+    'buildProceduralTypewriter',
+    'buildProceduralTeapot',
+  ]) {
+    const startIdx = townSrc.indexOf(`export function ${fn}(THREE)`);
+    assert.ok(startIdx >= 0, `Missing export function ${fn}(THREE) in town.js`);
+    const start = townSrc.slice(0, startIdx).split('\n').length;
+    const endIdx = townSrc.indexOf('\n}\n', startIdx);
+    assert.ok(endIdx >= 0, `Missing closing brace for ${fn} in town.js`);
+    const end = townSrc.slice(0, endIdx).split('\n').length + 1;
+    assert.ok(
+      roomSrc.includes(`town-3d/town.js:${start}-${end}`),
+      `Header must cite town-3d/town.js:${start}-${end}`
+    );
+    if (firstStart === null) firstStart = start;
+    lastEnd = end;
+  }
+
+  assert.ok(
+    roomSrc.includes(`town-3d/town.js:${firstStart}-${lastEnd}`),
+    `Header must cite town-3d/town.js:${firstStart}-${lastEnd}`
+  );
+  assert.equal(roomSrc.includes('town-3d/town.js:1337'), false);
+
+  const countMatch = roomSrc.match(/Direct-child count: (\d+)/);
+  assert.ok(countMatch, 'Expected Direct-child count in header');
+  assert.equal(Number(countMatch[1]), room.children.length);
+  assert.equal(room.children.length, 19);
+});
