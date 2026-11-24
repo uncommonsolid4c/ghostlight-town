@@ -1067,3 +1067,260 @@ test('exit with omitted setVisible leaves visibility untouched, and re-enter sav
   assert.deepEqual({ x: camera.position.x, y: camera.position.y, z: camera.position.z }, { x: 99, y: 99, z: 99 });
   assert.deepEqual({ x: controls.target.x, y: controls.target.y, z: controls.target.z }, { x: 1, y: 2, z: 3 });
 });
+
+test('enter calls room.updateMatrixWorld(true) when present and works when it is absent', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const mwCalls = [];
+  room.updateMatrixWorld = (deep) => mwCalls.push(deep);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(1, 0, 2);
+
+  assert.equal(visit.enter(milo), true);
+  assert.deepEqual(mwCalls, [true]);
+  assert.equal(visit.exit(), true);
+
+  const roomNoMw = buildInteriorRoom(THREE);
+  assert.equal(typeof roomNoMw.updateMatrixWorld, 'undefined');
+  const { camera: camera2, controls: controls2 } = makeFakeCameraAndControls();
+  const visit2 = createInteriorVisit({
+    room: roomNoMw,
+    camera: camera2,
+    controls: controls2,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+  assert.equal(visit2.enter(milo), true);
+  assert.equal(visit2.exit(), true);
+});
+
+test('enter calls deps in order: setPalette, then setDressing, then setVisible', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const order = [];
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible(r, v) {
+      order.push('visible');
+      setInteriorVisible(r, v);
+    },
+    setPalette(r, h) {
+      order.push('palette');
+      setInteriorPalette(r, h);
+    },
+    setDressing(r, h) {
+      order.push('dressing');
+      setInteriorDressing(r, h);
+    },
+  });
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+
+  assert.equal(visit.enter(wick), true);
+  assert.deepEqual(order, ['palette', 'dressing', 'visible']);
+  assert.equal(visit.exit(), true);
+});
+
+test('isDoorHit handles point-only hits and a cottage named door', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  cottage.userData = { clickable: true, kind: 'cottage', handle: 'ada' };
+
+  assert.equal(isDoorHit(cottage, { point: { x: 0, y: 1, z: 1.6 } }), true);
+  assert.equal(isDoorHit(cottage, { point: { x: 0, y: 1, z: 1.39 } }), false);
+  assert.equal(isDoorHit(cottage, { object: undefined, point: { x: 0, y: 1, z: 1.6 } }), true);
+
+  const doorCottage = new THREE.Group();
+  doorCottage.name = 'door';
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), {});
+  doorCottage.add(mesh);
+  assert.equal(isDoorHit(doorCottage, { object: mesh, point: makeVec3(5, 9, 9) }), true);
+});
+
+test('isDoorHit copies a clone-less point before worldToLocal and leaves the original untouched', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  cottage.userData = { clickable: true, kind: 'cottage', handle: 'ada' };
+  cottage.position.set(2, 0, 3);
+  cottage.rotation.y = Math.PI / 2;
+
+  const origWorldToLocal = cottage.worldToLocal.bind(cottage);
+  const recordedArgs = [];
+  cottage.worldToLocal = (vec) => {
+    recordedArgs.push(vec);
+    return origWorldToLocal(vec);
+  };
+
+  const point = { x: 3.7, y: 1, z: 3 };
+  assert.equal(isDoorHit(cottage, { object: {}, point }), true);
+  assert.equal(recordedArgs.length, 1);
+  assert.notEqual(recordedArgs[0], point);
+  assert.deepEqual(point, { x: 3.7, y: 1, z: 3 });
+});
+
+test('enter with a position-less room succeeds and leaves the camera eye at eye-local-as-world', () => {
+  const room = { rotation: { y: 0 }, visible: false, children: [] };
+  const camera = { position: { x: 0, y: 26, z: 58 } };
+  const controls = { target: { x: 0, y: 2, z: 0 }, enabled: true };
+  const visit = createInteriorVisit({ room, camera, controls });
+
+  const cottage = {
+    userData: { handle: 'ada' },
+    position: { x: 5, y: 0, z: 5 },
+    rotation: { y: 0 },
+  };
+  assert.equal(visit.enter(cottage), true);
+  assert.deepEqual(camera.position, { x: 0, y: 1.55, z: 0.9 });
+  assert.deepEqual(controls.target, { x: 0, y: 1.15, z: -1.3 });
+
+  assert.equal(visit.exit(), true);
+  assert.deepEqual(camera.position, { x: 0, y: 26, z: 58 });
+});
+
+test('lookBy works with plain-object camera and controls (no set/clone/lookAt)', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const camera = { position: { x: 0, y: 26, z: 58 } };
+  const controls = { target: { x: 0, y: 2, z: 0 }, enabled: true };
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  assert.equal(visit.enter(milo), true);
+  assert.equal(visit.lookBy(100, 0), true);
+  assert.ok(
+    controls.target.x > 1.0 && controls.target.x < 1.1,
+    `expected target.x in (1.0, 1.1), got ${controls.target.x}`
+  );
+  assert.ok(Math.abs(controls.target.y - 1.15) < 1e-9);
+  assert.deepEqual(camera.position, { x: 0, y: 1.55, z: 0.9 });
+  assert.equal(visit.exit(), true);
+});
+
+test('createInteriorVisit({}) is inert on all four methods', () => {
+  const THREE = makeFakeThree();
+  const v = createInteriorVisit({});
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+
+  assert.equal(v.isInside(), false);
+  assert.equal(v.enter(milo), false);
+  assert.equal(v.exit(), false);
+  assert.equal(v.lookBy(10, 10), false);
+  assert.equal(v.isInside(), false);
+});
+
+test('rayHitsInteriorDoor with rotation-less stub rooms and missing origin/direction fields', () => {
+  const THREE = makeFakeThree();
+  assert.equal(rayHitsInteriorDoor({}, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(
+    rayHitsInteriorDoor({ rotation: undefined }, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0, z: 1 }),
+    true
+  );
+
+  const room = buildInteriorRoom(THREE);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, z: 0.9 }, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: 0, y: 0 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 0, y: 1.55 }, { x: 0, y: 0, z: 1 }), false);
+});
+
+test('enter with rotation pi/2 places the eye and lookAt target at exact world coords', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  milo.rotation.y = Math.PI / 2;
+
+  assert.equal(visit.enter(milo), true);
+  assert.ok(Math.abs(camera.position.x - 18.82) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - 1.55) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - 4.6) < 1e-9);
+  assert.equal(camera.lookAtCalls.length, 1);
+  assert.ok(Math.abs(camera.lookAtCalls[0].x - 16.62) < 1e-9);
+  assert.ok(Math.abs(camera.lookAtCalls[0].y - 1.15) < 1e-9);
+  assert.ok(Math.abs(camera.lookAtCalls[0].z - 4.6) < 1e-9);
+  assert.equal(visit.exit(), true);
+});
+
+test('exit calls only setVisible, never palette/dressing again, and leaves the room pose alone', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  let paletteCalls = 0;
+  let dressingCalls = 0;
+  const visibleCalls = [];
+
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible(r, v) {
+      visibleCalls.push(v);
+      setInteriorVisible(r, v);
+    },
+    setPalette(r, h) {
+      paletteCalls += 1;
+      setInteriorPalette(r, h);
+    },
+    setDressing(r, h) {
+      dressingCalls += 1;
+      setInteriorDressing(r, h);
+    },
+  });
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  wick.position.set(-10, 0, -8);
+
+  assert.equal(visit.enter(wick), true);
+  assert.deepEqual(visibleCalls, [true]);
+  assert.equal(paletteCalls, 1);
+  assert.equal(dressingCalls, 1);
+
+  const poseSnapshot = {
+    x: room.position.x,
+    y: room.position.y,
+    z: room.position.z,
+    ry: room.rotation.y,
+  };
+
+  assert.equal(visit.exit(), true);
+  assert.deepEqual(visibleCalls, [true, false]);
+  assert.equal(paletteCalls, 1);
+  assert.equal(dressingCalls, 1);
+  assert.deepEqual(
+    { x: room.position.x, y: room.position.y, z: room.position.z, ry: room.rotation.y },
+    poseSnapshot
+  );
+});
