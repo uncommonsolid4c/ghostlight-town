@@ -1285,7 +1285,9 @@ test('runTurn integration: dry-run honesty-rejected game logs rejection and post
     };
     const badLine = buildDailyGameLine({ dailyGame: badGame });
     assert.equal(badLine.length, MAX_SAY_LEN + 1);
-    assert.equal(checkHonesty(badLine).ok, false);
+    const badHonesty = checkHonesty({ text: badLine, npc: { handle: host }, promptBook: [] });
+    assert.equal(badHonesty.ok, false);
+    assert.equal(badHonesty.reasons.some((r) => r.includes('exceeds_max_length')), true);
 
     let brainCalled = false;
     const logs = [];
