@@ -703,3 +703,191 @@ test('drift guard: staging empty-pad literals match town.js buildEmptyPlotPad in
     'staging-polyfork/empty-pad.mjs should parameterize groundY'
   );
 });
+
+test('buildEmptyPadMarker creates distinct geometry and material instances per build and per mesh', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[1]; // plotNumber 2
+  const g1 = buildEmptyPadMarker(THREE, plot, 0, () => ({}));
+  const g2 = buildEmptyPadMarker(THREE, plot, 0, () => ({}));
+
+  const [slab1, sign1] = g1.children;
+  const [slab2, sign2] = g2.children;
+
+  assert.notEqual(slab1.geometry, slab2.geometry);
+  assert.notEqual(slab1.material, slab2.material);
+  assert.notEqual(sign1.geometry, sign2.geometry);
+  assert.notEqual(sign1.material, sign2.material);
+
+  assert.notEqual(slab1.material, sign1.material);
+  assert.notEqual(slab1.geometry, sign1.geometry);
+});
+
+test('buildEmptyPadMarker leaves group x/z rotations and child rotations at zero', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[1]; // plotNumber 2
+  const group = buildEmptyPadMarker(THREE, plot, 0, () => ({}));
+  const [slab, sign] = group.children;
+
+  assert.equal(group.rotation.x, 0);
+  assert.equal(group.rotation.y, plot.rotY);
+  assert.equal(group.rotation.z, 0);
+  assert.deepEqual(slab.rotation, { x: 0, y: 0, z: 0 });
+  assert.deepEqual(sign.rotation, { x: 0, y: 0, z: 0 });
+});
+
+test('syncEmptyPadMarkers leaves stale foreign keys in emptyPadMarkers untouched and counts them in size', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const strayMarker = new THREE.Group();
+  const liveStore = {
+    plotAssignments: new Map(),
+    emptyPadMarkers: new Map([[99, strayMarker]]),
+  };
+
+  const count = syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt: () => 0,
+  });
+
+  assert.equal(count, 8);
+  assert.equal(liveStore.emptyPadMarkers.size, 8);
+  assert.equal(liveStore.emptyPadMarkers.get(99), strayMarker);
+  assert.equal(strayMarker.removedCount, 0);
+  assert.equal(scene.children.length, 7);
+});
+
+test('syncEmptyPadMarkers removes an orphan pre-seeded marker cleanly on assignment', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const orphan = new THREE.Group();
+  assert.equal(orphan.parent, null);
+  const liveStore = {
+    plotAssignments: new Map(),
+    emptyPadMarkers: new Map([[2, orphan]]),
+  };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  const count1 = syncEmptyPadMarkers(scene, liveStore, opts);
+  assert.equal(count1, 7);
+  assert.equal(scene.children.length, 6);
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 2 });
+  const count2 = syncEmptyPadMarkers(scene, liveStore, opts);
+  assert.equal(count2, 6);
+  assert.equal(orphan.removedCount, 1);
+  assert.equal(liveStore.emptyPadMarkers.has(2), false);
+  assert.equal(scene.children.length, 6);
+});
+
+test('syncEmptyPadMarkers throws TypeError when plotAssignments contains a null entry', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = {
+    plotAssignments: new Map([['ghost', null]]),
+    emptyPadMarkers: new Map(),
+  };
+
+  assert.throws(
+    () =>
+      syncEmptyPadMarkers(scene, liveStore, {
+        THREE,
+        makeTextTexture: () => ({}),
+        groundAt: () => 0,
+      }),
+    { name: 'TypeError', message: /plotNumber/ }
+  );
+});
+
+test('buildEmptyPadMarker passes fresh lines array and options object to makeTextTexture per build', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[1]; // plotNumber 2
+  const calls = [];
+  const makeTextTexture = (_three, lines, opts) => {
+    calls.push({ lines, opts });
+    return {};
+  };
+
+  buildEmptyPadMarker(THREE, plot, 0, makeTextTexture);
+  buildEmptyPadMarker(THREE, plot, 0, makeTextTexture);
+
+  assert.equal(calls.length, 2);
+  assert.notEqual(calls[0].opts, calls[1].opts);
+  assert.notEqual(calls[0].lines, calls[1].lines);
+  assert.equal(JSON.stringify(calls[0].opts), JSON.stringify(calls[1].opts));
+  assert.equal(JSON.stringify(calls[0].lines), JSON.stringify(calls[1].lines));
+});
+
+test('staging.js imports syncEmptyPadMarkers, wires both sync call sites, and handles open_plot clicks', () => {
+  const stagingSrc = readFileSync(new URL('./staging.js', import.meta.url), 'utf8');
+
+  assert.ok(
+    stagingSrc.includes("import { syncEmptyPadMarkers } from './empty-pad.mjs?v=35';"),
+    'staging.js must import syncEmptyPadMarkers from ./empty-pad.mjs?v=35'
+  );
+
+  const syncCalls = stagingSrc.match(/syncEmptyPadMarkers\(scene, liveStore, \{[\s\S]*?\}\);/g) || [];
+  assert.equal(syncCalls.length, 2);
+  for (const call of syncCalls) {
+    assert.ok(call.includes('makeTextTexture: makeBandstandTextTexture,'));
+    assert.ok(call.includes('groundAt: (x, z) => camp.groundAt(x, z),'));
+  }
+
+  assert.ok(stagingSrc.includes("if (kind === 'open_plot') {"));
+  assert.ok(stagingSrc.includes('`OPEN PLOT #${target.userData.plotNumber} — no resident yet`'));
+  assert.ok(stagingSrc.includes('infoStripEl.hidden = false;'));
+});
+
+test('drift guard: staging empty-pad rotation and position.set literals match town.js buildEmptyPlotPad', () => {
+  const townSrc = readFileSync(new URL('../town-3d/town.js', import.meta.url), 'utf8');
+  const stagingSrc = readFileSync(new URL('./empty-pad.mjs', import.meta.url), 'utf8');
+
+  const match = townSrc.match(/function buildEmptyPlotPad\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(match, 'buildEmptyPlotPad must exist in town-3d/town.js');
+  const townBody = match[0];
+
+  const literals = [
+    'group.rotation.y = plot.rotY',
+    'pad.position.set(0, 0.09, 0)',
+    'sign.position.set(2.0, 0.45, 2.35)',
+  ];
+
+  for (const lit of literals) {
+    assert.ok(townBody.includes(lit), `town.js buildEmptyPlotPad missing literal: ${lit}`);
+    assert.ok(stagingSrc.includes(lit), `staging-polyfork/empty-pad.mjs missing literal: ${lit}`);
+  }
+});
+
+test('syncEmptyPadMarkers ignores fractional plotNumber 2.5 but removes marker 2 for 2.0', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+
+  liveStore.plotAssignments.set('half', { plotNumber: 2.5 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(liveStore.emptyPadMarkers.has(2), true);
+
+  liveStore.plotAssignments.set('whole', { plotNumber: 2.0 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 6);
+  assert.equal(liveStore.emptyPadMarkers.has(2), false);
+});
+
+test('buildEmptyPadMarker creates fresh userData objects per build with expected keys', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[1]; // plotNumber 2
+  const g1 = buildEmptyPadMarker(THREE, plot, 0, () => ({}));
+  const g2 = buildEmptyPadMarker(THREE, plot, 0, () => ({}));
+
+  assert.notEqual(g1.userData, g2.userData);
+  assert.notEqual(g1.children[1].userData, g2.children[1].userData);
+
+  g1.userData.label = 'MUTATED';
+  g1.children[1].userData.signpostText = 'MUTATED';
+
+  assert.equal(g2.userData.label, 'OPEN PLOT #2');
+  assert.equal(g2.children[1].userData.signpostText, 'OPEN PLOT #2');
+  assert.deepEqual(Object.keys(g2.userData).sort(), ['clickable', 'kind', 'label', 'plotNumber']);
+});
