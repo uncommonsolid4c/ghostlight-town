@@ -1215,3 +1215,373 @@ test('fresh server state pins nightly_call, plots, inn, guestbook and events sha
     await ctx.close();
   }
 });
+
+async function signedSayAtServerTime(ctx, handle, privateKeyPem, body, kind = 'say') {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: '/api/town/ghostlight/say',
+    body: { body, kind },
+    handle,
+    privateKeyPem,
+    timestamp: ctx.nowSec(),
+  });
+  const res = await fetch(`${ctx.baseUrl}/api/town/ghostlight/say`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
+
+test('G1: join, checkin, say, and leave responses return exact sorted key sets', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keys,
+    });
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+    assert.deepEqual(Object.keys(joinRes.data).sort(), ['handle', 'origin', 'state_seq', 'status']);
+
+    const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(approveRes.status, 200);
+
+    const checkinRes = await client.checkin({ status_text: 'hi' });
+    assert.equal(checkinRes.status, 200);
+    assert.deepEqual(Object.keys(checkinRes.data).sort(), [
+      'expires_at',
+      'handle',
+      'lit_at',
+      'slot',
+      'state_seq',
+      'status_text',
+    ]);
+    assert.equal(checkinRes.data.lit_at + 2700, checkinRes.data.expires_at);
+
+    const sayRes = await client.say('hello');
+    assert.equal(sayRes.status, 201);
+    assert.deepEqual(Object.keys(sayRes.data).sort(), [
+      'body',
+      'created_at',
+      'handle',
+      'id',
+      'kind',
+      'reply_to',
+      'state_seq',
+    ]);
+    assert.equal(sayRes.data.reply_to, null);
+
+    const leaveRes = await client.leave();
+    assert.equal(leaveRes.status, 200);
+    assert.deepEqual(Object.keys(leaveRes.data).sort(), ['extinguished', 'handle', 'state_seq']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G2: plot PUT and GET responses return exact sorted key sets and matching timestamps', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const putRes = await client.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(putRes.status, 200);
+    assert.deepEqual(Object.keys(putRes.data).sort(), ['handle', 'plot_updated_at', 'state_seq']);
+
+    const getRes = await client.getPlot('gatekeeper');
+    assert.equal(getRes.status, 200);
+    assert.deepEqual(Object.keys(getRes.data).sort(), [
+      'handle',
+      'html',
+      'manifest',
+      'plot_updated_at',
+    ]);
+    assert.equal(getRes.data.plot_updated_at, putRes.data.plot_updated_at);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G3: full journey steps state_seq by exactly +1 per mutation', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...keys,
+    });
+
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+    const seq0 = s0.data.state_seq;
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+    assert.equal(joinRes.data.state_seq, seq0 + 1);
+
+    const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(approveRes.status, 200);
+    assert.equal(approveRes.data.state_seq, seq0 + 2);
+
+    const checkinRes = await client.checkin({ status_text: 'stepping' });
+    assert.equal(checkinRes.status, 200);
+    assert.equal(checkinRes.data.state_seq, seq0 + 3);
+
+    const sayRes = await client.say('step four');
+    assert.equal(sayRes.status, 201);
+    assert.equal(sayRes.data.state_seq, seq0 + 4);
+
+    const plotRes = await client.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(plotRes.status, 200);
+    assert.equal(plotRes.data.state_seq, seq0 + 5);
+
+    const leaveRes = await client.leave();
+    assert.equal(leaveRes.status, 200);
+    assert.equal(leaveRes.data.state_seq, seq0 + 6);
+
+    const sFinal = await client.state();
+    assert.equal(sFinal.status, 200);
+    assert.equal(sFinal.data.state_seq, seq0 + 6);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G4: fresh server state returns exact 13 top-level keys and matching UTC date on nightly_call and daily_game', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    assert.deepEqual(Object.keys(s.data).sort(), [
+      'daily_game',
+      'events',
+      'footlights',
+      'garden',
+      'guestbook',
+      'guestbook_by_plot',
+      'guestbook_pending',
+      'inn',
+      'nightly_call',
+      'plots',
+      'presence',
+      'prompt_book',
+      'state_seq',
+    ]);
+
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    assert.equal(s.data.nightly_call.date, todayUtc);
+    assert.equal(s.data.daily_game.date, s.data.nightly_call.date);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G5: state rows for footlight, prompt_book, and presence return exact sorted key sets', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const checkinRes = await client.checkin({ status_text: 'At the bandstand.' });
+    assert.equal(checkinRes.status, 200);
+    const sayRes = await client.say('Evening check.');
+    assert.equal(sayRes.status, 201);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+
+    assert.equal(s.data.footlights.length, 1);
+    assert.deepEqual(Object.keys(s.data.footlights[0]).sort(), [
+      'expires_at',
+      'handle',
+      'lit_at',
+      'role',
+      'slot',
+      'status_text',
+    ]);
+    assert.equal(s.data.footlights[0].role, 'muse');
+
+    assert.equal(s.data.prompt_book.length, 1);
+    assert.deepEqual(Object.keys(s.data.prompt_book[0]).sort(), [
+      'body',
+      'created_at',
+      'handle',
+      'id',
+      'kind',
+      'reply_to',
+      'role',
+    ]);
+
+    assert.equal(s.data.presence.length, 1);
+    assert.deepEqual(Object.keys(s.data.presence[0]).sort(), [
+      'handle',
+      'role',
+      'updated_at',
+      'zone',
+    ]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G6: immediate re-checkin within 60 s window returns 429 rate_limited with exact retry_after 60', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const c1 = await client.checkin({ status_text: 'first' });
+    assert.equal(c1.status, 200);
+
+    const c2 = await client.checkin({ status_text: 'second' });
+    assert.equal(c2.status, 429);
+    assert.equal(c2.data.error, 'rate_limited');
+    assert.equal(c2.data.retry_after, 60);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const fl = s.data.footlights.find((f) => f.handle === 'gatekeeper');
+    assert.ok(fl);
+    assert.equal(fl.status_text, 'first');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G7: say refreshes a lit footlight TTL while say by an unlit resident lights no footlight', async () => {
+  const ctx = await startClockTestServer();
+  try {
+    const gatekeeper = await createApprovedClient(ctx, 'gatekeeper');
+    const quietone = await createApprovedClient(ctx, 'quietone');
+
+    const c1 = await gatekeeper.checkin({ status_text: 'watch' });
+    assert.equal(c1.status, 200);
+    const exp1 = c1.data.expires_at;
+
+    ctx.advanceClock(1000);
+
+    const say1 = await signedSayAtServerTime(ctx, 'gatekeeper', gatekeeper.privateKeyPem, 'keeping watch');
+    assert.equal(say1.status, 201);
+
+    const s1 = await gatekeeper.state();
+    assert.equal(s1.status, 200);
+    const fl = s1.data.footlights.find((f) => f.handle === 'gatekeeper');
+    assert.ok(fl);
+    assert.equal(fl.expires_at, ctx.nowSec() + 2700);
+    assert.ok(fl.expires_at > exp1);
+
+    const say2 = await signedSayAtServerTime(ctx, 'quietone', quietone.privateKeyPem, 'hello from the gate');
+    assert.equal(say2.status, 201);
+
+    const s2 = await quietone.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.footlights.some((f) => f.handle === 'quietone'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G8: presence endpoint accepts gate and plot zones with exact keys and rejects invalid zone', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const pGate = await client.presence('gate');
+    assert.equal(pGate.status, 200);
+    assert.deepEqual(Object.keys(pGate.data).sort(), [
+      'handle',
+      'state_seq',
+      'updated_at',
+      'zone',
+    ]);
+    assert.equal(pGate.data.zone, 'gate');
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    const row = s1.data.presence.find((p) => p.handle === 'gatekeeper');
+    assert.ok(row);
+    assert.equal(row.zone, 'gate');
+
+    const pBad = await client.presence('roof');
+    assert.equal(pBad.status, 400);
+    assert.equal(pBad.data.error, 'invalid_zone');
+
+    const pPlot = await client.presence('plot:wick');
+    assert.equal(pPlot.status, 200);
+    assert.equal(pPlot.data.zone, 'plot:wick');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G9: plot PUT auth edges reject unknown and suspended residents while muted resident can plot but not say', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ghost = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'ghost',
+      ...generateKeypair(),
+    });
+    const ghostRes = await ghost.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(ghostRes.status, 401);
+    assert.equal(ghostRes.data.error, 'unknown_resident');
+
+    const suspended = await createApprovedClient(ctx, 'suspended-one');
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspended-one');
+    const suspRes = await suspended.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(suspRes.status, 403);
+    assert.equal(suspRes.data.error, 'resident_not_active');
+    assert.equal(suspRes.data.resident_status, 'suspended');
+
+    const muted = await createApprovedClient(ctx, 'muted-one');
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = ?").run('muted-one');
+    const mutedPlot = await muted.plot(VALID_MANIFEST, DESK_NOTE_HTML);
+    assert.equal(mutedPlot.status, 200);
+
+    const mutedSay = await muted.say('trying to speak');
+    assert.equal(mutedSay.status, 403);
+    assert.equal(mutedSay.data.error, 'resident_muted');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G10: all 10 bandstand avatarSpots are distinct and non-origin, and slot 9 places an avatar at spots[9]', async () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE);
+  const spots = town.parts.avatarSpots;
+  assert.equal(spots.length, 10);
+
+  const uniqueCoords = new Set(spots.map((s) => `${s.x},${s.y},${s.z}`));
+  assert.equal(uniqueCoords.size, 10);
+  for (const spot of spots) {
+    assert.ok(spot.x !== 0 || spot.y !== 0 || spot.z !== 0);
+  }
+
+  const ctx = await startTestServer();
+  try {
+    const slotnine = await createApprovedClient(ctx, 'slotnine');
+    const c = await slotnine.checkin({ slot: 9, status_text: 'nine' });
+    assert.equal(c.status, 200);
+    assert.equal(c.data.slot, 9);
+
+    const s = await slotnine.state();
+    assert.equal(s.status, 200);
+    const live = applyState(town, s.data);
+    const avatar = live.avatars.get('slotnine');
+    assert.ok(avatar);
+    assert.equal(avatar.position.x, spots[9].x);
+    assert.equal(avatar.position.y, spots[9].y);
+    assert.equal(avatar.position.z, spots[9].z);
+  } finally {
+    await ctx.close();
+  }
+});
