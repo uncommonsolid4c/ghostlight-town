@@ -967,3 +967,209 @@ test('closePlotOverlay leaves the title and sandbox untouched, and openGazetteOv
   assert.equal(gazetteEls.iframeEl.getAttribute('sandbox'), '');
   assert.equal(gazetteEls.titleEl.textContent, 'The Ghostlight Gazette — Issue #2');
 });
+
+
+test('resolvePlotOverlayContent rejects empty, whitespace-only, and non-string html with static fallback', async () => {
+  const apiHtml = (html) => async () => ({ status: 200, async json() { return { html }; } });
+  assert.deepEqual(await resolvePlotOverlayContent('wick', { fetchFn: apiHtml('   ') }), { kind: 'static', url: 'plots/wick/index.html' });
+  assert.deepEqual(await resolvePlotOverlayContent('wick', { fetchFn: apiHtml('') }), { kind: 'static', url: 'plots/wick/index.html' });
+  assert.deepEqual(await resolvePlotOverlayContent('wick', { fetchFn: apiHtml(42) }), { kind: 'static', url: 'plots/wick/index.html' });
+  assert.deepEqual(await resolvePlotOverlayContent('wick', { fetchFn: apiHtml(null) }), { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('resolvePlotOverlayContent encodes traversal-shaped handles into static URLs without fetching', async () => {
+  let calls = 0;
+  const countingFetch = async () => {
+    calls++;
+    return { status: 200, async json() { return { html: '<p>x</p>' }; } };
+  };
+  assert.deepEqual(await resolvePlotOverlayContent('../wick', { fetchFn: countingFetch }), { kind: 'static', url: 'plots/..%2Fwick/index.html' });
+  assert.equal(calls, 0);
+  assert.deepEqual(await resolvePlotOverlayContent('wick\n', { fetchFn: countingFetch }), { kind: 'static', url: 'plots/wick%0A/index.html' });
+  assert.equal(calls, 0);
+  assert.deepEqual(await resolvePlotOverlayContent('a/b', { fetchFn: countingFetch }), { kind: 'static', url: 'plots/a%2Fb/index.html' });
+  assert.equal(calls, 0);
+  assert.deepEqual(await resolvePlotOverlayContent('', { fetchFn: countingFetch }), { kind: 'static', url: 'plots//index.html' });
+  assert.equal(calls, 0);
+});
+
+test('resolvePlotOverlayContent apiBase edge values resolve to the bare path or strip trailing slash', async () => {
+  let url = null;
+  const captureFetch = async (u) => {
+    url = u;
+    return { status: 200, async json() { return { html: '<p>x</p>' }; } };
+  };
+  await resolvePlotOverlayContent('wick', { apiBase: '/', fetchFn: captureFetch });
+  assert.equal(url, '/api/town/plot?handle=wick');
+  await resolvePlotOverlayContent('wick', { apiBase: null, fetchFn: captureFetch });
+  assert.equal(url, '/api/town/plot?handle=wick');
+  await resolvePlotOverlayContent('wick', { apiBase: 'https://example.test/', fetchFn: captureFetch });
+  assert.equal(url, 'https://example.test/api/town/plot?handle=wick');
+  await resolvePlotOverlayContent('wick', { apiBase: undefined, fetchFn: captureFetch });
+  assert.equal(url, '/api/town/plot?handle=wick');
+});
+
+test('resolveGazetteOverlayContent issue-selection handles duplicate, leading junk, array, and number payloads', async () => {
+  const rDup = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { latest: 2, issues: [{ n: 2, file: 'issue-002.html' }, { n: 2, file: 'issue-002b.html' }] }; },
+    }),
+  });
+  assert.equal(rDup.issueFile, 'issue-002.html');
+  assert.equal(rDup.issueNum, 2);
+
+  const rJunk = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { latest: 2, issues: ['x', { n: 2, file: 'issue-002.html' }] }; },
+    }),
+  });
+  assert.equal(rJunk.issueFile, 'issue-002.html');
+
+  const rArr = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({ ok: true, async json() { return [1, 2]; } }),
+  });
+  assert.equal(rArr.issueFile, 'issue-001.html');
+  assert.equal(rArr.issueNum, 1);
+
+  const rNum = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({ ok: true, async json() { return 42; } }),
+  });
+  assert.equal(rNum.issueFile, 'issue-001.html');
+  assert.equal(rNum.issueNum, 1);
+});
+
+test('resolveGazetteOverlayContent filename accept and reject matrix', async () => {
+  const resolveWithFile = (file) => resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { latest: 2, issues: [{ n: 2, file }] }; },
+    }),
+  });
+  assert.equal((await resolveWithFile('issue_002.html')).issueFile, 'issue_002.html');
+  assert.equal((await resolveWithFile('issue-002.htm')).issueFile, 'issue-002.htm');
+  assert.equal((await resolveWithFile('2.html')).issueFile, '2.html');
+
+  const rQuery = await resolveWithFile('issue-002.html?x=1');
+  assert.equal(rQuery.issueFile, 'issue-001.html');
+  assert.equal(rQuery.issueNum, 1);
+
+  const rBackslash = await resolveWithFile('sub\\issue.html');
+  assert.equal(rBackslash.issueFile, 'issue-001.html');
+  assert.equal(rBackslash.issueNum, 1);
+
+  const rSpace = await resolveWithFile('issue-002.html ');
+  assert.equal(rSpace.issueFile, 'issue-001.html');
+  assert.equal(rSpace.issueNum, 1);
+});
+
+test('openPlotOverlay sets title and sandbox before the fetch resolves', async () => {
+  const els = makeFakeOverlayElements();
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const p = openPlotOverlay('wick', { ...els, fetchFn: async () => { await gate; return { status: 200, async json() { return { html: '<p>ok</p>' }; } }; } });
+  assert.equal(els.titleEl.textContent, '@wick — Desk Note');
+  assert.equal(els.iframeEl.getAttribute('sandbox'), '');
+  assert.equal(els.overlayEl.hidden, true);
+  assert.equal(els.iframeEl.src, '');
+  assert.equal(els.iframeEl.srcdoc, '');
+  release();
+  const res = await p;
+  assert.deepEqual(res, { kind: 'api', html: '<p>ok</p>' });
+  assert.equal(els.overlayEl.hidden, false);
+});
+
+test('openGazetteOverlay sets the title only after the fetch resolves', async () => {
+  const els = makeFakeOverlayElements();
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const p = openGazetteOverlay({ ...els, fetchFn: async () => { await gate; return { ok: true, async json() { return { latest: 2, issues: [{ n: 2, file: 'issue-002.html' }] }; } }; } });
+  assert.equal(els.titleEl.textContent, '');
+  assert.equal(els.overlayEl.hidden, true);
+  assert.equal(els.iframeEl.src, '');
+  release();
+  const res = await p;
+  assert.equal(res.issueNum, 2);
+  assert.equal(els.titleEl.textContent, 'The Ghostlight Gazette — Issue #2');
+  assert.equal(els.overlayEl.hidden, false);
+});
+
+test('openPlotOverlay handles back-to-back API and static transitions on shared elements', async () => {
+  const apiToStaticEls = makeFakeOverlayElements();
+  await openPlotOverlay('wick', {
+    ...apiToStaticEls,
+    fetchFn: async () => ({ status: 200, async json() { return { html: '<h1>Wick</h1>' }; } }),
+  });
+  assert.equal(apiToStaticEls.iframeEl.srcdoc, '<h1>Wick</h1>');
+  assert.equal(apiToStaticEls.iframeEl.getAttribute('src'), null);
+  const staticRes = await openPlotOverlay('maren', {
+    ...apiToStaticEls,
+    fetchFn: async () => ({ status: 404 }),
+  });
+  assert.deepEqual(staticRes, { kind: 'static', url: 'plots/maren/index.html' });
+  assert.equal(apiToStaticEls.titleEl.textContent, '@maren — Desk Note');
+  assert.equal(apiToStaticEls.iframeEl.getAttribute('srcdoc'), null);
+  assert.equal(apiToStaticEls.iframeEl.src, 'plots/maren/index.html');
+  assert.equal(apiToStaticEls.overlayEl.hidden, false);
+
+  const staticToApiEls = makeFakeOverlayElements();
+  await openPlotOverlay('wick', {
+    ...staticToApiEls,
+    fetchFn: async () => ({ status: 404 }),
+  });
+  assert.equal(staticToApiEls.iframeEl.src, 'plots/wick/index.html');
+  const apiRes = await openPlotOverlay('wick', {
+    ...staticToApiEls,
+    fetchFn: async () => ({ status: 200, async json() { return { html: '<h1>Wick</h1>' }; } }),
+  });
+  assert.deepEqual(apiRes, { kind: 'api', html: '<h1>Wick</h1>' });
+  assert.equal(staticToApiEls.iframeEl.srcdoc, '<h1>Wick</h1>');
+  assert.equal(staticToApiEls.iframeEl.getAttribute('src'), null);
+});
+
+test('closePlotOverlay is idempotent on double close and guards missing or empty arguments', () => {
+  const els = makeFakeOverlayElements();
+  els.overlayEl.hidden = false;
+  els.iframeEl.srcdoc = '<p>hi</p>';
+  let calls = 0;
+  closePlotOverlay({ overlayEl: els.overlayEl, iframeEl: els.iframeEl, onAfterClose: () => { calls++; } });
+  closePlotOverlay({ overlayEl: els.overlayEl, iframeEl: els.iframeEl, onAfterClose: () => { calls++; } });
+  assert.equal(els.overlayEl.hidden, true);
+  assert.equal(els.iframeEl.src, 'about:blank');
+  assert.equal(els.iframeEl.getAttribute('srcdoc'), null);
+  assert.equal(calls, 2);
+
+  assert.equal(closePlotOverlay(), undefined);
+  assert.equal(closePlotOverlay({}), undefined);
+});
+
+test('openPlotOverlay sets title for non-string handle and openGazetteOverlay clears stale srcdoc', async () => {
+  const plotEls = makeFakeOverlayElements();
+  let calls = 0;
+  const plotRes = await openPlotOverlay(42, {
+    ...plotEls,
+    fetchFn: async () => {
+      calls++;
+      return { status: 200, async json() { return { html: '<p>x</p>' }; } };
+    },
+  });
+  assert.deepEqual(plotRes, { kind: 'static', url: 'plots/42/index.html' });
+  assert.equal(plotEls.titleEl.textContent, '@42 — Desk Note');
+  assert.equal(calls, 0);
+
+  const gazetteEls = makeFakeOverlayElements();
+  gazetteEls.iframeEl.srcdoc = '<p>stale api note</p>';
+  gazetteEls.iframeEl.src = 'plots/wick/index.html';
+  const gazetteRes = await openGazetteOverlay({
+    ...gazetteEls,
+    fetchFn: async () => ({
+      ok: true,
+      async json() { return { latest: 2, issues: [{ n: 2, file: 'issue-002.html' }] }; },
+    }),
+  });
+  assert.equal(gazetteRes.issueFile, 'issue-002.html');
+  assert.equal(gazetteEls.iframeEl.getAttribute('srcdoc'), null);
+  assert.equal(gazetteEls.iframeEl.src, 'gazette/issue-002.html');
+  assert.equal(gazetteEls.overlayEl.hidden, false);
+});
