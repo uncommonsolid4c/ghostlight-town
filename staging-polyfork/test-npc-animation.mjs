@@ -497,3 +497,209 @@ test('updateNpcAnimations follows Map insertion order across calls', () => {
 
   assert.deepEqual(order, ['wick', 'maren', 'tomas', 'wick', 'maren', 'tomas']);
 });
+
+const WALK_CLIP_SHA256 = '41a931b763a88061e49c2eac86cbd19d3f290ab509768496dde755939dbbf03a';
+
+test('vendored anim-walk.json matches pinned sha256, size cap, and top-level schema', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-walk.json');
+  const rawBytes = fs.readFileSync(clipPath);
+  const sha256 = crypto.createHash('sha256').update(rawBytes).digest('hex');
+  assert.equal(sha256, WALK_CLIP_SHA256, 'anim-walk.json sha256 must match vendored bytes');
+  assert.ok(rawBytes.length <= 500 * 1024, 'anim-walk.json must stay under 500 KB');
+
+  const data = JSON.parse(rawBytes.toString('utf8'));
+  assert.equal(data.name, 'Walk');
+  assert.equal(data.cc0, true);
+  assert.deepEqual(Object.keys(data).sort(), ['cc0', 'hips', 'name', 'times', 'tracks']);
+});
+
+test('vendored anim-walk.json times are strictly increasing 0..1.3333 at ~30 fps and hips are finite', () => {
+  const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+
+  assert.equal(data.times.length, 41);
+  assert.equal(data.times[0], 0);
+  assert.equal(data.times[40], 1.3333);
+
+  const steps = new Set();
+  for (let i = 1; i < data.times.length; i++) {
+    assert.ok(data.times[i] > data.times[i - 1], `times[${i}] must be strictly greater than times[${i - 1}]`);
+    steps.add(Number((data.times[i] - data.times[i - 1]).toFixed(4)));
+  }
+  assert.deepEqual([...steps].sort((a, b) => a - b), [0.0333, 0.0334]);
+
+  assert.equal(data.hips.length, 123);
+  for (let i = 0; i < data.hips.length; i++) {
+    assert.equal(Number.isFinite(data.hips[i]), true, `hips[${i}] must be finite`);
+  }
+});
+
+test('vendored anim-walk.json tracks are the 22 Mixamo bones with finite unit quaternions in both builders', () => {
+  const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+  const trackKeys = Object.keys(data.tracks);
+  assert.equal(trackKeys.length, 22);
+
+  const villagerSrc = fs.readFileSync(path.join(__dirname, 'kit-medieval', 'villager.mjs'), 'utf8');
+  const tradesmanSrc = fs.readFileSync(path.join(__dirname, 'kit-medieval', 'tradesman.mjs'), 'utf8');
+
+  for (const [bone, values] of Object.entries(data.tracks)) {
+    assert.ok(MIXAMO_HUMANOID_BONES.has(bone), `unexpected track bone "${bone}"`);
+    assert.ok(villagerSrc.includes(bone), `villager.mjs must contain bone "${bone}"`);
+    assert.ok(tradesmanSrc.includes(bone), `tradesman.mjs must contain bone "${bone}"`);
+    assert.equal(values.length, 164, `track ${bone} must have 41 * 4 values`);
+    for (let i = 0; i < values.length; i++) {
+      assert.equal(Number.isFinite(values[i]), true, `track ${bone}[${i}] must be finite`);
+    }
+    for (let i = 0; i < values.length; i += 4) {
+      const norm = Math.hypot(values[i], values[i + 1], values[i + 2], values[i + 3]);
+      assert.ok(
+        Math.abs(norm - 1) <= 1e-3,
+        `track ${bone} quaternion at ${i / 4} has norm ${norm} outside 1e-3 of 1`
+      );
+    }
+  }
+});
+
+test('vendored anim-walk.json hips bob ranges match exact min/max bounds', () => {
+  const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (let i = 0; i < data.hips.length; i += 3) {
+    const x = data.hips[i];
+    const y = data.hips[i + 1];
+    const z = data.hips[i + 2];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  assert.deepEqual([minX, maxX], [-0.0327, 0.0407]);
+  assert.deepEqual([minY, maxY], [-0.0534, 0.0011]);
+  assert.deepEqual([minZ, maxZ], [0, 0.0003]);
+});
+
+test('vendored anim-idle.json and anim-walk.json drive the exact same 22 bones and carry clip metadata', () => {
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  const walk = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+
+  assert.deepEqual(Object.keys(walk.tracks).sort(), Object.keys(idle.tracks).sort());
+  assert.equal(idle.name, 'Idle');
+  assert.equal(idle.cc0, true);
+  assert.equal(walk.name, 'Walk');
+  assert.equal(walk.cc0, true);
+});
+
+test('default animate path wires npc-animation.mjs through kit-medieval/clips.mjs to _internal/clips.mjs', () => {
+  const npcAnimSrc = fs.readFileSync(path.join(__dirname, 'npc-animation.mjs'), 'utf8');
+  assert.ok(npcAnimSrc.includes("await import('./kit-medieval/clips.mjs')"));
+  assert.ok(npcAnimSrc.includes('.animate'));
+
+  const clipsWrapperSrc = fs.readFileSync(path.join(__dirname, 'kit-medieval', 'clips.mjs'), 'utf8');
+  assert.ok(clipsWrapperSrc.includes("export * from './_internal/clips.mjs'"));
+
+  const internalClipsSrc = fs.readFileSync(path.join(__dirname, 'kit-medieval', '_internal', 'clips.mjs'), 'utf8');
+  assert.ok(internalClipsSrc.includes('export const CLIP_NAMES'));
+  assert.ok(internalClipsSrc.includes("'Idle'"));
+  assert.ok(internalClipsSrc.includes("'Walk'"));
+  assert.ok(internalClipsSrc.includes('export async function animate('));
+});
+
+test('attachIdleAnimation and attachNpcAnimation strip extra option keys before calling animateFn', async () => {
+  const seen = [];
+  const fakeAnimate = async (_group, opts) => {
+    seen.push(opts);
+    return { update() {} };
+  };
+
+  await attachIdleAnimation({}, { name: 'idle' }, {
+    animateFn: fakeAnimate,
+    base: './custom/',
+    fade: 0.2,
+    inPlace: false,
+  });
+  await attachNpcAnimation({}, { name: 'npc' }, {
+    animateFn: fakeAnimate,
+    extra: 'nope',
+  });
+
+  assert.deepEqual(seen, [
+    { clips: ['Idle'], base: './custom/' },
+    { clips: ['Idle', 'Walk'], base: './anim/' },
+  ]);
+});
+
+test('attachIdleAnimation and attachNpcAnimation resolve handles from synchronous animateFn', async () => {
+  const handle = { update() {} };
+  const handle2 = { update() {}, locomotion() {} };
+
+  const res1 = await attachIdleAnimation({}, { name: 'sync-idle' }, { animateFn: () => handle });
+  const res2 = await attachNpcAnimation({}, { name: 'sync-npc' }, { animateFn: () => handle2 });
+
+  assert.equal(res1, handle);
+  assert.equal(res2, handle2);
+});
+
+test('thrown null or undefined in attachIdleAnimation and updateNpcAnimations warns once with empty value', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const resNull = await attachIdleAnimation({}, { name: 'null-throw' }, {
+      animateFn: async () => {
+        throw null;
+      },
+    });
+    assert.equal(resNull, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('[npc-animation]'));
+    assert.ok(warnings[0].includes('Idle clip'));
+    assert.ok(warnings[0].includes('stand-in stays still'));
+    assert.equal(warnings[0].endsWith('stand-in stays still: '), true);
+
+    warnings.length = 0;
+    const resUndef = await attachIdleAnimation({}, { name: 'undef-throw' }, {
+      animateFn: async () => {
+        throw undefined;
+      },
+    });
+    assert.equal(resUndef, null);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].endsWith('stand-in stays still: '), true);
+
+    warnings.length = 0;
+    const goodCalls = [];
+    const standIns = new Map([
+      ['bad', { anim: { update: () => { throw null; } } }],
+      ['good', { anim: { update: (dt) => goodCalls.push(dt) } }],
+    ]);
+    updateNpcAnimations(standIns, 0.025);
+    assert.deepEqual(goodCalls, [0.025]);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('[npc-animation] anim.update failed:'));
+    assert.equal(warnings[0].endsWith('anim.update failed: '), true);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('updateNpcAnimations honors custom .values(), rejects non-iterable objects, and staging.js stores standIn.anim', () => {
+  const calls = [];
+  const customContainer = {
+    values() {
+      return [{ anim: { update: (dt) => calls.push(dt) } }][Symbol.iterator]();
+    },
+  };
+  updateNpcAnimations(customContainer, 0.04);
+  assert.deepEqual(calls, [0.04]);
+
+  assert.throws(() => updateNpcAnimations({ a: 1 }, 0.016), TypeError);
+
+  const stagingSrc = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(stagingSrc.includes('attachNpcAnimation(THREE, standIn.group, { animateFn: animate }).then((anim) => {'));
+  assert.ok(stagingSrc.includes('standIn.anim = anim;'));
+  assert.ok(stagingSrc.includes("['wick', {"));
+  assert.ok(stagingSrc.includes("['maren', {"));
+  assert.ok(stagingSrc.includes("['tomas', {"));
+});
