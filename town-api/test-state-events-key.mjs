@@ -1199,3 +1199,386 @@ test('GET /api/town/state reports guestbook_pending count for the moderation que
     await ctx.close();
   }
 });
+
+test('GET /api/town/state counts pending letters in guestbook_pending', async () => {
+  const ctx = await startStateServer();
+
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl });
+    const gb = await visitor.signGuestbook('guestbook', 'Guest A', 'Hello town');
+    const lt = await visitor.signGuestbook('letter', 'Reader', 'Dear editor');
+    assert.equal(gb.status, 201);
+    assert.equal(lt.status, 201);
+
+    const s1 = await ctx.getState();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.body.guestbook_pending, 2);
+    assert.deepEqual(s1.body.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(s1.body.guestbook_by_plot, {});
+
+    const modLt = await ctx.admin.moderateGuestbook(lt.data.id, 'approve');
+    assert.equal(modLt.status, 200);
+    const s2 = await ctx.getState();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.body.guestbook_pending, 1);
+    assert.deepEqual(s2.body.guestbook, { signed: 0, letters: 1 });
+
+    const modGb = await ctx.admin.moderateGuestbook(gb.data.id, 'approve');
+    assert.equal(modGb.status, 200);
+    const s3 = await ctx.getState();
+    assert.equal(s3.status, 200);
+    assert.equal(s3.body.guestbook_pending, 0);
+    assert.deepEqual(s3.body.guestbook, { signed: 1, letters: 1 });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state returns null events for an empty events array', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({ baseNow, eventsContent: { events: [] } });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now, null);
+    assert.equal(body.events.next, null);
+    assert.deepEqual(Object.keys(body.events).sort(), ['next', 'now']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state strips extra fields from surfaced events', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Extra Fields',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+          foo: 'bar',
+          notes: 'x',
+          id: 42,
+          extra: { nested: true },
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Extra Fields');
+    assert.deepEqual(Object.keys(body.events.now).sort(), EVENT_KEYS);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state drops non-object entries from the events array', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        'just a string',
+        42,
+        null,
+        ['nested'],
+        {
+          title: 'Real One',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Real One');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state accepts a fractional duration_min and drops a string one', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'String Duration',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: '60',
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Half Minute',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -1800),
+          duration_min: 30.5,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Half Minute');
+    assert.equal(body.events.now.duration_min, 30.5);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state accepts an 80-char title and 200-char blurb, rejects a 201-char blurb', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const title80 = 'T'.repeat(80);
+  const blurb200 = 'B'.repeat(200);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Too Verbose',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 240,
+          location: 'bandstand',
+          blurb: 'B'.repeat(201),
+        },
+        {
+          title: title80,
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: blurb200,
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, title80);
+    assert.equal(body.events.now.blurb, blurb200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state drops entries with unparseable, empty, or non-string start_at', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Not A Date',
+          host_handle: 'milo',
+          start_at: 'not a date',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Empty Start',
+          host_handle: 'milo',
+          start_at: '',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Blank Start',
+          host_handle: 'milo',
+          start_at: '   ',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Number Start',
+          host_handle: 'milo',
+          start_at: 12345,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Good Date',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Good Date');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state drops an uppercase host_handle and trims a padded one', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Upper Host',
+          host_handle: 'HOST',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 240,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Padded Host',
+          host_handle: '  host  ',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Padded Host');
+    assert.equal(body.events.now.host_handle, 'host');
+    const hostRow = body.footlights.find((r) => r.handle === 'host');
+    assert.ok(hostRow);
+    assert.equal(hostRow.status_text, 'Padded Host');
+    assert.equal(hostRow.event, true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state does not reload events on a same-mtime rewrite, but does on a mtime bump', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startAt = isoAt(baseNow, -900);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'First Title',
+          host_handle: 'milo',
+          start_at: startAt,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    assert.equal(first.body.events.now.title, 'First Title');
+    const seq = first.body.state_seq;
+    const origMtimeMs = fs.statSync(ctx.eventsPath).mtimeMs;
+
+    fs.writeFileSync(
+      ctx.eventsPath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Second Title',
+            host_handle: 'milo',
+            start_at: startAt,
+            duration_min: 60,
+            location: 'bandstand',
+            blurb: 'b',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    fs.utimesSync(ctx.eventsPath, origMtimeMs / 1000, origMtimeMs / 1000);
+    assert.equal(fs.statSync(ctx.eventsPath).mtimeMs, origMtimeMs);
+
+    const stale = await ctx.getState(seq);
+    assert.equal(stale.status, 304);
+    assert.equal(stale.body, null);
+
+    const plain = await ctx.getState();
+    assert.equal(plain.status, 200);
+    assert.equal(plain.body.events.now.title, 'First Title');
+
+    const newer = new Date(Date.now() + 5000);
+    fs.utimesSync(ctx.eventsPath, newer, newer);
+
+    const reloaded = await ctx.getState(seq);
+    assert.equal(reloaded.status, 200);
+    assert.ok(reloaded.body.state_seq > seq);
+    assert.equal(reloaded.body.events.now.title, 'Second Title');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state counts a plot-scoped pending letter in guestbook_pending only', async () => {
+  const ctx = await startStateServer();
+
+  try {
+    await registerResident(ctx, 'wick');
+    ctx.db
+      .prepare(
+        "INSERT INTO guestbook (kind, name, body, plot, status, created_at) VALUES ('letter', 'Reader', 'Letter for wick', 'wick', 'pending', ?)",
+      )
+      .run(ctx.baseNow);
+
+    const s1 = await ctx.getState();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.body.guestbook_pending, 1);
+    assert.deepEqual(s1.body.guestbook_by_plot, {});
+    assert.deepEqual(s1.body.guestbook, { signed: 0, letters: 0 });
+
+    const row = ctx.db.prepare("SELECT id FROM guestbook WHERE plot = 'wick'").get();
+    assert.ok(row);
+    const mod = await ctx.admin.moderateGuestbook(row.id, 'approve');
+    assert.equal(mod.status, 200);
+
+    const s2 = await ctx.getState();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.body.guestbook_pending, 0);
+    assert.equal(s2.body.guestbook.letters, 0);
+    assert.deepEqual(s2.body.guestbook_by_plot, {});
+  } finally {
+    await ctx.close();
+  }
+});
