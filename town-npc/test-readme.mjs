@@ -628,3 +628,499 @@ test('town-npc/README.md honest-limits bullets match run.mjs and register.mjs', 
   const brainIdx = runSrc.indexOf('brainImpl(');
   assert.ok(probeIdx !== -1 && brainIdx !== -1 && probeIdx < brainIdx, 'run.mjs must probe /api/town/state before calling brainImpl');
 });
+
+test('town-npc/README.md shipped-file count is 8 and Files table has exactly 8 rows', () => {
+  const shippedFiles = fs
+    .readdirSync(__dirname, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.mjs') && !entry.name.startsWith('test-'))
+    .map((entry) => entry.name)
+    .sort();
+
+  assert.equal(shippedFiles.length, 8);
+  assert.deepEqual(shippedFiles, [
+    'characters.mjs',
+    'daily-game.mjs',
+    'honesty.mjs',
+    'keygen.mjs',
+    'register.mjs',
+    'run-all.mjs',
+    'run.mjs',
+    'stepback.mjs',
+  ]);
+
+  const tableSection = readReadme().match(/## Files\n\n([\s\S]*?)\n\nTest suites:/);
+  assert.ok(tableSection, 'town-npc/README.md must have a ## Files table followed by Test suites:');
+  const listedFiles = [...tableSection[1].matchAll(/^\|\s*`([^`]+)`\s*\|/gm)].map((m) => m[1]);
+  assert.equal(listedFiles.length, 8);
+  assert.deepEqual([...listedFiles].sort(), shippedFiles);
+});
+
+test('town-npc/README.md daily-game host rotation, line format, and posted guard match daily-game.mjs', async () => {
+  const { FORMAT_LABELS, dailyGameHostForDate, buildDailyGameLine, isDailyGamePosted } = await import('./daily-game.mjs');
+
+  const hosts = [
+    dailyGameHostForDate('2026-11-22'),
+    dailyGameHostForDate('2026-11-23'),
+    dailyGameHostForDate('2026-11-24'),
+  ];
+  assert.deepEqual(hosts, ['maren', 'tomas', 'wick']);
+  assert.equal(new Set(hosts).size, 3);
+
+  const dayNumber = Math.floor(Date.UTC(2026, 10, 22) / 86400000);
+  const startIdx = ((dayNumber % CHARACTERS.length) + CHARACTERS.length) % CHARACTERS.length;
+  const cyclic = [0, 1, 2].map((offset) => CHARACTERS[(startIdx + offset) % CHARACTERS.length].handle);
+  assert.deepEqual(hosts, cyclic);
+
+  assert.deepEqual(FORMAT_LABELS, {
+    riddle: 'Riddle',
+    word: 'Word game',
+    story: 'Story chain',
+  });
+
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'What has keys?' } }),
+    "Today's game — Riddle: What has keys?"
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'word', prompt: 'anagram' } }),
+    "Today's game — Word game: anagram"
+  );
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'story', prompt: 'Once...' } }),
+    "Today's game — Story chain: Once..."
+  );
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'unknown', prompt: 'x' } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: '   ' } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: null }), null);
+  assert.equal(buildDailyGameLine(), null);
+
+  assert.equal(dailyGameHostForDate('2026-02-30'), null);
+  assert.equal(dailyGameHostForDate('not-a-date'), null);
+  assert.equal(dailyGameHostForDate(''), null);
+  assert.equal(dailyGameHostForDate(20261122), null);
+
+  const game = { format: 'riddle', prompt: 'What has keys?' };
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ handle: 'maren', body: "Today's game — Riddle: What has keys?" }],
+      dailyGame: game,
+    }),
+    true
+  );
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: game }), false);
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [{ handle: 'maren', body: 'Different prompt entirely' }],
+      dailyGame: game,
+    }),
+    false
+  );
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: null }), false);
+  assert.equal(isDailyGamePosted({ promptBook: 'not-an-array', dailyGame: game }), false);
+});
+
+test('town-npc/README.md getStatusText fallback chain and buildSystemPrompt contents match characters.mjs', async () => {
+  const { getStatusText, buildSystemPrompt } = await import('./characters.mjs');
+
+  assert.equal(getStatusText(CHARACTERS[0], 'morning'), 'Sweeping the bandstand steps');
+  assert.equal(getStatusText(CHARACTERS[0], 'afternoon'), 'Browsing the Gazette newsstand');
+  assert.equal(getStatusText(CHARACTERS[0], 'evening'), 'Tending the Ghostlight bulb');
+
+  assert.equal(getStatusText({ title: 'X' }, 'night'), 'X');
+  assert.equal(getStatusText({ routine: { morning: 'r' } }, 'morning'), 'r');
+  assert.equal(getStatusText({}, 'morning'), '');
+  assert.equal(getStatusText(null, 'morning'), '');
+
+  const prompt = buildSystemPrompt(CHARACTERS[0], 'morning');
+  for (const needle of [
+    'You are Wick (Stagehand / Lamp-Trimmer) in Ghostlight Town.',
+    'Past: ',
+    'Want: ',
+    'Quirk: ',
+    'Earliest memory: ',
+    'Current morning routine: update the plot desk note and stand by the porch.',
+    "never correct a visitor's sense of the hour",
+    'Never write "[NPC]"',
+    'under 500 characters',
+    'NOTHING',
+  ]) {
+    assert.ok(prompt.includes(needle), `buildSystemPrompt must include ${needle}`);
+  }
+
+  for (const c of CHARACTERS) {
+    assert.deepEqual(Object.keys(c.routine).sort(), ['afternoon', 'evening', 'morning']);
+    assert.deepEqual(Object.keys(c.status).sort(), ['afternoon', 'evening', 'morning']);
+  }
+});
+
+test('town-npc/README.md getCharacter and CHARACTERS_BY_HANDLE match characters.mjs', async () => {
+  const { getCharacter, CHARACTERS_BY_HANDLE } = await import('./characters.mjs');
+
+  assert.equal(getCharacter('wick'), CHARACTERS[0]);
+  assert.equal(getCharacter('maren').title, 'Retired Typesetter');
+  assert.equal(getCharacter('tomas').name, 'Tomas');
+  assert.equal(getCharacter('nope'), null);
+  assert.equal(getCharacter('WICK'), null);
+  assert.equal(getCharacter(''), null);
+
+  assert.deepEqual(Object.keys(CHARACTERS_BY_HANDLE), ['wick', 'maren', 'tomas']);
+  for (const c of CHARACTERS) {
+    assert.match(c.handle, /^[a-z0-9][a-z0-9_-]{1,31}$/);
+  }
+});
+
+test('town-npc/README.md findAddressedLines 30-minute window and case-insensitivity match stepback.mjs', async () => {
+  const { findAddressedLines } = await import('./stepback.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+
+  const promptBook = [
+    { id: 1, handle: 'muse', body: 'Wick, did you sweep the steps?', created_at: now - 60 },
+    { id: 2, handle: 'lampmoth', body: 'hello WICK', created_at: now - 29 * 60 },
+    { id: 3, handle: 'wick', body: 'Wick checking in', created_at: now - 30 },
+    { id: 4, handle: 'muse', body: 'Wick earlier', created_at: now - 31 * 60 },
+    { id: 5, handle: 'muse', body: 'Wick without timestamp' },
+    { id: 6, handle: 'muse', body: 'Quiet evening at the Bandstand', created_at: now - 60 },
+  ];
+
+  const found = findAddressedLines({ npc: CHARACTERS[0], promptBook, now });
+  assert.deepEqual(
+    found.map((l) => l.id),
+    [1, 2]
+  );
+  assert.deepEqual(findAddressedLines({ npc: CHARACTERS[0], promptBook: [], now }), []);
+});
+
+test('town-npc/README.md decideTurn handover branches match stepback.mjs', async () => {
+  const { decideTurn, localDateString } = await import('./stepback.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const today = localDateString(now);
+  const npc = CHARACTERS[0];
+  const addressedLine = { handle: 'muse', body: 'Wick, did you sweep?', created_at: now - 60, id: 7 };
+
+  const tenFootlights = Array.from({ length: 10 }, (_, i) => ({ role: 'muse', handle: `m${i}` }));
+  const retired = decideTurn({ npc, state: { footlights: tenFootlights, prompt_book: [addressedLine] }, now });
+  assert.equal(retired.action, 'retired');
+  assert.equal(retired.replyLine, null);
+
+  const fiveFootlights = ['muse', 'lampmoth', 'museforsarp', 'puck', 'juniper'].map((handle) => ({
+    role: 'muse',
+    handle,
+  }));
+  assert.equal(decideTurn({ npc, state: { footlights: fiveFootlights, prompt_book: [] }, now }).action, 'silent');
+  const fiveReply = decideTurn({
+    npc,
+    state: { footlights: fiveFootlights, prompt_book: [addressedLine] },
+    now,
+  });
+  assert.equal(fiveReply.action, 'reply');
+  assert.deepEqual(fiveReply.replyLine, { id: 7, handle: 'muse' });
+
+  const twoLit = [
+    { role: 'muse', handle: 'muse' },
+    { role: 'muse', handle: 'lampmoth' },
+  ];
+  assert.equal(decideTurn({ npc, state: { footlights: twoLit, prompt_book: [] }, now }).action, 'silent');
+  const twoReply = decideTurn({
+    npc,
+    state: { footlights: twoLit, prompt_book: [addressedLine] },
+    now,
+  });
+  assert.equal(twoReply.action, 'reply');
+  assert.deepEqual(twoReply.replyLine, { id: 7, handle: 'muse' });
+
+  assert.equal(
+    decideTurn({
+      npc,
+      state: { footlights: [], prompt_book: [] },
+      npcState: { ambient_date: today, ambient_today: 2 },
+      now,
+    }).action,
+    'silent'
+  );
+  assert.equal(
+    decideTurn({
+      npc,
+      state: { footlights: [], prompt_book: [] },
+      npcState: { ambient_date: today, ambient_today: 1 },
+      now,
+    }).action,
+    'initiate'
+  );
+  assert.equal(
+    decideTurn({
+      npc,
+      state: { footlights: [], prompt_book: [] },
+      npcState: { ambient_date: '2026-11-21', ambient_today: 2 },
+      now,
+    }).action,
+    'initiate'
+  );
+
+  const routine = decideTurn({
+    npc,
+    state: {
+      footlights: [],
+      prompt_book: [{ id: 10, role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 4 * 3600 }],
+    },
+    now,
+  });
+  assert.equal(routine.action, 'initiate');
+  assert.match(routine.reason, /routine turn/);
+
+  const directReply = decideTurn({
+    npc,
+    state: { footlights: [], prompt_book: [addressedLine] },
+    now,
+  });
+  assert.equal(directReply.action, 'reply');
+  assert.deepEqual(directReply.replyLine, { id: 7, handle: 'muse' });
+});
+
+test('town-npc/README.md selectReplierForLine designation matches stepback.mjs', async () => {
+  const { selectReplierForLine } = await import('./stepback.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+
+  for (const [id, expected] of [
+    [0, 'wick'],
+    [1, 'maren'],
+    [2, 'tomas'],
+    [3, 'wick'],
+  ]) {
+    const res = selectReplierForLine({
+      state: {
+        prompt_book: [{ id, role: 'muse', kind: 'say', handle: 'muse', body: 'Good evening', created_at: now - 60 }],
+      },
+      now,
+    });
+    assert.equal(res.designatedHandle, expected);
+    assert.equal(res.method, 'rotation');
+  }
+
+  const addressed = selectReplierForLine({
+    state: {
+      prompt_book: [
+        { id: 0, role: 'muse', kind: 'say', handle: 'muse', body: 'Tomas, pass the tea', created_at: now - 60 },
+      ],
+    },
+    now,
+  });
+  assert.equal(addressed.designatedHandle, 'tomas');
+  assert.equal(addressed.method, 'addressed');
+
+  const zoned = selectReplierForLine({
+    state: {
+      prompt_book: [{ id: 0, role: 'muse', kind: 'say', handle: 'muse', body: 'Quiet porch', created_at: now - 60 }],
+      presence: [{ handle: 'muse', zone: 'plot:maren', updated_at: now - 60 }],
+    },
+    now,
+  });
+  assert.equal(zoned.designatedHandle, 'maren');
+  assert.equal(zoned.method, 'plot-zone');
+
+  assert.equal(
+    selectReplierForLine({
+      state: {
+        prompt_book: [
+          { id: 1, role: 'muse', kind: 'say', handle: 'muse', body: 'Hello', created_at: now - 120 },
+          { id: 2, role: 'npc', kind: 'say', handle: 'wick', body: 'Evening', created_at: now - 60 },
+        ],
+      },
+      now,
+    }),
+    null
+  );
+
+  assert.equal(
+    selectReplierForLine({
+      state: {
+        prompt_book: [{ id: 1, role: 'muse', kind: 'say', handle: 'muse', body: 'Old', created_at: now - 4 * 3600 }],
+      },
+      now,
+    }),
+    null
+  );
+
+  assert.equal(selectReplierForLine({ state: { prompt_book: [] }, now }), null);
+
+  const emote = selectReplierForLine({
+    state: {
+      prompt_book: [{ id: 4, role: 'muse', kind: 'emote', handle: 'muse', body: 'nods', created_at: now - 60 }],
+    },
+    now,
+  });
+  assert.equal(emote.designatedHandle, 'maren');
+  assert.equal(emote.method, 'rotation');
+});
+
+test('town-npc/README.md checkHonesty verdicts and denylist contents match honesty.mjs', async () => {
+  const { checkHonesty, MAX_SAY_LEN, HONESTY_DENYLIST } = await import('./honesty.mjs');
+
+  assert.deepEqual(checkHonesty({ text: '' }), { ok: false, reasons: ['empty_draft'] });
+  assert.deepEqual(checkHonesty({ text: '   ' }), { ok: false, reasons: ['empty_draft'] });
+
+  assert.equal(MAX_SAY_LEN, 500);
+  assert.equal(checkHonesty({ text: 'a'.repeat(500) }).ok, true);
+  const tooLong = checkHonesty({ text: 'a'.repeat(501) });
+  assert.equal(tooLong.ok, false);
+  assert.ok(tooLong.reasons.some((r) => r.startsWith('exceeds_max_length (501 > 500)')));
+
+  const bannedTermDraft = `meet at the Camp${'fire'} tonight`;
+  const bannedTermRes = checkHonesty({ text: bannedTermDraft });
+  assert.equal(bannedTermRes.ok, false);
+  assert.ok(bannedTermRes.reasons.includes(`forbidden_terminology: camp${'fire'}`));
+
+  assert.deepEqual(HONESTY_DENYLIST, [
+    'i am a real muse',
+    "i'm a real muse",
+    'i am human',
+    "i'm human",
+    'my human',
+    'my operator',
+    'outside ghostlight',
+  ]);
+  assert.equal(HONESTY_DENYLIST.length, 7);
+  for (const phrase of HONESTY_DENYLIST) {
+    const res = checkHonesty({ text: `note: ${phrase} here` });
+    assert.equal(res.ok, false);
+    assert.ok(res.reasons.includes(`denylist_phrase: "${phrase}"`));
+  }
+
+  const unverified = checkHonesty({ text: '"The bulb is bright" says stranger', promptBook: [] });
+  assert.equal(unverified.ok, false);
+  assert.ok(unverified.reasons.includes('unverified_attribution: stranger'));
+
+  assert.equal(
+    checkHonesty({
+      text: '"The bulb is bright" says muse',
+      promptBook: [{ handle: 'muse', body: 'The bulb is bright and warm' }],
+    }).ok,
+    true
+  );
+
+  assert.equal(
+    checkHonesty({
+      text: '"swept clean" says wick',
+      npc: { handle: 'wick' },
+      promptBook: [],
+    }).ok,
+    true
+  );
+
+  const transcript = checkHonesty({ text: 'muse: hello there friend', promptBook: [] });
+  assert.equal(transcript.ok, false);
+  assert.ok(transcript.reasons.includes('unverified_attribution: muse'));
+});
+
+test('town-npc/README.md keygen edge cases match keygen.mjs', async () => {
+  const { loadKeypair, ensureKeypair } = await import('./keygen.mjs');
+  const os = await import('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-keygen-'));
+
+  try {
+    assert.equal(loadKeypair({ handle: 'wick', stateDir: tmpDir }), null);
+
+    const npcDir = path.join(tmpDir, 'wick');
+    fs.mkdirSync(npcDir, { recursive: true });
+    fs.writeFileSync(path.join(npcDir, 'key.pem'), 'dummy', 'utf8');
+    assert.equal(loadKeypair({ handle: 'wick', stateDir: tmpDir }), null);
+    fs.unlinkSync(path.join(npcDir, 'key.pem'));
+
+    fs.writeFileSync(path.join(npcDir, 'pubkey.txt'), 'dummy', 'utf8');
+    assert.equal(loadKeypair({ handle: 'wick', stateDir: tmpDir }), null);
+    fs.unlinkSync(path.join(npcDir, 'pubkey.txt'));
+
+    assert.throws(() => ensureKeypair({ handle: 'Wick', stateDir: tmpDir }), /Invalid handle: Wick/);
+    assert.throws(() => ensureKeypair({ handle: 'bad handle', stateDir: tmpDir }), /Invalid handle/);
+    assert.throws(() => ensureKeypair({ handle: '', stateDir: tmpDir }), /Invalid handle/);
+
+    const first = ensureKeypair({ handle: 'wick', stateDir: tmpDir });
+    assert.equal(first.generated, true);
+    assert.equal(fs.statSync(first.keyPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(first.pubkeyPath).mode & 0o777, 0o644 & ~process.umask());
+    assert.ok(first.privateKeyPem.startsWith('-----BEGIN PRIVATE KEY-----'));
+    assert.equal(fs.readFileSync(first.pubkeyPath, 'utf8').trim(), first.pubkey);
+
+    const second = ensureKeypair({ handle: 'wick', stateDir: tmpDir, force: true });
+    assert.equal(second.generated, true);
+    assert.notEqual(second.pubkey, first.pubkey);
+    assert.equal(loadKeypair({ handle: 'wick', stateDir: tmpDir }).pubkey, second.pubkey);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('town-npc/README.md register join origin/bio and runAll summary shape match register.mjs and run-all.mjs', async () => {
+  const { runAll } = await import('./run-all.mjs');
+  const os = await import('node:os');
+
+  const registerSrc = fs.readFileSync(path.join(__dirname, 'register.mjs'), 'utf8');
+  assert.ok(registerSrc.includes("const SEED_NPCS = ['wick', 'maren', 'tomas'];"));
+  assert.ok(registerSrc.includes("client.join({ origin: 'colony', bio: character.title })"));
+  assert.ok(
+    registerSrc.includes(
+      'Usage: node town-npc/register.mjs --api-base <url> [--state-dir ./npc_state] --operator-key <path-to-operator-key.pem> [--npc wick|maren|tomas]'
+    )
+  );
+
+  const stubFetch = async () => ({
+    ok: true,
+    json: async () => ({ footlights: [], prompt_book: [], presence: [], daily_game: null }),
+  });
+  const stateDir = path.join(os.tmpdir(), 'ghostlight-readme-g10');
+
+  const stubApiBase = 'http://stub.local';
+
+  const sleeps = [];
+  const logs = [];
+  const res = await runAll({
+    apiBase: stubApiBase,
+    stateDir,
+    dryRun: true,
+    fetchImpl: stubFetch,
+    logger: (obj) => logs.push(obj),
+    sleepImpl: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.results.length, 3);
+  assert.deepEqual(
+    res.results.map((r) => r.npc),
+    ['wick', 'maren', 'tomas']
+  );
+  for (const r of res.results) {
+    assert.deepEqual(Object.keys(r).sort(), ['action', 'npc', 'ok', 'posted']);
+    assert.deepEqual(r, { npc: r.npc, action: 'dry_run', posted: false, ok: true });
+  }
+  assert.deepEqual(sleeps, [60000, 60000]);
+  assert.deepEqual(logs[logs.length - 1], { action: 'run_all', ok: true, npcs: res.results });
+
+  const sleepsOne = [];
+  const resOne = await runAll({
+    apiBase: stubApiBase,
+    stateDir,
+    npc: 'maren',
+    dryRun: true,
+    fetchImpl: stubFetch,
+    logger: () => {},
+    sleepImpl: async (ms) => {
+      sleepsOne.push(ms);
+    },
+  });
+  assert.equal(resOne.ok, true);
+  assert.equal(resOne.results.length, 1);
+  assert.equal(resOne.results[0].npc, 'maren');
+  assert.deepEqual(sleepsOne, []);
+
+  const resNope = await runAll({
+    apiBase: stubApiBase,
+    stateDir,
+    npc: 'nope',
+    dryRun: true,
+    fetchImpl: stubFetch,
+    logger: () => {},
+    sleepImpl: async () => {},
+  });
+  assert.deepEqual(resNope, { ok: false, results: [] });
+});
