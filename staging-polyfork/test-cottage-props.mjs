@@ -881,3 +881,221 @@ test('every VALID_PROP_KIND builds; attachPlotProps rejects non-array props; MIL
     assert.equal(mesh.material.color, prop.color);
   }
 });
+
+test('buildProp kind is exact-match: case variants and non-string kinds rejected', () => {
+  const THREE = makeFakeThree();
+  for (const badKind of ['Desk', 'DESK', ' desk', 'desk ', 42, true, ['desk']]) {
+    assert.equal(
+      buildProp(THREE, { kind: badKind, x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }),
+      null,
+      `expected null for kind=${JSON.stringify(badKind)}`
+    );
+  }
+});
+
+test('buildProp coordinate y edges, Infinity, and rot_y 360', () => {
+  const THREE = makeFakeThree();
+  for (const y of [12, -12]) {
+    const built = buildProp(THREE, { kind: 'desk', x: 0, y, z: 2.2, rot_y: 0, color: '#ffffff' });
+    assert.ok(built, `expected y=${y} to build`);
+  }
+  for (const y of [12.0001, -12.0001]) {
+    assert.equal(
+      buildProp(THREE, { kind: 'desk', x: 0, y, z: 2.2, rot_y: 0, color: '#ffffff' }),
+      null,
+      `expected null for y=${y}`
+    );
+  }
+
+  for (const coords of [
+    { x: Infinity, y: 0, z: 2.2 },
+    { x: 0, y: Infinity, z: 2.2 },
+    { x: 0, y: 0, z: -Infinity },
+  ]) {
+    assert.equal(
+      buildProp(THREE, { kind: 'desk', ...coords, rot_y: 0, color: '#ffffff' }),
+      null
+    );
+  }
+
+  assert.equal(buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 360, color: '#ffffff' }), null);
+  const near360 = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 359.999999, color: '#ffffff' });
+  assert.ok(near360);
+  assert.ok(Math.abs(near360.rotation.y - (359.999999 * Math.PI) / 180) < 1e-12);
+});
+
+test('MILO_PLOT_PROPS deep-equals the manifest literal', () => {
+  assert.deepEqual(MILO_PLOT_PROPS, [
+    { kind: 'desk', x: -1.2, y: 0, z: 2.2, rot_y: 180, color: '#7a5230' },
+    { kind: 'tea_kettle', x: -1.0, y: 0.78, z: 2.2, rot_y: 45, color: '#b87333' },
+    { kind: 'cat', x: 1.3, y: 0, z: 2.1, rot_y: 210, color: '#2b2b2b' },
+  ]);
+});
+
+test('buildProp ignores extra fields and builds from frozen input', () => {
+  const THREE = makeFakeThree();
+  const extra = buildProp(THREE, {
+    kind: 'desk',
+    x: 0,
+    y: 0,
+    z: 2.2,
+    rot_y: 0,
+    color: '#ffffff',
+    foo: 'bar',
+    scale: 2,
+    name: 'custom',
+  });
+  assert.ok(extra);
+  assert.equal(extra.name, 'prop_desk');
+  assert.deepEqual(extra.geometry.args, [1.1, 0.72, 0.6]);
+
+  const frozen = Object.freeze({ kind: 'cat', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#2b2b2b' });
+  const cat = buildProp(THREE, frozen);
+  assert.ok(cat);
+  assert.equal(cat.name, 'prop_cat');
+});
+
+test('group props carry nonzero y, rot_y, and remapped z on the group while children stay local', () => {
+  const THREE = makeFakeThree();
+
+  const lantern = buildProp(THREE, { kind: 'lantern', x: 0.5, y: 0.5, z: -1, rot_y: 270, color: '#6b492b' });
+  assert.ok(lantern);
+  assert.ok(Math.abs(lantern.position.y - 0.68) < 1e-12);
+  assert.ok(Math.abs(lantern.position.z - 3.1) < 1e-12);
+  assert.ok(Math.abs(lantern.rotation.y - (270 * Math.PI) / 180) < 1e-12);
+  const post = lantern.children.find((c) => c.name === 'prop_lantern_post');
+  assert.ok(post);
+  assert.equal(post.position.x, 0);
+  assert.equal(post.position.y, 0.45);
+  assert.equal(post.position.z, 0);
+
+  const planter = buildProp(THREE, { kind: 'planter', x: -0.5, y: 0.25, z: 1.2, rot_y: 45, color: '#7a5230' });
+  assert.ok(planter);
+  assert.ok(Math.abs(planter.position.y - 0.43) < 1e-12);
+  assert.ok(Math.abs(planter.position.z - 2.33) < 1e-12);
+  assert.ok(Math.abs(planter.rotation.y - (45 * Math.PI) / 180) < 1e-12);
+});
+
+test('attachPlotProps handles sparse arrays and preserves pre-existing children', () => {
+  const THREE = makeFakeThree();
+
+  const cottage1 = new THREE.Group();
+  const pre = new THREE.Group();
+  pre.name = 'pre_existing';
+  cottage1.add(pre);
+  // eslint-disable-next-line no-sparse-arrays
+  const attached = attachPlotProps(THREE, cottage1, [undefined, MILO_PLOT_PROPS[0], , MILO_PLOT_PROPS[2]]);
+  assert.equal(attached, 2);
+  assert.deepEqual(
+    cottage1.children.map((c) => c.name),
+    ['pre_existing', 'prop_desk', 'prop_cat']
+  );
+
+  const cottage2 = new THREE.Group();
+  const keep = new THREE.Group();
+  keep.name = 'keep';
+  cottage2.add(keep);
+  assert.equal(
+    attachPlotProps(THREE, cottage2, [{ kind: 'invalid', x: 0, y: 0, z: 0, rot_y: 0, color: '#000000' }]),
+    0
+  );
+  assert.deepEqual(
+    cottage2.children.map((c) => c.name),
+    ['keep']
+  );
+});
+
+test('porch contact relationships: deck, step, balusters, and posts meet', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const deck = attachPorchDeck(THREE, cottage);
+  const trim = attachPorchTrim(THREE, cottage);
+
+  const deckBottomY = deck.position.y - deck.geometry.args[1] / 2;
+  const deckTopY = deck.position.y + deck.geometry.args[1] / 2;
+  const deckMinX = deck.position.x - deck.geometry.args[0] / 2;
+  const deckMaxX = deck.position.x + deck.geometry.args[0] / 2;
+  const deckEndZ = deck.position.z + deck.geometry.args[2] / 2;
+
+  assert.ok(Math.abs(deckBottomY - 0) < 1e-12);
+  assert.ok(Math.abs(deckMinX - -2.4) < 1e-12);
+  assert.ok(Math.abs(deckMaxX - 2.4) < 1e-12);
+
+  const posts = trim.children.filter((c) => c.name === 'cottage_porch_post');
+  const rails = trim.children.filter((c) => c.name === 'cottage_porch_rail');
+  const balusters = trim.children.filter((c) => c.name === 'cottage_porch_baluster');
+  const step = trim.children.find((c) => c.name === 'cottage_porch_step');
+
+  assert.equal(posts.length, 2);
+  for (const post of posts) {
+    assert.ok(post.position.x > deckMinX && post.position.x < deckMaxX);
+    assert.ok(Math.abs(post.position.y - post.geometry.args[1] / 2 - deckTopY) < 1e-12);
+    assert.ok(Math.abs(post.position.y + post.geometry.args[1] / 2 - 2.0) < 1e-12);
+  }
+
+  const stepStartZ = step.position.z - step.geometry.args[2] / 2;
+  const stepTopY = step.position.y + step.geometry.args[1] / 2;
+  assert.ok(Math.abs(stepStartZ - deckEndZ) < 1e-12);
+  assert.ok(stepTopY < deckTopY);
+
+  assert.equal(balusters.length, 2);
+  assert.equal(rails.length, 2);
+  for (let i = 0; i < balusters.length; i++) {
+    const b = balusters[i];
+    const r = rails[i];
+    const balusterBottomY = b.position.y - b.geometry.args[1] / 2;
+    const balusterTopY = b.position.y + b.geometry.args[1] / 2;
+    const railUndersideY = r.position.y - r.geometry.args[1] / 2;
+    assert.ok(Math.abs(balusterBottomY - deckTopY) < 1e-12);
+    assert.ok(Math.abs(balusterTopY - railUndersideY) < 1e-12);
+  }
+});
+
+test('safeColor and HEX_COLOR_RE whitespace and fallback edges', async () => {
+  const { HEX_COLOR_RE, safeColor } = await import('./cottage-props.mjs');
+
+  assert.equal(safeColor('#123456 ', '#8a6240'), '#8a6240');
+  assert.equal(safeColor(' #123456', '#8a6240'), '#8a6240');
+  assert.equal(safeColor('#12345G', '#8a6240'), '#8a6240');
+  assert.equal(safeColor(undefined, '#000000'), '#000000');
+  assert.equal(safeColor('#abcdef', '#000000'), '#abcdef');
+
+  assert.equal(HEX_COLOR_RE.test(''), false);
+  assert.equal(HEX_COLOR_RE.test('#abcdef'), true);
+  assert.equal(HEX_COLOR_RE.test('#ABCDEF '), false);
+});
+
+test('single-mesh kinds return Mesh and group kinds return Group', () => {
+  const THREE = makeFakeThree();
+
+  for (const kind of ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame']) {
+    const built = buildProp(THREE, { kind, x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' });
+    assert.ok(built instanceof THREE.Mesh, `${kind} should be Mesh`);
+    assert.ok(built.geometry, `${kind} should have geometry`);
+    assert.equal('children' in built, false, `${kind} should not have children`);
+  }
+
+  for (const kind of ['lantern', 'planter']) {
+    const built = buildProp(THREE, { kind, x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' });
+    assert.ok(built instanceof THREE.Group, `${kind} should be Group`);
+    assert.equal('geometry' in built, false, `${kind} should not have geometry`);
+    assert.ok(Array.isArray(built.children), `${kind} should have children array`);
+  }
+});
+
+test('buildProp remap formula extra spot checks including just-below-boundary clamp', () => {
+  const THREE = makeFakeThree();
+
+  const clampBelow = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.049999, rot_y: 0, color: '#7a5230' });
+  assert.ok(Math.abs(clampBelow.position.z - 2.05) < 1e-12);
+
+  const nearPos = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 1.999999, rot_y: 0, color: '#7a5230' });
+  assert.ok(Math.abs(nearPos.position.z - 2.05000035) < 1e-9);
+
+  const nearNeg = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: -1.999999, rot_y: 0, color: '#7a5230' });
+  assert.ok(Math.abs(nearNeg.position.z - 3.44999965) < 1e-9);
+
+  const passThrough = buildProp(THREE, { kind: 'desk', x: 0, y: -0.5, z: 12, rot_y: 0, color: '#7a5230' });
+  assert.ok(Math.abs(passThrough.position.y - 0.04) < 1e-12);
+  assert.equal(passThrough.position.z, 12);
+});
