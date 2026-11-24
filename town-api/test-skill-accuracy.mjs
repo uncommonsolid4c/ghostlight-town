@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { createTownServer } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
 import { getPartOfDay } from '../town-npc/run.mjs';
+import { dailyGameHostForDate, buildDailyGameLine, FORMAT_LABELS } from '../town-npc/daily-game.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -1054,4 +1055,772 @@ test('SKILL.md §5 Inn room key is returned once and never in state', async () =
 
   assert.ok(skillMd.includes('the key is never exposed in `/api/town/state`'));
   assert.ok(skillMd.includes('public state only shows who holds each room and when the stay expires'));
+});
+
+async function signedPostAt(ctx, endpoint, payload, handle, privateKeyPem) {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: endpoint,
+    body: payload,
+    handle,
+    privateKeyPem,
+    timestamp: ctx.nowSec(),
+  });
+  const res = await fetch(`${ctx.baseUrl}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, data };
+}
+
+test('SKILL.md §3 fish doc, rate limits, client methods, settle window, and no state_seq bump (G1)', async () => {
+  const rl = parseRateLimits();
+  assert.equal(rl.fishCast.max, 10);
+  assert.equal(rl.fishCast.windowSec, 3600);
+  assert.equal(parseServerConstNumber('SETTLE_SEC'), 300);
+
+  const castSec = getEndpointSection('POST', '/api/town/fish/cast');
+  assert.ok(castSec.includes('10/hour per resident'));
+  assert.ok(castSec.includes('reel_at = cast_at + 300'));
+  assert.ok(castSec.includes('5-minute settle'));
+  assert.ok(castSec.includes('Does not bump `state_seq`'));
+
+  const reelSec = getEndpointSection('POST', '/api/town/fish/reel');
+  for (const code of ['already_cast', 'line_settling', 'no_active_cast', 'resident_muted']) {
+    assert.ok(
+      castSec.includes(code) || reelSec.includes(code) || skillMd.includes(code),
+      `Missing ${code} in fish docs`
+    );
+  }
+  assert.ok(clientSrc.includes('async fishCast('));
+  assert.ok(clientSrc.includes('async fishReel('));
+
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  const catchKinds = new Set([
+    'old_boot',
+    'tin_kettle',
+    'rusty_spoon',
+    'soggy_glove',
+    'tangled_string',
+    'poem_in_a_bottle',
+    'silver_minnow',
+    'glass_float',
+  ]);
+  try {
+    const keys = generateKeypair();
+    const joined = await signedPostAt(
+      ctx,
+      '/api/town/join',
+      { handle: 'alice', pubkey: keys.pubkey, origin: 'direct' },
+      'alice',
+      keys.privateKeyPem
+    );
+    assert.equal(joined.status, 201);
+
+    const s0 = (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+
+    const cast1 = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(cast1.status, 201);
+    assert.equal(cast1.data.reel_at, cast1.data.cast_at + 300);
+    assert.equal((await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq, s0);
+
+    const castDup = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(castDup.status, 409);
+    assert.equal(castDup.data.error, 'already_cast');
+
+    const earlyReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+    assert.equal(earlyReel.status, 409);
+    assert.equal(earlyReel.data.error, 'line_settling');
+
+    now += 300;
+    const okReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+    assert.equal(okReel.status, 200);
+    assert.ok(catchKinds.has(okReel.data.catch.kind));
+    assert.equal(typeof okReel.data.catch.label, 'string');
+    assert.equal(typeof okReel.data.catch.flavor, 'string');
+    assert.equal((await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq, s0);
+
+    const secondReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+    assert.equal(secondReel.status, 404);
+    assert.equal(secondReel.data.error, 'no_active_cast');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 guest fish doc, per-handle bucket, and resident-handle collision (G2)', async () => {
+  const rl = parseRateLimits();
+  assert.equal(rl.guestFishCast.max, 2);
+  assert.equal(rl.guestFishCast.windowSec, 3600);
+
+  const guestCastSec = getEndpointSection('POST', '/api/town/fish/guest/cast');
+  assert.ok(guestCastSec.includes('2/hour per guest handle'));
+  for (const code of ['invalid_handle', 'missing_pubkey', 'handle_taken', 'already_cast']) {
+    assert.ok(guestCastSec.includes(code), `Missing ${code} in guest fish cast doc`);
+  }
+
+  assert.ok(
+    skillMd.includes(
+      'Guests can fish too via `POST /api/town/fish/guest/cast` and `POST /api/town/fish/guest/reel` with a tighter limit (2 casts/hour vs 10 casts/hour for residents)'
+    )
+  );
+  for (const absentMethod of ['guestFishCast', 'guestFishReel', 'fishGuestCast', 'fishGuestReel']) {
+    assert.equal(clientSrc.includes(absentMethod), false, `Unexpected ${absentMethod} in ghostlight-client.mjs`);
+  }
+  const guestReelSec = getEndpointSection('POST', '/api/town/fish/guest/reel');
+  assert.equal(guestCastSec.includes('client.'), false);
+  assert.equal(guestReelSec.includes('client.'), false);
+  assert.ok(serverSrc.includes('`guest-fish-cast:${handle}`'));
+
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  const catchKinds = new Set([
+    'old_boot',
+    'tin_kettle',
+    'rusty_spoon',
+    'soggy_glove',
+    'tangled_string',
+    'poem_in_a_bottle',
+    'silver_minnow',
+    'glass_float',
+  ]);
+  try {
+    const aliceKeys = generateKeypair();
+    const joined = await signedPostAt(
+      ctx,
+      '/api/town/join',
+      { handle: 'alice', pubkey: aliceKeys.pubkey, origin: 'direct' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(joined.status, 201);
+
+    const gKeys = generateKeypair();
+    const collision = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'alice', pubkey: gKeys.pubkey },
+      'alice',
+      gKeys.privateKeyPem
+    );
+    assert.equal(collision.status, 409);
+    assert.equal(collision.data.error, 'handle_taken');
+
+    const gCast = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor1', pubkey: gKeys.pubkey },
+      'visitor1',
+      gKeys.privateKeyPem
+    );
+    assert.equal(gCast.status, 201);
+
+    const gEarly = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor1', pubkey: gKeys.pubkey },
+      'visitor1',
+      gKeys.privateKeyPem
+    );
+    assert.equal(gEarly.status, 409);
+    assert.equal(gEarly.data.error, 'line_settling');
+
+    now += 300;
+    const gOk = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor1', pubkey: gKeys.pubkey },
+      'visitor1',
+      gKeys.privateKeyPem
+    );
+    assert.equal(gOk.status, 200);
+    assert.ok(catchKinds.has(gOk.data.catch.kind));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 fish log doc and latest-first/empty/invalid behavior (G3)', async () => {
+  const logSec = getEndpointSection('GET', '/api/town/fish/log?handle=<handle>');
+  for (const phrase of ['latest first, cap 50', 'empty list if no catches', 'NOT a score or leaderboard', 'invalid_handle']) {
+    assert.ok(logSec.includes(phrase), `Missing "${phrase}" in fish/log doc`);
+  }
+  assert.ok(serverSrc.includes('ORDER BY created_at DESC, id DESC LIMIT 50'));
+
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const emptyRes = await fetch(`${ctx.baseUrl}/api/town/fish/log?handle=nobody`);
+    assert.equal(emptyRes.status, 200);
+    assert.deepEqual(await emptyRes.json(), { handle: 'nobody', catches: [], count: 0 });
+
+    const badRes = await fetch(`${ctx.baseUrl}/api/town/fish/log?handle=BAD!`);
+    assert.equal(badRes.status, 400);
+    assert.equal((await badRes.json()).error, 'invalid_handle');
+
+    const keys = generateKeypair();
+    const joined = await signedPostAt(
+      ctx,
+      '/api/town/join',
+      { handle: 'alice', pubkey: keys.pubkey, origin: 'direct' },
+      'alice',
+      keys.privateKeyPem
+    );
+    assert.equal(joined.status, 201);
+
+    assert.equal((await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem)).status, 201);
+    now += 300;
+    assert.equal((await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem)).status, 200);
+    now += 10;
+    assert.equal((await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem)).status, 201);
+    now += 300;
+    assert.equal((await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem)).status, 200);
+
+    const logRes = await fetch(`${ctx.baseUrl}/api/town/fish/log?handle=alice`);
+    assert.equal(logRes.status, 200);
+    const log = await logRes.json();
+    assert.equal(log.count, 2);
+    assert.equal(log.catches.length, 2);
+    assert.ok(log.catches[0].caught_at > log.catches[1].caught_at);
+    for (const c of log.catches) {
+      assert.equal(typeof c.kind, 'string');
+      assert.equal(typeof c.label, 'string');
+      assert.equal(typeof c.flavor, 'string');
+      assert.equal(typeof c.caught_at, 'number');
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 garden doc, slots, bed-full, and UTC-day growth stages (G4)', async () => {
+  const rl = parseRateLimits();
+  assert.equal(rl.gardenPlant.max, 10);
+  assert.equal(rl.gardenPlant.windowSec, 3600);
+
+  const gardenSec = getEndpointSection('POST', '/api/town/garden/plant');
+  for (const seed of ['moonflower', 'lantern_poppy', 'tea_mint', 'starwort', 'ghost_bell', 'silver_thyme']) {
+    assert.ok(gardenSec.includes(seed), `Missing seed ${seed} in garden/plant doc`);
+  }
+  assert.ok(gardenSec.includes('assigns lowest free slot `0..5`'));
+  assert.ok(gardenSec.includes('stage: "sprout"'));
+  assert.ok(gardenSec.includes('10/hour per resident'));
+  assert.ok(gardenSec.includes('bumps `state_seq`'));
+  for (const code of ['invalid_seed', 'already_planted', 'bed_full']) {
+    assert.ok(gardenSec.includes(code), `Missing ${code} in garden/plant doc`);
+  }
+
+  assert.equal(parseServerConstNumber('GARDEN_SLOTS'), 6);
+  const seedsMatch = serverSrc.match(/const\s+GARDEN_SEEDS\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/);
+  assert.ok(seedsMatch, 'Could not find GARDEN_SEEDS in server.mjs');
+  const seedKinds = [...seedsMatch[1].matchAll(/kind:\s*'([^']+)',\s*label:/g)].map((m) => m[1]).sort();
+  assert.deepEqual(seedKinds, ['ghost_bell', 'lantern_poppy', 'moonflower', 'silver_thyme', 'starwort', 'tea_mint']);
+
+  assert.ok(skillMd.includes('`sprout` (0–1 days) → `leaf` (2–3 days) → `bloom` (4+ days)'));
+
+  // Live slots, duplicate, and bed-full
+  {
+    let now = Math.floor(Date.now() / 1000);
+    const ctx = await startTestServer({ nowFn: () => now });
+    try {
+      const joinAndPlant = async (handle, seed) => {
+        const keys = generateKeypair();
+        const j = await signedPostAt(
+          ctx,
+          '/api/town/join',
+          { handle, pubkey: keys.pubkey, origin: 'direct' },
+          handle,
+          keys.privateKeyPem
+        );
+        assert.equal(j.status, 201, `join failed for ${handle}`);
+        const p = await signedPostAt(ctx, '/api/town/garden/plant', { seed }, handle, keys.privateKeyPem);
+        return { keys, plant: p };
+      };
+
+      const aliceKeys = generateKeypair();
+      assert.equal(
+        (
+          await signedPostAt(
+            ctx,
+            '/api/town/join',
+            { handle: 'alice', pubkey: aliceKeys.pubkey, origin: 'direct' },
+            'alice',
+            aliceKeys.privateKeyPem
+          )
+        ).status,
+        201
+      );
+
+      const badSeed = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: 'rose' },
+        'alice',
+        aliceKeys.privateKeyPem
+      );
+      assert.equal(badSeed.status, 400);
+      assert.equal(badSeed.data.error, 'invalid_seed');
+
+      const s0 = (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+      const p0 = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: 'moonflower' },
+        'alice',
+        aliceKeys.privateKeyPem
+      );
+      assert.equal(p0.status, 201);
+      assert.equal(p0.data.slot, 0);
+      assert.equal(p0.data.seed, 'moonflower');
+      assert.equal(p0.data.stage, 'sprout');
+      assert.equal((await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq, s0 + 1);
+
+      const dup = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: 'tea_mint' },
+        'alice',
+        aliceKeys.privateKeyPem
+      );
+      assert.equal(dup.status, 409);
+      assert.equal(dup.data.error, 'already_planted');
+      assert.equal(dup.data.slot, 0);
+      assert.equal(dup.data.seed, 'moonflower');
+
+      const fourHandles = ['bob', 'carol', 'dave', 'erin'];
+      for (let i = 0; i < fourHandles.length; i++) {
+        const { plant } = await joinAndPlant(fourHandles[i], 'starwort');
+        assert.equal(plant.status, 201);
+        assert.equal(plant.data.slot, i + 1);
+      }
+
+      now += 3601;
+      const fay = await joinAndPlant('fay', 'starwort');
+      assert.equal(fay.plant.status, 201);
+      assert.equal(fay.plant.data.slot, 5);
+
+      now += 3601;
+      const gus = await joinAndPlant('gus', 'starwort');
+      assert.equal(gus.plant.status, 409);
+      assert.equal(gus.plant.data.error, 'bed_full');
+    } finally {
+      await ctx.close();
+    }
+  }
+
+  // Growth stages derive from UTC days
+  {
+    let now = Math.floor(Date.now() / 1000);
+    const ctx = await startTestServer({ nowFn: () => now });
+    try {
+      const keys = generateKeypair();
+      assert.equal(
+        (
+          await signedPostAt(
+            ctx,
+            '/api/town/join',
+            { handle: 'alice', pubkey: keys.pubkey, origin: 'direct' },
+            'alice',
+            keys.privateKeyPem
+          )
+        ).status,
+        201
+      );
+      assert.equal(
+        (await signedPostAt(ctx, '/api/town/garden/plant', { seed: 'moonflower' }, 'alice', keys.privateKeyPem))
+          .status,
+        201
+      );
+
+      const getStage = async () => {
+        const st = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+        return st.garden.slots.find((s) => s.handle === 'alice')?.stage;
+      };
+
+      assert.equal(await getStage(), 'sprout');
+      now += 2 * 86400;
+      assert.equal(await getStage(), 'leaf');
+      now += 2 * 86400;
+      assert.equal(await getStage(), 'bloom');
+      now += 30 * 86400;
+      assert.equal(await getStage(), 'bloom');
+    } finally {
+      await ctx.close();
+    }
+  }
+});
+
+test('SKILL.md §3 guest garden doc and IP-keyed bucket match server.mjs and town.json (G5)', async () => {
+  const rl = parseRateLimits();
+  assert.equal(rl.guestGardenPlant.max, 2);
+  assert.equal(rl.guestGardenPlant.windowSec, 3600);
+
+  const guestGardenSec = getEndpointSection('POST', '/api/town/garden/guest/plant');
+  assert.ok(guestGardenSec.includes('shares the 6-slot bed and one-planting-per-handle rule'));
+  assert.ok(guestGardenSec.includes('2/hour'));
+  assert.equal(guestGardenSec.includes('per guest'), false);
+  for (const code of ['invalid_handle', 'missing_pubkey', 'invalid_seed', 'handle_taken', 'already_planted', 'bed_full']) {
+    assert.ok(guestGardenSec.includes(code), `Missing ${code} in guest garden doc`);
+  }
+
+  const townJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const guestGardenEndpoint = townJson.endpoints.find((e) => e.path === '/api/town/garden/guest/plant');
+  assert.ok(guestGardenEndpoint);
+  assert.equal(guestGardenEndpoint.rate_limit, '2/hour');
+
+  assert.ok(serverSrc.includes('`guest-garden-plant:${ip}`'));
+  assert.ok(serverSrc.includes('`garden-plant:${auth.handle}`'));
+  assert.ok(clientSrc.includes('async gardenGuestPlant('));
+  assert.equal(guestGardenSec.includes('gardenGuestPlant'), false);
+
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const g1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: keys.pubkey, seed: 'moonflower' },
+      'guest_a',
+      keys.privateKeyPem
+    );
+    assert.equal(g1.status, 201);
+    assert.equal(g1.data.slot, 0);
+
+    const g2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b', pubkey: keys.pubkey, seed: 'tea_mint' },
+      'guest_b',
+      keys.privateKeyPem
+    );
+    assert.equal(g2.status, 201);
+    assert.equal(g2.data.slot, 1);
+
+    const g3 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_c', pubkey: keys.pubkey, seed: 'starwort' },
+      'guest_c',
+      keys.privateKeyPem
+    );
+    assert.equal(g3.status, 429);
+    assert.equal(g3.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §5 daily game doc, nightly_call/daily_game in state, and host rotation (G6)', async () => {
+  const dgStart = skillMd.indexOf('### Daily game');
+  const gardenStart = skillMd.indexOf('### Garden', dgStart);
+  assert.ok(dgStart !== -1 && gardenStart !== -1);
+  const dgSec = skillMd.slice(dgStart, gardenStart);
+
+  for (const phrase of [
+    'derived from the UTC date',
+    'three rotating formats (riddle, word game, one-line story chain)',
+    'served as `daily_game { date, format, prompt }`',
+    'One seed NPC hosts it each day (rotating daily among Wick, Maren, and Tomas)',
+  ]) {
+    assert.ok(dgSec.includes(phrase), `Missing "${phrase}" in Daily game section`);
+  }
+
+  const games = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town-api/daily-games.json'), 'utf8'));
+  const topics = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town-api/nightly-topics.json'), 'utf8'));
+  assert.ok(Array.isArray(games) && games.length > 0);
+  const validFormats = new Set(['riddle', 'word', 'story']);
+  for (const entry of games) {
+    assert.ok(validFormats.has(entry.format));
+    assert.equal(typeof entry.prompt, 'string');
+    assert.ok(entry.prompt.length >= 1 && entry.prompt.length <= 160);
+  }
+  assert.ok(Array.isArray(topics) && topics.length > 0);
+  for (const t of topics) {
+    assert.equal(typeof t, 'string');
+  }
+
+  const ctx = await startTestServer();
+  try {
+    const state = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    assert.equal(state.nightly_call.date, todayUtc);
+    assert.ok(topics.includes(state.nightly_call.topic));
+    assert.equal(state.daily_game.date, todayUtc);
+    assert.ok(validFormats.has(state.daily_game.format));
+    assert.ok(games.some((g) => g.prompt === state.daily_game.prompt && g.format === state.daily_game.format));
+  } finally {
+    await ctx.close();
+  }
+
+  assert.deepEqual(
+    [
+      dailyGameHostForDate('2026-11-24'),
+      dailyGameHostForDate('2026-11-25'),
+      dailyGameHostForDate('2026-11-26'),
+    ].sort(),
+    ['maren', 'tomas', 'wick']
+  );
+  assert.equal(dailyGameHostForDate('not-a-date'), null);
+  assert.equal(dailyGameHostForDate(42), null);
+  assert.equal(dailyGameHostForDate('2026-02-30'), null);
+  assert.deepEqual(FORMAT_LABELS, { riddle: 'Riddle', word: 'Word game', story: 'Story chain' });
+  assert.equal(buildDailyGameLine({}), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'bogus', prompt: 'x' } }), null);
+  assert.equal(buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'Why?' } }), "Today's game — Riddle: Why?");
+});
+
+test('SKILL.md say reply_to doc and validation match server.mjs (G7)', async () => {
+  const saySec = getEndpointSection('POST', '/api/town/ghostlight/say');
+  assert.ok(saySec.includes('`reply_to` optional positive integer id of an existing Prompt Book line'));
+  assert.ok(saySec.includes('invalid_reply_to'));
+
+  const guestSaySec = getEndpointSection('POST', '/api/town/ghostlight/guest/say');
+  assert.ok(guestSaySec.includes('invalid_reply_to'));
+
+  assert.equal((serverSrc.match(/invalid_reply_to/g) || []).length, 4);
+
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    assert.equal(
+      (
+        await signedPostAt(
+          ctx,
+          '/api/town/join',
+          { handle: 'alice', pubkey: keys.pubkey, origin: 'direct' },
+          'alice',
+          keys.privateKeyPem
+        )
+      ).status,
+      201
+    );
+
+    for (const badId of [0, -5, 999999]) {
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/ghostlight/say',
+        { body: 'nope', reply_to: badId },
+        'alice',
+        keys.privateKeyPem
+      );
+      assert.equal(r.status, 400);
+      assert.equal(r.data.error, 'invalid_reply_to');
+    }
+
+    const first = await signedPostAt(
+      ctx,
+      '/api/town/ghostlight/say',
+      { body: 'first line' },
+      'alice',
+      keys.privateKeyPem
+    );
+    assert.equal(first.status, 201);
+    assert.equal(typeof first.data.id, 'number');
+
+    const reply = await signedPostAt(
+      ctx,
+      '/api/town/ghostlight/say',
+      { body: 'answer', reply_to: first.data.id },
+      'alice',
+      keys.privateKeyPem
+    );
+    assert.equal(reply.status, 201);
+    assert.equal(reply.data.reply_to, first.data.id);
+
+    const state = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    const pbEntry = state.prompt_book.find((e) => e.id === reply.data.id);
+    assert.ok(pbEntry);
+    assert.equal(pbEntry.reply_to, first.data.id);
+
+    const gKeys = generateKeypair();
+    const gBad = await signedPostAt(
+      ctx,
+      '/api/town/ghostlight/guest/say',
+      { handle: 'visitor1', pubkey: gKeys.pubkey, body: 'hi', reply_to: 0 },
+      'visitor1',
+      gKeys.privateKeyPem
+    );
+    assert.equal(gBad.status, 400);
+    assert.equal(gBad.data.error, 'invalid_reply_to');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md checkin auto-slot, say TTL refresh, and leave doc and live behavior (G8)', async () => {
+  assert.equal(parseServerConstNumber('FOOTLIGHT_TTL_SEC'), 2700);
+  assert.ok(getEndpointSection('POST', '/api/town/ghostlight/checkin').includes('Lights your footlight for 45 minutes'));
+  assert.ok(getEndpointSection('POST', '/api/town/ghostlight/say').includes('Refreshes your footlight TTL if lit'));
+  assert.ok(getEndpointSection('POST', '/api/town/ghostlight/leave').includes('Puts your footlight out'));
+  assert.ok(serverSrc.includes('UPDATE footlights SET expires_at = ? WHERE handle = ? AND expires_at > ?'));
+
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const joinUser = async (handle) => {
+      const keys = generateKeypair();
+      const j = await signedPostAt(
+        ctx,
+        '/api/town/join',
+        { handle, pubkey: keys.pubkey, origin: 'direct' },
+        handle,
+        keys.privateKeyPem
+      );
+      assert.equal(j.status, 201);
+      return keys;
+    };
+
+    const aliceKeys = await joinUser('alice');
+    const bobKeys = await joinUser('bob');
+    const carolKeys = await joinUser('carol');
+
+    const cAlice = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'alice', aliceKeys.privateKeyPem);
+    assert.equal(cAlice.status, 200);
+    assert.equal(cAlice.data.slot, 0);
+    assert.equal(cAlice.data.expires_at, cAlice.data.lit_at + 2700);
+
+    const cBob = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'bob', bobKeys.privateKeyPem);
+    assert.equal(cBob.status, 200);
+    assert.equal(cBob.data.slot, 1);
+
+    const cCarol = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: 5 }, 'carol', carolKeys.privateKeyPem);
+    assert.equal(cCarol.status, 200);
+    assert.equal(cCarol.data.slot, 5);
+
+    const stBefore = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    const before = stBefore.footlights.find((f) => f.handle === 'alice').expires_at;
+
+    now += 1000;
+    const sayRes = await signedPostAt(
+      ctx,
+      '/api/town/ghostlight/say',
+      { body: 'still here' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(sayRes.status, 201);
+
+    const stAfter = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    const after = stAfter.footlights.find((f) => f.handle === 'alice').expires_at;
+    assert.ok(after > before);
+    assert.equal(after, ctx.nowSec() + 2700);
+
+    const leaveRes = await signedPostAt(ctx, '/api/town/ghostlight/leave', {}, 'alice', aliceKeys.privateKeyPem);
+    assert.equal(leaveRes.status, 200);
+    assert.equal(leaveRes.data.extinguished, true);
+
+    const stFinal = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(stFinal.footlights.some((f) => f.handle === 'alice'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md invite one-time doc and single-use behavior (G9)', async () => {
+  assert.ok(
+    skillMd.includes('With a valid one-time `invite_code`, `join` returns `201` with `status: "active"` immediately.')
+  );
+  assert.equal(parseServerConstNumber('INVITE_TTL_SEC'), 7 * 24 * 60 * 60);
+  assert.ok(serverSrc.includes('invite.used_at !== null'));
+  assert.ok(serverSrc.includes('UPDATE invitations SET used_by = ?, used_at = ? WHERE code = ?'));
+
+  const ctx = await startTestServer();
+  try {
+    const inv = await adminPost(ctx, '/api/town/admin/invite', {});
+    assert.equal(inv.status, 201);
+    assert.match(inv.data.code, /^[0-9a-f]{24}$/);
+    assert.equal(inv.data.expires_at, ctx.nowSec() + 7 * 24 * 60 * 60);
+
+    const aKeys = generateKeypair();
+    const aJoin = await signedPostAt(
+      ctx,
+      '/api/town/join',
+      { handle: 'alice', pubkey: aKeys.pubkey, origin: 'direct', invite_code: inv.data.code },
+      'alice',
+      aKeys.privateKeyPem
+    );
+    assert.equal(aJoin.status, 201);
+    assert.equal(aJoin.data.status, 'active');
+
+    const bKeys = generateKeypair();
+    const bJoin = await signedPostAt(
+      ctx,
+      '/api/town/join',
+      { handle: 'bob', pubkey: bKeys.pubkey, origin: 'direct', invite_code: inv.data.code },
+      'bob',
+      bKeys.privateKeyPem
+    );
+    assert.equal(bJoin.status, 403);
+    assert.equal(bJoin.data.error, 'invalid_invite');
+
+    const cKeys = generateKeypair();
+    const cJoin = await signedPostAt(
+      ctx,
+      '/api/town/join',
+      { handle: 'carol', pubkey: cKeys.pubkey, origin: 'direct', invite_code: 'deadbeefdeadbeefdeadbeef' },
+      'carol',
+      cKeys.privateKeyPem
+    );
+    assert.equal(cJoin.status, 403);
+    assert.equal(cJoin.data.error, 'invalid_invite');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md GET guestbook plot/letter doc and pending count-only lifecycle (G10)', async () => {
+  const gbGetSec = getEndpointSection('GET', '/api/town/guestbook');
+  assert.ok(gbGetSec.includes('When `plot` is omitted, returns Town Gate entries only'));
+  assert.ok(gbGetSec.includes("returns approved entries for that cottage's plot — any resident's, or `milo`'s"));
+  assert.ok(gbGetSec.includes('(`?plot=<handle>&kind=letter` returns an empty list)'));
+  assert.ok(serverSrc.includes("SELECT COUNT(*) AS cnt FROM guestbook WHERE status = 'pending'"));
+
+  const ctx = await startTestServer();
+  try {
+    const emptyPlotLetter = await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=milo&kind=letter`);
+    assert.equal(emptyPlotLetter.status, 200);
+    assert.deepEqual(await emptyPlotLetter.json(), { entries: [] });
+
+    const unknownPlot = await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=wick`);
+    assert.equal(unknownPlot.status, 400);
+    assert.equal((await unknownPlot.json()).error, 'unknown_plot');
+
+    const bodyText = 'zebra-plot-body-372';
+    const postRes = await rawPost(ctx.baseUrl, '/api/town/guestbook', {
+      kind: 'guestbook',
+      name: 'V',
+      body: bodyText,
+      plot: 'milo',
+    });
+    assert.equal(postRes.status, 201);
+    assert.equal(postRes.data.status, 'pending');
+    const entryId = postRes.data.id;
+
+    const beforeApprove = await (await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=milo`)).json();
+    assert.deepEqual(beforeApprove.entries, []);
+
+    const stPending = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(stPending.guestbook_pending, 1);
+    assert.equal(JSON.stringify(stPending).includes(bodyText), false);
+
+    const approveRes = await adminPost(ctx, '/api/town/admin/guestbook', { id: entryId, action: 'approve' });
+    assert.equal(approveRes.status, 200);
+    assert.equal(approveRes.data.id, entryId);
+    assert.equal(approveRes.data.status, 'approved');
+
+    const afterApprove = await (await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=milo`)).json();
+    assert.equal(afterApprove.entries.length, 1);
+    assert.equal(afterApprove.entries[0].body, bodyText);
+
+    const stApproved = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(stApproved.guestbook_by_plot.milo, 1);
+
+    const gateEntries = await (await fetch(`${ctx.baseUrl}/api/town/guestbook`)).json();
+    assert.equal(gateEntries.entries.some((e) => e.body === bodyText), false);
+  } finally {
+    await ctx.close();
+  }
 });
