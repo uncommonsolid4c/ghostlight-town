@@ -1,5 +1,5 @@
 // Orbit tap-to-glide + multi-pointer suppression helpers for staging-polyfork.
-// stepGlide is vendored verbatim from town-3d/town.js (lines 2653-2704).
+// stepGlide is vendored verbatim from town-3d/town.js (lines 3043-3090).
 // Pure JS (no THREE import, no top-level document/window access) so Node tests
 // can exercise every function directly.
 
