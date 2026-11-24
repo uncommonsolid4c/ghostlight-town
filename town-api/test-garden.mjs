@@ -45,7 +45,7 @@ async function startTestServer(opts = {}) {
   };
 }
 
-async function signedPostAt(ctx, endpoint, payload, handle, privateKeyPem) {
+async function signedPostAt(ctx, endpoint, payload, handle, privateKeyPem, extraHeaders = {}) {
   const { rawBody, headers } = signRequest({
     method: 'POST',
     path: endpoint,
@@ -56,7 +56,7 @@ async function signedPostAt(ctx, endpoint, payload, handle, privateKeyPem) {
   });
   const res = await fetch(`${ctx.baseUrl}${endpoint}`, {
     method: 'POST',
-    headers,
+    headers: { ...extraHeaders, ...headers },
     body: rawBody,
   });
   const data = await res.json().catch(() => null);
@@ -1264,6 +1264,424 @@ test('state?since= reflects a planting: 200 with garden after, 304 once caught u
     const stSince1 = await alice.state(seq1);
     assert.equal(stSince1.status, 304);
     assert.equal(stSince1.data, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest garden bucket is per-IP via x-forwarded-for', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ipA = { 'x-forwarded-for': '203.0.113.7' };
+    const ipB = { 'x-forwarded-for': '198.51.100.9' };
+
+    const kA1 = generateKeypair();
+    const a1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a1', pubkey: kA1.pubkey, seed: 'moonflower' },
+      'guest_a1',
+      kA1.privateKeyPem,
+      ipA
+    );
+    assert.equal(a1.status, 201);
+    assert.equal(a1.data.slot, 0);
+
+    const kA2 = generateKeypair();
+    const a2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a2', pubkey: kA2.pubkey, seed: 'tea_mint' },
+      'guest_a2',
+      kA2.privateKeyPem,
+      ipA
+    );
+    assert.equal(a2.status, 201);
+    assert.equal(a2.data.slot, 1);
+
+    const kA3 = generateKeypair();
+    const a3 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a3', pubkey: kA3.pubkey, seed: 'starwort' },
+      'guest_a3',
+      kA3.privateKeyPem,
+      ipA
+    );
+    assert.equal(a3.status, 429);
+    assert.equal(a3.data.error, 'rate_limited');
+
+    const kB1 = generateKeypair();
+    const b1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b1', pubkey: kB1.pubkey, seed: 'ghost_bell' },
+      'guest_b1',
+      kB1.privateKeyPem,
+      ipB
+    );
+    assert.equal(b1.status, 201);
+    assert.equal(b1.data.slot, 2);
+
+    const kB2 = generateKeypair();
+    const b2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b2', pubkey: kB2.pubkey, seed: 'silver_thyme' },
+      'guest_b2',
+      kB2.privateKeyPem,
+      ipB
+    );
+    assert.equal(b2.status, 201);
+    assert.equal(b2.data.slot, 3);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest retry_after is exact and the sliding window resets at exactly +3600s', async () => {
+  const T = 1795000000;
+  let now = T;
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const k1 = generateKeypair();
+    const p1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_1', pubkey: k1.pubkey, seed: 'moonflower' },
+      'guest_1',
+      k1.privateKeyPem
+    );
+    assert.equal(p1.status, 201);
+    assert.equal(p1.data.slot, 0);
+
+    const k2 = generateKeypair();
+    const p2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_2', pubkey: k2.pubkey, seed: 'tea_mint' },
+      'guest_2',
+      k2.privateKeyPem
+    );
+    assert.equal(p2.status, 201);
+    assert.equal(p2.data.slot, 1);
+
+    const k3 = generateKeypair();
+    const p3AtT = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_3', pubkey: k3.pubkey, seed: 'starwort' },
+      'guest_3',
+      k3.privateKeyPem
+    );
+    assert.equal(p3AtT.status, 429);
+    assert.equal(p3AtT.data.error, 'rate_limited');
+    assert.equal(p3AtT.data.retry_after, 3600);
+
+    now = T + 3599;
+    const p3BeforeReset = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_3', pubkey: k3.pubkey, seed: 'starwort' },
+      'guest_3',
+      k3.privateKeyPem
+    );
+    assert.equal(p3BeforeReset.status, 429);
+    assert.equal(p3BeforeReset.data.error, 'rate_limited');
+    assert.equal(p3BeforeReset.data.retry_after, 1);
+
+    now = T + 3600;
+    const p3AtReset = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_3', pubkey: k3.pubkey, seed: 'starwort' },
+      'guest_3',
+      k3.privateKeyPem
+    );
+    assert.equal(p3AtReset.status, 201);
+    assert.equal(p3AtReset.data.slot, 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('resident 10/hour gardenPlant limit never fires because duplicates stay 409 already_planted', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const first = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(first.status, 201);
+    const seqAfterFirst = first.data.state_seq;
+
+    for (let i = 0; i < 10; i++) {
+      const dup = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: 'tea_mint' },
+        'alice',
+        aliceKeys.privateKeyPem
+      );
+      assert.equal(dup.status, 409);
+      assert.equal(dup.data.error, 'already_planted');
+    }
+
+    const st = await alice.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.state_seq, seqAfterFirst);
+    assert.equal(st.data.garden.slots.length, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('duplicate guest plant with a different keypair still returns 409 already_planted', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const first = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_x', pubkey: keysA.pubkey, seed: 'starwort' },
+      'guest_x',
+      keysA.privateKeyPem
+    );
+    assert.equal(first.status, 201);
+    assert.equal(first.data.slot, 0);
+    assert.equal(first.data.seed, 'starwort');
+    const originalPlantedAt = first.data.planted_at;
+
+    const keysB = generateKeypair();
+    const dup = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_x', pubkey: keysB.pubkey, seed: 'moonflower' },
+      'guest_x',
+      keysB.privateKeyPem
+    );
+    assert.equal(dup.status, 409);
+    assert.deepEqual(dup.data, {
+      error: 'already_planted',
+      slot: 0,
+      seed: 'starwort',
+      planted_at: originalPlantedAt,
+    });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest handle validation edges: bad handles 400, 2 and 32 char bounds 201, empty signed handle 401', async () => {
+  const ctx = await startTestServer();
+  try {
+    const badHandles = ['a', 'Guest', 'guest name', '-guest', '_guest', 'a'.repeat(33)];
+    for (const bad of badHandles) {
+      const keys = generateKeypair();
+      const res = await signedPostAt(
+        ctx,
+        '/api/town/garden/guest/plant',
+        { handle: bad, pubkey: keys.pubkey, seed: 'moonflower' },
+        bad,
+        keys.privateKeyPem
+      );
+      assert.equal(res.status, 400, `expected 400 for handle ${JSON.stringify(bad)}`);
+      assert.equal(res.data.error, 'invalid_handle');
+    }
+
+    const keysEmpty = generateKeypair();
+    const emptySigned = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: '', pubkey: keysEmpty.pubkey, seed: 'moonflower' },
+      '',
+      keysEmpty.privateKeyPem
+    );
+    assert.equal(emptySigned.status, 401);
+    assert.equal(emptySigned.data.error, 'missing_auth_headers');
+
+    const keysMin = generateKeypair();
+    const minValid = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'ab', pubkey: keysMin.pubkey, seed: 'moonflower' },
+      'ab',
+      keysMin.privateKeyPem
+    );
+    assert.equal(minValid.status, 201);
+    assert.equal(minValid.data.slot, 0);
+
+    const maxHandle = 'a'.repeat(32);
+    const keysMax = generateKeypair();
+    const maxValid = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: maxHandle, pubkey: keysMax.pubkey, seed: 'tea_mint' },
+      maxHandle,
+      keysMax.privateKeyPem
+    );
+    assert.equal(maxValid.status, 201);
+    assert.equal(maxValid.data.slot, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('body.handle null falls back to signed handle while empty string body.handle is 400 invalid_handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keysNull = generateKeypair();
+    const resNull = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: null, pubkey: keysNull.pubkey, seed: 'tea_mint' },
+      'guest_null',
+      keysNull.privateKeyPem
+    );
+    assert.equal(resNull.status, 201);
+    assert.equal(resNull.data.handle, 'guest_null');
+
+    const keysEmpty = generateKeypair();
+    const resEmpty = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: '', pubkey: keysEmpty.pubkey, seed: 'tea_mint' },
+      'guest_empty',
+      keysEmpty.privateKeyPem
+    );
+    assert.equal(resEmpty.status, 400);
+    assert.equal(resEmpty.data.error, 'invalid_handle');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('client-supplied slot, planted_at, and stage fields are ignored', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const resPlant = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower', slot: 5, planted_at: 1, stage: 'bloom' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(resPlant.status, 201);
+    assert.equal(resPlant.data.slot, 0);
+    assert.equal(resPlant.data.stage, 'sprout');
+    assert.notEqual(resPlant.data.planted_at, 1);
+
+    const guestKeys = generateKeypair();
+    const guestPlant = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_y', pubkey: guestKeys.pubkey, seed: 'tea_mint', slot: 3, planted_at: 1, stage: 'bloom' },
+      'guest_y',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(guestPlant.status, 201);
+    assert.equal(guestPlant.data.slot, 1);
+    assert.equal(guestPlant.data.stage, 'sprout');
+    assert.notEqual(guestPlant.data.planted_at, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('malformed guest pubkey returns 401 invalid_pubkey', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const nonBase64 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_badkey1', pubkey: '!!!not-base64!!!', seed: 'moonflower' },
+      'guest_badkey1',
+      keys.privateKeyPem
+    );
+    assert.equal(nonBase64.status, 401);
+    assert.equal(nonBase64.data.error, 'invalid_pubkey');
+
+    const shortKey = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_badkey2', pubkey: Buffer.from('short').toString('base64'), seed: 'moonflower' },
+      'guest_badkey2',
+      keys.privateKeyPem
+    );
+    assert.equal(shortKey.status, 401);
+    assert.equal(shortKey.data.error, 'invalid_pubkey');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('garden stage is derived from the clock on read and tolerates clock rewind or negative age', async () => {
+  const T = 1795000000;
+  let now = T;
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const { client: alice, keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const planted = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(planted.status, 201);
+    assert.equal(planted.data.stage, 'sprout');
+
+    now = T + 4 * DAY_SEC;
+    const stBloom = await alice.state();
+    assert.equal(stBloom.status, 200);
+    assert.equal(stBloom.data.garden.slots[0].stage, 'bloom');
+
+    now = T;
+    const stRewind = await alice.state();
+    assert.equal(stRewind.status, 200);
+    assert.equal(stRewind.data.garden.slots[0].stage, 'sprout');
+
+    now = T - DAY_SEC;
+    const stNegative = await alice.state();
+    assert.equal(stNegative.status, 200);
+    assert.equal(stNegative.data.garden.slots[0].stage, 'sprout');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GhostlightClient garden error round-trips and missing-pubkey guard', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await joinResident(ctx, 'alice');
+    const resErr = await alice.gardenPlant('rose');
+    assert.equal(resErr.status, 400);
+    assert.equal(resErr.data.error, 'invalid_seed');
+
+    const guestKeys = generateKeypair();
+    const guestClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'guest_z',
+      ...guestKeys,
+    });
+    const guestErr = await guestClient.gardenGuestPlant('guest_z', 'rose');
+    assert.equal(guestErr.status, 400);
+    assert.equal(guestErr.data.error, 'invalid_seed');
+
+    const noKeyClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'guest_nokey',
+    });
+    await assert.rejects(
+      () => noKeyClient.gardenGuestPlant('guest_nokey', 'moonflower'),
+      (err) => err instanceof Error && err.message === 'pubkey is required for gardenGuestPlant()'
+    );
   } finally {
     await ctx.close();
   }
