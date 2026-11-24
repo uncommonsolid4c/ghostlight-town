@@ -668,3 +668,334 @@ test('model placement parents ground the props and town-3d/README.md lists the m
     prevIdx = idx;
   }
 });
+
+const COMPONENT_BYTE_SIZE = {
+  5120: 1,
+  5121: 1,
+  5122: 2,
+  5123: 2,
+  5125: 4,
+  5126: 4,
+};
+
+const TYPE_COMPONENT_COUNT = {
+  SCALAR: 1,
+  VEC2: 2,
+  VEC3: 3,
+  VEC4: 4,
+  MAT2: 4,
+  MAT3: 9,
+  MAT4: 16,
+};
+
+const EXPECTED_MATERIAL_NAMES = {
+  'post-lantern.glb': ['HalloweenBits'],
+  'lantern.glb': ['HalloweenBits'],
+  'bench.glb': ['citybits_texture'],
+  'street-light.glb': ['Grey', 'Light'],
+  'bookshelf.glb': ['Material'],
+  'oil-lamp.glb': ['White', 'LightMetal'],
+  'teapot.glb': ['Solid.151'],
+};
+
+const TEXTURED_GLBS = new Set([
+  'post-lantern.glb',
+  'lantern.glb',
+  'bench.glb',
+  'bookshelf.glb',
+  'teapot.glb',
+]);
+
+const UNTEXTURED_GLBS = new Set([
+  'street-light.glb',
+  'oil-lamp.glb',
+]);
+
+async function loadAllCreditedGlbs() {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const files = parseCreditedModels(creditsMd);
+  const out = [];
+  for (const file of files) {
+    const buf = await fs.readFile(path.join(MODELS_DIR, file));
+    const jsonLen = buf.readUInt32LE(12);
+    const binLen = buf.readUInt32LE(20 + jsonLen);
+    const gltf = JSON.parse(buf.subarray(20, 20 + jsonLen).toString('utf8'));
+    out.push({ file, buf, jsonLen, binLen, gltf });
+  }
+  return out;
+}
+
+test('credited GLBs have 4-byte-aligned chunks and a single default scene 0', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, jsonLen, binLen, gltf } of glbs) {
+    assert.equal(jsonLen % 4, 0, `${file} JSON chunk length must be 4-byte aligned`);
+    assert.equal(binLen % 4, 0, `${file} BIN chunk length must be 4-byte aligned`);
+    assert.equal(gltf.scene, 0, `${file} default scene must be 0`);
+    assert.equal(gltf.scenes?.length, 1, `${file} must have exactly 1 scene`);
+  }
+});
+
+test('credited GLB accessors have expected componentType/type by role and no sparse/normalized', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (let i = 0; i < gltf.accessors.length; i += 1) {
+      const acc = gltf.accessors[i];
+      assert.equal(acc.sparse, undefined, `${file} accessor[${i}] must not be sparse`);
+      assert.equal(acc.normalized ?? false, false, `${file} accessor[${i}] must not be normalized`);
+    }
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        const idxAcc = gltf.accessors[prim.indices];
+        assert.equal(idxAcc.componentType, 5123, `${file} indices must be UNSIGNED_SHORT (5123)`);
+        assert.equal(idxAcc.type, 'SCALAR', `${file} indices must be SCALAR`);
+
+        const posAcc = gltf.accessors[prim.attributes.POSITION];
+        assert.equal(posAcc.componentType, 5126, `${file} POSITION must be FLOAT (5126)`);
+        assert.equal(posAcc.type, 'VEC3', `${file} POSITION must be VEC3`);
+
+        const normAcc = gltf.accessors[prim.attributes.NORMAL];
+        assert.equal(normAcc.componentType, 5126, `${file} NORMAL must be FLOAT (5126)`);
+        assert.equal(normAcc.type, 'VEC3', `${file} NORMAL must be VEC3`);
+
+        if (prim.attributes.TEXCOORD_0 !== undefined) {
+          const uvAcc = gltf.accessors[prim.attributes.TEXCOORD_0];
+          assert.equal(uvAcc.componentType, 5126, `${file} TEXCOORD_0 must be FLOAT (5126)`);
+          assert.equal(uvAcc.type, 'VEC2', `${file} TEXCOORD_0 must be VEC2`);
+        }
+      }
+    }
+  }
+});
+
+test('credited GLB accessors and bufferViews stay within buffer bounds', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (let i = 0; i < gltf.accessors.length; i += 1) {
+      const acc = gltf.accessors[i];
+      const bv = gltf.bufferViews[acc.bufferView];
+      const compSize = COMPONENT_BYTE_SIZE[acc.componentType];
+      const typeCount = TYPE_COMPONENT_COUNT[acc.type];
+      assert.ok(compSize > 0, `${file} accessor[${i}] has valid componentType`);
+      assert.ok(typeCount > 0, `${file} accessor[${i}] has valid type`);
+      const end = (acc.byteOffset ?? 0) + acc.count * compSize * typeCount;
+      assert.ok(
+        end <= bv.byteLength,
+        `${file} accessor[${i}] end ${end} exceeds bufferView byteLength ${bv.byteLength}`
+      );
+    }
+    for (let i = 0; i < gltf.bufferViews.length; i += 1) {
+      const bv = gltf.bufferViews[i];
+      const buf = gltf.buffers[bv.buffer];
+      const end = (bv.byteOffset ?? 0) + bv.byteLength;
+      assert.ok(
+        end <= buf.byteLength,
+        `${file} bufferView[${i}] end ${end} exceeds buffer byteLength ${buf.byteLength}`
+      );
+      if (bv.target !== undefined) {
+        assert.ok(
+          bv.target === 34962 || bv.target === 34963,
+          `${file} bufferView[${i}] target must be 34962 or 34963`
+        );
+      }
+      if (bv.byteStride !== undefined) {
+        assert.equal(bv.byteStride % 4, 0, `${file} bufferView[${i}] byteStride must be multiple of 4`);
+      }
+    }
+  }
+});
+
+test('credited GLB material names and PBR factors are pinned', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    const names = gltf.materials.map((m) => m.name);
+    assert.deepEqual(names, EXPECTED_MATERIAL_NAMES[file], `${file} material names must match`);
+    for (const mat of gltf.materials) {
+      assert.equal(mat.alphaMode, 'OPAQUE', `${file} material ${mat.name} alphaMode must be OPAQUE`);
+      const pbr = mat.pbrMetallicRoughness;
+      assert.ok(pbr && typeof pbr === 'object', `${file} material ${mat.name} must have pbrMetallicRoughness`);
+      assert.ok(
+        pbr.metallicFactor >= 0 && pbr.metallicFactor <= 1,
+        `${file} material ${mat.name} metallicFactor must be in [0, 1]`
+      );
+      assert.ok(
+        pbr.roughnessFactor >= 0 && pbr.roughnessFactor <= 1,
+        `${file} material ${mat.name} roughnessFactor must be in [0, 1]`
+      );
+      if (pbr.baseColorFactor !== undefined) {
+        assert.equal(pbr.baseColorFactor.length, 4, `${file} material ${mat.name} baseColorFactor length 4`);
+        for (const c of pbr.baseColorFactor) {
+          assert.ok(c >= 0 && c <= 1, `${file} material ${mat.name} baseColorFactor entry in [0, 1]`);
+        }
+      }
+      if (pbr.baseColorTexture !== undefined) {
+        assert.ok(
+          Number.isInteger(pbr.baseColorTexture.index) &&
+            pbr.baseColorTexture.index >= 0 &&
+            pbr.baseColorTexture.index < (gltf.textures?.length ?? 0),
+          `${file} material ${mat.name} baseColorTexture.index in range`
+        );
+        assert.equal(
+          pbr.baseColorTexture.texCoord ?? 0,
+          0,
+          `${file} material ${mat.name} baseColorTexture.texCoord must be 0`
+        );
+      }
+    }
+  }
+});
+
+test('credited GLB texture, sampler, and image cross-references match per-file expectations', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    if (TEXTURED_GLBS.has(file)) {
+      assert.equal(gltf.textures?.length, 1, `${file} must have 1 texture`);
+      assert.equal(gltf.images?.length, 1, `${file} must have 1 image`);
+      assert.equal(gltf.samplers?.length, 1, `${file} must have 1 sampler`);
+      const tex = gltf.textures[0];
+      assert.ok(
+        Number.isInteger(tex.sampler) && tex.sampler >= 0 && tex.sampler < gltf.samplers.length,
+        `${file} texture.sampler in range`
+      );
+      assert.ok(
+        Number.isInteger(tex.source) && tex.source >= 0 && tex.source < gltf.images.length,
+        `${file} texture.source in range`
+      );
+      const img = gltf.images[0];
+      assert.equal(img.mimeType, 'image/png', `${file} image.mimeType must be image/png`);
+      assert.ok(
+        Number.isInteger(img.bufferView) && img.bufferView >= 0 && img.bufferView < gltf.bufferViews.length,
+        `${file} image.bufferView in range`
+      );
+      if (file === 'teapot.glb') {
+        assert.equal(img.name, 'misc_kettle', 'teapot.glb image.name must be misc_kettle');
+        assert.deepEqual(gltf.samplers[0], { wrapS: 10497, wrapT: 10497 }, 'teapot.glb sampler must match');
+      } else {
+        assert.ok(img.name.endsWith('.png'), `${file} image.name must end with .png`);
+      }
+    } else {
+      assert.ok(UNTEXTURED_GLBS.has(file), `${file} must be classified`);
+      assert.equal(gltf.textures, undefined, `${file} must have no textures key`);
+      assert.equal(gltf.images, undefined, `${file} must have no images key`);
+      assert.equal(gltf.samplers?.length, 1, `${file} must have 1 sampler`);
+      assert.deepEqual(gltf.samplers[0], {}, `${file} sampler[0] must be empty object`);
+    }
+  }
+});
+
+test('credited GLB scene and node hierarchy is a reachable TRS-only tree with unique names', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    const scene = gltf.scenes[0];
+    if (file === 'teapot.glb') {
+      assert.equal('name' in scene, false, 'teapot.glb scene must have no name key');
+    } else {
+      assert.equal(scene.name, 'Root Scene', `${file} scene name must be Root Scene`);
+    }
+
+    const visited = new Set();
+    const visit = (idx) => {
+      assert.ok(!visited.has(idx), `${file} node[${idx}] visited twice`);
+      visited.add(idx);
+      const node = gltf.nodes[idx];
+      for (const child of node.children ?? []) {
+        visit(child);
+      }
+    };
+    for (const rootIdx of scene.nodes) {
+      visit(rootIdx);
+    }
+    assert.equal(visited.size, gltf.nodes.length, `${file} all nodes must be reachable from scenes[0].nodes`);
+
+    const names = new Set();
+    for (let i = 0; i < gltf.nodes.length; i += 1) {
+      const node = gltf.nodes[i];
+      assert.equal('matrix' in node, false, `${file} node[${i}] must not have matrix`);
+      assert.equal(typeof node.name, 'string', `${file} node[${i}] must have string name`);
+      assert.ok(!names.has(node.name), `${file} duplicate node name ${node.name}`);
+      names.add(node.name);
+      if (node.mesh !== undefined) {
+        assert.ok(node.name.length > 0, `${file} mesh node[${i}] must have non-empty name`);
+      }
+    }
+  }
+});
+
+test('credited GLB node transforms are valid unit quaternions, positive scales, and teapot has no TRS', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (let i = 0; i < gltf.nodes.length; i += 1) {
+      const node = gltf.nodes[i];
+      if (file === 'teapot.glb') {
+        assert.equal('translation' in node, false, `teapot.glb node[${i}] must have no translation`);
+        assert.equal('rotation' in node, false, `teapot.glb node[${i}] must have no rotation`);
+        assert.equal('scale' in node, false, `teapot.glb node[${i}] must have no scale`);
+      }
+      if (node.rotation !== undefined) {
+        const len = Math.hypot(...node.rotation);
+        assert.ok(Math.abs(len - 1) <= 1e-6, `${file} node[${i}] rotation must be unit quaternion`);
+      }
+      if (node.scale !== undefined) {
+        for (const s of node.scale) {
+          assert.ok(s > 0, `${file} node[${i}] scale component must be > 0`);
+        }
+      }
+    }
+  }
+});
+
+test('every primitive in every credited GLB uses TRIANGLES mode (4)', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        assert.equal(prim.mode, 4, `${file} primitive mode must be 4 (TRIANGLES)`);
+      }
+    }
+  }
+});
+
+test('CREDITS.md preamble matches verbatim', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const firstEntryIdx = creditsMd.search(/^- \*\*/m);
+  assert.ok(firstEntryIdx > 0, 'CREDITS.md must have a preamble before the first entry');
+  const preamble = creditsMd.slice(0, firstEntryIdx);
+  const expectedPreamble = [
+    '# 3D Model Credits (`town-3d`)',
+    '',
+    "Ghostlight Town's architectural core (bandstand, gate, newsstand, cottages,",
+    "Milo's ghost, and perimeter scenery) is procedural Three.js geometry.",
+    'The following CC0 1.0 props are used as set dressing under `town-3d/models/`.',
+    'Although CC0 1.0 requires no attribution, we credit the creator here.',
+    '',
+    '',
+  ].join('\n');
+  assert.equal(preamble, expectedPreamble);
+  assert.equal(preamble.includes('`models/'), false, 'preamble must not mention `models/ directly');
+});
+
+test('PROP_PLACEMENTS completeness, unique IDs, valid parents, and model-less exclusion', () => {
+  assert.equal(PROP_PLACEMENTS.length, 9, 'PROP_PLACEMENTS must have exactly 9 entries');
+  const ids = new Set(PROP_PLACEMENTS.map((p) => p.id));
+  assert.equal(ids.size, 9, 'PROP_PLACEMENTS ids must be unique');
+
+  const modelLess = [];
+  for (const p of PROP_PLACEMENTS) {
+    assert.equal(typeof p.kind, 'string', `${p.id} must have a string kind`);
+    assert.ok(p.kind.length > 0, `${p.id} must have a non-empty kind`);
+    assert.ok(p.parent === 'scene' || p.parent === 'newsstand', `${p.id} parent must be scene or newsstand`);
+
+    if (!('model' in p)) {
+      modelLess.push(p);
+      assert.equal('targetSize' in p, false, `${p.id} model-less placement must not have targetSize`);
+      assert.equal('scaleAxis' in p, false, `${p.id} model-less placement must not have scaleAxis`);
+    } else {
+      assert.ok(Number.isFinite(p.targetSize) && p.targetSize > 0, `${p.id} targetSize must be finite > 0`);
+      assert.equal(typeof p.scaleAxis, 'string', `${p.id} must have a string scaleAxis`);
+      assert.ok(p.scaleAxis.length > 0, `${p.id} must have a non-empty scaleAxis`);
+    }
+  }
+
+  assert.equal(modelLess.length, 1, 'expected exactly 1 model-less placement');
+  assert.equal(modelLess[0].id, 'maren_typewriter');
+});
+
