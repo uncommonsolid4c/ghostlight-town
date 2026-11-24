@@ -590,3 +590,174 @@ test('openNoticeBoardOverlay opens two different element sets to the same html w
   assert.equal(elsA.overlayEl.hidden, false);
   assert.equal(elsB.overlayEl.hidden, false);
 });
+
+test('buildNoticeBoardOverlayHtml <style> block text matches verbatim literal', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const match = html.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(match, 'overlay HTML must include a <style> block');
+  assert.equal(
+    match[1],
+    '\n    body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }\n    h1 { font-size: 1.35rem; border-bottom: 1px solid #6b492b; padding-bottom: 0.4rem; }\n    h2 { font-size: 1.05rem; margin-top: 1.4rem; margin-bottom: 0.3rem; color: #5a4332; }\n    .notice p { margin: 0; }\n  ',
+  );
+});
+
+test('buildNoticeBoardOverlayHtml document elements appear in strict order with head before body', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const needles = [
+    '<!doctype html>',
+    '<html lang="en">',
+    '<head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+    '<title>Notice Board</title>',
+    '<style>',
+    '</style>',
+    '</head>',
+    '<body>',
+    '<h1>Notice Board</h1>',
+    '<section class="notice">',
+    '</body>',
+    '</html>',
+  ];
+  let prevIdx = -1;
+  for (const needle of needles) {
+    const idx = html.indexOf(needle);
+    assert.ok(idx > prevIdx, `expected "${needle}" (idx=${idx}) after prevIdx=${prevIdx}`);
+    prevIdx = idx;
+  }
+});
+
+test('buildNoticeBoardOverlayHtml contains no ampersands or entities and keeps em-dashes literal', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  assert.equal(/&/.test(html), false);
+  assert.equal(/&[a-z]+;|&#\d+;/.test(html), false);
+  assert.equal((html.match(/—/g) || []).length, 3);
+  assert.equal(/&mdash;/.test(html), false);
+});
+
+test('openNoticeBoardOverlay rejects falsy elements before onBeforeOpen and mutates nothing', () => {
+  const shared = makeFakeOverlayElements();
+  const onBeforeOpen = () => {
+    throw new Error('must not be called');
+  };
+  const badInputs = [
+    { overlayEl: 0, titleEl: shared.titleEl, iframeEl: shared.iframeEl, onBeforeOpen },
+    { overlayEl: shared.overlayEl, titleEl: '', iframeEl: shared.iframeEl, onBeforeOpen },
+    { overlayEl: shared.overlayEl, titleEl: shared.titleEl, iframeEl: false, onBeforeOpen },
+    { overlayEl: null, titleEl: shared.titleEl, iframeEl: shared.iframeEl, onBeforeOpen },
+  ];
+  for (const input of badInputs) {
+    assert.equal(openNoticeBoardOverlay(input), null);
+  }
+  assert.equal(shared.overlayEl.hidden, true);
+  assert.equal(shared.titleEl.textContent, '');
+  assert.equal(shared.iframeEl.srcdoc, '');
+
+  const fresh = makeFakeOverlayElements();
+  const html = openNoticeBoardOverlay({ ...fresh, onBeforeOpen: undefined });
+  assert.equal(html, buildNoticeBoardOverlayHtml());
+  assert.equal(fresh.overlayEl.hidden, false);
+});
+
+test('openNoticeBoardOverlay invokes async onBeforeOpen without awaiting and ignores its return', () => {
+  const els = makeFakeOverlayElements();
+  let flag = false;
+  const html = openNoticeBoardOverlay({
+    ...els,
+    onBeforeOpen: async () => {
+      flag = true;
+    },
+  });
+  assert.equal(typeof html, 'string');
+  assert.equal(flag, true);
+  assert.equal(els.overlayEl.hidden, false);
+  assert.equal(els.iframeEl.srcdoc, html);
+});
+
+test('openNoticeBoardOverlay invokes only the per-call onBeforeOpen without retaining stale callbacks', () => {
+  const els = makeFakeOverlayElements();
+  let a = 0;
+  let b = 0;
+  openNoticeBoardOverlay({
+    ...els,
+    onBeforeOpen: () => {
+      a += 1;
+    },
+  });
+  openNoticeBoardOverlay({
+    ...els,
+    onBeforeOpen: () => {
+      b += 1;
+    },
+  });
+  assert.equal(a, 1);
+  assert.equal(b, 1);
+});
+
+test('openNoticeBoardOverlay propagates throwing titleEl.textContent setter and leaves iframe and overlay untouched', () => {
+  const { overlayEl, iframeEl } = makeFakeOverlayElements();
+  const titleEl = {
+    get textContent() {
+      return '';
+    },
+    set textContent(_v) {
+      throw new Error('title-boom');
+    },
+  };
+  assert.throws(() => openNoticeBoardOverlay({ overlayEl, titleEl, iframeEl }), /title-boom/);
+  assert.equal(overlayEl.hidden, true);
+  assert.equal(iframeEl.getAttribute('sandbox'), null);
+  assert.equal(iframeEl.srcdoc, '');
+  assert.equal(iframeEl.getAttribute('src'), null);
+});
+
+test('notice-board-overlay.mjs NOTICE_BOARD_PAPERS line arrays match expected literals', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'notice-board-overlay.mjs'), 'utf8');
+  const blockMatch = src.match(/const NOTICE_BOARD_PAPERS = \[([\s\S]*?)\];/);
+  assert.ok(blockMatch, 'NOTICE_BOARD_PAPERS block must exist');
+  const entryRe = /\['(notice_board_paper_\w+)',\s*(-?[\d.]+),\s*\[((?:'[^']*',?\s*)+)\]\]/g;
+  const parsedLines = [];
+  for (const match of blockMatch[1].matchAll(entryRe)) {
+    const lines = [...match[3].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+    parsedLines.push(lines);
+  }
+  assert.deepEqual(parsedLines, [
+    ['GAZETTE #2', 'Issue #2 is out —', 'read it at the', 'newsstand.'],
+    ['THE INN', 'Rooms for short', 'stays — ask at', 'the tavern.'],
+    ['SOCIAL GATE', 'Plots are free,', 'no upkeep — yours', 'outright. Bring a', 'friend.'],
+  ]);
+});
+
+test('openNoticeBoardOverlay ignores extra option keys and opens normally when onBeforeOpen is null or undefined', () => {
+  const elsA = makeFakeOverlayElements();
+  const expected = buildNoticeBoardOverlayHtml();
+  const htmlA = openNoticeBoardOverlay({
+    ...elsA,
+    extra: 'x',
+    unused: { a: 1 },
+    onBeforeOpen: null,
+  });
+  assert.equal(htmlA, expected);
+  assert.equal(elsA.overlayEl.hidden, false);
+
+  const elsB = makeFakeOverlayElements();
+  const htmlB = openNoticeBoardOverlay({
+    ...elsB,
+    onBeforeOpen: undefined,
+  });
+  assert.equal(htmlB, expected);
+  assert.equal(elsB.overlayEl.hidden, false);
+});
+
+test('buildNoticeBoardOverlayHtml has exactly one em-dash in each of the three <p> bodies', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const bodies = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => m[1]);
+  assert.equal(bodies.length, 3);
+  for (const body of bodies) {
+    assert.equal(
+      (body.match(/—/g) || []).length,
+      1,
+      `expected exactly 1 em-dash in <p> body: ${JSON.stringify(body)}`,
+    );
+  }
+});
