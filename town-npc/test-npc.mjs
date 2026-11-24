@@ -1243,3 +1243,600 @@ test('runTurn persists dated memory and state counters after a successful post',
     fs.rmSync(tmpDir2, { recursive: true, force: true });
   }
 });
+
+
+test('decideTurn count boundaries: 1 lit, 4 active, 9 active, NPC footlights, prompt-book-sourced', () => {
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+  const today = localDateString(now);
+  const npcState = { ambient_today: 0, ambient_date: today };
+
+  // 1 lit real muse + muse line 4h old -> initiate (routine turn)
+  const r1Lit = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [{ handle: 'alice', role: 'muse' }],
+      prompt_book: [{ handle: 'alice', role: 'muse', body: 'nice evening', created_at: now - 4 * 3600 }],
+      presence: [],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(r1Lit.action, 'initiate');
+  assert.equal(r1Lit.reason, 'routine turn; real muse spoke within 6h and fewer than 2 lit');
+
+  // 4 active real muses + addressed line from m0 -> reply (step 4, not reply-only)
+  const r4Active = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [],
+      presence: ['m0', 'm1', 'm2', 'm3'].map((h) => ({ handle: h, role: 'muse', updated_at: now - 60 })),
+      prompt_book: [{ id: 10, handle: 'm0', role: 'muse', body: 'wick, check the bulb', created_at: now - 60 }],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(r4Active.action, 'reply');
+  assert.equal(r4Active.reason, 'addressed in Prompt Book within last 30m');
+  assert.deepEqual(r4Active.replyLine, { id: 10, handle: 'm0' });
+
+  // 9 active real muses + unaddressed muse line from m0 1h old -> silent (reply-only, < 10)
+  const r9Active = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [],
+      presence: Array.from({ length: 9 }, (_, i) => ({ handle: `m${i}`, role: 'muse', updated_at: now - 60 })),
+      prompt_book: [{ id: 11, handle: 'm0', role: 'muse', body: 'quiet night here', created_at: now - 3600 }],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(r9Active.action, 'silent');
+  assert.equal(r9Active.reason, '9 real muses active in 24h (>= 5, reply-only) and not addressed');
+
+  // 2 lit NPC footlights do not count as lit real muses -> initiate
+  const rNpcFootlights = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [
+        { handle: 'maren', role: 'npc' },
+        { handle: 'tomas', role: 'npc' },
+      ],
+      prompt_book: [{ handle: 'alice', role: 'muse', body: 'nice evening', created_at: now - 4 * 3600 }],
+      presence: [],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(rNpcFootlights.action, 'initiate');
+  assert.equal(rNpcFootlights.reason, 'routine turn; real muse spoke within 6h and fewer than 2 lit');
+
+  // 5 active real muses sourced from Prompt Book only -> silent (reply-only)
+  const rPbOnly = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [],
+      presence: [],
+      prompt_book: Array.from({ length: 5 }, (_, i) => ({
+        id: i + 1,
+        handle: `pb${i}`,
+        role: 'muse',
+        body: 'hello bandstand',
+        created_at: now - 100,
+      })),
+    },
+    npcState,
+    now,
+  });
+  assert.equal(rPbOnly.action, 'silent');
+  assert.equal(rPbOnly.reason, '5 real muses active in 24h (>= 5, reply-only) and not addressed');
+});
+
+test('findAddressedLines edges: case, 30m boundary, own line, missing/non-string fields', async () => {
+  const { findAddressedLines } = await import('./stepback.mjs');
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+
+  assert.equal(
+    findAddressedLines({
+      npc: wick,
+      promptBook: [{ handle: 'alice', body: 'WICK, is the bulb warm?', created_at: now - 60 }],
+      now,
+    }).length,
+    1
+  );
+
+  assert.equal(
+    findAddressedLines({
+      npc: wick,
+      promptBook: [{ handle: 'alice', body: 'wick, hello', created_at: now - 1800 }],
+      now,
+    }).length,
+    1
+  );
+  assert.equal(
+    findAddressedLines({
+      npc: wick,
+      promptBook: [{ handle: 'alice', body: 'wick, hello', created_at: now - 1801 }],
+      now,
+    }).length,
+    0
+  );
+
+  assert.equal(
+    findAddressedLines({
+      npc: wick,
+      promptBook: [{ handle: 'wick', body: 'wick, check the bulb', created_at: now - 60 }],
+      now,
+    }).length,
+    0
+  );
+
+  assert.equal(
+    findAddressedLines({
+      npc: wick,
+      promptBook: [
+        { handle: 'alice', body: 'wick, missing timestamp' },
+        { handle: 'alice', body: 123, created_at: now - 60 },
+        { handle: 'alice', body: null, created_at: now - 60 },
+      ],
+      now,
+    }).length,
+    0
+  );
+});
+
+test('selectReplierForLine edges: emote/system kinds, id fallbacks, ordering, plot-zone fall-throughs, npc emote answer', () => {
+  const now = 1_760_000_000;
+
+  const emoteRes = selectReplierForLine({
+    state: {
+      prompt_book: [{ id: 2, handle: 'alice', role: 'muse', kind: 'emote', body: 'waves', created_at: now - 60 }],
+      presence: [],
+    },
+    now,
+  });
+  assert.equal(emoteRes.designatedHandle, 'tomas');
+  assert.equal(emoteRes.method, 'rotation');
+
+  assert.equal(
+    selectReplierForLine({
+      state: {
+        prompt_book: [{ id: 2, handle: 'alice', role: 'muse', kind: 'system', body: 'joined', created_at: now - 60 }],
+        presence: [],
+      },
+      now,
+    }),
+    null
+  );
+
+  const noIdRes = selectReplierForLine({
+    state: {
+      prompt_book: [{ handle: 'alice', role: 'muse', body: 'hello', created_at: 1_760_000_100 }],
+      presence: [],
+    },
+    now: 1_760_000_200,
+  });
+  assert.equal(noIdRes.designatedHandle, 'wick');
+  assert.equal(noIdRes.method, 'rotation');
+
+  const negIdRes = selectReplierForLine({
+    state: {
+      prompt_book: [{ id: -1, handle: 'alice', role: 'muse', body: 'hello', created_at: now - 60 }],
+      presence: [],
+    },
+    now,
+  });
+  assert.equal(negIdRes.designatedHandle, 'tomas');
+  assert.equal(negIdRes.method, 'rotation');
+
+  const latestRes = selectReplierForLine({
+    state: {
+      prompt_book: [
+        { id: 9, handle: 'alice', role: 'muse', body: 'later', created_at: now - 60 },
+        { id: 1, handle: 'alice', role: 'muse', body: 'earlier', created_at: now - 600 },
+      ],
+      presence: [],
+    },
+    now,
+  });
+  assert.equal(latestRes.line.id, 9);
+  assert.equal(latestRes.designatedHandle, 'wick');
+
+  const unknownPlotRes = selectReplierForLine({
+    state: {
+      prompt_book: [{ id: 1, handle: 'alice', role: 'muse', body: 'hello', created_at: now - 60 }],
+      presence: [{ handle: 'alice', zone: 'plot:nosuch', updated_at: now - 60 }],
+    },
+    now,
+  });
+  assert.equal(unknownPlotRes.method, 'rotation');
+  assert.equal(unknownPlotRes.designatedHandle, 'maren');
+
+  const stalePlotRes = selectReplierForLine({
+    state: {
+      prompt_book: [{ id: 1, handle: 'alice', role: 'muse', body: 'hello', created_at: now - 60 }],
+      presence: [{ handle: 'alice', zone: 'plot:maren', updated_at: now - 4 * 3600 }],
+    },
+    now,
+  });
+  assert.equal(stalePlotRes.method, 'rotation');
+
+  const answeredEmote = selectReplierForLine({
+    state: {
+      prompt_book: [
+        { id: 1, handle: 'alice', role: 'muse', body: 'hello', created_at: now - 600 },
+        { id: 2, handle: 'wick', role: 'npc', kind: 'emote', body: 'nods', created_at: now - 300 },
+      ],
+      presence: [],
+    },
+    now,
+  });
+  assert.equal(answeredEmote, null);
+});
+
+test('checkHonesty boundaries: 500/501 cap, empty/non-string, reason order, self/dash/case/snippet floor', () => {
+  const wick = CHARACTERS[0];
+
+  assert.equal(checkHonesty({ text: 'a'.repeat(500), npc: wick, promptBook: [] }).ok, true);
+  const over = checkHonesty({ text: 'a'.repeat(501), npc: wick, promptBook: [] });
+  assert.equal(over.ok, false);
+  assert.deepEqual(over.reasons, ['exceeds_max_length (501 > 500)']);
+
+  for (const blank of ['', '   ', 42]) {
+    const res = checkHonesty({ text: blank, npc: wick, promptBook: [] });
+    assert.equal(res.ok, false);
+    assert.deepEqual(res.reasons, ['empty_draft']);
+  }
+
+  const multi = checkHonesty({
+    text: `I am a real muse at the campfire. ${'x'.repeat(500)}`,
+    npc: wick,
+    promptBook: [],
+  });
+  assert.equal(multi.ok, false);
+  assert.ok(multi.reasons[0].startsWith('exceeds_max_length'));
+  assert.ok(multi.reasons.includes('forbidden_terminology: campfire'));
+  assert.ok(multi.reasons.includes('denylist_phrase: "i am a real muse"'));
+
+  assert.equal(
+    checkHonesty({ text: '"Swept the steps twice," says wick.', npc: wick, promptBook: [] }).ok,
+    true
+  );
+
+  const dashFail = checkHonesty({
+    text: '"The cedar steps smell like rain tonight" — alice',
+    npc: wick,
+    promptBook: [{ handle: 'alice', body: 'Something else entirely.' }],
+  });
+  assert.equal(dashFail.ok, false);
+  assert.deepEqual(dashFail.reasons, ['unverified_attribution: alice']);
+
+  assert.equal(checkHonesty({ text: 'I AM A REAL MUSE, honestly.', npc: wick, promptBook: [] }).ok, false);
+
+  assert.equal(checkHonesty({ text: 'alice: x', npc: wick, promptBook: [] }).ok, true);
+  const twoChar = checkHonesty({ text: 'alice: ok', npc: wick, promptBook: [] });
+  assert.equal(twoChar.ok, false);
+  assert.deepEqual(twoChar.reasons, ['unverified_attribution: alice']);
+});
+
+test('trimMemory byte boundaries: 2048/2047, single long line, empty, multibyte', () => {
+  const line101 = `${'x'.repeat(100)}\n`;
+  const tail28 = `${'x'.repeat(27)}\n`;
+  const text2048 = line101.repeat(20) + tail28;
+  assert.equal(Buffer.byteLength(text2048, 'utf8'), MEMORY_MAX_BYTES);
+  const trimmed2048 = trimMemory(text2048);
+  assert.equal(trimmed2048, line101.repeat(19) + tail28);
+  assert.ok(Buffer.byteLength(trimmed2048, 'utf8') < MEMORY_MAX_BYTES);
+
+  const text2047 = line101.repeat(20) + `${'x'.repeat(26)}\n`;
+  assert.equal(Buffer.byteLength(text2047, 'utf8'), MEMORY_MAX_BYTES - 1);
+  assert.equal(trimMemory(text2047), text2047);
+
+  assert.equal(trimMemory(`${'x'.repeat(3000)}\n`), '');
+  assert.equal(trimMemory(''), '');
+
+  const multi3001 = `${'é'.repeat(1500)}\n`;
+  assert.equal(Buffer.byteLength(multi3001, 'utf8'), 3001);
+  assert.equal(trimMemory(multi3001), '');
+
+  const multi2001 = `${'é'.repeat(1000)}\n`;
+  assert.equal(Buffer.byteLength(multi2001, 'utf8'), 2001);
+  assert.equal(trimMemory(multi2001), multi2001);
+});
+
+test('runTurn unknown NPC and brain failure paths', async () => {
+  const tmp1 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-unknown-'));
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-throw-'));
+  const tmp3 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-nonstr-'));
+  try {
+    const now = 1_760_000_000;
+    let fetchCalls = 0;
+    const unknownLogs = [];
+    const unknownRes = await runTurn({
+      npcHandle: 'nosuch',
+      apiBase: 'http://fake.local',
+      stateDir: tmp1,
+      dryRun: false,
+      now,
+      fetchImpl: async () => {
+        fetchCalls++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+      logger: (o) => unknownLogs.push(o),
+    });
+    assert.deepEqual(unknownRes, { ok: false, exitCode: 1, action: 'error' });
+    assert.equal(fetchCalls, 0);
+    assert.deepEqual(unknownLogs, [{ npc: 'nosuch', action: 'error', reason: 'unknown npc: nosuch' }]);
+    assert.equal(fs.existsSync(path.join(tmp1, 'nosuch')), false);
+
+    const quietFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ footlights: [], prompt_book: [], presence: [] }),
+    });
+
+    const throwRes = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmp2,
+      dryRun: false,
+      now,
+      fetchImpl: quietFetch,
+      brainImpl: async () => {
+        throw new Error('boom');
+      },
+      logger: () => {},
+    });
+    assert.equal(throwRes.ok, false);
+    assert.equal(throwRes.action, 'error');
+    const st2 = JSON.parse(fs.readFileSync(path.join(tmp2, 'wick', 'state.json'), 'utf8'));
+    assert.equal(st2.turns, 0);
+    assert.equal(st2.last_turn_at, null);
+
+    const nonStrLogs = [];
+    const nonStrRes = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmp3,
+      dryRun: false,
+      now,
+      fetchImpl: quietFetch,
+      brainImpl: async () => 42,
+      logger: (o) => nonStrLogs.push(o),
+    });
+    assert.equal(nonStrRes.ok, false);
+    assert.equal(nonStrRes.action, 'error');
+    assert.ok(nonStrLogs.some((o) => o.action === 'error' && String(o.reason).startsWith('brain failed:')));
+  } finally {
+    fs.rmSync(tmp1, { recursive: true, force: true });
+    fs.rmSync(tmp2, { recursive: true, force: true });
+    fs.rmSync(tmp3, { recursive: true, force: true });
+  }
+});
+
+test('runTurn silent and retired persistence plus dry-run no-write', async () => {
+  const tmpSilent = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-silent-'));
+  const tmpDry = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-silent-dry-'));
+  const tmpRetired = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-retired-'));
+  try {
+    const now = 1_760_000_000;
+    const silentState = {
+      footlights: [
+        { handle: 'alice', role: 'muse' },
+        { handle: 'bob', role: 'muse' },
+      ],
+      prompt_book: [{ id: 1, handle: 'alice', role: 'muse', body: 'hello bob', created_at: now - 60 }],
+      presence: [],
+    };
+    let brainCalls = 0;
+    const guardBrain = async () => {
+      brainCalls++;
+      throw new Error('brain should not be called');
+    };
+
+    const resSilent = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpSilent,
+      dryRun: false,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => silentState }),
+      brainImpl: guardBrain,
+      logger: () => {},
+    });
+    assert.equal(resSilent.ok, true);
+    assert.equal(resSilent.action, 'silent');
+    assert.equal(brainCalls, 0);
+    const stSilent = JSON.parse(fs.readFileSync(path.join(tmpSilent, 'wick', 'state.json'), 'utf8'));
+    assert.equal(stSilent.last_turn_at, now);
+    assert.equal(stSilent.turns, 0);
+    assert.equal(fs.readFileSync(path.join(tmpSilent, 'wick', 'memory.md'), 'utf8'), '');
+
+    const resDry = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpDry,
+      dryRun: true,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => silentState }),
+      brainImpl: guardBrain,
+      logger: () => {},
+    });
+    assert.equal(resDry.action, 'silent');
+    assert.equal(fs.existsSync(path.join(tmpDry, 'wick')), false);
+
+    const retiredState = {
+      footlights: [],
+      prompt_book: [],
+      presence: Array.from({ length: 10 }, (_, i) => ({
+        handle: `m${i}`,
+        role: 'muse',
+        updated_at: now - 60,
+      })),
+    };
+    const resRetired = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmpRetired,
+      dryRun: false,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => retiredState }),
+      brainImpl: guardBrain,
+      logger: () => {},
+    });
+    assert.equal(resRetired.action, 'retired');
+    const stRetired = JSON.parse(fs.readFileSync(path.join(tmpRetired, 'wick', 'state.json'), 'utf8'));
+    assert.equal(stRetired.last_turn_at, now);
+    assert.equal(stRetired.turns, 0);
+  } finally {
+    fs.rmSync(tmpSilent, { recursive: true, force: true });
+    fs.rmSync(tmpDry, { recursive: true, force: true });
+    fs.rmSync(tmpRetired, { recursive: true, force: true });
+  }
+});
+
+test('runTurn --force conversions in dry-run: retired unaddressed -> initiate, reply unchanged', async () => {
+  const tmp1 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-force1-'));
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-force2-'));
+  try {
+    const now = 1_760_000_000;
+    const retiredUnaddressed = {
+      footlights: [],
+      presence: Array.from({ length: 10 }, (_, i) => ({
+        handle: `m${i}`,
+        role: 'muse',
+        updated_at: now - 60,
+      })),
+      prompt_book: [
+        { id: 1, handle: 'muse_0', role: 'muse', body: 'talking among ourselves', created_at: now - 120 },
+      ],
+    };
+    const res1 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmp1,
+      dryRun: true,
+      force: true,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => retiredUnaddressed }),
+      logger: () => {},
+    });
+    assert.equal(res1.action, 'dry_run');
+    assert.equal(res1.decision.action, 'initiate');
+    assert.ok(res1.decision.reason.startsWith('forced ('));
+    assert.equal(res1.decision.replyLine, null);
+
+    const existingReply = {
+      footlights: [
+        { handle: 'alice', role: 'muse' },
+        { handle: 'bob', role: 'muse' },
+      ],
+      presence: [],
+      prompt_book: [
+        { id: 4, handle: 'alice', role: 'muse', body: 'wick, is the bulb warm?', created_at: now - 60 },
+      ],
+    };
+    const res2 = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmp2,
+      dryRun: true,
+      force: true,
+      now,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => existingReply }),
+      logger: () => {},
+    });
+    assert.equal(res2.action, 'dry_run');
+    assert.equal(res2.decision.action, 'reply');
+    assert.equal(res2.decision.reason.startsWith('forced'), false);
+    assert.deepEqual(res2.decision.replyLine, { id: 4, handle: 'alice' });
+  } finally {
+    fs.rmSync(tmp1, { recursive: true, force: true });
+    fs.rmSync(tmp2, { recursive: true, force: true });
+  }
+});
+
+test('formatPresenceForPrompt zone edges: unknown zone, empty plot:, unknown plot, host line last, null npc', () => {
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+
+  assert.equal(
+    formatPresenceForPrompt({
+      npc: wick,
+      presence: [
+        { handle: 'zoe', zone: 'inn', updated_at: now - 60, role: 'muse' },
+        { handle: 'yan', zone: 'plot:', updated_at: now - 60, role: 'muse' },
+      ],
+      now,
+    }),
+    '- zoe is at around town.'
+  );
+
+  assert.equal(
+    formatPresenceForPrompt({
+      npc: wick,
+      presence: [{ handle: 'zoe', zone: 'plot:nosuch', updated_at: now - 60, role: 'muse' }],
+      now,
+    }),
+    "- zoe is at nosuch's cottage."
+  );
+
+  assert.equal(
+    formatPresenceForPrompt({
+      npc: wick,
+      presence: [
+        { handle: 'zoe', zone: 'plot:wick', updated_at: now - 60, role: 'muse' },
+        { handle: 'yan', zone: 'gate', updated_at: now - 30, role: 'muse' },
+      ],
+      now,
+    }),
+    "- zoe is at your cottage.\n- yan is at the gate.\nA visitor is at your cottage — you are the host; greet them or answer from your doorway."
+  );
+
+  assert.equal(
+    formatPresenceForPrompt({
+      npc: null,
+      presence: [{ handle: 'wick', zone: 'gate', updated_at: now - 60, role: 'npc' }],
+      now,
+    }),
+    '- wick is at the gate.'
+  );
+});
+
+test('run.mjs CLI via subprocess: usage, missing api-base, unknown NPC, TOWN_API_BASE env default', () => {
+  const tmpCli = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-cli-'));
+  const runScript = path.resolve('town-npc/run.mjs');
+  try {
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.TOWN_API_BASE;
+
+    const runFail = (args, env = cleanEnv) => {
+      try {
+        execFileSync('node', [runScript, ...args], { cwd: tmpCli, encoding: 'utf8', env });
+        assert.fail('expected CLI to exit non-zero');
+      } catch (err) {
+        assert.equal(err.status, 1);
+        return { stdout: err.stdout || '', stderr: err.stderr || '' };
+      }
+    };
+
+    const rNoArgs = runFail([]);
+    assert.ok(rNoArgs.stderr.includes('Usage: node town-npc/run.mjs --npc <handle> --api-base <url>'));
+
+    runFail(['--npc', 'wick']);
+
+    const rUnknown = runFail(['--npc', 'nosuch', '--api-base', 'http://127.0.0.1:1', '--state-dir', tmpCli]);
+    assert.ok(rUnknown.stdout.includes('"action":"error"'));
+    assert.ok(rUnknown.stdout.includes('unknown npc: nosuch'));
+
+    const rEnv = runFail(['--npc', 'wick', '--state-dir', tmpCli], {
+      ...cleanEnv,
+      TOWN_API_BASE: 'http://127.0.0.1:1',
+    });
+    assert.ok(rEnv.stdout.includes('"action":"error"'));
+    assert.ok(rEnv.stdout.includes('state fetch error:'));
+  } finally {
+    fs.rmSync(tmpCli, { recursive: true, force: true });
+  }
+});
