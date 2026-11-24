@@ -640,3 +640,209 @@ test('SEED_COLORS keys are exactly the six seed names; unknown seed with bloom s
   assert.equal(plant.getObjectByName('plant-stem'), null);
   assert.equal(plant.getObjectByName('plant-flower'), null);
 });
+
+test('buildGardenPlant child counts per stage: sprout 2, leaf 4, bloom 5', () => {
+  const THREE = makeFakeThree();
+
+  const sprout = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'sprout' });
+  assert.equal(sprout.children.length, 2);
+  for (const child of sprout.children) {
+    assert.ok(child.name.startsWith('plant-sprout-leaf-'), `unexpected child ${child.name}`);
+  }
+
+  const leaf = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'leaf' });
+  assert.equal(leaf.children.length, 4);
+
+  const bloom = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'bloom' });
+  assert.equal(bloom.children.length, 5);
+  assert.deepEqual(
+    bloom.children.map((c) => c.name),
+    ['plant-stem', 'plant-leaf-0', 'plant-leaf-1', 'plant-leaf-2', 'plant-flower']
+  );
+});
+
+test('buildGardenPlant material roughness and sharing: sprout leaves 0.8, stem 0.85, leaves 0.8', () => {
+  const THREE = makeFakeThree();
+
+  const sprout = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'sprout' });
+  const sl0 = sprout.getObjectByName('plant-sprout-leaf-0');
+  const sl1 = sprout.getObjectByName('plant-sprout-leaf-1');
+  assert.equal(sl0.material, sl1.material);
+  assert.equal(sl0.material.color, '#a8c686');
+  assert.equal(sl0.material.opts.roughness, 0.8);
+
+  const leaf = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'leaf' });
+  const stem = leaf.getObjectByName('plant-stem');
+  const lf0 = leaf.getObjectByName('plant-leaf-0');
+  assert.equal(stem.material.opts.roughness, 0.85);
+  assert.equal(lf0.material.opts.roughness, 0.8);
+  assert.notEqual(stem.material, lf0.material);
+});
+
+test('buildGardenPlant non-string seed and stage fail soft and keep the raw name', () => {
+  const THREE = makeFakeThree();
+
+  const p1 = buildGardenPlant(THREE, { seed: 42, stage: 'leaf' });
+  assert.equal(p1.name, 'garden-plant-42-leaf');
+  assert.equal(p1.getObjectByName('plant-stem'), null);
+  assert.ok(p1.getObjectByName('plant-sprout-leaf-0'));
+
+  const p2 = buildGardenPlant(THREE, { seed: '', stage: 'bloom' });
+  assert.equal(p2.name, 'garden-plant-unknown-bloom');
+  assert.equal(p2.getObjectByName('plant-stem'), null);
+
+  const p3 = buildGardenPlant(THREE, { seed: 'moonflower', stage: 2 });
+  assert.equal(p3.name, 'garden-plant-moonflower-2');
+  assert.equal(p3.getObjectByName('plant-stem'), null);
+
+  const p4 = buildGardenPlant(THREE, { seed: 'moonflower', stage: null });
+  assert.equal(p4.name, 'garden-plant-moonflower-sprout');
+  assert.equal(p4.getObjectByName('plant-stem'), null);
+});
+
+test('gardenStageForAgeDays boolean, object, -0, and fractional inputs', () => {
+  for (const input of [true, false, {}, [], -0]) {
+    assert.equal(gardenStageForAgeDays(input), 'sprout');
+  }
+  assert.equal(gardenStageForAgeDays(2.5), 'leaf');
+  assert.equal(gardenStageForAgeDays(3.5), 'leaf');
+});
+
+test('buildGardenBed children in exact order; frame stands 0.06 proud of soil', () => {
+  const THREE = makeFakeThree();
+  const bed = buildGardenBed(THREE);
+  assert.deepEqual(
+    bed.children.map((c) => c.name),
+    [
+      'garden-soil',
+      'garden-frame-north',
+      'garden-frame-south',
+      'garden-frame-west',
+      'garden-frame-east',
+      'garden-plants',
+    ]
+  );
+
+  const soil = bed.getObjectByName('garden-soil');
+  const north = bed.getObjectByName('garden-frame-north');
+  const soilTop = soil.position.y + soil.geometry.args[1] / 2;
+  const frameTop = north.position.y + north.geometry.args[1] / 2;
+  assert.ok(Math.abs(soilTop - 0.22) < 1e-9);
+  assert.ok(Math.abs(frameTop - 0.28) < 1e-9);
+  assert.ok(Math.abs(frameTop - soilTop - 0.06) < 1e-9);
+});
+
+test('buildGardenBed slot entries missing seed or stage fail soft to sprout', () => {
+  const THREE = makeFakeThree();
+  const bed = buildGardenBed(THREE, {
+    garden: {
+      slots: [
+        { slot: 1 },
+        { slot: 3, seed: 'starwort' },
+        { slot: 4, stage: 'bloom' },
+      ],
+    },
+  });
+  const plants = bed.getObjectByName('garden-plants');
+  assert.equal(plants.children.length, 3);
+
+  assert.equal(plants.children[0].name, 'garden-plant-unknown-sprout');
+  assert.ok(Math.abs(plants.children[0].position.x - 0) < 1e-9);
+  assert.ok(Math.abs(plants.children[0].position.z - -0.3) < 1e-9);
+
+  assert.equal(plants.children[1].name, 'garden-plant-starwort-sprout');
+
+  assert.equal(plants.children[2].name, 'garden-plant-unknown-bloom');
+  assert.equal(plants.children[2].getObjectByName('plant-stem'), null);
+});
+
+test('updateGardenBed repeated updates keep the bed intact; non-array slots clears', () => {
+  const THREE = makeFakeThree();
+  const bed = buildGardenBed(THREE, {
+    garden: { slots: [{ slot: 0, seed: 'moonflower', stage: 'sprout' }] },
+  });
+
+  updateGardenBed(THREE, bed, {
+    slots: [{ slot: 1, seed: 'tea_mint', stage: 'leaf' }],
+  });
+  updateGardenBed(THREE, bed, {
+    slots: [{ slot: 5, seed: 'ghost_bell', stage: 'bloom' }],
+  });
+  const third = updateGardenBed(THREE, bed, {
+    slots: [
+      { slot: 2, seed: 'starwort', stage: 'leaf' },
+      { slot: 3, seed: 'silver_thyme', stage: 'sprout' },
+    ],
+  });
+
+  assert.equal(bed.children.length, 6);
+  assert.equal(bed.children.filter((c) => c.name === 'garden-plants').length, 1);
+  assert.ok(bed.getObjectByName('garden-soil'));
+  assert.ok(bed.getObjectByName('garden-frame-east'));
+  assert.equal(third.children.length, 2);
+  assert.equal(third.children[0].name, 'garden-plant-starwort-leaf');
+  assert.equal(third.children[1].name, 'garden-plant-silver_thyme-sprout');
+
+  const cleared = updateGardenBed(THREE, bed, { slots: 'nope' });
+  assert.equal(cleared.children.length, 0);
+  assert.equal(bed.children.length, 6);
+});
+
+test('server gardenStageForAge agrees with client gardenStageForAgeDays on every boundary', () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'town-api', 'server.mjs'), 'utf8');
+  const match = serverSrc.match(/function\s+gardenStageForAge\s*\(\s*now\s*,\s*plantedAt\s*\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(match, 'Could not find gardenStageForAge in town-api/server.mjs');
+  const serverStage = new Function('now', 'plantedAt', match[1]);
+
+  const now = 1_800_000_000;
+  const cases = [
+    [-86400, 'sprout'],
+    [0, 'sprout'],
+    [1.5 * 86400, 'sprout'],
+    [2 * 86400, 'leaf'],
+    [3.99 * 86400, 'leaf'],
+    [4 * 86400, 'bloom'],
+    [10 * 86400, 'bloom'],
+    [100 * 86400, 'bloom'],
+  ];
+  for (const [ageSec, expected] of cases) {
+    assert.equal(serverStage(now, now - ageSec), expected);
+    assert.equal(gardenStageForAgeDays(ageSec / 86400), expected);
+  }
+});
+
+test('staging.js wires the garden bed: import, empty init, state.garden refresh', () => {
+  const stagingSrc = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  const importMatch = stagingSrc.match(/import\s*\{\s*([^}]*)\}\s*from\s*'\.\/garden\.mjs\?v=\d+';/);
+  assert.ok(importMatch, 'Could not find garden.mjs import in staging.js');
+  const importedNames = importMatch[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(importedNames, ['GARDEN_BED', 'buildGardenBed', 'updateGardenBed']);
+
+  assert.ok(stagingSrc.includes('buildGardenBed(THREE, {\n    garden: { slots: [] },'));
+  assert.ok(stagingSrc.includes('y: camp.groundAt(GARDEN_BED.x, GARDEN_BED.z)'));
+  assert.ok(stagingSrc.includes('updateGardenBed(THREE, gardenBed, state.garden);'));
+  assert.ok(stagingSrc.includes('Nov 23 hotfix'));
+});
+
+test('GARDEN_BED is exactly {x: 6.5, z: 0}; raised-bed plants stay at soil height', () => {
+  assert.equal(GARDEN_BED.x, 6.5);
+  assert.equal(GARDEN_BED.z, 0);
+  assert.equal(Object.keys(GARDEN_BED).length, 2);
+
+  const THREE = makeFakeThree();
+  const bed = buildGardenBed(THREE, {
+    y: 0.25,
+    garden: { slots: [{ slot: 0, seed: 'moonflower', stage: 'sprout' }] },
+  });
+  assert.equal(bed.position.y, 0.25);
+
+  const plants = bed.getObjectByName('garden-plants');
+  assert.equal(plants.children.length, 1);
+  assert.equal(plants.children[0].position.y, 0.22);
+  assert.ok(Math.abs(plants.children[0].position.x - -0.7) < 1e-9);
+  assert.ok(Math.abs(plants.children[0].position.z - -0.3) < 1e-9);
+});
