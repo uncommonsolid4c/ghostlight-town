@@ -911,3 +911,265 @@ test('getStagingNewsstandFrontPosition: bandstand behind newsstand and distance 
     { x: 2, y: 0, z: 0 }
   );
 });
+
+test('Walk clip identity and timing: name Walk, cc0 true, 41 frames at ~30 fps', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-walk.json');
+  const data = JSON.parse(fs.readFileSync(clipPath, 'utf8'));
+  assert.equal(data.name, 'Walk');
+  assert.equal(data.cc0, true);
+  assert.equal(data.times.length, 41);
+  assert.equal(data.times[0], 0);
+  assert.equal(data.times[40], 1.3333);
+  for (let i = 1; i < data.times.length; i++) {
+    const step = data.times[i] - data.times[i - 1];
+    assert.ok(step > 0, `time step ${i} must be strictly positive`);
+    assert.ok(step >= 0.033 && step <= 0.0335, `time step ${i} (${step}) must be in [0.033, 0.0335]`);
+  }
+});
+
+test('Walk clip track arrays are per-frame unit quaternions across all 22 Mixamo bones', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-walk.json');
+  const data = JSON.parse(fs.readFileSync(clipPath, 'utf8'));
+  const trackKeys = Object.keys(data.tracks);
+  assert.equal(trackKeys.length, 22);
+  assert.deepEqual(new Set(trackKeys), MIXAMO_HUMANOID_BONES);
+
+  const expectedLen = data.times.length * 4;
+  assert.equal(expectedLen, 164);
+  for (const bone of trackKeys) {
+    const arr = data.tracks[bone];
+    assert.equal(arr.length, expectedLen, `${bone} track length must equal 164`);
+    for (let i = 0; i < arr.length; i++) {
+      assert.ok(Number.isFinite(arr[i]), `${bone}[${i}] must be finite`);
+    }
+    for (let i = 0; i < arr.length; i += 4) {
+      const norm = Math.hypot(arr[i], arr[i + 1], arr[i + 2], arr[i + 3]);
+      assert.ok(Math.abs(norm - 1) <= 1e-3, `${bone} frame ${i / 4} norm ${norm} must be within 1e-3 of 1`);
+    }
+  }
+});
+
+test('Walk clip hips is a per-frame vec3 with exact downward bob range', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-walk.json');
+  const data = JSON.parse(fs.readFileSync(clipPath, 'utf8'));
+  assert.equal(data.hips.length, 123);
+  const xs = [];
+  const ys = [];
+  const zs = [];
+  for (let i = 0; i < data.hips.length; i += 3) {
+    const [x, y, z] = [data.hips[i], data.hips[i + 1], data.hips[i + 2]];
+    assert.ok(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z));
+    xs.push(x);
+    ys.push(y);
+    zs.push(z);
+  }
+  assert.deepEqual([Math.min(...xs), Math.max(...xs)], [-0.0327, 0.0407]);
+  assert.deepEqual([Math.min(...ys), Math.max(...ys)], [-0.0534, 0.0011]);
+  assert.deepEqual([Math.min(...zs), Math.max(...zs)], [0, 0.0003]);
+});
+
+test('updateStagingWander: dt = Infinity is a no-op', () => {
+  const locoCalls = [];
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(speed) } },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 2, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([fig], Infinity, new Map());
+  assert.equal(group.position.x, 0);
+  assert.equal(group.position.y, 0);
+  assert.equal(group.position.z, 0);
+  assert.equal(fig.state, 'walking');
+  assert.equal(locoCalls.length, 0);
+});
+
+test('updateStagingWander: yielded figure with live presence still present stays hidden', () => {
+  const locoCalls = [];
+  const group = makeFakeGroup(5, 0.2, 5, 0);
+  group.visible = false;
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(speed) } },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 2, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: true,
+  };
+
+  updateStagingWander([fig], 0.5, new Map([['wick', {}]]));
+  assert.equal(group.visible, false);
+  assert.equal(fig.yielded, true);
+  assert.equal(group.position.x, 5);
+  assert.equal(group.position.y, 0.2);
+  assert.equal(group.position.z, 5);
+  assert.equal(locoCalls.length, 0);
+});
+
+test('updateStagingWander: figure with no standIn key walks and arrives without throwing', () => {
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const fig = {
+    handle: 'milo',
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 0.5, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  assert.doesNotThrow(() => updateStagingWander([fig], 1.0, new Map()));
+  assert.equal(fig.state, 'lingering');
+  assert.equal(fig.lingerRemaining, 14);
+  assert.equal(group.position.x, 0);
+  assert.equal(group.position.y, 0);
+  assert.equal(group.position.z, 0.5);
+});
+
+test('updateStagingWander: null-anim arrival never needs locomotion', () => {
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 0.5, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  assert.doesNotThrow(() => updateStagingWander([fig], 1.0, new Map()));
+  assert.equal(fig.state, 'lingering');
+  assert.equal(fig.lingerRemaining, 14);
+  assert.equal(group.position.z, 0.5);
+});
+
+test('updateStagingWander: arrival snap epsilon boundary at 1e-6', () => {
+  const snapGroup = makeFakeGroup(0, 0, 0, 0);
+  const snapTargetZ = 0.5 + 5e-7;
+  const snapFig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group: snapGroup,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: snapTargetZ, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+  updateStagingWander([snapFig], 1.0, new Map());
+  assert.equal(snapFig.state, 'lingering');
+  assert.equal(snapGroup.position.z, snapTargetZ);
+
+  const walkGroup = makeFakeGroup(0, 0, 0, 0);
+  const walkTargetZ = 0.5 + 2e-6;
+  const walkFig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group: walkGroup,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: walkTargetZ, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+  updateStagingWander([walkFig], 1.0, new Map());
+  assert.equal(walkFig.state, 'walking');
+  assert.ok(Math.abs(walkGroup.position.z - 0.5) < 1e-9);
+});
+
+test('Turn smoothing: dt = 0.24 just below 0.25 uses exp formula and advances 0.12 m', () => {
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 2, y: 0, z: 0, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([fig], 0.24, new Map());
+  const expectedRotY = (Math.PI / 2) * (1 - Math.exp(-2.4));
+  assert.ok(Math.abs(group.rotation.y - expectedRotY) < 1e-9);
+  assert.ok(Math.abs(group.position.x - 0.12) < 1e-9);
+});
+
+test('Single call: one figure arrives while another walks, in order', () => {
+  const locoCalls = [];
+  const wickGroup = makeFakeGroup(0, 0, 2, 0);
+  const marenGroup = makeFakeGroup(0, 0, 0, 0);
+  const wick = {
+    handle: 'wick',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(['wick', speed]) } },
+    group: wickGroup,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 2, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+  const maren = {
+    handle: 'maren',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(['maren', speed]) } },
+    group: marenGroup,
+    speed: 0.45,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 12, label: 'home' },
+      { x: 0, y: 0, z: 2, rotY: 0, linger: 16, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([wick, maren], 1.0, new Map());
+  assert.deepEqual(locoCalls, [['wick', 0], ['maren', 0.45]]);
+  assert.equal(wick.state, 'lingering');
+  assert.equal(maren.state, 'walking');
+  assert.ok(Math.abs(marenGroup.position.z - 0.45) < 1e-9);
+});
