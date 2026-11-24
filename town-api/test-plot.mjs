@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { createTownServer } from './server.mjs';
 import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';
-import { validateHtml, validateManifest, VALID_PROP_KINDS } from './plot-validation.mjs';
+import { validateHtml, validateManifest, VALID_PROP_KINDS, decodeHtmlEntities } from './plot-validation.mjs';
 
 const VALID_MANIFEST = {
   cottage: 'gable',
@@ -1089,6 +1089,282 @@ test('PUT ignores a body handle field and failed PUTs leave the stored plot unto
     const stateAfter = await client.state();
     assert.equal(stateAfter.status, 200);
     assert.equal(stateAfter.data.plots.alice, stateBefore.data.plots.alice);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('decodeHtmlEntities decodes decimal, hex, and named entities; leaves bad ones untouched', () => {
+  assert.equal(decodeHtmlEntities('&#106;avascript'), 'javascript');
+  assert.equal(decodeHtmlEntities('&#x6a;avascript'), 'javascript');
+  assert.equal(decodeHtmlEntities('&#X6A;avascript'), 'javascript');
+  assert.equal(decodeHtmlEntities('&#106avascript'), 'javascript');
+
+  assert.equal(decodeHtmlEntities('&amp;lt;'), '&lt;');
+  assert.equal(decodeHtmlEntities('&AMP;'), '&');
+  assert.equal(decodeHtmlEntities('a&GT;b'), 'a>b');
+  assert.equal(decodeHtmlEntities('&colon;'), ':');
+  assert.equal(decodeHtmlEntities('&Tab;'), '\t');
+
+  assert.equal(decodeHtmlEntities('&unknown;'), '&unknown;');
+  assert.equal(decodeHtmlEntities('&#0;'), '&#0;');
+  assert.equal(decodeHtmlEntities('&#x110000;'), '&#x110000;');
+});
+
+test('validateManifest missing-field errors name the field', () => {
+  const { roof: _roof, ...noRoof } = VALID_MANIFEST;
+  assert.deepEqual(validateManifest(noRoof), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'roof',
+  });
+
+  const { trim: _trim, ...noTrim } = VALID_MANIFEST;
+  assert.deepEqual(validateManifest(noTrim), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'trim',
+  });
+
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, cottage: null }), {
+    ok: false,
+    error: 'invalid_cottage',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, signpost_text: null }), {
+    ok: false,
+    error: 'invalid_signpost_text',
+    max: 120,
+  });
+  assert.deepEqual(validateManifest(undefined), {
+    ok: false,
+    error: 'invalid_manifest',
+  });
+
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: [{ kind: 'desk', x: 0, y: 0, z: 0 }] }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: [{ kind: 'desk', x: 0, z: 0, rot_y: 0 }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'y', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: [{ kind: 'desk', x: 0, y: 0, rot_y: 0 }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'z', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: null }],
+    }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: '#abc' }],
+    }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+});
+
+test('validateManifest check ordering: unknown keys first, then size, then fields; first key wins', () => {
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, zzz: 1, aaa: 2 }), {
+    ok: false,
+    error: 'unknown_manifest_key',
+    key: 'zzz',
+  });
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, zzz: 1, signpost_text: 'a'.repeat(17 * 1024) }),
+    { ok: false, error: 'unknown_manifest_key', key: 'zzz' }
+  );
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, cottage: 'castle', zzz: 1 }), {
+    ok: false,
+    error: 'unknown_manifest_key',
+    key: 'zzz',
+  });
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'spaceship', x: 0, y: 0, z: 0, rot_y: 0, extra: 1 }],
+    }),
+    { ok: false, error: 'unknown_prop_key', key: 'extra', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [
+        { kind: 'spaceship', x: 0, y: 0, z: 0, rot_y: 0 },
+        { kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, extra: 1 },
+      ],
+    }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+});
+
+test('validateHtml forbidden-tag reasons name the tag', () => {
+  const cases = [
+    ['</script>', 'forbidden_tag:script'],
+    ['<script >alert(1)</script>', 'forbidden_tag:script'],
+    ['<SCRIPT>alert(1)</SCRIPT>', 'forbidden_tag:script'],
+    ['<scr\tipt>alert(1)</scr\tipt>', 'forbidden_tag:script'],
+    ['<iframe src="x.html"></iframe>', 'forbidden_tag:iframe'],
+    ['<form action="/x"></form>', 'forbidden_tag:form'],
+    ['<object data="x.swf"></object>', 'forbidden_tag:object'],
+    ['<embed src="x.swf">', 'forbidden_tag:embed'],
+    ['<link rel="stylesheet" href="x.css">', 'forbidden_tag:link'],
+    ['<base href="other/">', 'forbidden_tag:base'],
+    ['<title>Hijack</title>', 'forbidden_tag:title'],
+  ];
+  for (const [html, reason] of cases) {
+    assert.deepEqual(validateHtml(html), { ok: false, error: 'unsafe_html', reason });
+  }
+});
+
+test('validateHtml URI schemes: mailto/tel/ftp are external; fragment and uppercase data-image are safe', () => {
+  for (const html of [
+    '<a href="mailto:a@b.c">x</a>',
+    '<a href="tel:+15551234">x</a>',
+    '<a href="ftp://example.com/x">x</a>',
+  ]) {
+    assert.deepEqual(validateHtml(html), {
+      ok: false,
+      error: 'unsafe_html',
+      reason: 'external_uri',
+    });
+  }
+
+  assert.deepEqual(validateHtml('<a href="#">x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<a href="plots/wick#top">x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<img src="DATA:IMAGE/PNG;BASE64,iVBORw0=">'), { ok: true });
+
+  assert.deepEqual(validateHtml('<a href="data:application/json,{}">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="  javascript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+});
+
+test('validateHtml unterminated tags pass; entity-encoded colon still catches javascript:', () => {
+  assert.deepEqual(validateHtml('<div'), { ok: true });
+  assert.deepEqual(validateHtml('<'), { ok: true });
+  assert.deepEqual(validateHtml('a > b'), { ok: true });
+  assert.deepEqual(validateHtml('<div style="color: red">x</div>'), { ok: true });
+
+  assert.deepEqual(validateHtml('<a href="javascript&#58;alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="java&#115;cript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+});
+
+test('PUT auth: pending resident 403, unknown handle 401 unknown_resident', async () => {
+  const ctx = await startTestServer();
+  try {
+    const pendingKeys = generateKeypair();
+    const pendingClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'pending',
+      ...pendingKeys,
+    });
+    const joinRes = await pendingClient.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+    ctx.db.prepare("UPDATE residents SET status = 'pending' WHERE handle = ?").run('pending');
+
+    const pendingPut = await pendingClient.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(pendingPut.status, 403);
+    assert.deepEqual(pendingPut.data, {
+      error: 'resident_not_active',
+      resident_status: 'pending',
+    });
+
+    const ghostKeys = generateKeypair();
+    const signed = signRequest({
+      method: 'PUT',
+      path: '/api/town/plot',
+      body: { manifest: VALID_MANIFEST, html: VALID_HTML },
+      handle: 'ghost',
+      privateKeyPem: ghostKeys.privateKeyPem,
+    });
+    const ghostRes = await fetch(`${ctx.baseUrl}/api/town/plot`, {
+      method: 'PUT',
+      headers: signed.headers,
+      body: signed.rawBody,
+    });
+    assert.equal(ghostRes.status, 401);
+    assert.deepEqual(await ghostRes.json(), { error: 'unknown_resident' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('validateManifest accepts every starter-catalog kind', () => {
+  assert.equal(VALID_PROP_KINDS.size, 9);
+  for (const kind of VALID_PROP_KINDS) {
+    const res = validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind, x: 0, y: 0, z: 0, rot_y: 0 }],
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.manifest.props[0].kind, kind);
+  }
+});
+
+test('validateHtml CSS: comments hide url(, whitespace does not; uppercase EXPRESSION; calc is safe', () => {
+  assert.deepEqual(
+    validateHtml('<style>/* url(evil.png) */ p { color: red; }</style><p>x</p>'),
+    { ok: true }
+  );
+  assert.deepEqual(validateHtml('<div style="background: url(  evil.png  )">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<div style="width:EXPRESSION(alert(1))">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('<div style="width:calc(100% - 10px)">x</div>'), { ok: true });
+  assert.deepEqual(validateHtml('<style>p { background: java\tscript:alert(1); }</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+});
+
+test('GET empty handle 400; GET with deleted plot files 404; server-level 32 KB HTML boundary', async () => {
+  const ctx = await startTestServer();
+  try {
+    const emptyHandle = await fetch(`${ctx.baseUrl}/api/town/plot?handle=`);
+    assert.equal(emptyHandle.status, 400);
+    assert.deepEqual(await emptyHandle.json(), { error: 'invalid_handle' });
+
+    const { client } = await createApprovedResident(ctx, 'alice');
+    const initPut = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(initPut.status, 200);
+
+    fs.rmSync(path.join(ctx.plotsDir, 'alice'), { recursive: true, force: true });
+    const deletedGet = await client.getPlot('alice');
+    assert.equal(deletedGet.status, 404);
+    assert.deepEqual(deletedGet.data, { error: 'plot_not_found' });
+
+    const okPut = await client.plot(VALID_MANIFEST, '<p>' + 'x'.repeat(32761) + '</p>');
+    assert.equal(okPut.status, 200);
+
+    const tooLargePut = await client.plot(VALID_MANIFEST, '<p>' + 'x'.repeat(32762) + '</p>');
+    assert.equal(tooLargePut.status, 400);
+    assert.deepEqual(tooLargePut.data, { error: 'html_too_large', max: 32768 });
   } finally {
     await ctx.close();
   }
