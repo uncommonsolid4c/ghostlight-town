@@ -1303,3 +1303,422 @@ test('validateEventEntry rejects non-string fields and enforces host_handle leng
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('selectCurrentEvent same-start ties: first in array wins (now and next)', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (title, startAt) => ({
+    title,
+    host_handle: 'milo',
+    start_at: startAt,
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  });
+  const nowA = ev('A', '2026-11-20T17:30:00Z');
+  const nowB = ev('B', '2026-11-20T17:30:00Z');
+  assert.equal(apiSelectCurrentEvent([nowA, nowB], T0)?.event.title, 'A');
+  assert.equal(apiSelectCurrentEvent([nowB, nowA], T0)?.event.title, 'B');
+
+  const nextA = ev('A', '2026-11-20T19:00:00Z');
+  const nextB = ev('B', '2026-11-20T19:00:00Z');
+  assert.equal(apiSelectCurrentEvent([nextA, nextB], T0)?.event.title, 'A');
+  assert.equal(apiSelectCurrentEvent([nextB, nextA], T0)?.event.title, 'B');
+});
+
+test('validateEventEntry handle charset edges and title trim-then-length', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'E',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+    ...overrides,
+  });
+
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: '_milo' })], T0), null);
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: 'milo-' })], T0)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: 'm1' })], T0)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: 'a_b-c9' })], T0)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: 'milo_' })], T0)?.status, 'now');
+
+  const padded80 = apiSelectCurrentEvent([ev({ title: '  ' + 'x'.repeat(80) + '  ' })], T0);
+  assert.equal(padded80?.status, 'now');
+  assert.equal(padded80?.event.title, 'x'.repeat(80));
+  assert.equal(apiSelectCurrentEvent([ev({ title: '  ' + 'x'.repeat(81) + '  ' })], T0), null);
+});
+
+test('validateEventEntry trims location and blurb and honors offset start_at window', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'E',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+    ...overrides,
+  });
+
+  const locRes = apiSelectCurrentEvent([ev({ location: '  bandstand  ' })], T0);
+  assert.equal(locRes?.event.location, 'bandstand');
+
+  const blurb200 = apiSelectCurrentEvent([ev({ blurb: '  ' + 'x'.repeat(200) + '  ' })], T0);
+  assert.equal(blurb200?.status, 'now');
+  assert.equal(blurb200?.event.blurb, 'x'.repeat(200));
+  assert.equal(apiSelectCurrentEvent([ev({ blurb: '  ' + 'x'.repeat(201) })], T0), null);
+
+  const offsetEv = ev({ start_at: '2026-11-20T18:00:00+02:00', duration_min: 60 });
+  assert.equal(apiSelectCurrentEvent([offsetEv], Date.parse('2026-11-20T16:30:00Z'))?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([offsetEv], Date.parse('2026-11-20T17:00:00Z')), null);
+});
+
+test('selectCurrentEvent honors fractional duration_min and epoch/negative nowMs', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = {
+    title: 'HalfPlus',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 30.5,
+    location: 'bandstand',
+    blurb: '',
+  };
+
+  assert.equal(apiSelectCurrentEvent([ev], T0 + 1800 * 1000)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev], T0 + 1831 * 1000), null);
+  assert.equal(apiSelectCurrentEvent([ev], 0)?.status, 'next');
+  assert.equal(apiSelectCurrentEvent([ev], -1)?.status, 'next');
+});
+
+test('selectNowNext handles non-array/empty/Infinity guards, ending-exactly with no future, and same-start tie', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'E',
+    host_handle: 'milo',
+    start_at: '2026-11-20T17:30:00Z',
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+    ...overrides,
+  });
+
+  assert.deepEqual(selectNowNext('not-an-array', T0), { now: null, next: null });
+  assert.deepEqual(selectNowNext([], T0), { now: null, next: null });
+  assert.deepEqual(selectNowNext([ev()], Infinity), { now: null, next: null });
+
+  const endingAtT0 = ev({ start_at: '2026-11-20T17:00:00Z', duration_min: 60 });
+  assert.deepEqual(selectNowNext([endingAtT0], T0), { now: null, next: null });
+
+  const B = ev({ title: 'B' });
+  const A = ev({ title: 'A' });
+  assert.equal(selectNowNext([B, A], T0).now?.title, 'B');
+});
+
+test('eventStateKey handles missing start_at and empty title', () => {
+  assert.equal(eventStateKey({ title: 'X' }, null), 'now|X|undefined');
+  assert.equal(eventStateKey({ title: '', start_at: 'S' }, null), 'now||S');
+  assert.equal(eventStateKey(null, { title: 'T' }), 'next|T|undefined');
+});
+
+test('loadEventsFile strips extra entry keys, drops invalid entries, and handles non-string path and empty events', () => {
+  assert.deepEqual(loadEventsFile(123), { events: [] });
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-strip-'));
+  try {
+    const filePath = path.join(tmpDir, 'events.json');
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Kept',
+            host_handle: 'milo',
+            start_at: '2026-11-20T18:00:00Z',
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: 'hi',
+            extra: 1,
+            another: 'x',
+          },
+          {
+            title: 'TooLong',
+            host_handle: 'milo',
+            start_at: '2026-11-20T19:00:00Z',
+            duration_min: 241,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const loaded = loadEventsFile(filePath);
+    assert.equal(loaded.events.length, 1);
+    assert.deepEqual(Object.keys(loaded.events[0]).sort(), [
+      'blurb',
+      'duration_min',
+      'host_handle',
+      'location',
+      'start_at',
+      'title',
+    ]);
+
+    const emptyPath = path.join(tmpDir, 'empty.json');
+    fs.writeFileSync(emptyPath, JSON.stringify({ events: [] }), 'utf8');
+    assert.deepEqual(loadEventsFile(emptyPath), { events: [] });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('server integration: adding a next event while now is live does not bump state_seq (304)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const firstIso = new Date((baseNow - 60) * 1000).toISOString();
+  const secondIso = new Date((baseNow + 3600) * 1000).toISOString();
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-nextkey-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  const firstEv = {
+    title: 'First',
+    host_handle: 'host',
+    start_at: firstIso,
+    duration_min: 30,
+    location: 'bandstand',
+    blurb: '',
+  };
+  fs.writeFileSync(eventsPath, JSON.stringify({ events: [firstEv] }), 'utf8');
+  const t1 = new Date('2026-11-15T17:00:00Z');
+  fs.utimesSync(eventsPath, t1, t1);
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const { keys } = await registerResidentWithKeys(ctx, 'host');
+    const checkinRes = await signedCheckin(ctx, keys, 'host', {
+      status_text: 'mine',
+      slot: 0,
+    });
+    assert.equal(checkinRes.status, 200);
+
+    const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res1.status, 200);
+    const s1 = await res1.json();
+    assert.equal(s1.events.now?.title, 'First');
+    assert.equal(s1.events.next, null);
+
+    fs.writeFileSync(
+      eventsPath,
+      JSON.stringify({
+        events: [
+          firstEv,
+          {
+            title: 'Second',
+            host_handle: 'host',
+            start_at: secondIso,
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const t2 = new Date('2026-11-15T17:05:00Z');
+    fs.utimesSync(eventsPath, t2, t2);
+
+    const sinceRes = await fetch(`${ctx.baseUrl}/api/town/state?since=${s1.state_seq}`);
+    assert.equal(sinceRes.status, 304);
+
+    const res2 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res2.status, 200);
+    const s2 = await res2.json();
+    assert.equal(s2.events.now?.title, 'First');
+    assert.equal(s2.events.next?.title, 'Second');
+    assert.equal(s2.state_seq, s1.state_seq);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('server integration: host-only change does not bump state_seq (304) and plain read moves override', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startIso = new Date((baseNow - 60) * 1000).toISOString();
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-hostswap-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  fs.writeFileSync(
+    eventsPath,
+    JSON.stringify({
+      events: [
+        {
+          title: 'Reading',
+          host_handle: 'hosta',
+          start_at: startIso,
+          duration_min: 30,
+          location: 'bandstand',
+          blurb: '',
+        },
+      ],
+    }),
+    'utf8'
+  );
+  const t1 = new Date('2026-11-15T17:00:00Z');
+  fs.utimesSync(eventsPath, t1, t1);
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const { keys: keysA } = await registerResidentWithKeys(ctx, 'hosta');
+    const { keys: keysB } = await registerResidentWithKeys(ctx, 'hostb');
+    assert.equal((await signedCheckin(ctx, keysA, 'hosta', { status_text: 'a-words', slot: 0 })).status, 200);
+    assert.equal((await signedCheckin(ctx, keysB, 'hostb', { status_text: 'b-words', slot: 1 })).status, 200);
+
+    const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res1.status, 200);
+    const s1 = await res1.json();
+    const a1 = s1.footlights.find((f) => f.handle === 'hosta');
+    const b1 = s1.footlights.find((f) => f.handle === 'hostb');
+    assert.equal(a1.status_text, 'Reading');
+    assert.equal(a1.event, true);
+    assert.equal(b1.status_text, 'b-words');
+    assert.equal('event' in b1, false);
+
+    fs.writeFileSync(
+      eventsPath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Reading',
+            host_handle: 'hostb',
+            start_at: startIso,
+            duration_min: 30,
+            location: 'bandstand',
+            blurb: '',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const t2 = new Date('2026-11-15T17:05:00Z');
+    fs.utimesSync(eventsPath, t2, t2);
+
+    const sinceRes = await fetch(`${ctx.baseUrl}/api/town/state?since=${s1.state_seq}`);
+    assert.equal(sinceRes.status, 304);
+
+    const res2 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res2.status, 200);
+    const s2 = await res2.json();
+    assert.equal(s2.state_seq, s1.state_seq);
+    const a2 = s2.footlights.find((f) => f.handle === 'hosta');
+    const b2 = s2.footlights.find((f) => f.handle === 'hostb');
+    assert.equal(a2.status_text, 'a-words');
+    assert.equal('event' in a2, false);
+    assert.equal(b2.status_text, 'Reading');
+    assert.equal(b2.event, true);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('server integration: overlapping now events override earliest-start host and tie-break first in file', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const earlyIso = new Date((baseNow - 600) * 1000).toISOString();
+  const lateIso = new Date((baseNow - 60) * 1000).toISOString();
+
+  const tmpDir1 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-overlap-'));
+  const eventsPath1 = path.join(tmpDir1, 'events.json');
+  fs.writeFileSync(
+    eventsPath1,
+    JSON.stringify({
+      events: [
+        {
+          title: 'Late',
+          host_handle: 'late',
+          start_at: lateIso,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: '',
+        },
+        {
+          title: 'Early',
+          host_handle: 'early',
+          start_at: earlyIso,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: '',
+        },
+      ],
+    }),
+    'utf8'
+  );
+
+  const ctx1 = await startTestServer({ baseNow, eventsPath: eventsPath1 });
+  try {
+    const { keys: kEarly } = await registerResidentWithKeys(ctx1, 'early');
+    const { keys: kLate } = await registerResidentWithKeys(ctx1, 'late');
+    assert.equal((await signedCheckin(ctx1, kEarly, 'early', { status_text: 'e-words', slot: 0 })).status, 200);
+    assert.equal((await signedCheckin(ctx1, kLate, 'late', { status_text: 'l-words', slot: 1 })).status, 200);
+
+    const res = await fetch(`${ctx1.baseUrl}/api/town/state`);
+    assert.equal(res.status, 200);
+    const s = await res.json();
+    assert.equal(s.events.now?.title, 'Early');
+    const fEarly = s.footlights.find((f) => f.handle === 'early');
+    const fLate = s.footlights.find((f) => f.handle === 'late');
+    assert.equal(fEarly.status_text, 'Early');
+    assert.equal(fEarly.event, true);
+    assert.equal(fLate.status_text, 'l-words');
+    assert.equal('event' in fLate, false);
+  } finally {
+    await ctx1.close();
+    fs.rmSync(tmpDir1, { recursive: true, force: true });
+  }
+
+  const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-tie-'));
+  const eventsPath2 = path.join(tmpDir2, 'events.json');
+  fs.writeFileSync(
+    eventsPath2,
+    JSON.stringify({
+      events: [
+        {
+          title: 'First',
+          host_handle: 'first',
+          start_at: lateIso,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: '',
+        },
+        {
+          title: 'Second',
+          host_handle: 'second',
+          start_at: lateIso,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: '',
+        },
+      ],
+    }),
+    'utf8'
+  );
+
+  const ctx2 = await startTestServer({ baseNow, eventsPath: eventsPath2 });
+  try {
+    const { keys: kFirst } = await registerResidentWithKeys(ctx2, 'first');
+    const { keys: kSecond } = await registerResidentWithKeys(ctx2, 'second');
+    assert.equal((await signedCheckin(ctx2, kFirst, 'first', { status_text: 'f-words', slot: 0 })).status, 200);
+    assert.equal((await signedCheckin(ctx2, kSecond, 'second', { status_text: 's-words', slot: 1 })).status, 200);
+
+    const res = await fetch(`${ctx2.baseUrl}/api/town/state`);
+    assert.equal(res.status, 200);
+    const s = await res.json();
+    assert.equal(s.events.now?.title, 'First');
+    const fFirst = s.footlights.find((f) => f.handle === 'first');
+    const fSecond = s.footlights.find((f) => f.handle === 'second');
+    assert.equal(fFirst.status_text, 'First');
+    assert.equal(fFirst.event, true);
+    assert.equal(fSecond.status_text, 's-words');
+    assert.equal('event' in fSecond, false);
+  } finally {
+    await ctx2.close();
+    fs.rmSync(tmpDir2, { recursive: true, force: true });
+  }
+});
