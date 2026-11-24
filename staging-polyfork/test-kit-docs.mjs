@@ -696,3 +696,206 @@ test('clips.mjs falls back to the Polyfork CDN and animate defaults to HOME', ()
     assert.ok(clipsSrc.includes('fetch' + '(url)'), `${kit}/_internal/clips.mjs must call ` + 'fetch' + '(url)');
   }
 });
+
+test('_internal/merge.mjs and city.mjs are byte-identical across kits with expected exports', () => {
+  assert.equal(
+    readKitFile('kit-campground', '_internal/merge.mjs'),
+    readKitFile('kit-medieval', '_internal/merge.mjs'),
+    '_internal/merge.mjs must be byte-identical across kits'
+  );
+  assert.equal(
+    readKitFile('kit-campground', '_internal/city.mjs'),
+    readKitFile('kit-medieval', '_internal/city.mjs'),
+    '_internal/city.mjs must be byte-identical across kits'
+  );
+
+  const mergeSrc = readKitFile('kit-campground', '_internal/merge.mjs');
+  assert.ok(
+    mergeSrc.includes('export function mergeAssets(list, { keepDynamic = true } = {})'),
+    '_internal/merge.mjs must export mergeAssets'
+  );
+  assert.ok(
+    mergeSrc.includes("import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';"),
+    '_internal/merge.mjs must import mergeGeometries'
+  );
+
+  const citySrc = readKitFile('kit-campground', '_internal/city.mjs');
+  assert.ok(citySrc.includes('export function cityLayout('), '_internal/city.mjs must export cityLayout');
+  assert.ok(citySrc.includes('export default cityLayout;'), '_internal/city.mjs must default-export cityLayout');
+});
+
+test('API.md is the 8-line one-paragraph contract in both kits', () => {
+  for (const kit of KITS) {
+    const apiMd = readKitFile(kit, 'API.md');
+    assert.ok(apiMd.startsWith('# The API, all of it\n'), `${kit}/API.md must start with # The API, all of it`);
+    const trimmed = apiMd.trim();
+    assert.equal(trimmed.split('\n').length, 8, `${kit}/API.md must have 8 lines when trimmed`);
+    assert.ok(trimmed.endsWith('The game is yours.'), `${kit}/API.md must end with The game is yours.`);
+    assert.ok(
+      apiMd.includes("setTime('noon'|'day'|'golden'|'dusk'|'night'|'moonlit'|'dawn'|'overcast'|'space' or 0..1 day to night"),
+      `${kit}/API.md must document setTime modes`
+    );
+    assert.ok(
+      apiMd.includes('`setting: true` builds the SETTING only'),
+      `${kit}/API.md must document setting: true`
+    );
+  }
+});
+
+test('KIT.md packed date and part counts match PARTS.json', () => {
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    const partsCount = Object.keys(JSON.parse(readKitFile(kit, 'PARTS.json'))).length;
+    const m = kitMd.match(/(\d+) of (\d+) parts, packed (\d{4}-\d{2}-\d{2})\./);
+    assert.ok(m, `${kit}/KIT.md must declare packed part counts and date`);
+    assert.equal(Number(m[1]), partsCount, `${kit}/KIT.md first part count must match PARTS.json`);
+    assert.equal(Number(m[2]), partsCount, `${kit}/KIT.md second part count must match PARTS.json`);
+    assert.equal(m[3], '2026-11-10', `${kit}/KIT.md packed date must be 2026-11-10`);
+  }
+});
+
+test('KIT.md shared-knob bullet lists and campground season/wear text match contract', () => {
+  const campMd = readKitFile('kit-campground', 'KIT.md');
+  const medMd = readKitFile('kit-medieval', 'KIT.md');
+
+  const campBullets = [...campMd.matchAll(/^-\s+\*\*`([a-z]+)`\*\*/gm)].map((m) => m[1]);
+  const medBullets = [...medMd.matchAll(/^-\s+\*\*`([a-z]+)`\*\*/gm)].map((m) => m[1]);
+
+  assert.deepEqual(campBullets, ['season', 'wear', 'snow', 'leaves', 'blossom', 'colorway']);
+  assert.deepEqual(medBullets, ['colorway']);
+  assert.ok(
+    campMd.includes('- **`season`** (62 of 62 parts): `spring`, `summer`, `autumn`, `winter`. One value per scene'),
+    'campground KIT.md must document season enum values'
+  );
+  assert.ok(
+    campMd.includes('- **`wear`** (61 of 62 parts): 0 to 1. One value per scene'),
+    'campground KIT.md must document wear range'
+  );
+});
+
+test('KIT.md palette lists contain valid, unique hex colors', () => {
+  const expectedCounts = { 'kit-campground': 25, 'kit-medieval': 16 };
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    const m = kitMd.match(/\*\*Palette\.\*\*([^\n]*)/);
+    assert.ok(m, `${kit}/KIT.md must include a **Palette.** paragraph`);
+    const hexes = m[1].match(/#[0-9a-fA-F]{6}/g) || [];
+    assert.equal(hexes.length, expectedCounts[kit], `${kit}/KIT.md palette hex count`);
+    assert.equal(
+      new Set(hexes.map((h) => h.toLowerCase())).size,
+      expectedCounts[kit],
+      `${kit}/KIT.md palette hex colors must be unique`
+    );
+  }
+});
+
+test('KIT.md Scale sections contain expected kit-specific phrases', () => {
+  const campMd = readKitFile('kit-campground', 'KIT.md');
+  for (const phrase of [
+    'Everything snaps to a 4 m grid',
+    '2.6 m storey',
+    '2.0 m doors',
+    'exactly 0.6 m above it',
+    "the lake's water plane is y=0",
+  ]) {
+    assert.ok(campMd.includes(phrase), `kit-campground/KIT.md must include '${phrase}'`);
+  }
+
+  const medMd = readKitFile('kit-medieval', 'KIT.md');
+  for (const phrase of [
+    'Everything snaps to a 2m grid',
+    'wall modules are 2m wide and 3m tall',
+    'doorways 2.1m',
+    'roof pitch a constant 45 degrees',
+  ]) {
+    assert.ok(medMd.includes(phrase), `kit-medieval/KIT.md must include '${phrase}'`);
+  }
+});
+
+test('PARTS.json entry key vocabulary and field presence counts match', () => {
+  const allowedKeys = new Set(['class', 'colors', 'knobs', 'lit', 'rig']);
+  const expected = {
+    'kit-campground': { colors: 62, lit: 16, rig: 56 },
+    'kit-medieval': { colors: 49, lit: 16, rig: 28 },
+  };
+  for (const kit of KITS) {
+    const parts = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    let colors = 0;
+    let lit = 0;
+    let rig = 0;
+    for (const [partKey, entry] of Object.entries(parts)) {
+      for (const key of Object.keys(entry)) {
+        assert.ok(allowedKeys.has(key), `${kit}/PARTS.json '${partKey}' has unexpected key '${key}'`);
+      }
+      assert.ok('class' in entry && 'knobs' in entry, `${kit}/PARTS.json '${partKey}' must have class and knobs`);
+      if ('colors' in entry) colors++;
+      if ('lit' in entry) lit++;
+      if ('rig' in entry) rig++;
+    }
+    assert.deepEqual({ colors, lit, rig }, expected[kit], `${kit}/PARTS.json presence counts`);
+  }
+});
+
+test('kit.json night-entry totals, from/to distinctness, and intensity bounds', () => {
+  const expected = {
+    'kit-campground': { entries: 26, partsTotal: 30, maxIntensity: 1.4 },
+    'kit-medieval': { entries: 10, partsTotal: 10, maxIntensity: 1 },
+  };
+  for (const kit of KITS) {
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const night = kitJson.night || [];
+    let partsTotal = 0;
+    let maxIntensity = 0;
+    for (const entry of night) {
+      assert.notEqual(entry.from, entry.to, `${kit}/kit.json night entry must have from !== to`);
+      assert.ok(
+        entry.intensity > 0 && entry.intensity <= 1.4,
+        `${kit}/kit.json night entry intensity must be in (0, 1.4]`
+      );
+      if (entry.intensity > maxIntensity) maxIntensity = entry.intensity;
+      partsTotal += entry.parts.length;
+    }
+    assert.equal(night.length, expected[kit].entries, `${kit}/kit.json night entry count`);
+    assert.equal(partsTotal, expected[kit].partsTotal, `${kit}/kit.json night parts total`);
+    assert.equal(maxIntensity, expected[kit].maxIntensity, `${kit}/kit.json max night intensity`);
+  }
+});
+
+test('LAYOUT.json row key vocabulary and rx/rz=180 upright pairing', () => {
+  const allowedKeys = new Set(['part', 'x', 'y', 'z', 'rx', 'ry', 'rz', 's', 'params', 'anim', 'module']);
+  for (const kit of KITS) {
+    const layout = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    for (let i = 0; i < layout.length; i++) {
+      const row = layout[i];
+      for (const key of Object.keys(row)) {
+        assert.ok(allowedKeys.has(key), `${kit}/LAYOUT.json row ${i} has unexpected key '${key}'`);
+      }
+      assert.equal(
+        row.rx === 180,
+        row.rz === 180,
+        `${kit}/LAYOUT.json row ${i} must pair rx === 180 with rz === 180`
+      );
+    }
+  }
+});
+
+test('CREDITS.txt line counts and non-glb header lines are identical across kits', () => {
+  const expectedCounts = {
+    'kit-campground': { total: 68, glb: 62 },
+    'kit-medieval': { total: 66, glb: 60 },
+  };
+  const expectedHeader = [
+    'Credit lines for CC BY 4.0, https://creativecommons.org/licenses/by/4.0/',
+    'If you share or re-host one of these mesh files under CC BY, keep its line with it',
+    "(the same line covers that model's .fbx, .usdz, .usda and .obj). Under the Polyfork",
+    'licence no credit is needed. LICENSE.txt has both.',
+  ];
+  for (const kit of KITS) {
+    const lines = readKitFile(kit, 'CREDITS.txt').trim().split('\n');
+    const glbLines = lines.filter((l) => l.includes('.glb'));
+    const nonGlbNonEmpty = lines.filter((l) => l.trim() !== '' && !l.includes('.glb'));
+    assert.equal(lines.length, expectedCounts[kit].total, `${kit}/CREDITS.txt trimmed line count`);
+    assert.equal(glbLines.length, expectedCounts[kit].glb, `${kit}/CREDITS.txt .glb line count`);
+    assert.deepEqual(nonGlbNonEmpty, expectedHeader, `${kit}/CREDITS.txt non-glb header lines`);
+  }
+});
