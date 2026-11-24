@@ -1070,3 +1070,306 @@ test('happy-path log sequence: three turn logs in order, then the run_all summar
     await ctx.close();
   }
 });
+
+test('CLI duplicate --api-base: last one wins', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const res = await runAllCli(
+      [
+        '--api-base',
+        'http://127.0.0.1:1',
+        '--api-base',
+        ctx.baseUrl,
+        '--state-dir',
+        stateDir,
+        '--npc',
+        'wick',
+        '--stagger-ms',
+        '0',
+      ],
+      { NPC_BRAIN_CMD: 'printf "The bulb is steady.\\n"' }
+    );
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs.length, 1);
+    assert.equal(summary.npcs[0].npc, 'wick');
+    assert.equal(summary.npcs[0].posted, true);
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI --state-dir with no value exits 1 with usage', async () => {
+  const ctx = await startTestServer();
+  try {
+    const res = await runAllCli(['--api-base', ctx.baseUrl, '--state-dir']);
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /Unknown or incomplete argument: --state-dir/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('CLI --help prints exact full usage text', async () => {
+  const res = await runAllCli(['--help']);
+  assert.equal(res.code, 1);
+  assert.equal(
+    res.stderr,
+    'Usage: node town-npc/run-all.mjs --api-base <url> [--state-dir ./npc_state] [--npc wick|maren|tomas] [--stagger-ms N] [--dry-run]\n'
+  );
+  assert.equal(res.stdout, '');
+});
+
+test('CLI -h prints exact full usage text', async () => {
+  const res = await runAllCli(['-h']);
+  assert.equal(res.code, 1);
+  assert.equal(
+    res.stderr,
+    'Usage: node town-npc/run-all.mjs --api-base <url> [--state-dir ./npc_state] [--npc wick|maren|tomas] [--stagger-ms N] [--dry-run]\n'
+  );
+  assert.equal(res.stdout, '');
+});
+
+test('CLI missing --api-base (no-arg and empty-string) prints exact error and usage', async () => {
+  const expectedStderr =
+    'Error: Missing --api-base (or TOWN_API_BASE)\n' +
+    'Usage: node town-npc/run-all.mjs --api-base <url> [--state-dir ./npc_state] [--npc wick|maren|tomas] [--stagger-ms N] [--dry-run]\n';
+
+  const noArgRes = await runAllCli([]);
+  assert.equal(noArgRes.code, 1);
+  assert.equal(noArgRes.stderr, expectedStderr);
+
+  const emptyArgRes = await runAllCli(['--api-base', '', '--state-dir', '/tmp/nope', '--dry-run']);
+  assert.equal(emptyArgRes.code, 1);
+  assert.equal(emptyArgRes.stderr, expectedStderr);
+});
+
+test('CLI --npc empty string runs all three NPCs in dry-run', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-empty-npc-'));
+  try {
+    const res = await runAllCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--npc',
+      '',
+      '--stagger-ms',
+      '0',
+      '--dry-run',
+    ]);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs.length, 3);
+    assert.deepEqual(
+      summary.npcs.map((n) => n.npc),
+      ['wick', 'maren', 'tomas']
+    );
+    for (const entry of summary.npcs) {
+      assert.equal(entry.action, 'dry_run');
+    }
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI probe-500 error JSON carries full payload including api_base and error', async () => {
+  const errServer = http.createServer((_req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'internal_error' }));
+  });
+  await new Promise((resolve) => errServer.listen(0, '127.0.0.1', resolve));
+  const { port } = errServer.address();
+  const base = `http://127.0.0.1:${port}`;
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-500-full-'));
+  try {
+    const res = await runAllCli(['--api-base', base, '--state-dir', stateDir]);
+    assert.equal(res.code, 1);
+    const lines = res.stdout.trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    const errObj = JSON.parse(lines[0]);
+    assert.deepEqual(errObj, {
+      action: 'error',
+      ok: false,
+      error: 'API probe failed with HTTP 500',
+      api_base: base,
+      status: 500,
+    });
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+  } finally {
+    await new Promise((resolve) => errServer.close(resolve));
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('negative stagger never sleeps', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const sleepCalls = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: -5,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Wick')) return 'The bulb is steady on the steps tonight.';
+        if (prompt.includes('You are Maren')) return 'A clean line is worth keeping in the pocket.';
+        return 'The copper kettle is warm if anyone stops by.';
+      },
+      logger: () => {},
+      sleepImpl: async (ms) => {
+        sleepCalls.push(ms);
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(sleepCalls, []);
+    assert.deepEqual(
+      res.results.map((r) => r.posted),
+      [true, true, true]
+    );
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('function-level dry-run still staggers between turns', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const sleepCalls = [];
+    let brainCalls = 0;
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 1234,
+      dryRun: true,
+      brainImpl: async () => {
+        brainCalls++;
+        throw new Error('brain must not be called in dry-run');
+      },
+      logger: () => {},
+      sleepImpl: async (ms) => {
+        sleepCalls.push(ms);
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(sleepCalls, [1234, 1234]);
+    assert.equal(brainCalls, 0);
+    assert.deepEqual(
+      res.results.map((r) => ({ action: r.action, posted: r.posted })),
+      [
+        { action: 'dry_run', posted: false },
+        { action: 'dry_run', posted: false },
+        { action: 'dry_run', posted: false },
+      ]
+    );
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('10-muse retirement: all three retire, run stays ok, brain never called', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-retire-'));
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const fakeState = {
+      footlights: [],
+      prompt_book: Array.from({ length: 10 }, (_, idx) => ({
+        id: idx + 1,
+        handle: `muse${idx + 1}`,
+        role: 'muse',
+        kind: 'say',
+        body: `Hello from muse ${idx + 1}.`,
+        created_at: now - 60,
+      })),
+      presence: [],
+    };
+    const postedUrls = [];
+    const fakeFetch = async (url, init) => {
+      if (init && init.method === 'POST') {
+        postedUrls.push(String(url));
+        const body = { ok: true };
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(body),
+          json: async () => body,
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(fakeState),
+        json: async () => fakeState,
+      };
+    };
+
+    let brainCalls = 0;
+    const logs = [];
+    const res = await runAll({
+      apiBase: 'http://fake.local',
+      stateDir,
+      staggerMs: 0,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => {
+        brainCalls++;
+        return 'Should not be called.';
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(
+      res.results.map((r) => ({ action: r.action, posted: r.posted })),
+      [
+        { action: 'retired', posted: false },
+        { action: 'retired', posted: false },
+        { action: 'retired', posted: false },
+      ]
+    );
+    assert.equal(brainCalls, 0);
+    assert.deepEqual(postedUrls, []);
+    const summary = logs[logs.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    const retiredLogs = logs.filter((l) => l.action === 'retired');
+    assert.equal(retiredLogs.length, 3);
+    assert.deepEqual(
+      retiredLogs.map((l) => l.npc),
+      ['wick', 'maren', 'tomas']
+    );
+    for (const entry of retiredLogs) {
+      assert.match(entry.reason, /10 real muses active in 24h/);
+    }
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
