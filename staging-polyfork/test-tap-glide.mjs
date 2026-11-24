@@ -646,3 +646,276 @@ test('createPointerTracker ignores an overlay-open second pointer so the tap sti
   pinchTracker.onPointerDown(3, 50, 50, { pointerType: 'touch' });
   assert.deepEqual(pinchTracker.onPointerUp(3, 50, 50), { ended: true, shouldClick: true });
 });
+
+test('staging.js imports exactly the four tap-glide helpers it uses', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const match = stagingSrc.match(/import \{([^}]*)\} from '\.\/tap-glide\.mjs';/);
+  assert.ok(match, 'Could not locate tap-glide.mjs import block in staging.js');
+  assert.equal(
+    match[1],
+    '\n  deriveGlideMaxRadius,\n  clampGlideTarget,\n  stepOrbitGlide,\n  createPointerTracker,\n'
+  );
+  assert.ok(!/\bstepGlide\b/.test(match[1]));
+  assert.ok(!match[1].includes('DEFAULT_ORBIT_GLIDE_MAX_RADIUS'));
+  assert.ok(!stagingSrc.includes('DEFAULT_ORBIT_GLIDE_MAX_RADIUS'));
+});
+
+test('staging.js wires tap-glide drag threshold, radius, speed, cancel, and gates', async () => {
+  const [stagingSrc, tapGlideSrc, indexHtml] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'tap-glide.mjs'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+  ]);
+
+  assert.ok(stagingSrc.includes('createPointerTracker({ dragThreshold: 4 })'));
+  assert.ok(stagingSrc.includes('deriveGlideMaxRadius(camp.terrain?.userData?.terrain)'));
+  assert.ok(stagingSrc.includes('{ speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }'));
+  assert.ok(stagingSrc.includes('const dt = Math.min(clock.getDelta(), 0.1);'));
+  assert.equal(
+    stagingSrc.split('if (res.cancelGlide) {\n      glideTarget = null;\n    }').length - 1,
+    2
+  );
+  assert.ok(
+    stagingSrc.includes("window.addEventListener('pointercancel', (e) => finishPointer(e, false));")
+  );
+  assert.ok(stagingSrc.includes("if (!hitClickable && e.pointerType === 'touch') {"));
+  assert.ok(
+    stagingSrc.includes(
+      'if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden) && !interiorVisit.isInside()) {'
+    )
+  );
+  assert.ok(stagingSrc.includes('glideTarget = null;\n    pointerTracker.reset();'));
+  assert.ok(!stagingSrc.includes('pinchFov'));
+  assert.ok(!tapGlideSrc.includes('pinchFov'));
+  assert.ok(!indexHtml.includes('pinchFov'));
+});
+
+test('stepGlide loop glides 20 m in 158 frames, monotonic, inside maxRadius', () => {
+  let pos = { x: 0, z: 0 };
+  let steps = 0;
+  let maxR = 0;
+  let prevX = 0;
+  let arrived = false;
+
+  for (let i = 1; i <= 500; i += 1) {
+    const next = stepGlide(pos, { x: 20, z: 0 }, 1 / 60, { speed: 7.5 });
+    assert.ok(next.x >= prevX - 1e-12);
+    prevX = next.x;
+    maxR = Math.max(maxR, Math.hypot(next.x, next.z));
+    pos = { x: next.x, z: next.z };
+    steps = i;
+    if (next.arrived) {
+      arrived = true;
+      break;
+    }
+  }
+
+  assert.equal(arrived, true);
+  assert.equal(steps, 158);
+  assert.deepEqual(pos, { x: 20, z: 0 });
+  assert.ok(maxR <= 28.5);
+});
+
+test('stepOrbitGlide glides to the clamped target in 3 steps with the camera offset invariant', () => {
+  let target = { x: 0, z: 0 };
+  let camera = { x: 100, z: -50 };
+  let steps = 0;
+  let arrived = false;
+
+  for (let i = 1; i <= 100; i += 1) {
+    const next = stepOrbitGlide(target, camera, { x: 30, z: 40 }, 1, { speed: 14 });
+    assert.ok(Math.abs(next.cameraX - next.targetX - 100) < 1e-9);
+    assert.ok(Math.abs(next.cameraZ - next.targetZ - -50) < 1e-9);
+    target = { x: next.targetX, z: next.targetZ };
+    camera = { x: next.cameraX, z: next.cameraZ };
+    steps = i;
+    if (next.arrived) {
+      arrived = true;
+      break;
+    }
+  }
+
+  assert.equal(arrived, true);
+  assert.equal(steps, 3);
+  assert.ok(Math.abs(target.x - 22.8) < 1e-9);
+  assert.ok(Math.abs(target.z - 30.4) < 1e-9);
+  assert.ok(Math.abs(camera.x - 122.8) < 1e-9);
+  assert.ok(Math.abs(camera.z - -19.6) < 1e-9);
+});
+
+test('stepGlide handles zero radius, Infinity and NaN targets, and negative maxRadius', () => {
+  assert.deepEqual(
+    stepGlide({ x: 3, z: -4 }, { x: 10, z: 0 }, 1, { maxRadius: 0 }),
+    { x: 0, z: 0, arrived: true }
+  );
+
+  const infRes = stepGlide({ x: 0, z: 0 }, { x: Infinity, z: 0 }, 1);
+  assert.ok(Number.isNaN(infRes.x));
+  assert.ok(Number.isNaN(infRes.z));
+  assert.equal(infRes.arrived, false);
+
+  const nanRes = stepGlide({ x: 0, z: 0 }, { x: NaN, z: 0 }, 1);
+  assert.ok(Number.isNaN(nanRes.x));
+  assert.ok(Number.isNaN(nanRes.z));
+  assert.equal(nanRes.arrived, false);
+
+  const negRes = stepGlide({ x: 3, z: -4 }, { x: 10, z: 0 }, 1, { speed: 7.5, maxRadius: -5 });
+  assert.ok(Number.isFinite(negRes.x) && Number.isFinite(negRes.z));
+  assert.ok(Math.abs(negRes.x - 4.925835939721843) < 1e-9);
+  assert.ok(Math.abs(negRes.z - 0.8579861857539625) < 1e-9);
+  assert.equal(negRes.arrived, false);
+});
+
+test('deriveGlideMaxRadius linear middle values at half-metre widths', () => {
+  assert.equal(deriveGlideMaxRadius({ width: 109.5 }), 28.75);
+  assert.ok(Math.abs(deriveGlideMaxRadius({ width: 109.9 }) - 28.95) < 1e-9);
+  assert.equal(deriveGlideMaxRadius({ width: 111.5 }), 29.75);
+  assert.equal(deriveGlideMaxRadius({ width: 127 }), 37.5);
+  assert.ok(Math.abs(deriveGlideMaxRadius({ width: 127.9 }) - 37.95) < 1e-9);
+});
+
+test('clampGlideTarget handles Infinity radius, negative radius, and NaN inputs', () => {
+  assert.deepEqual(clampGlideTarget(100, 0, Infinity), { x: 100, z: 0 });
+
+  const neg = clampGlideTarget(10, 0, -5);
+  assert.ok(neg.x === -5);
+  assert.ok(neg.z === 0);
+
+  const nanPos = clampGlideTarget(NaN, 0);
+  assert.ok(Number.isNaN(nanPos.x));
+  assert.ok(nanPos.z === 0);
+
+  assert.deepEqual(clampGlideTarget(10, 0, NaN), { x: 10, z: 0 });
+});
+
+test('createPointerTracker defaults, overlay-open first down, and unknown-id move while active', () => {
+  const defaultTracker = createPointerTracker();
+  assert.deepEqual(defaultTracker.onPointerDown(1, 50, 50), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(defaultTracker.onPointerUp(1, 50, 50), {
+    ended: true,
+    shouldClick: true,
+  });
+
+  const overlayTracker = createPointerTracker();
+  assert.deepEqual(overlayTracker.onPointerDown(1, 50, 50, { overlayHidden: false }), {
+    started: false,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.equal(overlayTracker.size, 0);
+  assert.deepEqual(overlayTracker.onPointerUp(1, 50, 50), {
+    ended: false,
+    shouldClick: false,
+  });
+  assert.deepEqual(overlayTracker.onPointerDown(2, 60, 60, { pointerType: 'touch' }), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(overlayTracker.onPointerUp(2, 60, 60), {
+    ended: true,
+    shouldClick: true,
+  });
+
+  const unknownTracker = createPointerTracker();
+  unknownTracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(unknownTracker.onPointerMove(999, 120, 100), {
+    moved: false,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.equal(unknownTracker.size, 1);
+});
+
+test('createPointerTracker zero threshold and Y-only drag threshold', () => {
+  const zeroTracker = createPointerTracker({ dragThreshold: 0 });
+  zeroTracker.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(zeroTracker.onPointerMove(1, 101, 100), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: true,
+  });
+
+  const zeroClick = createPointerTracker({ dragThreshold: 0 });
+  zeroClick.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(zeroClick.onPointerUp(1, 100, 100), {
+    ended: true,
+    shouldClick: true,
+  });
+
+  const yExact = createPointerTracker();
+  yExact.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(yExact.onPointerMove(1, 100, 104), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(yExact.onPointerUp(1, 100, 104), {
+    ended: true,
+    shouldClick: true,
+  });
+
+  const yOver = createPointerTracker();
+  yOver.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(yOver.onPointerMove(1, 100, 105), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: true,
+  });
+  assert.deepEqual(yOver.onPointerUp(1, 100, 100), {
+    ended: true,
+    shouldClick: false,
+  });
+});
+
+test('staging-polyfork README 65c and index.html tap hints match the live files', async () => {
+  const [readmeSrc, indexHtml, tapGlideSrc, townSrc] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'README.md'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'tap-glide.mjs'), 'utf8'),
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+  ]);
+
+  assert.ok(readmeSrc.includes('38 m on the span-2 128 m island'));
+  assert.ok(readmeSrc.includes('4 px drag threshold'));
+  assert.ok(readmeSrc.includes('`pinchFov` is'));
+  assert.ok(readmeSrc.includes('deliberately not ported because OrbitControls handles pinch as dolly'));
+
+  const vMatch = indexHtml.match(/staging\.js\?v=(\d+)/);
+  assert.ok(vMatch, 'Could not locate staging.js?v= in index.html');
+  const bulletStart = readmeSrc.indexOf('`tap-glide.mjs` (65c)');
+  assert.ok(bulletStart !== -1, 'Could not locate 65c bullet in staging-polyfork/README.md');
+  assert.ok(readmeSrc.slice(bulletStart).includes('(`?v=' + vMatch[1] + '`)'));
+
+  const header = tapGlideSrc.split('\n').slice(0, 5).join('\n');
+  const lineMatch = header.match(/lines (\d+)-(\d+)/);
+  assert.ok(lineMatch, 'Could not locate line range in tap-glide.mjs header');
+  const startIdx = townSrc.indexOf('export function stepGlide(');
+  assert.ok(startIdx !== -1, 'Could not locate stepGlide in town-3d/town.js');
+  const endIdx = townSrc.indexOf('\n}\n', startIdx);
+  assert.ok(endIdx !== -1, 'Could not locate end of stepGlide in town-3d/town.js');
+  const startLine = townSrc.slice(0, startIdx).split('\n').length;
+  const endLine = townSrc.slice(0, endIdx).split('\n').length + 1;
+  assert.equal(Number(lineMatch[1]), startLine);
+  assert.equal(Number(lineMatch[2]), endLine);
+
+  assert.ok(
+    indexHtml.includes(
+      'Drag: orbit &middot; Scroll / Pinch: zoom &middot; WASD / Arrows: pan &middot; Tap ground: glide &middot; Click: inspect'
+    )
+  );
+  assert.ok(
+    indexHtml.includes(
+      'Tap ground: walk \\u00b7 Drag: look \\u00b7 Pinch: zoom \\u00b7 Tap: inspect'
+    )
+  );
+  assert.ok(
+    indexHtml.includes(
+      'Tap ground to glide; tap a cottage, newsstand, Inn, or gatehouse to inspect.'
+    )
+  );
+});
