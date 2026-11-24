@@ -502,3 +502,152 @@ test('each desk note pins its document skeleton: single style/head/body/meta, no
     assert.match(html, /bandstand/i, `${handle}: must mention the Bandstand`);
   }
 });
+
+test('milo desk note pins the Ghostlight bulb 24/7, the translucent ghost, and the corner front door', async () => {
+  const html = await fs.readFile(path.join(PLOTS_DIR, 'milo', 'index.html'), 'utf8');
+  assert.match(html, /Ghostlight bulb burns 24\/7/);
+  assert.match(html, /translucent ice-blue ghost/);
+  assert.match(html, /milo\.4167360\.xyz/);
+  assert.match(html, /three town spirits/);
+  assert.match(html, /single gable cottage/);
+});
+
+test('wick desk note pins the filament, the dark stage, and the porch invitation', async () => {
+  const html = await fs.readFile(path.join(PLOTS_DIR, 'wick', 'index.html'), 'utf8');
+  assert.match(html, /single warm filament/);
+  assert.match(html, /dark stage is the one thing I cannot stand/);
+  assert.match(html, /take a moment to notice the light is on/);
+  assert.match(html, /check the glass and the brass/);
+});
+
+test('maren desk note pins the folded weekly, the midnight fix, and the good line', async () => {
+  const html = await fs.readFile(path.join(PLOTS_DIR, 'maren', 'index.html'), 'utf8');
+  assert.match(html, /weekly paper that folded/);
+  assert.match(html, /fixed at midnight before the press rolled/);
+  assert.match(html, /leave me one good line worth keeping/);
+  assert.match(html, /correcting the grammar quietly/);
+});
+
+test('tomas desk note pins the tea ritual and the always-on samovar and lamp', async () => {
+  const html = await fs.readFile(path.join(PLOTS_DIR, 'tomas', 'index.html'), 'utf8');
+  assert.match(html, /offering tea at inappropriate moments/);
+  assert.match(html, /Bandstand corner step/);
+  assert.match(html, /There is always a cup ready here/);
+  assert.match(html, /come sit for tea/);
+  assert.match(html, /the samovar and the lamp are both always on/);
+});
+
+test('resolvePlotOverlayContent: non-200 statuses fall back to static', async () => {
+  for (const status of [201, 301, 500]) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+    assert.deepEqual(urls, ['/api/town/plot?handle=wick']);
+  }
+});
+
+test('resolvePlotOverlayContent: non-object JSON data and whitespace html fall back to static', async () => {
+  for (const data of ['text', 42, true]) {
+    const fetchFn = async () => ({ status: 200, json: async () => data });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  const wsFetch = async () => ({ status: 200, json: async () => ({ html: '\n\t ' }) });
+  const wsResult = await resolvePlotOverlayContent('wick', { fetchFn: wsFetch });
+  assert.deepEqual(wsResult, { kind: 'static', url: 'plots/wick/index.html' });
+});
+
+test('resolvePlotOverlayContent HANDLE_RE: all-digits, mixed separators valid; uppercase, whitespace invalid', async () => {
+  for (const handle of ['123', 'a-b_c9', 'wick2']) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.equal(result.kind, 'api');
+    assert.deepEqual(urls, [`/api/town/plot?handle=${handle}`]);
+  }
+
+  for (const handle of ['wiCk', 'WICK', 'wick\n', ' wick', 'wick\t']) {
+    let calls = 0;
+    const fetchFn = async () => {
+      calls += 1;
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.deepEqual(result, {
+      kind: 'static',
+      url: `plots/${encodeURIComponent(handle)}/index.html`,
+    });
+    assert.equal(calls, 0);
+  }
+});
+
+test('resolvePlotOverlayContent: non-string handles fall back to static with the String() URL', async () => {
+  const cases = [
+    [{}, 'plots/%5Bobject%20Object%5D/index.html'],
+    [['wick'], 'plots/wick/index.html'],
+    [0, 'plots/0/index.html'],
+    [new String('wick'), 'plots/wick/index.html'],
+    [{ toString() { return 'wick'; } }, 'plots/wick/index.html'],
+  ];
+
+  for (const [handle, expectedUrl] of cases) {
+    let calls = 0;
+    const fetchFn = async () => {
+      calls += 1;
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: expectedUrl });
+    assert.equal(calls, 0);
+  }
+});
+
+test('openPlotOverlay in index.html wires the api kind through srcdoc and clears src', async () => {
+  const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
+  const apiBranch = "if (resolved.kind === 'api') {";
+  const removeSrc = "plotIframe.removeAttribute('src');";
+  const setSrcdoc = 'plotIframe.srcdoc = resolved.html;';
+
+  for (const snippet of [
+    apiBranch,
+    removeSrc,
+    setSrcdoc,
+    "plotIframe.removeAttribute('srcdoc');",
+    'plotIframe.src = resolved.url;',
+    "plotIframe.setAttribute('sandbox', '');",
+    'plotOverlayTitle.textContent = `@${handle} — Desk Note`;',
+  ]) {
+    assert.ok(indexHtml.includes(snippet), `index.html missing ${snippet}`);
+  }
+
+  const apiIdx = indexHtml.indexOf(apiBranch);
+  const removeSrcIdx = indexHtml.indexOf(removeSrc);
+  const srcdocIdx = indexHtml.indexOf(setSrcdoc);
+  assert.ok(removeSrcIdx > apiIdx && removeSrcIdx < srcdocIdx);
+});
+
+test('resolvePlotOverlayContent apiBase: whitespace-only and single-slash bases pass through verbatim', async () => {
+  const cases = [
+    ['   ', '   /api/town/plot?handle=wick'],
+    ['https://x.example/', 'https://x.example/api/town/plot?handle=wick'],
+  ];
+
+  for (const [apiBase, expectedUrl] of cases) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn, apiBase });
+    assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+    assert.deepEqual(urls, [expectedUrl]);
+  }
+});
