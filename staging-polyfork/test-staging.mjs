@@ -12,6 +12,7 @@ import {
 import { lightFootlightSlot } from './concept-bandstand.js';
 import {
   TOWN_LAYOUT,
+  SEED_HOME_PADS,
   createAvatarCapsule,
   setAvatarStatusText,
   getPlotTargetPosition,
@@ -1119,4 +1120,532 @@ test('Slice 92: index.html includes #info-strip and staging.js wires empty-pad m
     const branchRe = new RegExp(`kind === '${kind}'[\\s\\S]*?infoStripEl\\.hidden = true`);
     assert.match(codeOnly, branchRe, `staging.js ${kind} click branch must hide #info-strip`);
   }
+});
+
+test('createStagingLiveStore returns fresh Maps, nulls, and empty events on every call', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function createStagingLiveStore() {');
+  assert.ok(fnStart !== -1, 'Expected createStagingLiveStore in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  const createStagingLiveStore = new Function(`${fnBody}\nreturn createStagingLiveStore;`)();
+  const a = createStagingLiveStore();
+  const b = createStagingLiveStore();
+
+  for (const store of [a, b]) {
+    assert.ok(store.avatars instanceof Map);
+    assert.ok(store.plotAssignments instanceof Map);
+    assert.ok(store.plotCache instanceof Map);
+    assert.ok(store.emptyPadMarkers instanceof Map);
+    assert.equal(store.lastState, null);
+    assert.equal(store.nightlyCallTopic, null);
+    assert.deepEqual(store.events, []);
+    assert.equal(store.eventBannerKey, null);
+  }
+
+  assert.notEqual(a.events, b.events);
+  a.avatars.set('x', 1);
+  assert.equal(b.avatars.has('x'), false);
+});
+
+test('applyStagingPlotManifest guards return null for milo, missing handle, and non-object manifest', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingPlotManifest(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingPlotManifest in staging.js');
+  const fnEnd = src.indexOf('\nasync function syncStagingPlotsFromState(', fnStart + 1);
+  assert.ok(fnEnd !== -1, 'Expected syncStagingPlotsFromState after applyStagingPlotManifest');
+  const fnBody = src.slice(fnStart, fnEnd);
+
+  const buildApplyPlotManifest = new Function(
+    'THREE',
+    'TOWN_LAYOUT',
+    'SEED_HOME_PADS',
+    'RESERVED_SEED_PADS',
+    'place',
+    'buildStagingSignpost',
+    'attachPorchDeck',
+    'attachPorchTrim',
+    'attachPlotProps',
+    'attachSeedDoorProp',
+    `${fnBody}\nreturn applyStagingPlotManifest;`
+  );
+  const applyStagingPlotManifest = buildApplyPlotManifest(
+    {},
+    TOWN_LAYOUT,
+    SEED_HOME_PADS,
+    new Set(Object.values(SEED_HOME_PADS)),
+    () => {
+      throw new Error('place must not be called for guard cases');
+    },
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+    () => {}
+  );
+
+  const store = { plotAssignments: new Map() };
+  assert.equal(applyStagingPlotManifest(store, null, {}), null);
+  assert.equal(applyStagingPlotManifest(store, '', {}), null);
+  assert.equal(applyStagingPlotManifest(store, 'milo', {}), null);
+  assert.equal(applyStagingPlotManifest(store, 'wick', null), null);
+  assert.equal(applyStagingPlotManifest(store, 'wick', 'nope'), null);
+  assert.equal(applyStagingPlotManifest(store, 'wick', 42), null);
+  assert.equal(store.plotAssignments.size, 0);
+});
+
+test('syncStagingPlotsFromState discovers handles from plots, footlights, presence, and Prompt Book, drops milo, and sorts seeds first', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  assert.ok(
+    src.includes('const statePlots = state?.plots && typeof state.plots === \'object\' ? state.plots : null;'),
+    'syncStagingPlotsFromState must guard state.plots'
+  );
+  assert.ok(
+    src.includes('for (const row of state?.footlights || []) if (row?.handle) found.add(row.handle);'),
+    'syncStagingPlotsFromState must discover handles from footlights'
+  );
+  assert.ok(
+    src.includes('for (const row of state?.presence || []) if (row?.handle) found.add(row.handle);'),
+    'syncStagingPlotsFromState must discover handles from presence'
+  );
+  assert.ok(
+    src.includes('for (const row of state?.prompt_book || []) if (row?.handle) found.add(row.handle);'),
+    'syncStagingPlotsFromState must discover handles from prompt_book'
+  );
+  assert.ok(
+    src.includes('found.delete(\'milo\');'),
+    'syncStagingPlotsFromState must drop milo'
+  );
+  assert.ok(
+    src.includes('if (aSeed !== bSeed) return aSeed ? -1 : 1;'),
+    'syncStagingPlotsFromState must sort seeds first'
+  );
+});
+
+test('applyStagingPresence places gate avatars in a 5-wide row facing the town, wrapping to a second row', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingPresence(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingPresence in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  const buildApplyPresence = new Function(
+    'THREE',
+    'scene',
+    'camp',
+    'TOWN_LAYOUT',
+    'createAvatarCapsule',
+    'setAvatarStatusText',
+    'getPlotTargetPosition',
+    'pickBandstandSpot',
+    `${fnBody}\nreturn applyStagingPresence;`
+  );
+
+  withRecordingCanvas(({ fakeTHREE }) => {
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.userData = {};
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+        this.rotation = { x: 0, y: 0, z: 0 };
+      }
+      add(c) { this.children.push(c); }
+      removeFromParent() {}
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial { constructor(o = {}) { Object.assign(this, o); } };
+    fakeTHREE.SpriteMaterial = class SpriteMaterial { constructor(o = {}) { Object.assign(this, o); } };
+    fakeTHREE.Mesh = class Mesh { constructor(g, m) { this.geometry = g; this.material = m; this.position = { set() {} }; } };
+    fakeTHREE.Sprite = class Sprite {
+      constructor(m) {
+        this.material = m;
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+        this.scale = { x: 1, y: 1, z: 1, set: (x, y, z) => { this.scale.x = x; this.scale.y = y; this.scale.z = z; } };
+      }
+    };
+    fakeTHREE.CylinderGeometry = class CylinderGeometry {};
+    fakeTHREE.SphereGeometry = class SphereGeometry {};
+
+    const scene = { children: [], add(obj) { this.children.push(obj); } };
+    const camp = { groundAt: () => 0 };
+    const applyStagingPresence = buildApplyPresence(
+      fakeTHREE,
+      scene,
+      camp,
+      TOWN_LAYOUT,
+      createAvatarCapsule,
+      setAvatarStatusText,
+      getPlotTargetPosition,
+      pickBandstandSpot
+    );
+
+    const liveStore = { avatars: new Map(), plotAssignments: new Map() };
+    const bandstandBuilt = {
+      avatarSpots: [{ x: 1, y: 0.6, z: 1, rotY: 0 }, { x: 2, y: 0.6, z: 2, rotY: 0 }],
+    };
+
+    applyStagingPresence(liveStore, bandstandBuilt, null, new Map(), {
+      presence: [
+        { handle: 'a', role: 'muse', zone: 'gate' },
+        { handle: 'b', role: 'muse', zone: 'gate' },
+        { handle: 'c', role: 'muse', zone: 'gate' },
+        { handle: 'd', role: 'muse', zone: 'gate' },
+        { handle: 'e', role: 'muse', zone: 'gate' },
+        { handle: 'f', role: 'muse', zone: 'gate' },
+      ],
+      footlights: [],
+    });
+
+    assert.deepEqual(liveStore.avatars.get('a').userData.target, {
+      x: -2.2,
+      y: 0,
+      z: 24.8,
+      rotY: Math.PI,
+      nametagLift: 0,
+    });
+    assert.deepEqual(liveStore.avatars.get('b').userData.target, {
+      x: -1.1,
+      y: 0,
+      z: 24.8,
+      rotY: Math.PI,
+      nametagLift: 0.5,
+    });
+    assert.deepEqual(liveStore.avatars.get('c').userData.target, {
+      x: 0,
+      y: 0,
+      z: 24.8,
+      rotY: Math.PI,
+      nametagLift: 0,
+    });
+    assert.deepEqual(liveStore.avatars.get('d').userData.target, {
+      x: 1.1,
+      y: 0,
+      z: 24.8,
+      rotY: Math.PI,
+      nametagLift: 0.5,
+    });
+    assert.deepEqual(liveStore.avatars.get('e').userData.target, {
+      x: 2.2,
+      y: 0,
+      z: 24.8,
+      rotY: Math.PI,
+      nametagLift: 0,
+    });
+    assert.deepEqual(liveStore.avatars.get('f').userData.target, {
+      x: -2.2,
+      y: 0,
+      z: 23.8,
+      rotY: Math.PI,
+      nametagLift: 0.5,
+    });
+  });
+});
+
+test('applyStagingPresence targets plot:milo at Milo\'s plot front and plot:unknown at a bandstand spot', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingPresence(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingPresence in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  const buildApplyPresence = new Function(
+    'THREE',
+    'scene',
+    'camp',
+    'TOWN_LAYOUT',
+    'createAvatarCapsule',
+    'setAvatarStatusText',
+    'getPlotTargetPosition',
+    'pickBandstandSpot',
+    `${fnBody}\nreturn applyStagingPresence;`
+  );
+
+  withRecordingCanvas(({ fakeTHREE }) => {
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.userData = {};
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+        this.rotation = { x: 0, y: 0, z: 0 };
+      }
+      add(c) { this.children.push(c); }
+      removeFromParent() {}
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial { constructor(o = {}) { Object.assign(this, o); } };
+    fakeTHREE.SpriteMaterial = class SpriteMaterial { constructor(o = {}) { Object.assign(this, o); } };
+    fakeTHREE.Mesh = class Mesh { constructor(g, m) { this.geometry = g; this.material = m; this.position = { set() {} }; } };
+    fakeTHREE.Sprite = class Sprite {
+      constructor(m) {
+        this.material = m;
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+        this.scale = { x: 1, y: 1, z: 1, set: (x, y, z) => { this.scale.x = x; this.scale.y = y; this.scale.z = z; } };
+      }
+    };
+    fakeTHREE.CylinderGeometry = class CylinderGeometry {};
+    fakeTHREE.SphereGeometry = class SphereGeometry {};
+
+    const scene = { children: [], add(obj) { this.children.push(obj); } };
+    const camp = { groundAt: () => 0 };
+    const applyStagingPresence = buildApplyPresence(
+      fakeTHREE,
+      scene,
+      camp,
+      TOWN_LAYOUT,
+      createAvatarCapsule,
+      setAvatarStatusText,
+      getPlotTargetPosition,
+      pickBandstandSpot
+    );
+
+    const liveStore = { avatars: new Map(), plotAssignments: new Map() };
+    const bandstandBuilt = {
+      avatarSpots: [{ x: 1, y: 0.6, z: 1, rotY: 0 }, { x: 2, y: 0.6, z: 2, rotY: 0 }],
+    };
+
+    applyStagingPresence(liveStore, bandstandBuilt, null, new Map(), {
+      presence: [
+        { handle: 'x', role: 'muse', zone: 'plot:milo' },
+        { handle: 'y', role: 'muse', zone: 'plot:unknown' },
+      ],
+      footlights: [],
+    });
+
+    const expectedMilo = getPlotTargetPosition(TOWN_LAYOUT.plots[0], 0);
+    assert.deepEqual(liveStore.avatars.get('x').userData.target, {
+      x: expectedMilo.x,
+      y: 0,
+      z: expectedMilo.z,
+      rotY: expectedMilo.rotY,
+      nametagLift: 0,
+    });
+    assert.deepEqual(liveStore.avatars.get('y').userData.target, {
+      x: 1,
+      y: 0.6,
+      z: 1,
+      rotY: 0,
+      slot: 0,
+      nametagLift: 0,
+    });
+  });
+});
+
+test('applyStagingState never touches slot 0 or milo, bounds slots, and fully resets unlit footlights', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function applyStagingState(');
+  assert.ok(fnStart !== -1, 'Expected applyStagingState in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  assert.match(fnBody, /\.filter\(\(r\) => r\?\.handle !== 'milo'\);/);
+  assert.match(fnBody, /row\.slot >= 1 && row\.slot < footlights\.length/);
+  assert.match(fnBody, /if \(slot === 0 \|\| flGroup\.userData\?\.permanent\) continue;/);
+
+  for (const snippet of [
+    "shell.material.color.set('#7a6230');",
+    "shell.material.emissive.set('#000000');",
+    'shell.material.emissiveIntensity = 0;',
+    'placard.rotation.x = 0;',
+    'placard.position.y = 0.06;',
+    'placard.material.map = null;',
+    "placard.material.color.set('#4d301c');",
+    'placard.material.needsUpdate = true;',
+    'flGroup.userData.lit = false;',
+    'flGroup.userData.handle = null;',
+    'flGroup.userData.role = null;',
+    'flGroup.userData.statusText = null;',
+  ]) {
+    const escaped = snippet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(fnBody, new RegExp(escaped), `Expected unlit reset line: ${snippet}`);
+  }
+
+  assert.match(
+    fnBody,
+    /!flGroup\.userData\.lit \|\|\s*flGroup\.userData\.handle !== handle \|\|\s*flGroup\.userData\.role !== role \|\|\s*\(flGroup\.userData\.statusText \?\? null\) !== statusText/
+  );
+});
+
+test('buildStagingSignpost builds a post and a 512x160 board, splitting two-part text across two lines', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function buildStagingSignpost(');
+  assert.ok(fnStart !== -1, 'Expected buildStagingSignpost in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  const buildFn = new Function('THREE', 'document', `${fnBody}\nreturn buildStagingSignpost;`);
+
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+      }
+      add(c) { this.children.push(c); }
+    };
+    fakeTHREE.Mesh = class Mesh {
+      constructor(geometry, material) {
+        this.geometry = geometry;
+        this.material = material;
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+      }
+    };
+    fakeTHREE.BoxGeometry = class BoxGeometry {
+      constructor(...args) { this.args = args; }
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    };
+    fakeTHREE.CanvasTexture = class CanvasTexture {
+      constructor(canvas) { this.canvas = canvas; }
+    };
+    fakeTHREE.SRGBColorSpace = 'srgb';
+
+    const buildStagingSignpost = buildFn(fakeTHREE, globalThis.document);
+    const group = buildStagingSignpost('Wick — Lamp-Trimmer');
+
+    assert.equal(group.name, 'cottage_signpost');
+    assert.equal(group.children.length, 2);
+
+    const [post, board] = group.children;
+    assert.deepEqual(post.geometry.args, [0.12, 1.1, 0.12]);
+    assert.equal(post.position.x, 0);
+    assert.equal(post.position.y, 0.55);
+    assert.equal(post.position.z, 0);
+    assert.equal(post.material.color, '#5c4028');
+
+    assert.deepEqual(board.geometry.args, [1.5, 0.5, 0.08]);
+    assert.equal(board.position.x, 0);
+    assert.equal(board.position.y, 1.05);
+    assert.equal(board.position.z, 0.04);
+
+    assert.equal(draws.length, 2);
+    assert.equal(draws[0].text, 'Wick —');
+    assert.equal(draws[0].y, 58);
+    assert.equal(draws[0].width, 512);
+    assert.equal(draws[0].height, 160);
+    assert.equal(draws[1].text, 'Lamp-Trimmer');
+    assert.equal(draws[1].y, 104);
+    assert.equal(draws[1].width, 512);
+    assert.equal(draws[1].height, 160);
+
+    draws.length = 0;
+    buildStagingSignpost('Just one line');
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, 'Just one line');
+    assert.equal(draws[0].y, 80);
+  });
+});
+
+test('lightUp pairs night zones from params, falls back to mod defaults, and skips missing zones', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function lightUp(');
+  assert.ok(fnStart !== -1, 'Expected lightUp in staging.js');
+  const fnEnd = src.indexOf('\nfunction place(', fnStart + 1);
+  assert.ok(fnEnd !== -1, 'Expected place after lightUp');
+  const fnBody = src.slice(fnStart, fnEnd);
+
+  const calls = [];
+  const camp = { light(obj, pairs) { calls.push({ obj, pairs }); } };
+  const lightUp = new Function('camp', `${fnBody}\nreturn lightUp;`)(camp);
+
+  const obj = { id: 'cottage' };
+  lightUp(
+    {
+      night: { wall: { color: '#ffbe5c', intensity: 2 }, roof: { color: '#111' } },
+      params: { roof: { default: '#5a4332' } },
+    },
+    obj,
+    { wall: '#abc' }
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].obj, obj);
+  assert.deepEqual(calls[0].pairs, [
+    { from: '#abc', to: '#ffbe5c', intensity: 2 },
+    { from: '#5a4332', to: '#111', intensity: 1 },
+  ]);
+
+  lightUp({ night: { wall: { color: '#fff' } } }, obj, {});
+  lightUp({ night: {} }, obj, {});
+  lightUp({}, obj, {});
+  assert.equal(calls.length, 1);
+});
+
+test('place grounds the part, faces the centre by default, and honors rotY, scale, and remove', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const lightStart = src.indexOf('function lightUp(');
+  const placeStart = src.indexOf('\nfunction place(', lightStart + 1);
+  const placeEnd = src.indexOf('\n// Minimal staging-local signpost', placeStart + 1);
+  assert.ok(lightStart !== -1 && placeStart !== -1 && placeEnd !== -1, 'Expected lightUp and place in staging.js');
+  const lightUpBody = src.slice(lightStart, placeStart);
+  const placeBody = src.slice(placeStart + 1, placeEnd);
+
+  const lightCalls = [];
+  const added = [];
+  const camp = {
+    groundAt: (x, z) => x + z,
+    light(obj, pairs) { lightCalls.push({ obj, pairs }); },
+  };
+  const scene = { add(o) { added.push(o); } };
+
+  const place = new Function(
+    'camp',
+    'scene',
+    `const faceCenter = (x, z) => Math.atan2(-x, -z);\n${lightUpBody}\n${placeBody}\nreturn place;`
+  )(camp, scene);
+
+  const mod = {
+    night: {},
+    createAsset(params) {
+      const o = {
+        params,
+        position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+        rotation: { y: 0 },
+        scale: { setScalar(s) { o.scaleValue = s; } },
+        getObjectByName(n) { return n === 'chimney' ? { name: 'chimney' } : null; },
+        remove(g) { o.removed = g; },
+      };
+      return o;
+    },
+  };
+
+  const o1 = place(mod, { a: 1 }, 3, 4);
+  assert.equal(o1.position.x, 3);
+  assert.equal(o1.position.y, 7);
+  assert.equal(o1.position.z, 4);
+  assert.equal(o1.rotation.y, Math.atan2(-3, -4));
+  assert.equal(added.length, 1);
+  assert.equal(added[0], o1);
+
+  const o2 = place(mod, {}, 1, 2, { rotY: 0.5, scale: 2 });
+  assert.equal(o2.rotation.y, 0.5);
+  assert.equal(o2.scaleValue, 2);
+
+  const o3 = place(mod, {}, 5, 6, { remove: 'chimney' });
+  assert.equal(o3.removed.name, 'chimney');
+  assert.equal(lightCalls.length, 0);
+});
+
+test('faceCenter angles, seeded rnd sequence, and counts start at zero', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const faceMatch = src.match(/const faceCenter = \(x, z\) => Math\.atan2\(-x, -z\);/);
+  const rndMatch = src.match(/let seed = 20261113;\nconst rnd = \(\) => \(\(seed = \(seed \* 1664525 \+ 1013904223\) >>> 0\) \/ 4294967296\);/);
+  assert.ok(faceMatch, 'Expected faceCenter in staging.js');
+  assert.ok(rndMatch, 'Expected seeded rnd in staging.js');
+
+  const { faceCenter, rnd } = new Function(`${faceMatch[0]}\n${rndMatch[0]}\nreturn { faceCenter, rnd };`)();
+  assert.equal(faceCenter(10, 0), -Math.PI / 2);
+  assert.equal(faceCenter(0, 10), -Math.PI);
+  assert.equal(faceCenter(-5, 0), Math.PI / 2);
+  // Math.atan2(-0, -0) yields -Math.PI; never called at the origin in practice (assets sit at radius >= 6).
+  assert.equal(faceCenter(0, 0), -Math.PI);
+
+  assert.equal(rnd(), 0.47958743665367365);
+  assert.equal(rnd(), 0.5140639289747924);
+
+  assert.ok(
+    src.includes('const counts = { bandstand: 0, ghost: 0, buildings: 0, pines: 0, lamps: 0, npcs: 0 };'),
+    'Expected counts initialized to zero in staging.js'
+  );
 });
