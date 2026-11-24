@@ -805,3 +805,197 @@ test('updateEventBanner hide path runs before the material and liveStore guards'
   );
   assert.equal(card3.visible, false);
 });
+
+test('loadEvents with no argument or undefined fetchFn fail-opens to { events: [] }', async () => {
+  assert.deepEqual(await loadEvents(), { events: [] });
+  assert.deepEqual(await loadEvents(undefined), { events: [] });
+});
+
+test('loadEvents rejects bad field types, whitespace-only fields, and duration edges, and preserves newline titles', async () => {
+  const invalidPayloads = [
+    { ...VALID_EVENT, title: 42 },
+    { ...VALID_EVENT, host_handle: 42 },
+    { ...VALID_EVENT, start_at: new Date('2026-11-15T20:00:00Z') },
+    { ...VALID_EVENT, duration_min: null },
+    { ...VALID_EVENT, location: ['Bandstand'] },
+    { ...VALID_EVENT, blurb: 7 },
+    { ...VALID_EVENT, title: '   ' },
+    { ...VALID_EVENT, start_at: '   ' },
+    { ...VALID_EVENT, duration_min: 14.999 },
+    { ...VALID_EVENT, duration_min: 240.5 },
+    { ...VALID_EVENT, duration_min: 0 },
+  ];
+  for (const bad of invalidPayloads) {
+    const res = await loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return { events: [bad] };
+      },
+    }));
+    assert.deepEqual(res, { events: [] });
+  }
+
+  const newlineEvent = { ...VALID_EVENT, title: 'Line one\nLine two' };
+  const res = await loadEvents(async () => ({
+    ok: true,
+    async json() {
+      return { events: [newlineEvent] };
+    },
+  }));
+  assert.deepEqual(res, { events: [newlineEvent] });
+});
+
+test('selectCurrentEvent returns normalized event and picks starting event at back-to-back boundary', () => {
+  const padded = {
+    ...VALID_EVENT,
+    title: '  Midnight Reading on the Bandstand  ',
+    host_handle: '  milo ',
+    start_at: ' 2026-11-15T20:00:00Z ',
+    extra: 'drop me',
+  };
+  const res = selectCurrentEvent([padded], Date.parse('2026-11-15T20:30:00Z'));
+  assert.equal(res?.status, 'now');
+  assert.deepEqual(res?.event, VALID_EVENT);
+
+  const eventA = { ...VALID_EVENT, title: 'A', start_at: '2026-11-15T19:00:00Z', duration_min: 60 };
+  const eventB = { ...VALID_EVENT, title: 'B', start_at: '2026-11-15T20:00:00Z', duration_min: 60 };
+  const boundary = selectCurrentEvent([eventA, eventB], Date.parse('2026-11-15T20:00:00Z'));
+  assert.equal(boundary?.status, 'now');
+  assert.equal(boundary?.event.title, 'B');
+});
+
+test('selectCurrentEvent handles Infinity nowMs, non-array events, epoch nowMs, and array entries', () => {
+  assert.equal(selectCurrentEvent([VALID_EVENT], Infinity), null);
+  assert.equal(selectCurrentEvent([VALID_EVENT], -Infinity), null);
+  assert.equal(selectCurrentEvent({ events: [VALID_EVENT] }, 0), null);
+  assert.equal(selectCurrentEvent([VALID_EVENT], 0)?.status, 'next');
+  assert.equal(selectCurrentEvent([[VALID_EVENT]], Date.parse('2026-11-15T20:30:00Z')), null);
+});
+
+test('eventBannerLines pins exact 30-char wrap points and trim-then-split order', () => {
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'a'.repeat(30) }, 'now'),
+    ['EVENTS', 'a'.repeat(30)]
+  );
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'alpha beta gamma delta epsilon zeta' }, 'next'),
+    ['NEXT EVENT', 'alpha beta gamma delta epsilon', 'zeta']
+  );
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: '  ' + 'b'.repeat(35) + '  ' }, 'now'),
+    ['EVENTS', 'b'.repeat(30), 'b'.repeat(5)]
+  );
+});
+
+test('updateEventBanner redraws on title change, keeps hidden card hidden on cache hit, and falls back when eventBanner is null', () => {
+  const card = { name: 'event_banner', visible: false, material: { map: null, needsUpdate: false } };
+  let redraws = 0;
+  const makeTextTexture = () => {
+    redraws += 1;
+    return { id: redraws };
+  };
+  const liveStore = { eventBannerKey: null };
+  const ctx = { THREE: {}, bandstandBuilt: { group: { children: [card] } }, liveStore, makeTextTexture };
+
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), true);
+  assert.equal(redraws, 1);
+
+  assert.equal(updateEventBanner(ctx, { ...VALID_EVENT, title: 'A Different Title' }, 'next'), true);
+  assert.equal(redraws, 2);
+
+  card.visible = false;
+  assert.equal(updateEventBanner(ctx, { ...VALID_EVENT, title: 'A Different Title' }, 'next'), false);
+  assert.equal(redraws, 2);
+  assert.equal(card.visible, false);
+
+  const card2 = { name: 'event_banner', visible: false, material: { map: null, needsUpdate: false } };
+  assert.equal(
+    updateEventBanner(
+      {
+        THREE: {},
+        bandstandBuilt: { eventBanner: null, group: { children: [card2] } },
+        liveStore: { eventBannerKey: null },
+        makeTextTexture,
+      },
+      VALID_EVENT,
+      'now'
+    ),
+    true
+  );
+  assert.equal(card2.visible, true);
+
+  assert.equal(
+    updateEventBanner(
+      {
+        THREE: {},
+        bandstandBuilt: { eventBanner: undefined, group: undefined },
+        liveStore: { eventBannerKey: null },
+        makeTextTexture,
+      },
+      VALID_EVENT,
+      'now'
+    ),
+    false
+  );
+});
+
+test('renderEventBannerHeader renders markup verbatim via textContent and formats next with missing host', () => {
+  const el = { hidden: true, textContent: '' };
+  assert.equal(
+    renderEventBannerHeader(el, { ...VALID_EVENT, title: '<b>Bold</b> & "quotes"' }, 'now'),
+    true
+  );
+  assert.equal(el.textContent, 'Now: <b>Bold</b> & "quotes" — hosted by @milo');
+
+  const el2 = { hidden: true, textContent: '' };
+  assert.equal(
+    renderEventBannerHeader(el2, { title: 'No Host', start_at: '2026-11-15T20:00:00Z' }, 'next'),
+    true
+  );
+  assert.equal(el2.textContent, 'Next: No Host — Nov 15, 12:00 PM · hosted by @undefined');
+});
+
+test('formatEventWhen pads single-digit minutes, rejects Date objects, and handles epoch minus 1ms', () => {
+  assert.equal(formatEventWhen(Date.parse('2026-11-15T20:05:00Z')), 'Nov 15, 12:05 PM');
+  assert.equal(formatEventWhen(new Date('2026-11-15T20:00:00Z')), '');
+  assert.equal(formatEventWhen(-1), 'Dec 31, 3:59 PM');
+});
+
+test('loadEvents calls fetchFn once with events.json, skips undefined entries, and handles empty events', async () => {
+  const calls = [];
+  const fetchFn = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      async json() {
+        return { events: [undefined, VALID_EVENT] };
+      },
+    };
+  };
+  const res = await loadEvents(fetchFn);
+  assert.deepEqual(calls, ['events.json']);
+  assert.equal(res.events.length, 1);
+  assert.deepEqual(res.events[0], VALID_EVENT);
+
+  assert.deepEqual(
+    await loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return { events: [] };
+      },
+    })),
+    { events: [] }
+  );
+});
+
+test('selectCurrentEvent prefers now over next regardless of order and tie-breaks same-start now first-in-file', () => {
+  const nowEv = { ...VALID_EVENT, title: 'Now', start_at: '2026-11-15T20:00:00Z', duration_min: 60 };
+  const nextEv = { ...VALID_EVENT, title: 'Next', start_at: '2026-11-16T18:00:00Z', duration_min: 30 };
+  const t = Date.parse('2026-11-15T20:30:00Z');
+  assert.equal(selectCurrentEvent([nextEv, nowEv], t)?.event.title, 'Now');
+  assert.equal(selectCurrentEvent([nowEv, nextEv], t)?.event.title, 'Now');
+
+  const tie1 = { ...VALID_EVENT, title: 'TieOne', start_at: '2026-11-15T20:00:00Z', duration_min: 60 };
+  const tie2 = { ...VALID_EVENT, title: 'TieTwo', start_at: '2026-11-15T20:00:00Z', duration_min: 60 };
+  assert.equal(selectCurrentEvent([tie2, tie1], t)?.event.title, 'TieTwo');
+});
