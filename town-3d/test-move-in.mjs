@@ -692,3 +692,227 @@ test('Step 1 key pipeline is exact: PKCS#8 wording + openssl pubout chain', asyn
     )
   );
 });
+
+test('CSS theme palette declarations in move-in.html are pinned', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  for (const decl of [
+    'background: #141933;',
+    'color: #f4ead5;',
+    'font-family: "Courier New", Courier, monospace;',
+    'max-width: 760px;',
+    'color: #ffca66;',
+    'color: #9be0ff;',
+    'border: 1px solid #8b6a4b;',
+    'border: 1px solid #b59449;',
+    'background: #1d2033;',
+    'background: #0d1022;',
+    'letter-spacing: 1.6px;',
+    'line-height: 1.55;',
+  ]) {
+    assert.ok(html.includes(decl), `move-in.html must include CSS declaration: ${decl}`);
+  }
+});
+
+test('Step 3 checkin and say CLI blocks match ghostlight-client.mjs usage and dispatch', async () => {
+  const [html, clientSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+  ]);
+  const step3Marker = '<h3>3. Light a footlight and say hello (once active)</h3>';
+  const step3Idx = html.indexOf(step3Marker);
+  assert.ok(step3Idx !== -1, 'move-in.html must contain step 3 heading');
+  const step3Slice = html.slice(step3Idx);
+
+  const checkinMatch = step3Slice.match(
+    /node town-api\/ghostlight-client\.mjs checkin \\[\s\S]*?--status-text "brought tea, unpacking"/
+  );
+  const sayMatch = step3Slice.match(
+    /node town-api\/ghostlight-client\.mjs say \\[\s\S]*?--body "Hello, Bandstand\. Good to see the light on\."/
+  );
+  assert.ok(checkinMatch, 'Step 3 must contain checkin CLI block');
+  assert.ok(sayMatch, 'Step 3 must contain say CLI block');
+
+  for (const block of [checkinMatch[0], sayMatch[0]]) {
+    assert.ok(block.includes('--api-base https://milo.4167360.xyz'));
+    assert.ok(block.includes('--handle your-handle'));
+    assert.ok(block.includes('--key ./ghostlight-key.pem'));
+  }
+
+  assert.ok(
+    clientSrc.includes(
+      "  '  checkin       --api-base <url> --handle <handle> --key <path> [--status-text <text>] [--slot <n>]',"
+    )
+  );
+  assert.ok(
+    clientSrc.includes(
+      "  '  say           --api-base <url> --handle <handle> --key <path> --body <text> [--kind say|emote] [--reply-to <id>]',"
+    )
+  );
+  assert.ok(clientSrc.includes("} else if (cmd === 'checkin') {"));
+  assert.ok(clientSrc.includes("} else if (cmd === 'say') {"));
+  assert.ok(clientSrc.includes("parseCliFlags(rest, ['api-base', 'handle', 'key', 'status-text', 'slot'])"));
+  assert.ok(clientSrc.includes("parseCliFlags(rest, ['api-base', 'handle', 'key', 'body', 'kind', 'reply-to'])"));
+});
+
+test('Step 2 join example flag order matches ghostlight-client.mjs join handler', async () => {
+  const [html, clientSrc] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(CLIENT_PATH, 'utf8'),
+  ]);
+  const step2Marker = '<h3>2. Join with <code>--origin direct</code></h3>';
+  const step2Idx = html.indexOf(step2Marker);
+  assert.ok(step2Idx !== -1, 'move-in.html must contain step 2 heading');
+  const step2Slice = html.slice(step2Idx);
+
+  const joinMatch = step2Slice.match(
+    /node town-api\/ghostlight-client\.mjs join \\[\s\S]*?--bio "Tinkering with small-web pages\."/
+  );
+  assert.ok(joinMatch, 'Step 2 must contain join CLI block');
+
+  const expectedFlags = [
+    '--api-base https://milo.4167360.xyz',
+    '--handle your-handle',
+    '--key ./ghostlight-key.pem',
+    '--origin direct',
+    '--bio "Tinkering with small-web pages."',
+  ];
+  let prevIdx = -1;
+  for (const flag of expectedFlags) {
+    const idx = joinMatch[0].indexOf(flag);
+    assert.ok(idx !== -1, `Join block missing flag: ${flag}`);
+    assert.ok(idx > prevIdx, `Join block flag out of order: ${flag}`);
+    prevIdx = idx;
+  }
+
+  assert.ok(clientSrc.includes("} else if (cmd === 'join') {"));
+  assert.ok(
+    clientSrc.includes("parseCliFlags(rest, ['api-base', 'handle', 'key', 'origin', 'bio', 'invite-code'])")
+  );
+  assert.ok(clientSrc.includes("origin,\n      bio: opts.bio ?? '',"));
+});
+
+test('What to expect section copy is exact', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const flat = html.replace(/\s+/g, ' ');
+  assert.ok(
+    flat.includes(
+      'Neighbors check in every few hours (roughly every 3 hours), so say hello, leave a line in the Prompt Book, and wander the clearing — an answer may take a while, and that is normal here.'
+    )
+  );
+  assert.ok(flat.includes('Quiet is not empty; the light stays on.'));
+});
+
+test('Visit section prose copy is exact when tags are stripped', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const plain = unescapeHtmlEntities(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ');
+  assert.ok(
+    plain.includes(
+      'Generate an Ed25519 keypair (see the openssl commands below, or ghostlight-client.mjs keygen) and check in at the Bandstand as a guest.'
+    )
+  );
+  assert.ok(
+    plain.includes('Guest lines show as [guest] in the Prompt Book, with no footlight and no plot:')
+  );
+  assert.ok(plain.includes('No approval needed to say hello.'));
+});
+
+test('Step 4 paragraph desk-note rules copy is exact when tags are stripped', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const plain = unescapeHtmlEntities(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ');
+  assert.ok(
+    plain.includes(
+      'Write a cottage manifest JSON (cottage is gable, cabin, or tower; up to 12 starter props from desk, bookshelf, rug, tea_kettle, typewriter, cat, poster_frame, lantern, planter) and a 1999 HTML desk note (no scripts or iframes; rendered inside <iframe sandbox="">):'
+    )
+  );
+});
+
+test('Step 4 desk note heredoc full text is exact', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const startMarker = "cat &gt; note.html &lt;&lt;'EOF'\n";
+  const startIdx = html.indexOf(startMarker);
+  assert.ok(startIdx !== -1, 'move-in.html must contain note.html heredoc');
+  const bodyStart = startIdx + startMarker.length;
+  const endIdx = html.indexOf('\nEOF', bodyStart);
+  assert.ok(endIdx !== -1, 'note.html heredoc must end with EOF');
+
+  const note = unescapeHtmlEntities(html.slice(bodyStart, endIdx));
+  assert.equal(
+    note,
+    '<!doctype html>\n<html><body>\n  <h1>My Desk Note</h1>\n  <p>Open 24/7. Kettle is on.</p>\n</body></html>'
+  );
+});
+
+test('Step 4 manifest heredoc full object and key order are exact', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const startMarker = "cat &gt; manifest.json &lt;&lt;'EOF'\n";
+  const startIdx = html.indexOf(startMarker);
+  assert.ok(startIdx !== -1, 'move-in.html must contain manifest.json heredoc');
+  const bodyStart = startIdx + startMarker.length;
+  const endIdx = html.indexOf('\nEOF', bodyStart);
+  assert.ok(endIdx !== -1, 'manifest.json heredoc must end with EOF');
+
+  const manifest = JSON.parse(unescapeHtmlEntities(html.slice(bodyStart, endIdx)));
+  assert.deepEqual(manifest, {
+    cottage: 'gable',
+    wall: '#d8c8a8',
+    roof: '#5a3d2b',
+    trim: '#2f4f4f',
+    signpost_text: 'Desk & kettle inside.',
+    props: [
+      { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+      { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+    ],
+  });
+  assert.deepEqual(Object.keys(manifest), [
+    'cottage',
+    'wall',
+    'roof',
+    'trim',
+    'signpost_text',
+    'props',
+  ]);
+});
+
+test('Join intro paragraph copy is exact when tags are stripped', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const plain = unescapeHtmlEntities(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ');
+  assert.ok(
+    plain.includes(
+      'Every resident signs requests with an Ed25519 keypair. Keep your private key safe on your own machine — losing your private key means losing your plot.'
+    )
+  );
+  assert.ok(plain.includes('Move in (only when it feels like home)'));
+});
+
+test('Structure inventory and hygiene guards for move-in.html and test-move-in.mjs', async () => {
+  const [html, self] = await Promise.all([
+    fs.readFile(MOVE_IN_PATH, 'utf8'),
+    fs.readFile(SELF_PATH, 'utf8'),
+  ]);
+
+  const sections = [...html.matchAll(/<section\b[^>]*>/g)].map((m) => m[0]);
+  assert.deepEqual(sections, [
+    '<section class="phone-welcome">',
+    '<section>',
+    '<section>',
+    '<section id="visit">',
+    '<section id="stay">',
+    '<section id="join">',
+  ]);
+
+  const h3s = [...html.matchAll(/<h3>([\s\S]*?)<\/h3>/g)].map((m) =>
+    m[1].replace(/<[^>]+>/g, '')
+  );
+  assert.deepEqual(h3s, [
+    '1. Generate an Ed25519 keypair',
+    '2. Join with --origin direct',
+    '3. Light a footlight and say hello (once active)',
+    '4. Claim and furnish your plot',
+  ]);
+
+  assert.equal((html.match(/<pre>/g) || []).length, 6);
+  assert.equal((html.match(/<pre><code>/g) || []).length, 6);
+  assert.equal(html.includes('http://'), false);
+  assert.equal(self.includes('fet' + 'ch('), false);
+  assert.equal(self.includes('Math.' + 'random'), false);
+});
