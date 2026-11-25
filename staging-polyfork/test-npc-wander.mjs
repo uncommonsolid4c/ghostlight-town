@@ -1173,3 +1173,302 @@ test('Single call: one figure arrives while another walks, in order', () => {
   assert.equal(maren.state, 'walking');
   assert.ok(Math.abs(marenGroup.position.z - 0.45) < 1e-9);
 });
+
+test('SEED_HOME_PADS literal and exact home targets for plots 2, 3, 4', () => {
+  assert.deepEqual(SEED_HOME_PADS, { wick: 2, maren: 3, tomas: 4 });
+  const expected = {
+    wick: { x: 14.3627, y: 0, z: -3.9642, rotY: -1.3015 },
+    maren: { x: 10.4889, y: 0, z: -10.583, rotY: -0.7809 },
+    tomas: { x: 3.8345, y: 0, z: -14.3983, rotY: -0.2603 },
+  };
+  for (const [handle, plotNum] of [
+    ['wick', 2],
+    ['maren', 3],
+    ['tomas', 4],
+  ]) {
+    const plot = TOWN_LAYOUT.plots.find((p) => p.plotNumber === plotNum);
+    assert.ok(plot, `plot ${plotNum} for ${handle} must exist in TOWN_LAYOUT.plots`);
+    assert.deepEqual(getPlotTargetPosition(plot, 0), expected[handle]);
+  }
+});
+
+test('newsstand front exact literal for TOWN_LAYOUT and 2.0 m offset magnitude', () => {
+  const front = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+  assert.deepEqual(front, { x: 5.2122, y: 0, z: 12.1617 });
+  const offset = Math.hypot(front.x - 6, front.z - 14);
+  assert.ok(Math.abs(offset - 2.0) < 1e-5, `expected offset ~2.0, got ${offset}`);
+  assert.ok((front.x - 6) * (0 - 6) + (front.z - 14) * (0 - 14) > 0, 'offset must point toward bandstand');
+});
+
+test('linger sums per NPC, longest-linger label, and ghost drift total', () => {
+  const lingerSums = Object.fromEntries(
+    SEED_WANDER_CONFIG.map((cfg) => [
+      cfg.handle,
+      cfg.lingers.home + cfg.lingers.bandstand + cfg.lingers.newsstand,
+    ])
+  );
+  assert.deepEqual(lingerSums, { wick: 36, maren: 38, tomas: 36 });
+
+  const longestLabels = Object.fromEntries(
+    SEED_WANDER_CONFIG.map((cfg) => [
+      cfg.handle,
+      Object.entries(cfg.lingers).sort((a, b) => b[1] - a[1])[0][0],
+    ])
+  );
+  assert.deepEqual(longestLabels, { wick: 'bandstand', maren: 'bandstand', tomas: 'newsstand' });
+
+  const ghostTotal = Object.values(GHOST_DRIFT_CONFIG.lingers).reduce((a, b) => a + b, 0);
+  assert.equal(ghostTotal, 51);
+});
+
+test('lingering seed figure yields to live presence, then restores at home', () => {
+  const groundAt = (x, z) => +(0.25 + x * 0.01 - z * 0.005).toFixed(4);
+  const bandstandGroundY = groundAt(0, 0);
+  const bandstandSpots = makeFakeBandstandSpots();
+  const newsstandFront = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+  const standIns = new Map(
+    [
+      ['wick', 2],
+      ['maren', 3],
+      ['tomas', 4],
+    ].map(([handle, plotNum]) => {
+      const plot = TOWN_LAYOUT.plots.find((p) => p.plotNumber === plotNum);
+      const pos = getPlotTargetPosition(plot, 0);
+      return [handle, { group: makeFakeGroup(pos.x, groundAt(pos.x, pos.z), pos.z, pos.rotY), home: { x: pos.x, z: pos.z }, anim: null }];
+    })
+  );
+
+  const figures = buildStagingWanderFigures({
+    standIns,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY,
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+
+  const wick = figures[0];
+  const home = wick.waypoints[0];
+  const bandstand = wick.waypoints[1];
+  wick.group.position.set(home.x, home.y, home.z);
+
+  const d = Math.hypot(bandstand.x - home.x, bandstand.y - home.y, bandstand.z - home.z);
+  updateStagingWander(figures, d / 0.5 + 0.01, new Map());
+  assert.equal(wick.state, 'lingering');
+  assert.equal(wick.lingerRemaining, 14);
+  assert.equal(wick.targetIndex, 1);
+
+  const pos = { x: wick.group.position.x, y: wick.group.position.y, z: wick.group.position.z };
+  updateStagingWander(figures, 1.0, new Map([['wick', {}]]));
+  assert.equal(wick.group.visible, false);
+  assert.equal(wick.yielded, true);
+  assert.equal(wick.group.position.x, pos.x);
+  assert.equal(wick.group.position.y, pos.y);
+  assert.equal(wick.group.position.z, pos.z);
+  assert.equal(wick.lingerRemaining, 14);
+  assert.equal(wick.state, 'lingering');
+
+  updateStagingWander(figures, 1.0, new Map());
+  assert.equal(wick.group.visible, true);
+  assert.equal(wick.yielded, false);
+  assert.equal(wick.group.position.x, home.x);
+  assert.equal(wick.group.position.z, home.z);
+  assert.equal(wick.state, 'walking');
+  assert.equal(wick.lingerRemaining, 0);
+  assert.equal(wick.targetIndex, 1);
+});
+
+test('locomotion call accounting across walk, arrive, linger, and advance', () => {
+  const locoCalls = [];
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(speed) } },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 1, rotY: 0, linger: 14, label: 'bandstand' },
+      { x: 1, y: 0, z: 1, linger: 12, label: 'newsstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([fig], 1.0, new Map());
+  updateStagingWander([fig], 1.0, new Map());
+  assert.deepEqual(locoCalls, [0.5, 0]);
+  assert.equal(fig.state, 'lingering');
+
+  updateStagingWander([fig], 5.0, new Map());
+  assert.deepEqual(locoCalls, [0.5, 0]);
+  assert.equal(fig.lingerRemaining, 9);
+
+  updateStagingWander([fig], 9.0, new Map());
+  assert.equal(fig.state, 'walking');
+  assert.equal(fig.targetIndex, 2);
+  assert.deepEqual(locoCalls, [0.5, 0]);
+
+  updateStagingWander([fig], 1.0, new Map());
+  assert.deepEqual(locoCalls, [0.5, 0, 0.5]);
+  assert.ok(Math.abs(group.position.x - 0.5) < 1e-9);
+});
+
+test('buildStagingGhostDrift: non-array bandstandSpots return null; length-1 array works', () => {
+  const ghost = makeFakeGroup(0, 0.6, 3.8);
+  assert.equal(buildStagingGhostDrift({ ghost, bandstandSpots: {} }), null);
+  assert.equal(buildStagingGhostDrift({ ghost, bandstandSpots: 'spots' }), null);
+  assert.equal(buildStagingGhostDrift({ ghost, bandstandSpots: 5 }), null);
+
+  const fig = buildStagingGhostDrift({
+    ghost,
+    bandstandSpots: [{ x: 1, y: 0.75, z: 2, rotY: 0.5 }],
+  });
+  assert.ok(fig);
+  assert.equal(fig.waypoints.length, 4);
+  assert.deepEqual(fig.waypoints[0], { x: 1, y: 0.75, z: 2, linger: 25, label: 'spot0' });
+  assert.ok(fig.waypoints.every((wp) => wp.y === 0.75));
+});
+
+test('buildStagingWanderFigures throws TypeError on a missing plot or missing bandstand spot', () => {
+  const groundAt = () => 0.25;
+  const bandstandSpots = makeFakeBandstandSpots();
+  const newsstandFront = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+  const standIns = new Map([
+    ['wick', { group: makeFakeGroup(0, 0, 0), home: { x: 0, z: 0 }, anim: null }],
+  ]);
+  const baseArgs = {
+    standIns,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY: 0.25,
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  };
+
+  assert.throws(
+    () => buildStagingWanderFigures({ ...baseArgs, plots: TOWN_LAYOUT.plots.filter((p) => p.plotNumber !== 2) }),
+    TypeError
+  );
+  assert.throws(
+    () => buildStagingWanderFigures({ ...baseArgs, bandstandSpots: bandstandSpots.slice(0, 1) }),
+    TypeError
+  );
+  assert.throws(
+    () => buildStagingWanderFigures({ ...baseArgs, plots: [] }),
+    TypeError
+  );
+});
+
+test('npc-wander.mjs export surface and extra source discipline', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'npc-wander.mjs'), 'utf8');
+  const exportsList = [...src.matchAll(/^export (?:const|function) (\w+)/gm)]
+    .map((m) => m[1])
+    .sort();
+  assert.deepEqual(exportsList, [
+    'GHOST_DRIFT_CONFIG',
+    'SEED_WANDER_CONFIG',
+    'buildStagingGhostDrift',
+    'buildStagingWanderFigures',
+    'getStagingNewsstandFrontPosition',
+    'updateStagingWander',
+  ]);
+  for (const needle of [
+    'Date' + '.now',
+    'set' + 'Timeout',
+    'set' + 'Interval',
+    'TO' + 'DO',
+    'FIX' + 'ME',
+  ]) {
+    assert.equal(src.includes(needle), false, `npc-wander.mjs must not contain ${needle}`);
+  }
+  assert.equal((src.match(/Math\.hypot/g) || []).length, 3);
+});
+
+test('exact multi-step walk: straight and diagonal, arrival on the third call', () => {
+  const straightGroup = makeFakeGroup(0, 0, 0, 0);
+  const straightFig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group: straightGroup,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 1.5, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([straightFig], 1.0, new Map());
+  assert.ok(Math.abs(straightGroup.position.z - 0.5) < 1e-9);
+  updateStagingWander([straightFig], 1.0, new Map());
+  assert.ok(Math.abs(straightGroup.position.z - 1.0) < 1e-9);
+  assert.equal(straightFig.state, 'walking');
+  updateStagingWander([straightFig], 1.0, new Map());
+  assert.ok(Math.abs(straightGroup.position.z - 1.5) < 1e-9);
+  assert.equal(straightFig.state, 'lingering');
+  assert.equal(straightFig.lingerRemaining, 14);
+
+  const diagGroup = makeFakeGroup(0, 0, 0, 0);
+  const diagFig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group: diagGroup,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0.9, y: 0, z: 1.2, rotY: 0, linger: 14, label: 'bandstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  updateStagingWander([diagFig], 1.0, new Map());
+  assert.ok(Math.abs(diagGroup.position.x - 0.3) < 1e-9);
+  assert.ok(Math.abs(diagGroup.position.z - 0.4) < 1e-9);
+  assert.ok(Math.abs(diagGroup.rotation.y - Math.atan2(0.9, 1.2)) < 1e-9);
+  updateStagingWander([diagFig], 1.0, new Map());
+  assert.ok(Math.abs(diagGroup.position.x - 0.6) < 1e-9);
+  assert.ok(Math.abs(diagGroup.position.z - 0.8) < 1e-9);
+  updateStagingWander([diagFig], 1.0, new Map());
+  assert.ok(Math.abs(diagGroup.position.x - 0.9) < 1e-9);
+  assert.ok(Math.abs(diagGroup.position.z - 1.2) < 1e-9);
+  assert.equal(diagFig.state, 'lingering');
+});
+
+test('test-file hygiene: unique names, import list, needle counts as-true', () => {
+  const src = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+
+  const imports = [...src.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+  assert.deepEqual(imports, [
+    'node:test',
+    'node:assert/strict',
+    'node:crypto',
+    'node:fs',
+    'node:path',
+    'node:url',
+    './avatar.mjs',
+    './npc-wander.mjs',
+  ]);
+  assert.equal((src.match(/^await test\(/gm) || []).length, 0);
+  assert.equal((src.match(/fetch\(/g) || []).length, 3);
+  assert.equal((src.match(/Math\.random/g) || []).length, 3);
+  for (const needle of ['TO' + 'DO', 'FIX' + 'ME', 'Date' + '.now']) {
+    assert.equal(src.includes(needle), false, `test-npc-wander.mjs must not contain ${needle}`);
+  }
+  assert.equal(new RegExp('camp' + 'fire', 'i').test(src), false);
+});
