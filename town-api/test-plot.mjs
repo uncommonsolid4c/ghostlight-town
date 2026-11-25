@@ -1369,3 +1369,425 @@ test('GET empty handle 400; GET with deleted plot files 404; server-level 32 KB 
     await ctx.close();
   }
 });
+
+test('stored manifest bytes are the pretty-printed normalized manifest; pure-validator defaults', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+    const put1 = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(put1.status, 200);
+
+    const manifestPath = path.join(ctx.plotsDir, 'alice', 'manifest.json');
+    const htmlPath = path.join(ctx.plotsDir, 'alice', 'index.html');
+    const normRes = validateManifest(VALID_MANIFEST);
+    assert.equal(normRes.ok, true);
+    assert.equal(
+      fs.readFileSync(manifestPath, 'utf8'),
+      JSON.stringify(normRes.manifest, null, 2)
+    );
+    assert.deepEqual(Object.keys(normRes.manifest), [
+      'cottage',
+      'wall',
+      'roof',
+      'trim',
+      'signpost_text',
+      'props',
+    ]);
+    assert.deepEqual(Object.keys(normRes.manifest.props[0]), [
+      'kind',
+      'x',
+      'y',
+      'z',
+      'rot_y',
+      'color',
+    ]);
+    assert.deepEqual(Object.keys(normRes.manifest.props[1]), [
+      'kind',
+      'x',
+      'y',
+      'z',
+      'rot_y',
+    ]);
+    assert.equal(fs.readFileSync(htmlPath, 'utf8'), VALID_HTML);
+
+    const minimal = {
+      cottage: 'cabin',
+      wall: '#aabbcc',
+      roof: '#112233',
+      trim: '#445566',
+    };
+    const put2 = await client.plot(minimal, '<p>minimal</p>');
+    assert.equal(put2.status, 200);
+    assert.equal(
+      fs.readFileSync(manifestPath, 'utf8'),
+      JSON.stringify(validateManifest(minimal).manifest, null, 2)
+    );
+  } finally {
+    await ctx.close();
+  }
+
+  const spacesRes = validateManifest({ ...VALID_MANIFEST, signpost_text: '  hi  ' });
+  assert.equal(spacesRes.ok, true);
+  assert.equal(spacesRes.manifest.signpost_text, '  hi  ');
+
+  const tabRes = validateManifest({ ...VALID_MANIFEST, signpost_text: '\tTabbed\n' });
+  assert.equal(tabRes.ok, true);
+  assert.equal(tabRes.manifest.signpost_text, '\tTabbed\n');
+
+  const undefSignpost = validateManifest({ ...VALID_MANIFEST, signpost_text: undefined });
+  assert.equal(undefSignpost.ok, true);
+  assert.equal(undefSignpost.manifest.signpost_text, '');
+
+  const undefProps = validateManifest({ ...VALID_MANIFEST, props: undefined });
+  assert.equal(undefProps.ok, true);
+  assert.deepEqual(undefProps.manifest.props, []);
+
+  const undefColor = validateManifest({
+    ...VALID_MANIFEST,
+    props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: undefined }],
+  });
+  assert.equal(undefColor.ok, true);
+  assert.deepEqual(Object.keys(undefColor.manifest.props[0]), [
+    'kind',
+    'x',
+    'y',
+    'z',
+    'rot_y',
+  ]);
+  assert.equal('color' in undefColor.manifest.props[0], false);
+});
+
+test('64 KB body-cap boundary: exact-65536 passes the cap, 65537 tears the socket down', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client, keys } = await createApprovedResident(ctx, 'alice');
+    const put1 = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(put1.status, 200);
+
+    const manifestPath = path.join(ctx.plotsDir, 'alice', 'manifest.json');
+    const htmlPath = path.join(ctx.plotsDir, 'alice', 'index.html');
+    const manifestBefore = fs.readFileSync(manifestPath);
+    const htmlBefore = fs.readFileSync(htmlPath);
+    const stateBefore = await client.state();
+    assert.equal(stateBefore.status, 200);
+
+    const probe = (n) =>
+      Buffer.byteLength(
+        JSON.stringify({ manifest: VALID_MANIFEST, html: '<p>' + 'x'.repeat(n) + '</p>' }),
+        'utf8'
+      );
+    const n = 65536 - probe(0);
+    assert.equal(probe(n), 65536);
+
+    const exactCapPut = await client.plot(VALID_MANIFEST, '<p>' + 'x'.repeat(n) + '</p>');
+    assert.equal(exactCapPut.status, 400);
+    assert.deepEqual(exactCapPut.data, { error: 'html_too_large', max: 32768 });
+
+    const overSigned = signRequest({
+      method: 'PUT',
+      path: '/api/town/plot',
+      body: { manifest: VALID_MANIFEST, html: '<p>' + 'x'.repeat(n + 1) + '</p>' },
+      handle: 'alice',
+      privateKeyPem: keys.privateKeyPem,
+    });
+    let rejected = false;
+    try {
+      await fetch(`${ctx.baseUrl}/api/town/plot`, {
+        method: 'PUT',
+        headers: overSigned.headers,
+        body: overSigned.rawBody,
+      });
+    } catch {
+      rejected = true;
+    }
+    assert.equal(rejected, true);
+
+    assert.deepEqual(fs.readFileSync(manifestPath), manifestBefore);
+    assert.deepEqual(fs.readFileSync(htmlPath), htmlBefore);
+
+    const stateAfter = await client.state();
+    assert.equal(stateAfter.status, 200);
+    assert.equal(stateAfter.data.state_seq, stateBefore.data.state_seq);
+    assert.equal(stateAfter.data.plots.alice, put1.data.plot_updated_at);
+
+    const afterPut = await client.plot(VALID_MANIFEST, '<p>after cap</p>');
+    assert.equal(afterPut.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rate-limit 429 exact body + retry_after leaves state_seq and plot files untouched', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+    for (let i = 0; i < 10; i++) {
+      const res = await client.plot(VALID_MANIFEST, `<p>put ${i}</p>`);
+      assert.equal(res.status, 200);
+    }
+
+    const manifestPath = path.join(ctx.plotsDir, 'alice', 'manifest.json');
+    const htmlPath = path.join(ctx.plotsDir, 'alice', 'index.html');
+    const manifestBefore = fs.readFileSync(manifestPath);
+    const htmlBefore = fs.readFileSync(htmlPath);
+    const stateBefore = await client.state();
+    assert.equal(stateBefore.status, 200);
+
+    const put11 = await client.plot(VALID_MANIFEST, '<p>put 11</p>');
+    assert.equal(put11.status, 429);
+    assert.deepEqual(Object.keys(put11.data), ['error', 'retry_after']);
+    assert.equal(put11.data.error, 'rate_limited');
+    assert.ok(put11.data.retry_after === 3599 || put11.data.retry_after === 3600);
+
+    const put12 = await client.plot(VALID_MANIFEST, '<p>put 12</p>');
+    assert.equal(put12.status, 429);
+    assert.deepEqual(Object.keys(put12.data), ['error', 'retry_after']);
+    assert.equal(put12.data.error, 'rate_limited');
+    assert.ok(put12.data.retry_after <= put11.data.retry_after);
+
+    const stateAfter = await client.state();
+    assert.equal(stateAfter.status, 200);
+    assert.equal(stateAfter.data.state_seq, stateBefore.data.state_seq);
+    assert.deepEqual(fs.readFileSync(manifestPath), manifestBefore);
+    assert.deepEqual(fs.readFileSync(htmlPath), htmlBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET 404 when plot files are missing or corrupt while state map still lists handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+    const put1 = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(put1.status, 200);
+
+    const manifestPath = path.join(ctx.plotsDir, 'alice', 'manifest.json');
+    const htmlPath = path.join(ctx.plotsDir, 'alice', 'index.html');
+
+    fs.unlinkSync(manifestPath);
+    const missingManifestGet = await client.getPlot('alice');
+    assert.equal(missingManifestGet.status, 404);
+    assert.deepEqual(missingManifestGet.data, { error: 'plot_not_found' });
+
+    const stateRes = await client.state();
+    assert.equal(stateRes.status, 200);
+    assert.equal(stateRes.data.plots.alice, put1.data.plot_updated_at);
+
+    fs.writeFileSync(manifestPath, 'not json{', 'utf8');
+    const corruptManifestGet = await client.getPlot('alice');
+    assert.equal(corruptManifestGet.status, 404);
+    assert.deepEqual(corruptManifestGet.data, { error: 'plot_not_found' });
+
+    const put2 = await client.plot(VALID_MANIFEST, VALID_HTML);
+    assert.equal(put2.status, 200);
+
+    fs.unlinkSync(htmlPath);
+    const missingHtmlGet = await client.getPlot('alice');
+    assert.equal(missingHtmlGet.status, 404);
+    assert.deepEqual(missingHtmlGet.data, { error: 'plot_not_found' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('validateManifest further boundaries: infinities, -0, bad colors, all 9 kinds with color, UTF-16 signpost', () => {
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: Infinity, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: -Infinity, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'y', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: true, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'z', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: Infinity }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: -0 }],
+    }).ok,
+    true
+  );
+
+  for (const badColor of ['', '#1234567', '#gggggg']) {
+    assert.deepEqual(
+      validateManifest({
+        ...VALID_MANIFEST,
+        props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: badColor }],
+      }),
+      { ok: false, error: 'invalid_prop_color', index: 0 }
+    );
+  }
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, wall: '#12345g' }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+
+  for (const kind of VALID_PROP_KINDS) {
+    const res = validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind, x: 0, y: 0, z: 0, rot_y: 0, color: '#ABCDEF' }],
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.manifest.props[0].color, '#ABCDEF');
+  }
+
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 },
+        { kind: 'cat', x: 0, y: 0, z: 0, rot_y: 0, extra: 1 },
+      ],
+    }),
+    { ok: false, error: 'unknown_prop_key', key: 'extra', index: 1 }
+  );
+
+  assert.equal(
+    validateManifest({ ...VALID_MANIFEST, signpost_text: '😀'.repeat(60) }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, signpost_text: '😀'.repeat(61) }),
+    { ok: false, error: 'invalid_signpost_text', max: 120 }
+  );
+});
+
+test('validateHtml forbidden-tag prefix matching rejects prefixed tags and allows non-tag positions', () => {
+  const cases = [
+    ['<scriptx>alert(1)</scriptx>', 'forbidden_tag:script'],
+    ['<scripture>holy</scripture>', 'forbidden_tag:script'],
+    ['<formatting>x</formatting>', 'forbidden_tag:form'],
+    ['<iframe2 src="x.html"></iframe2>', 'forbidden_tag:iframe'],
+    ['</scriptx>', 'forbidden_tag:script'],
+    ['<linkx rel="stylesheet" href="x.css">', 'forbidden_tag:link'],
+    ['<basex href="other/">', 'forbidden_tag:base'],
+    ['<titlex>Hijack</titlex>', 'forbidden_tag:title'],
+    ['<objectx data="x.swf"></objectx>', 'forbidden_tag:object'],
+    ['<embedx src="x.swf">', 'forbidden_tag:embed'],
+  ];
+  for (const [html, reason] of cases) {
+    assert.deepEqual(validateHtml(html), { ok: false, error: 'unsafe_html', reason });
+  }
+  assert.deepEqual(validateHtml('<a href="x">script</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<div class="script">x</div>'), { ok: true });
+});
+
+test('validateHtml event/URI attr case, control-char obfuscation, valueless URI attrs, and self-closing tags', () => {
+  const badCases = [
+    ['<div on\x01click="x()">x</div>', 'forbidden_attr:on'],
+    ['<div on="x()">x</div>', 'forbidden_attr:on'],
+    ['<div ONMOUSEOVER="x()">x</div>', 'forbidden_attr:onmouseover'],
+    ['<a HREF="javascript:alert(1)">x</a>', 'javascript_uri'],
+    ['<img SRC="//evil.example/x.png">', 'external_uri'],
+    ['<a HREF="HTTPS://evil.example/x">x</a>', 'external_uri'],
+    ['<a href="java\0script:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="http://example.com/x">x</a>', 'external_uri'],
+  ];
+  for (const [html, reason] of badCases) {
+    assert.deepEqual(validateHtml(html), { ok: false, error: 'unsafe_html', reason });
+  }
+  assert.deepEqual(validateHtml('<a href>x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<img src>'), { ok: true });
+  assert.deepEqual(validateHtml('<div/>'), { ok: true });
+  assert.deepEqual(validateHtml('<br/>'), { ok: true });
+});
+
+test('validateHtml viewport-meta edges reject duplicate attrs, case, spacing, and extra content keys', () => {
+  const badMetas = [
+    '<meta name="viewport" name="viewport" content="width=device-width, initial-scale=1.0">',
+    '<meta name="viewport" content="Width=Device-Width, initial-scale=1.0">',
+    '<meta name="viewport" content="width=device-width,  initial-scale=1.0">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1.0">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" name="viewport">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">',
+  ];
+  for (const html of badMetas) {
+    assert.deepEqual(validateHtml(html), {
+      ok: false,
+      error: 'unsafe_html',
+      reason: 'forbidden_tag:meta',
+    });
+  }
+});
+
+test('validateHtml style-block edges: case-insensitive close, unclosed, attrs, self-closed, expression', () => {
+  assert.deepEqual(validateHtml('<style>p { background: url(evil.png); }</STYLE><p>x</p>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<style>p { color: red; }</STYLE><p>x</p>'), { ok: true });
+  assert.deepEqual(validateHtml('<style>p { background: url(evil.png); }'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(
+    validateHtml('<style type="text/css">p { background: url(evil.png); }</style>'),
+    { ok: false, error: 'unsafe_html', reason: 'css_url' }
+  );
+  assert.deepEqual(validateHtml('<style/><p>x</p>'), { ok: true });
+  assert.deepEqual(validateHtml('<style>p { width: expression(alert(1)); }</STYLE>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+});
+
+test('decodeHtmlEntities further + data-URI spaces + test-plot self hygiene', () => {
+  assert.equal(decodeHtmlEntities('&#xD;'), '\r');
+  assert.equal(decodeHtmlEntities('&#13;'), '\r');
+  assert.equal(decodeHtmlEntities('&#1114111;'), '\u{10FFFF}');
+  assert.equal(decodeHtmlEntities('&#1114112;'), '&#1114112;');
+  assert.equal(decodeHtmlEntities('&nbsp;'), ' ');
+  assert.equal(decodeHtmlEntities('&lt;'), '<');
+  assert.equal(decodeHtmlEntities('&quot;'), '"');
+  assert.equal(decodeHtmlEntities('&apos;'), "'");
+  assert.equal(decodeHtmlEntities('&newline;'), '\n');
+  assert.equal(decodeHtmlEntities('&amp'), '&');
+  assert.equal(decodeHtmlEntities('&'), '&');
+  assert.equal(decodeHtmlEntities('&#x6A'), 'j');
+  assert.equal(decodeHtmlEntities('&#X4a;'), 'J');
+
+  assert.deepEqual(validateHtml('<img src="data :image/png;base64,iVBORw0=">'), { ok: true });
+  assert.deepEqual(validateHtml('<img src="data:image/png ;base64,iVBORw0=">'), { ok: true });
+
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+  assert.equal(src.includes('Math' + '.' + 'random'), false);
+  assert.equal(src.includes('Date' + '.' + 'now'), false);
+  assert.equal(src.includes('TO' + 'DO'), false);
+  assert.equal(src.includes('FIX' + 'ME'), false);
+  assert.equal(src.toLowerCase().includes('camp' + 'fire'), false);
+  assert.equal(src.split('fet' + 'ch(').length - 1, 12);
+  assert.equal((src.match(/^import .*$/gm) || []).length, 8);
+  assert.equal(
+    src.includes(
+      "import { validateHtml, validateManifest, VALID_PROP_KINDS, decodeHtmlEntities } from './plot-validation.mjs';"
+    ),
+    true
+  );
+});
