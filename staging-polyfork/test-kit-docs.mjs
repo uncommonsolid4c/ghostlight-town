@@ -899,3 +899,347 @@ test('CREDITS.txt line counts and non-glb header lines are identical across kits
     assert.deepEqual(nonGlbNonEmpty, expectedHeader, `${kit}/CREDITS.txt non-glb header lines`);
   }
 });
+
+test('KIT.md heading inventory and Parts line numbers match', () => {
+  const expectedHeadings = {
+    'kit-campground': [
+      '# Campground & Lake',
+      '## What is in this folder',
+      '## The ground',
+      '## Using them together',
+      '## Parts',
+      '## Building this with an AI agent?',
+    ],
+    'kit-medieval': [
+      '# Medieval Village Kit',
+      '## What is in this folder',
+      '## The ground',
+      '## Using them together',
+      '## Parts',
+      '## Building this with an AI agent?',
+    ],
+  };
+  const expectedPartsLineIdx = {
+    'kit-campground': 85,
+    'kit-medieval': 78,
+  };
+  for (const kit of KITS) {
+    const md = readKitFile(kit, 'KIT.md');
+    const lines = md.split('\n');
+    const headings = lines.filter((l) => l.startsWith('#'));
+    assert.deepEqual(headings, expectedHeadings[kit], `${kit}/KIT.md heading inventory`);
+    assert.equal(
+      lines[expectedPartsLineIdx[kit]],
+      '## Parts',
+      `${kit}/KIT.md ## Parts must be at 0-based line ${expectedPartsLineIdx[kit]}`
+    );
+  }
+});
+
+test('LICENSE.txt is byte-identical across kits with 29 lines and pinned first/last lines', () => {
+  const camp = readKitFile('kit-campground', 'LICENSE.txt');
+  const med = readKitFile('kit-medieval', 'LICENSE.txt');
+  assert.equal(camp, med, 'LICENSE.txt must be byte-identical across kits');
+  const splitLines = camp.split('\n');
+  assert.equal(splitLines.length, 30, 'LICENSE.txt split(\\n) must have length 30 (29 lines + trailing newline)');
+  assert.equal(splitLines[splitLines.length - 1], '', 'LICENSE.txt must end with a trailing newline');
+  const trimmedLines = camp.trim().split('\n');
+  assert.equal(trimmedLines.length, 29, 'LICENSE.txt trimmed must have 29 lines');
+  assert.equal(trimmedLines[0], 'Licence', 'LICENSE.txt first line');
+  assert.equal(
+    trimmedLines[28],
+    'Otherwise these files are yours permanently, including after a subscription ends.',
+    'LICENSE.txt last content line'
+  );
+  assert.ok(
+    camp.includes('Full terms: https://polyfork.dev/licensing'),
+    'LICENSE.txt must include full terms URL'
+  );
+});
+
+test('kit.json slug exact values and Building-section api URLs match', () => {
+  const expectedSlugs = {
+    'kit-campground': 'campground-lake-ad32b0',
+    'kit-medieval': 'medieval-village-kit-ca0b43',
+  };
+  for (const kit of KITS) {
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const slug = expectedSlugs[kit];
+    assert.equal(kitJson.kit, slug, `${kit}/kit.json slug`);
+    const md = readKitFile(kit, 'KIT.md');
+    const parts = md.split('## Building this with an AI agent?\n');
+    assert.equal(parts.length, 2, `${kit}/KIT.md must have Building section`);
+    const body = parts[1];
+    assert.equal(body.trim().split('\n').length, 3, `${kit}/KIT.md Building section must trim to 3 lines`);
+    assert.ok(
+      body.includes(`https://polyfork.dev/api/kits/${slug}`),
+      `${kit}/KIT.md Building section must include api URL for ${slug}`
+    );
+    assert.ok(
+      body.includes('https://polyfork.dev/prompt.txt'),
+      `${kit}/KIT.md Building section must include prompt.txt URL`
+    );
+  }
+});
+
+test('The ground sections are byte-identical across kits despite medieval having no TERRAIN.json', () => {
+  const campGround = readKitFile('kit-campground', 'KIT.md').split('## The ground\n')[1].split('\n## ')[0];
+  const medGround = readKitFile('kit-medieval', 'KIT.md').split('## The ground\n')[1].split('\n## ')[0];
+  assert.equal(campGround, medGround, '## The ground sections must be byte-identical across kits');
+  assert.ok(campGround.includes('TERRAIN.json'), '## The ground section must mention TERRAIN.json');
+  assert.equal(
+    fs.existsSync(path.join(__dirname, 'kit-campground', 'TERRAIN.json')),
+    true,
+    'kit-campground must have TERRAIN.json on disk'
+  );
+  assert.equal(
+    fs.existsSync(path.join(__dirname, 'kit-medieval', 'TERRAIN.json')),
+    false,
+    'kit-medieval must not have TERRAIN.json on disk'
+  );
+});
+
+test('every PARTS.json knob default is a valid enum member or in-range number', () => {
+  const expected = {
+    'kit-campground': { enum: 187, range: 241, total: 428 },
+    'kit-medieval': { enum: 108, range: 143, total: 251 },
+  };
+  for (const kit of KITS) {
+    const parts = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    let enumCount = 0;
+    let rangeCount = 0;
+    let bad = 0;
+    for (const [partKey, entry] of Object.entries(parts)) {
+      for (const [knobName, spec] of Object.entries(entry.knobs || {})) {
+        const m = String(spec).match(/^(.*) \(([^)]*)\)$/);
+        assert.ok(m, `${kit}/PARTS.json '${partKey}.${knobName}' must match '<body > (<default>)'`);
+        const [, body, def] = m;
+        if (body.includes('|')) {
+          enumCount++;
+          if (!body.split('|').includes(def)) bad++;
+        } else {
+          const rm = body.match(/^(-?[\d.]+)\.\.(-?[\d.]+)$/);
+          if (!rm) {
+            assert.fail(`${kit}/PARTS.json '${partKey}.${knobName}' has unexpected spec shape: ${spec}`);
+          }
+          rangeCount++;
+          const lo = Number(rm[1]);
+          const hi = Number(rm[2]);
+          const val = Number(def);
+          if (!Number.isFinite(val) || val < lo || val > hi) bad++;
+        }
+      }
+    }
+    assert.equal(bad, 0, `${kit}/PARTS.json must have 0 invalid knob defaults`);
+    assert.deepEqual(
+      { enum: enumCount, range: rangeCount, total: enumCount + rangeCount },
+      expected[kit],
+      `${kit}/PARTS.json enum/range knob counts`
+    );
+  }
+});
+
+test('LAYOUT.json row-shape counts, unused parts, and top part match', () => {
+  const expected = {
+    'kit-campground': {
+      rows: 174,
+      anim: 5,
+      s: 7,
+      params: 174,
+      module: 1,
+      unique: 62,
+      unused: ['terrain'],
+      top: ['campground-pine-stand', 22],
+    },
+    'kit-medieval': {
+      rows: 559,
+      anim: 0,
+      s: 495,
+      params: 0,
+      module: 0,
+      unique: 34,
+      unused: [
+        'barn',
+        'bread-oven',
+        'bridge-wood',
+        'chicken',
+        'dirt-terrain-blob',
+        'draft-horse',
+        'gatehouse',
+        'granary',
+        'ground-dirt',
+        'ground-grass',
+        'guard',
+        'orchard-tree',
+        'plough',
+        'roof-gable',
+        'roof-hip-corner',
+        'stone-wall',
+        'terrain',
+        'torch-sconce',
+        'villager',
+        'wagon-four-wheel',
+        'wall-corner',
+        'wall-door',
+        'wall-straight',
+        'wall-window',
+        'watermill',
+        'wheat-plant',
+      ],
+      top: ['grass-terrain-blob', 175],
+    },
+  };
+  for (const kit of KITS) {
+    const parts = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const layout = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    let anim = 0;
+    let s = 0;
+    let params = 0;
+    let moduleCount = 0;
+    const counts = new Map();
+    for (const row of layout) {
+      if ('anim' in row) anim++;
+      if ('s' in row) s++;
+      if ('params' in row) params++;
+      if ('module' in row) moduleCount++;
+      counts.set(row.part, (counts.get(row.part) || 0) + 1);
+    }
+    const unused = Object.keys(parts).filter((k) => !counts.has(k)).sort();
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+    assert.deepEqual(
+      {
+        rows: layout.length,
+        anim,
+        s,
+        params,
+        module: moduleCount,
+        unique: counts.size,
+        unused,
+        top,
+      },
+      expected[kit],
+      `${kit}/LAYOUT.json row-shape summary`
+    );
+  }
+});
+
+test('LAYOUT.json coordinate bounds and campground anim values match', () => {
+  const expectedBounds = {
+    'kit-campground': { x: [-46.5, 192], y: [-4.339, 4], z: [-384, 34] },
+    'kit-medieval': { x: [-21.299, 15.189], y: [-0.47, 0.05], z: [-19.103, 18.276] },
+  };
+  const expectedAnims = {
+    'kit-campground': ['Fixing', 'Holding torch', 'Idle', 'Interact', 'Sitting'],
+    'kit-medieval': [],
+  };
+  for (const kit of KITS) {
+    const layout = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    const animSet = new Set();
+    let animRows = 0;
+    for (const row of layout) {
+      if (row.x < minX) minX = row.x;
+      if (row.x > maxX) maxX = row.x;
+      if (row.y < minY) minY = row.y;
+      if (row.y > maxY) maxY = row.y;
+      if (row.z < minZ) minZ = row.z;
+      if (row.z > maxZ) maxZ = row.z;
+      if ('anim' in row) {
+        animRows++;
+        animSet.add(row.anim);
+      }
+    }
+    assert.deepEqual(
+      { x: [minX, maxX], y: [minY, maxY], z: [minZ, maxZ] },
+      expectedBounds[kit],
+      `${kit}/LAYOUT.json coordinate bounds`
+    );
+    assert.deepEqual([...animSet].sort(), expectedAnims[kit], `${kit}/LAYOUT.json anim values`);
+    if (kit === 'kit-medieval') {
+      assert.equal(animRows, 0, 'kit-medieval/LAYOUT.json must have 0 anim rows');
+    }
+  }
+});
+
+test('API.md contract lines 3-8 are verbatim', () => {
+  const expectedLines3to8 = [
+    "buildKit({ base, kit } | { folder }, plus: params | keep: [part keys you will move, hide or pick up; the rest is merged into a few draw calls] | only | skip | people | night | loose | setting | terrainParams (the ground's own knobs) | city: { seed, blocks: [x, z] }) -> place. `setting: true` builds the SETTING only: the kit's terrain, twice its composed span, with its vegetation and rock scattered over it and a plain to the horizon, no composed placements: ground to stand your own creatures and buildings in. `city` (street kits) lays a NEW, bigger town from the kit's own buildings instead of its composed layout: drawn streets with crossings, pavements, parks, parked cars, people who walk, a boundary of facades ([4, 3] is about 170 x 100 m); place.city then has streets { x, z } centre lines, junctions and lots [{ key, x, z, facing, door: [x, z] }].",
+    "place: group | bounds | of(key) objects | where(key) positions | openSpot({ near }) a clear point to start at | spots(n, { from, road }) n clear, reachable, spread-out points to put things at | blocked(x, z, radius) the part a body there would touch, or null (convex outlines: use it for collision) | boxes() [{ key, box, low, hull }] the same data raw | surfaceAt(x, z) the ground tile under a point (road or pavement) | groundAt(x, z) | vista() { position, target } framing the whole place | surround() the kit's trees and rocks past its edge | night(0..1) | light(object, key) lights something you built yourself | loose [{ key, position, quaternion, radius, mass, apply() }] small props you may move (loose: true) | people[].anim | tick(seconds) each frame | city.",
+    "stage(renderer, scene, { time }) -> look: shadows(root) | ground(place) | follow(object) | update() each frame | setTime('noon'|'day'|'golden'|'dusk'|'night'|'moonlit'|'dawn'|'overcast'|'space' or 0..1 day to night; YOUR choice: after dusk the place's windows, signs and lamps come on by themselves).",
+    'animate(humanoid) -> anim: play(name) | locomotion(metresPerSecond) picks Idle/Walk/Run | update(delta).',
+    "A PART'S OPTIONS (knobs, colourways, colour zones, rig nodes) are one line each in PARTS.json in the zip: grep its key rather than reading its .mjs.",
+    'In the zip, kit.mjs, stage.mjs and clips.mjs open with these signatures in full: nothing in _internal/ needs reading. The game is yours.',
+  ];
+  for (const kit of KITS) {
+    const lines = readKitFile(kit, 'API.md').trim().split('\n');
+    assert.deepEqual(lines.slice(2, 8), expectedLines3to8, `${kit}/API.md lines 3-8`);
+  }
+});
+
+test('top-level infra wrappers are identical across kits with API headers and _internal re-exports', () => {
+  for (const name of ['kit', 'clips', 'merge', 'stage']) {
+    const camp = readKitFile('kit-campground', `${name}.mjs`);
+    const med = readKitFile('kit-medieval', `${name}.mjs`);
+    assert.equal(camp, med, `${name}.mjs must be byte-identical across kits`);
+    assert.ok(
+      camp.startsWith(`// Polyfork ${name}.mjs. THIS FILE IS THE API. The implementation is ./_internal/${name}.mjs`),
+      `${name}.mjs must start with the API header`
+    );
+    assert.ok(
+      camp.includes(`export * from './_internal/${name}.mjs';`),
+      `${name}.mjs must re-export * from ./_internal/${name}.mjs`
+    );
+    if (name === 'merge') {
+      assert.equal(
+        camp.includes('export { default }'),
+        false,
+        'merge.mjs must not have a default re-export'
+      );
+    } else {
+      assert.ok(
+        camp.includes(`export { default } from './_internal/${name}.mjs';`),
+        `${name}.mjs must re-export default from ./_internal/${name}.mjs`
+      );
+    }
+  }
+});
+
+test('terrain.mjs SEASONS asymmetry and season-knob counts match', () => {
+  for (const kit of KITS) {
+    const src = readKitFile(kit, 'terrain.mjs');
+    assert.ok(src.includes('export const params'), `${kit}/terrain.mjs must export params`);
+    assert.ok(src.includes('const ZONES'), `${kit}/terrain.mjs must define ZONES`);
+    assert.ok(src.includes('const COLORWAYS'), `${kit}/terrain.mjs must define COLORWAYS`);
+    assert.equal(
+      src.includes('const SEASONS'),
+      kit === 'kit-campground',
+      `${kit}/terrain.mjs SEASONS presence`
+    );
+  }
+
+  const medParts = JSON.parse(readKitFile('kit-medieval', 'PARTS.json'));
+  const medSeasonParts = Object.entries(medParts)
+    .filter(([, entry]) => entry.knobs && 'season' in entry.knobs)
+    .map(([key, entry]) => [key, entry.knobs.season]);
+  assert.deepEqual(
+    medSeasonParts,
+    [['orchard-tree', 'bare|blossom|summer|fruiting (summer)']],
+    'kit-medieval must have only orchard-tree with a season knob'
+  );
+
+  const campParts = JSON.parse(readKitFile('kit-campground', 'PARTS.json'));
+  const campKeys = Object.keys(campParts);
+  assert.equal(campKeys.length, 62, 'kit-campground must have 62 parts');
+  const dist = {};
+  for (const key of campKeys) {
+    const spec = campParts[key].knobs && campParts[key].knobs.season;
+    assert.ok(spec, `kit-campground/${key} must have a season knob`);
+    const m = String(spec).match(/^(.*) \(([^)]*)\)$/);
+    assert.ok(m, `kit-campground/${key} season knob must match '<enum> (<default>)'`);
+    assert.equal(m[1], 'spring|summer|autumn|winter', `kit-campground/${key} season enum`);
+    dist[m[2]] = (dist[m[2]] || 0) + 1;
+  }
+  assert.deepEqual(dist, { summer: 59, autumn: 2, spring: 1 }, 'kit-campground season default distribution');
+});
