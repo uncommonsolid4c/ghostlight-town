@@ -1010,3 +1010,420 @@ test('staging-polyfork/README.md no polyfork.dev import claim matches the bundle
   assert.ok(npcAnimSrc.includes("import('./kit-medieval/clips.mjs')"));
   assert.ok(npcAnimSrc.includes('fn(group, { clips, base })'));
 });
+
+test('staging-polyfork/README.md concept-* vendored bullet matches headers, cottage/ghost byte-identity, and bandstand exception', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`concept-bandstand.js`'));
+  assert.ok(bullet, '## Contents must have a concept-bandstand.js vendored bullet');
+  for (const name of ['concept-bandstand.js', 'concept-cottage.js', 'concept-ghost.js']) {
+    assert.ok(bullet.includes(name), `concept-* bullet must name ${name}`);
+  }
+  assert.ok(
+    bullet.replace(/\s+/g, ' ').includes('1-line vendored-source header'),
+    'concept-* bullet must mention 1-line vendored-source header'
+  );
+
+  for (const name of ['concept-bandstand.js', 'concept-cottage.js', 'concept-ghost.js']) {
+    const vendored = fs.readFileSync(path.join(BUNDLE_DIR, name), 'utf8');
+    const expectedHeader = `// Vendored from town-3d/${name} — keep byte-identical after this header line.\n`;
+    assert.ok(vendored.startsWith(expectedHeader), `${name} must start with exact vendored-source header`);
+    const body = vendored.slice(expectedHeader.length);
+    const town3dSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d', name), 'utf8');
+    if (name === 'concept-bandstand.js') {
+      assert.notEqual(
+        body,
+        town3dSrc,
+        'concept-bandstand.js body after header is expected to differ from town-3d/concept-bandstand.js'
+      );
+    } else {
+      assert.equal(body, town3dSrc, `${name} body after header must be byte-identical to town-3d/${name}`);
+    }
+  }
+
+  const testStagingSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'test-staging.mjs'), 'utf8');
+  const vmMatch = testStagingSrc.match(/const VENDORED_MODULES = \[([\s\S]*?)\];/);
+  assert.ok(vmMatch, 'test-staging.mjs must declare VENDORED_MODULES');
+  const listed = [...vmMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(listed, ['concept-cottage.js', 'concept-ghost.js']);
+});
+
+test('staging-polyfork/README.md self-contained / jsdelivr-only network dependency matches index.html and bundle', () => {
+  const importmap = indexHtml.match(/<script type="importmap">([\s\S]*?)<\/script>/);
+  assert.ok(importmap, 'index.html must contain an importmap script');
+  const urls = [...importmap[1].matchAll(/https:\/\/[^"']+/g)].map((m) => m[0]);
+  assert.equal(urls.length, 2, `Expected exactly 2 https URLs in importmap, found ${urls.length}`);
+  assert.ok(
+    urls.every((u) => u.startsWith('https://cdn.jsdelivr.net/npm/three@0.160.0/')),
+    `All importmap https URLs must come from jsdelivr three@0.160.0: ${JSON.stringify(urls)}`
+  );
+
+  const walkBundleJs = (dir) => {
+    const out = [];
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const f = path.join(dir, e.name);
+      if (e.isDirectory()) out.push(...walkBundleJs(f));
+      else if (e.isFile() && /\.(mjs|js)$/.test(e.name) && !e.name.startsWith('test-')) out.push(f);
+    }
+    return out;
+  };
+  const remoteImport = /(?:from\s+['"]https?:\/\/|import\(\s*['"]https?:\/\/)/;
+  const bad = [];
+  for (const f of walkBundleJs(BUNDLE_DIR)) {
+    if (remoteImport.test(fs.readFileSync(f, 'utf8'))) bad.push(path.relative(BUNDLE_DIR, f));
+  }
+  assert.deepEqual(bad, [], `Bundle JS files must not contain remote JS imports: ${JSON.stringify(bad)}`);
+
+  const fetches = [...stagingJs.matchAll(/fetch\(`([^`]+)`/g)].map((m) => m[1]);
+  assert.equal(fetches.length, 2, `Expected exactly 2 fetch calls in staging.js, found ${fetches.length}`);
+  assert.ok(
+    fetches.every((u) => u.startsWith('/api/town/')),
+    `All staging.js fetch URLs must start with /api/town/: ${JSON.stringify(fetches)}`
+  );
+
+  const selfIdx = readmeMd.indexOf('Self-contained:');
+  assert.notEqual(selfIdx, -1, 'README.md must contain a "Self-contained:" paragraph');
+  const after = readmeMd.slice(selfIdx).replace(/\s+/g, ' ');
+  assert.ok(
+    after.startsWith(
+      'Self-contained: every Polyfork import is relative to the bundle. The only network dependency is three.js from jsdelivr'
+    ),
+    'README.md Self-contained paragraph must state jsdelivr three.js as the only network dependency'
+  );
+});
+
+test('staging-polyfork/README.md anim/ clips bullet matches vendored JSON clips and npc-animation.mjs', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`anim/`'));
+  assert.ok(bullet, '## Contents must have an `anim/` bullet');
+  assert.ok(bullet.includes('`anim-idle.json`'), '`anim/` bullet must name `anim-idle.json`');
+  assert.ok(bullet.includes('`anim-walk.json`'), '`anim/` bullet must name `anim-walk.json`');
+
+  for (const [file, expectedName] of [['anim-idle.json', 'Idle'], ['anim-walk.json', 'Walk']]) {
+    const clip = JSON.parse(fs.readFileSync(path.join(BUNDLE_DIR, 'anim', file), 'utf8'));
+    assert.equal(clip.name, expectedName, `${file} name must be ${expectedName}`);
+    assert.ok(
+      clip.tracks && typeof clip.tracks === 'object' && !Array.isArray(clip.tracks) && 'Hips' in clip.tracks,
+      `${file} tracks must be a non-empty object containing Hips`
+    );
+    assert.ok(Array.isArray(clip.times) && clip.times.length > 0, `${file} times must be a non-empty array`);
+    assert.equal(clip.cc0, true, `${file} cc0 must be true`);
+  }
+
+  const npcAnimSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'npc-animation.mjs'), 'utf8');
+  assert.ok(npcAnimSrc.includes("base = './anim/'"), "npc-animation.mjs must use base = './anim/'");
+});
+
+test('staging-polyfork/README.md Inn per-room glow geometry cy/z matches inn-nightly-call.mjs', () => {
+  const innSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'inn-nightly-call.mjs'), 'utf8');
+  const yMatch = innSrc.match(/const FRONT_UPPER_Y = ([\d.]+);/);
+  const zMatch = innSrc.match(/const FRONT_UPPER_Z = ([\d.]+);/);
+  assert.ok(yMatch && yMatch[1] === '4.25', `Expected FRONT_UPPER_Y = 4.25, got ${yMatch?.[1]}`);
+  assert.ok(zMatch && zMatch[1] === '2.94', `Expected FRONT_UPPER_Z = 2.94, got ${zMatch?.[1]}`);
+
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  assert.ok(limitsSec.includes('`cy` 4.25'), '## Known limits must mention `cy` 4.25');
+  assert.ok(limitsSec.includes('`z` ~`+2.94`'), '## Known limits must mention `z` ~`+2.94`');
+  assert.ok(
+    innSrc.includes('at width 10: HZ = 2.90, pane offset WPW = 0.04 => z = 2.94; upper cy = 4.25;'),
+    'inn-nightly-call.mjs must carry the width-10 geometry derivation comment'
+  );
+});
+
+test('staging-polyfork/README.md intro header adoption, fallback, and three@0.160.0 match PLAN.md, town-3d/README.md, and index.html', () => {
+  const contentsIdx = readmeMd.indexOf('## Contents');
+  assert.notEqual(contentsIdx, -1, 'README.md must contain ## Contents');
+  const header = readmeMd.slice(0, contentsIdx).replace(/\s+/g, ' ');
+  assert.ok(
+    header.includes('The live town since the 2026-11-14 adoption (slice 77)'),
+    'README header must state the 2026-11-14 adoption (slice 77)'
+  );
+  assert.ok(
+    header.includes('The old procedural `town-3d/` build is the fallback'),
+    'README header must state town-3d/ is the fallback'
+  );
+
+  const adoptIdx = planMd.indexOf('Adoption (2026-11-14, foreground turn):');
+  assert.notEqual(adoptIdx, -1, 'PLAN.md must contain the Adoption (2026-11-14, foreground turn) paragraph');
+  const adopt = planMd.slice(adoptIdx, adoptIdx + 1500);
+  assert.ok(adopt.includes('fixed by slice 77'), 'PLAN.md adoption paragraph must mention fixed by slice 77');
+  assert.ok(
+    adopt.includes('the staging subpath is kept as a mirror copy inside the new root'),
+    'PLAN.md adoption paragraph must state the staging subpath mirror copy'
+  );
+
+  const town3dReadme = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/README.md'), 'utf8');
+  assert.ok(
+    town3dReadme.includes('`town-3d/` is the fallback procedural build.'),
+    'town-3d/README.md must state it is the fallback procedural build'
+  );
+
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const idxBullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`index.html`'));
+  assert.ok(
+    idxBullet && idxBullet.includes('three@0.160.0, same as the live town'),
+    '`index.html` Contents bullet must state three@0.160.0, same as the live town'
+  );
+  assert.ok(
+    indexHtml.includes('"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"'),
+    'index.html importmap must map "three" to three@0.160.0 on jsdelivr'
+  );
+});
+
+test('staging-polyfork/README.md Nightly Call card live from state matches staging.js and town-api/server.mjs', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups');
+  const bullet = limitsSec.split(/\r?\n- /).find((b) => b.includes('Nightly Call card is live from state'));
+  assert.ok(bullet, '## Known limits must have a Nightly Call card is live from state bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  assert.ok(
+    norm.includes('redraws `nightly_call_card` from `state.nightly_call`'),
+    'Nightly Call bullet must mention redraws `nightly_call_card` from `state.nightly_call`'
+  );
+  assert.ok(
+    norm.includes('which the live server ships (`GET /api/town/state`)'),
+    'Nightly Call bullet must mention live server ships (`GET /api/town/state`)'
+  );
+  assert.match(
+    stagingJs,
+    /updateStagingNightlyCallCard\(\s*\{[\s\S]*?\},\s*state\?\.nightly_call\s*\)/,
+    'staging.js must call updateStagingNightlyCallCard with state?.nightly_call'
+  );
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
+  assert.ok(serverSrc.includes('stateBody.nightly_call = {'), 'town-api/server.mjs must set stateBody.nightly_call');
+});
+
+test('staging-polyfork/README.md Gatehouse colors and placement match staging.js', () => {
+  const gm = stagingJs.match(
+    /place\(Gatehouse,\s*\{\s*shingle:\s*(\w+),\s*plaster:\s*(\w+),\s*gateState:\s*'([^']+)',\s*windows:\s*(\d+)\s*\},\s*(-?\d+),\s*(-?\d+)\)/
+  );
+  assert.ok(gm, 'staging.js must place Gatehouse with shingle, plaster, gateState, windows, x, z');
+  const resolveConst = (name) => stagingJs.match(new RegExp(`const ${name} = '([^']+)'`))?.[1];
+  assert.equal(resolveConst(gm[1]), '#5a4332');
+  assert.equal(resolveConst(gm[2]), '#f5efe0');
+  assert.equal(gm[3], 'wide');
+  assert.equal(gm[4], '2');
+  assert.equal(gm[5], '0');
+  assert.equal(gm[6], '27');
+
+  const buildingsSec = getSection(
+    readmeMd,
+    'Buildings (place coordinates, metres; bandstand spot at 0,0)'
+  ).replace(/\s+/g, ' ');
+  assert.ok(
+    buildingsSec.includes(
+      'Village Gatehouse | (0, 27) | shingle #5a4332, plaster #f5efe0, gateState `wide`, windows 2'
+    ),
+    '## Buildings Gatehouse row must match staging.js colors, gateState, windows, and coordinates'
+  );
+});
+
+test('staging-polyfork/README.md NPC stand-in yield rule matches npc-wander.mjs and staging.js', () => {
+  const npcSec = getSection(readmeMd, 'NPC stand-ins').replace(/\s+/g, ' ');
+  assert.ok(
+    npcSec.includes(
+      'when a live presence avatar exists for `wick`, `maren`, or `tomas`, their humanoid stand-in hides (`visible = false`) and the live capsule represents them; when presence clears, the humanoid reappears at its home spot'
+    ),
+    '## NPC stand-ins must document the live-presence yield rule'
+  );
+
+  const wanderSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'npc-wander.mjs'), 'utf8');
+  assert.match(
+    wanderSrc,
+    /isLivePresent\) \{\s*w\.group\.visible = false;\s*w\.yielded = true;/,
+    'npc-wander.mjs must hide stand-in and mark yielded when live presence exists'
+  );
+  assert.match(
+    wanderSrc,
+    /if \(w\.yielded\) \{\s*w\.yielded = false;\s*w\.group\.visible = true;\s*const home = w\.waypoints\[0\];/,
+    'npc-wander.mjs must restore stand-in at waypoints[0] when presence clears'
+  );
+  assert.ok(wanderSrc.includes('const home = w.waypoints[0];'));
+  assert.match(
+    stagingJs,
+    /updateStagingWander\(wanderFigures, dt, liveStore\.avatars\)/,
+    'staging.js must pass liveStore.avatars to updateStagingWander'
+  );
+});
+
+test('staging-polyfork/README.md Contents bullets for uncovered modules match exports, definitions, and verbatim stepGlide', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bulletFor = (prefix) => contentsSec.split(/\r?\n- /).find((b) => b.startsWith(prefix));
+  const definedIn = (src, name) => new RegExp(`(?:export\\s+)?(?:const|function)\\s+${name}\\b`).test(src);
+  const townJs = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/town.js'), 'utf8');
+
+  // (a) avatar.mjs
+  const avatarSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'avatar.mjs'), 'utf8');
+  const avBullet = bulletFor('`avatar.mjs`');
+  assert.ok(avBullet, '## Contents must have an `avatar.mjs` bullet');
+  const AV7 = [
+    'TOWN_LAYOUT',
+    'SEED_HOME_PADS',
+    'makeCanvas',
+    'makeTextTexture',
+    'createAvatarCapsule',
+    'getPlotTargetPosition',
+    'pickBandstandSpot',
+  ];
+  for (const name of AV7) {
+    assert.ok(avBullet.includes(`\`${name}\``), `avatar.mjs bullet must list \`${name}\``);
+    assert.ok(definedIn(avatarSrc, name), `avatar.mjs must define ${name}`);
+    assert.ok(definedIn(townJs, name), `town-3d/town.js must define ${name}`);
+  }
+  assert.doesNotMatch(avatarSrc, /from ['"]three['"]/, 'avatar.mjs must not import from three');
+  assert.ok(avatarSrc.includes("typeof document !== 'undefined'"), 'avatar.mjs must guard document access');
+  assert.doesNotMatch(avatarSrc, /^document\./m, 'avatar.mjs must have no top-level document. line');
+
+  // (b) cottage-props.mjs
+  const cpBullet = bulletFor('`cottage-props.mjs`');
+  assert.ok(
+    cpBullet && cpBullet.replace(/\s+/g, ' ').includes('9 valid prop kinds matching `town-3d/town.js`'),
+    'cottage-props.mjs bullet must state 9 valid prop kinds matching town-3d/town.js'
+  );
+  const cpMod = await import(path.join(BUNDLE_DIR, 'cottage-props.mjs'));
+  for (const name of ['attachPorchDeck', 'attachPorchTrim', 'attachPlotProps', 'MILO_PLOT_PROPS', 'VALID_PROP_KINDS']) {
+    assert.ok(name in cpMod, `cottage-props.mjs must export ${name}`);
+  }
+  const townKindsMatch = townJs.match(/const VALID_PROP_KINDS = new Set\(\[([\s\S]*?)\]\)/);
+  assert.ok(townKindsMatch, 'town-3d/town.js must define VALID_PROP_KINDS');
+  const townKinds = [...townKindsMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(cpMod.VALID_PROP_KINDS.size, 9);
+  assert.deepEqual([...cpMod.VALID_PROP_KINDS], townKinds);
+
+  // (c) notice-board-overlay.mjs
+  const nbSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'notice-board-overlay.mjs'), 'utf8');
+  const nbBullet = bulletFor('`notice-board-overlay.mjs`');
+  assert.ok(
+    nbBullet &&
+      nbBullet
+        .replace(/\s+/g, ' ')
+        .includes('vendored `NOTICE_BOARD_PAPERS`, `escapeHtml`, and `buildNoticeBoardOverlayHtml`'),
+    'notice-board-overlay.mjs bullet must list the 3 vendored names'
+  );
+  assert.ok(nbSrc.includes('const NOTICE_BOARD_PAPERS'));
+  assert.ok(nbSrc.includes('function escapeHtml'));
+  assert.ok(nbSrc.includes('export function buildNoticeBoardOverlayHtml'));
+  assert.ok(townJs.includes('NOTICE_BOARD_PAPERS'));
+  assert.ok(townJs.includes('function escapeHtml'));
+  assert.ok(townJs.includes('function buildNoticeBoardOverlayHtml'));
+
+  // (d) plot-overlay.mjs
+  const poMod = await import(path.join(BUNDLE_DIR, 'plot-overlay.mjs'));
+  for (const name of [
+    'resolvePlotOverlayContent',
+    'resolveGazetteOverlayContent',
+    'openPlotOverlay',
+    'openGazetteOverlay',
+    'closePlotOverlay',
+  ]) {
+    assert.ok(name in poMod, `plot-overlay.mjs must export ${name}`);
+  }
+  const poBullet = bulletFor('`plot-overlay.mjs`');
+  assert.ok(
+    poBullet && poBullet.replace(/\s+/g, ' ').includes('Gazette `gazette/latest.json` resolver'),
+    'plot-overlay.mjs bullet must state Gazette `gazette/latest.json` resolver'
+  );
+
+  // (e) inn-guestbook-overlay.mjs
+  const igSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'inn-guestbook-overlay.mjs'), 'utf8');
+  const IG11 = [
+    'INN_ROOM_DETAILS',
+    'escapeHtml',
+    'hasUsableInnState',
+    'formatInnOccupancyLine',
+    'buildInnOverlayHtml',
+    'resolveInnOverlayContent',
+    'GUESTBOOK_DATE_FMT',
+    'formatGuestbookDate',
+    'renderGuestbookEntryLi',
+    'buildGuestbookOverlayHtml',
+    'resolveGuestbookOverlayContent',
+  ];
+  for (const name of IG11) {
+    assert.ok(
+      definedIn(igSrc, name) || new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s+${name}\\b`).test(igSrc),
+      `inn-guestbook-overlay.mjs must define ${name}`
+    );
+  }
+  for (const name of ['INN_ROOM_DETAILS', 'formatGuestbookDate', 'renderGuestbookEntryLi']) {
+    assert.ok(townJs.includes(name), `town-3d/town.js must contain ${name}`);
+  }
+
+  // (f) event-banner.mjs
+  const ebMod = await import(path.join(BUNDLE_DIR, 'event-banner.mjs'));
+  for (const name of [
+    'loadEvents',
+    'selectCurrentEvent',
+    'eventBannerLines',
+    'updateEventBanner',
+    'renderEventBannerHeader',
+  ]) {
+    assert.ok(name in ebMod, `event-banner.mjs must export ${name}`);
+  }
+  const ebSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'event-banner.mjs'), 'utf8');
+  assert.ok(ebSrc.includes('{ events: [] }'), 'event-banner.mjs loadEvents must fail open with { events: [] }');
+
+  // (g) npc-wander.mjs
+  const nwMod = await import(path.join(BUNDLE_DIR, 'npc-wander.mjs'));
+  for (const name of [
+    'SEED_WANDER_CONFIG',
+    'GHOST_DRIFT_CONFIG',
+    'buildStagingWanderFigures',
+    'buildStagingGhostDrift',
+    'updateStagingWander',
+  ]) {
+    assert.ok(name in nwMod, `npc-wander.mjs must export ${name}`);
+  }
+
+  // (h) tap-glide.mjs verbatim stepGlide
+  const extractFn = (src, name) => {
+    const idx = src.indexOf(`function ${name}(`);
+    if (idx === -1) return null;
+    const brace = src.indexOf('{', idx);
+    let depth = 0;
+    for (let i = brace; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') {
+        depth--;
+        if (depth === 0) return src.slice(idx, i + 1);
+      }
+    }
+    return null;
+  };
+  const tgSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'tap-glide.mjs'), 'utf8');
+  const tgBody = extractFn(tgSrc, 'stepGlide');
+  const townBody = extractFn(townJs, 'stepGlide');
+  assert.notEqual(tgBody, null, 'tap-glide.mjs must define function stepGlide');
+  assert.equal(tgBody, townBody, 'tap-glide.mjs stepGlide must be verbatim byte-equal to town-3d/town.js');
+
+  const tgBullet = bulletFor('`tap-glide.mjs`');
+  assert.ok(
+    tgBullet && tgBullet.replace(/\s+/g, ' ').includes('vendored `stepGlide` from `town-3d/town.js`'),
+    'tap-glide.mjs bullet must state vendored `stepGlide` from `town-3d/town.js`'
+  );
+  const uiSec = getSection(readmeMd, 'UI parity (slices 65a–65c)').replace(/\s+/g, ' ');
+  assert.ok(
+    uiSec.includes('vendored `stepGlide` verbatim from `town-3d/town.js`'),
+    '## UI parity must state vendored `stepGlide` verbatim from `town-3d/town.js`'
+  );
+});
+
+test('staging-polyfork/README.md lamp posts emissive-only matches lamp-post.mjs, staging.js, and concept-bandstand.js', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  assert.ok(
+    limitsSec.includes('**Lamp posts have emissive glow only**, no real point lights'),
+    '## Known limits must state lamp posts have emissive glow only, no real point lights'
+  );
+
+  const lampSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'kit-medieval/lamp-post.mjs'), 'utf8');
+  assert.ok(!lampSrc.includes('PointLight'), 'kit-medieval/lamp-post.mjs must not use PointLight');
+  assert.ok(
+    lampSrc.includes("emissive:'#ffcf87'") && lampSrc.includes('emissive:C.glow'),
+    'kit-medieval/lamp-post.mjs must use emissive glass and flame materials'
+  );
+  assert.ok(!stagingJs.includes('PointLight'), 'staging.js must not use PointLight');
+
+  const bandstandSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'concept-bandstand.js'), 'utf8');
+  assert.ok(
+    bandstandSrc.includes("light.name = 'ghostlight_point_light'"),
+    'concept-bandstand.js must hold the one ghostlight_point_light'
+  );
+});
