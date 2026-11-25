@@ -931,3 +931,292 @@ test('scripts/README.md --verify is read-only', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('scripts/README.md title, heading order, and intro stay pinned', () => {
+  const readme = readReadme();
+  const norm = (s) => s.replace(/\s+/g, ' ');
+
+  assert.equal(readme.split('\n')[0], '# Deploy Staging & Live Health Scripts (`scripts/`)');
+
+  const heads = [...readme.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(heads, [
+    'Shipped files',
+    '`stage-deploy.mjs` (Slice 28)',
+    '`check-live.mjs` (Slices 34, 100)',
+    'Shared helpers',
+    'Honest limits',
+  ]);
+
+  const n = norm(readme);
+  assert.ok(
+    n.includes('Local static-bundle staging and read-only live-site verification scripts for Ghostlight Town.')
+  );
+  assert.ok(n.includes('Neither script deploys to the homelab or mutates live state.'));
+});
+
+test('scripts/README.md Shipped files table role cells match verbatim', () => {
+  const n = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    n.includes(
+      'Slice 28 static deploy staging script: stages `town-3d/` (default bundle) or `staging-polyfork` under `<out>/ghostlight-town/` with a sha256 `MANIFEST.json`; `--verify <dir>` re-checks a staged directory (read-only).'
+    )
+  );
+  assert.ok(
+    n.includes(
+      'Slices 34 & 100 read-only live-site health check: verifies `<base>/ghostlight-town/` against the selected local bundle (`staging-polyfork` by default, or `town-3d` as fallback).'
+    )
+  );
+});
+
+test('scripts/README.md stage-deploy section bullet lead-ins and opening paragraph stay pinned', () => {
+  const readme = readReadme();
+  const m = readme.match(/## `stage-deploy\.mjs` \(Slice 28\)\s+([\s\S]*?)(?:\n## |\n$)/);
+  assert.ok(m, 'section `stage-deploy.mjs` (Slice 28) must exist');
+
+  const leads = [...m[1].matchAll(/^- \*\*([^*]+)\*\*/gm)].map((x) => x[1]);
+  assert.deepEqual(leads, [
+    'Bundles:',
+    'Target safety:',
+    '`--verify <dir>`:',
+    '`EXCLUDED_FILES` rule:',
+    'Current staging facts:',
+  ]);
+
+  const n = readme.replace(/\s+/g, ' ');
+  assert.ok(
+    n.includes(
+      'Stages the static 3D tree into `<out>/ghostlight-town/` and writes `MANIFEST.json` with per-file `sha256` hashes and byte counts. Local file operations only — never touches the homelab, never bumps `?v=` in `index.html`, and never stages `town-api/` or `town-npc/`.'
+    )
+  );
+});
+
+test('scripts/README.md check-live defaults bullet and Checks performed list stay pinned', () => {
+  const readme = readReadme();
+  const norm = (s) => s.replace(/\s+/g, ' ');
+  const n = norm(readme);
+
+  assert.ok(
+    n.includes(
+      '`--base https://milo.4167360.xyz`, `--bundle staging-polyfork`, `--api-base` defaults to `--base`, `--root` defaults to repo root.'
+    )
+  );
+
+  const m = readme.match(/## `check-live\.mjs` \(Slices 34, 100\)\s+([\s\S]*?)(?:\n## |\n$)/);
+  assert.ok(m, 'section `check-live.mjs` (Slices 34, 100) must exist');
+
+  const lines = m[1].split('\n');
+  const bullets = [];
+  for (const line of lines) {
+    if (line.startsWith('  - ')) bullets.push(line.slice(4));
+    else if (line.startsWith('    ') && bullets.length) bullets[bullets.length - 1] += ' ' + line.trim();
+  }
+  const sub = bullets.map((b) => norm(b));
+  assert.deepEqual(sub, [
+    'HTTP 200 for every expected file in the selected bundle.',
+    '`glTF` 4-byte magic header on `.glb` models.',
+    '`staging.js?v=N` / `town.js?v=N` parity between repo `index.html` and live `index.html`.',
+    'Required bundle JS markers (`PROP_PLACEMENTS`, `buildConceptBandstand`, `SEED_WANDER_CONFIG`, `newsstand_papers_shelf` for `town-3d`; `applyStagingState`, `liveStore`, `buildConceptBandstand`, `concept-bandstand.js` for `staging-polyfork`).',
+    '`gazette/latest.json` parses cleanly and its `issue-*.html` target returns HTTP 200.',
+    'Informational check of `<api-base>/api/town/state`; pass `--require-api` to make a non-200 API response fail the run.',
+  ]);
+});
+
+test('scripts/README.md Shared helpers parenthetical matches stage-deploy and check-live exports and imports', () => {
+  const n = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    n.includes(
+      '(`stage-deploy.mjs` also exports `EXCLUDED_FILES`, `collectSourceFilesFromTown3d`, and `collectSourceFilesFromStagingPolyfork`; `check-live.mjs` exports `getExpectedFiles`)'
+    )
+  );
+
+  const checkSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+  assert.ok(checkSrc.includes("import { collectSourceFiles, listStagedFiles } from './stage-deploy.mjs';"));
+
+  const stageSrc = fs.readFileSync(path.join(__dirname, 'stage-deploy.mjs'), 'utf8');
+  for (const sym of [
+    'EXCLUDED_FILES',
+    'collectSourceFilesFromTown3d',
+    'collectSourceFilesFromStagingPolyfork',
+    'collectSourceFiles',
+    'listStagedFiles',
+  ]) {
+    assert.ok(
+      stageSrc.includes('export ') && new RegExp(`export (?:const|async function|function) ${sym}\\b`).test(stageSrc),
+      `stage-deploy.mjs must export ${sym}`
+    );
+  }
+  assert.ok(/export async function getExpectedFiles/.test(checkSrc));
+});
+
+test('scripts/README.md Honest limits bullets and closing cross-links stay pinned', () => {
+  const readme = readReadme();
+  const norm = (s) => s.replace(/\s+/g, ' ');
+
+  const m = readme.match(/## Honest limits\s+([\s\S]*?)(?:\n## |\n$)/);
+  assert.ok(m, 'section Honest limits must exist');
+
+  const leads = [...m[1].matchAll(/^- \*\*([^*]+)\*\*/gm)].map((x) => x[1]);
+  assert.deepEqual(leads, ['Staging is not deploying:', '`check-live.mjs` is read-only:']);
+
+  const secNorm = norm(m[1]);
+  assert.ok(secNorm.includes('prepares and verifies a local staging directory only'));
+  assert.ok(secNorm.includes("deploying to the homelab is Milo's call in a foreground turn."));
+  assert.ok(secNorm.includes('it reads and reports on the live site and cannot fix or mutate it.'));
+
+  const n = norm(readme);
+  assert.ok(
+    n.includes(
+      'See [`../town-3d/README.md`](../town-3d/README.md), [`../staging-polyfork/README.md`](../staging-polyfork/README.md), and [`../PLAN.md`](../PLAN.md) §8 for bundle details and history.'
+    )
+  );
+  const hrefs = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
+    .map((x) => x[1])
+    .filter((h) => !h.startsWith('http'));
+  assert.deepEqual(hrefs.slice(-3), ['../town-3d/README.md', '../staging-polyfork/README.md', '../PLAN.md']);
+});
+
+test('scripts/README.md stage-deploy summary and MANIFEST exact key sets match both bundles', () => {
+  const dryRun = (bundle) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-keys-'));
+    try {
+      const out = execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', bundle, '--out', tmp],
+        { cwd: ROOT_DIR, encoding: 'utf8' }
+      );
+      const summary = JSON.parse(out.trim());
+      const manifest = JSON.parse(fs.readFileSync(path.join(tmp, 'ghostlight-town', 'MANIFEST.json'), 'utf8'));
+      return { summary, manifest };
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  };
+
+  const town3d = dryRun('town-3d');
+  assert.deepEqual(Object.keys(town3d.summary), [
+    'ok',
+    'out',
+    'bundle',
+    'town_js_v',
+    'staging_js_v',
+    'file_count',
+    'total_bytes',
+  ]);
+  assert.equal(town3d.summary.ok, true);
+  assert.equal(town3d.summary.bundle, 'town-3d');
+  assert.equal(town3d.summary.town_js_v, '16');
+  assert.equal(town3d.summary.staging_js_v, null);
+  assert.equal(town3d.summary.file_count, 25);
+
+  const staging = dryRun('staging-polyfork');
+  assert.deepEqual(Object.keys(staging.summary), [
+    'ok',
+    'out',
+    'bundle',
+    'town_js_v',
+    'staging_js_v',
+    'file_count',
+    'total_bytes',
+  ]);
+  assert.equal(staging.summary.ok, true);
+  assert.equal(staging.summary.bundle, 'staging-polyfork');
+  assert.equal(staging.summary.town_js_v, null);
+  assert.equal(staging.summary.staging_js_v, '41');
+  assert.equal(staging.summary.file_count, 195);
+
+  assert.deepEqual(Object.keys(staging.manifest), [
+    'staged_at',
+    'source',
+    'bundle',
+    'town_js_v',
+    'staging_js_v',
+    'files',
+    'total_bytes',
+    'file_count',
+    'not_staged',
+    'excluded',
+  ]);
+  assert.equal(staging.manifest.source, 'ghostlight-town repo tree');
+  assert.deepEqual(staging.manifest.not_staged, [
+    'town-api/ (server-side, separate deploy)',
+    'town-npc/ (server-side, separate deploy)',
+  ]);
+  assert.equal(
+    staging.manifest.total_bytes,
+    staging.manifest.files.reduce((s, f) => s + f.bytes, 0)
+  );
+});
+
+test('scripts/README.md check-live BUNDLE_CONFIG and apiStatus strings stay pinned', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+  const cfg = (name) => {
+    const m = src.match(
+      new RegExp(`'${name}': \\{[\\s\\S]*?entryJs: '([^']+)',[\\s\\S]*?versionKey: '([^']+)',[\\s\\S]*?versionRe: (\\/[^/]+\\/)[,\\n]`)
+    );
+    assert.ok(m, `BUNDLE_CONFIG[${name}] must parse`);
+    return { entryJs: m[1], versionKey: m[2], versionRe: m[3] };
+  };
+  assert.deepEqual(cfg('town-3d'), {
+    entryJs: 'town.js',
+    versionKey: 'town_js_v',
+    versionRe: '/town\\.js\\?v=(\\d+)/',
+  });
+  assert.deepEqual(cfg('staging-polyfork'), {
+    entryJs: 'staging.js',
+    versionKey: 'staging_js_v',
+    versionRe: '/staging\\.js\\?v=(\\d+)/',
+  });
+  assert.ok(src.includes("let apiStatus = 'not-live';"));
+  assert.ok(src.includes("apiStatus = 'live';"));
+});
+
+test('scripts/README.md EXCLUDED_FILES export, README bullet, and real town-3d manifest excluded match', async () => {
+  const { EXCLUDED_FILES } = await import('./stage-deploy.mjs');
+  assert.deepEqual(EXCLUDED_FILES, [
+    {
+      repoPath: 'town-3d/models/pine.glb',
+      relPath: 'models/pine.glb',
+      reason: 'deliberately uncommitted, 2.2 MB — procedural trees stay',
+    },
+  ]);
+
+  const n = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    n.includes(
+      'excludes `town-3d/models/pine.glb` (`models/pine.glb`, 2.2 MB, local-only, deliberately never committed or shipped; procedural trees stay). Also excludes `gazette/*.mjs` build tools in `town-3d/`, `test-*.mjs` and `README.md` in `staging-polyfork/`, and blocks secret-like filenames or contents.'
+    )
+  );
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-excl-'));
+  try {
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmp],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const manifest = JSON.parse(fs.readFileSync(path.join(tmp, 'ghostlight-town', 'MANIFEST.json'), 'utf8'));
+    const byPath = new Map(manifest.excluded.map((e) => [e.path, e.reason]));
+    assert.equal(byPath.get('models/pine.glb'), 'deliberately uncommitted, 2.2 MB — procedural trees stay');
+    assert.equal(byPath.get('gazette/build-digest.mjs'), 'build tool, not served content');
+    assert.equal(byPath.get('gazette/build-feed.mjs'), 'build tool, not served content');
+    const paths = manifest.excluded.map((e) => e.path);
+    assert.deepEqual(paths, [...paths].sort());
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md and test-readme.mjs hygiene guards hold', () => {
+  const testSrc = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
+  const readme = readReadme();
+
+  assert.equal(testSrc.includes(`${'fe'}tch(`), false, 'test file must not contain a literal fetch call');
+  assert.equal(testSrc.includes(`Math.${'random'}`), false, 'test file must not contain Math random');
+  assert.doesNotMatch(testSrc, BANNED_TERM_RE);
+
+  assert.equal(readme.includes('http://'), false, 'README must not contain http://');
+  for (const w of ['rsync', 'ssh ', 'scp ']) {
+    assert.equal(readme.includes(w), false, `README must not contain ${w}`);
+  }
+  assert.doesNotMatch(readme, BANNED_TERM_RE);
+});
