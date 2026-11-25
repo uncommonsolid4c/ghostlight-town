@@ -711,3 +711,167 @@ test('town-3d/README.md Gazette feed has one item per issue', () => {
     assert.ok(readme.includes(`\`${name}\``), `town-3d/README.md must name \`${name}\``);
   }
 });
+
+test('town-3d/README.md shipped table rows match the 4 shipped .js files', () => {
+  const readme = readReadme();
+  const shipped = fs
+    .readdirSync(__dirname, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.js') && !e.name.startsWith('test-'))
+    .map((e) => e.name)
+    .sort();
+  assert.equal(shipped.length, 4, `expected 4 shipped .js files, got ${JSON.stringify(shipped)}`);
+  assert.deepEqual(shipped, ['concept-bandstand.js', 'concept-cottage.js', 'concept-ghost.js', 'town.js']);
+  const tableRows = [...readme.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]);
+  assert.deepEqual([...tableRows].sort(), shipped, `table rows ${JSON.stringify(tableRows)} must match ${JSON.stringify(shipped)}`);
+  assert.equal(tableRows[0], 'town.js', 'first shipped-table row must be town.js');
+});
+
+test('town-3d/README.md Starter props order matches VALID_PROP_KINDS in town.js', () => {
+  const readme = readReadme();
+  const readmeNorm = readme.replace(/\s+/g, ' ');
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  const block = townJs.match(/const VALID_PROP_KINDS = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(block, 'town.js must define VALID_PROP_KINDS');
+  const kinds = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(kinds, ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter']);
+  const m = readmeNorm.match(/Starter props:.*?`desk`, `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`, `lantern`, `planter`/);
+  assert.ok(m, 'README Starter props bullet must list VALID_PROP_KINDS in exact order');
+  for (const k of kinds) {
+    const n = (readme.match(new RegExp('`' + k + '`', 'g')) ?? []).length;
+    assert.equal(n, 1, `README must contain \`${k}\` exactly once, found ${n}`);
+  }
+});
+
+test('town-3d/gazette/feed.xml items are complete, newest-first, with guid == link', () => {
+  const feed = fs.readFileSync(path.join(__dirname, 'gazette', 'feed.xml'), 'utf8');
+  const items = [...feed.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+  assert.equal(items.length, 3, 'gazette/feed.xml must have 3 <item> blocks');
+  const links = items.map((it) => it.match(/<link>([^<]+)<\/link>/)[1]);
+  assert.deepEqual(links, [
+    'https://milo.4167360.xyz/ghostlight-town/gazette/issue-003.html',
+    'https://milo.4167360.xyz/ghostlight-town/gazette/issue-002.html',
+    'https://milo.4167360.xyz/ghostlight-town/gazette/issue-001.html',
+  ]);
+  for (const it of items) {
+    for (const tag of ['title', 'link', 'guid', 'pubDate', 'description']) {
+      assert.match(it, new RegExp('<' + tag + '[ >]'), `feed item must contain <${tag}>`);
+    }
+    const link = it.match(/<link>([^<]+)<\/link>/)[1];
+    const guid = it.match(/<guid[^>]*>([^<]+)<\/guid>/)[1];
+    assert.equal(guid, link, 'feed item <guid> must equal <link>');
+  }
+  const dates = items.map((it) => it.match(/<pubDate>([^<]+)<\/pubDate>/)[1]);
+  assert.deepEqual(dates, ['Wed, 18 Nov 2026 12:00:00 +0000', 'Sat, 14 Nov 2026 12:00:00 +0000', 'Thu, 12 Nov 2026 12:00:00 +0000']);
+  const channelLink = feed.match(/<channel>[\s\S]*?<link>([^<]+)<\/link>/)[1];
+  assert.equal(channelLink, 'https://milo.4167360.xyz/ghostlight-town/');
+});
+
+test('town-3d/CREDITS.md per-prop structure and 7 known Poly Pizza IDs match README', () => {
+  const readme = readReadme();
+  const credits = fs.readFileSync(path.join(__dirname, 'CREDITS.md'), 'utf8');
+  const expected = [
+    ['post-lantern.glb', 'Kay Lousberg', 'ZSQ65S4lEu'],
+    ['lantern.glb', 'Kay Lousberg', 'CtHBJ1ufeW'],
+    ['bench.glb', 'Kay Lousberg', '6d92UYCIC1'],
+    ['street-light.glb', 'Quaternius', 'nFwrlcLvM5'],
+    ['bookshelf.glb', 'CreativeTrio', '30Iealxb0p'],
+    ['oil-lamp.glb', 'Quaternius', 'RsWYHKkDhD'],
+    ['teapot.glb', 'MilkAndBanana', 'XggUrd5f03'],
+  ];
+  for (const [file, author, id] of expected) {
+    assert.ok(credits.includes('models/' + file), `CREDITS.md must include models/${file}`);
+    assert.ok(credits.includes('Author: ' + author), `CREDITS.md must include Author: ${author} for ${file}`);
+    assert.ok(credits.includes('Poly Pizza ID: `' + id + '`'), `CREDITS.md must include Poly Pizza ID: \`${id}\``);
+    assert.ok(credits.includes('https://poly.pizza/m/' + id), `CREDITS.md must include https://poly.pizza/m/${id}`);
+    assert.ok(readme.includes('`' + file + '`'), `README must name \`${file}\``);
+  }
+  const licenceLines = credits.match(/Licence: CC0 1\.0/g) ?? [];
+  assert.equal(licenceLines.length, 7, `CREDITS.md must have 7 Licence: CC0 1.0 lines, got ${licenceLines.length}`);
+});
+
+test('town-3d/README.md section headings and Behaviour / Honest limits bullets match expected structure', () => {
+  const readme = readReadme();
+  const headings = [...readme.matchAll(/^## ([^\n]+)/gm)].map((m) => m[1]);
+  assert.deepEqual(headings, ['Shipped files', 'Fallback vs. staging role', 'Budgets & starter props', 'Behaviour', 'Honest limits']);
+  const beh = readme.match(/## Behaviour\r?\n([\s\S]*?)(?:\r?\n## |\s*$)/)[1];
+  const behBullets = [...beh.matchAll(/^- \*\*([^*]+):\*\*/gm)].map((m) => m[1]);
+  assert.deepEqual(behBullets, ['Deterministic wandering', 'Footlight status', 'Inn common windows', 'Per-plot guestbook tabs', 'Notice board']);
+  const hon = readme.match(/## Honest limits\r?\n([\s\S]*?)\s*$/)[1];
+  const honBullets = [...hon.matchAll(/^- \*\*([^*]+):\*\*/gm)].map((m) => m[1]);
+  assert.deepEqual(honBullets, ['Not the default live client', 'No literal `fetch(` in `town.js`', 'Offline wandering']);
+});
+
+test('town-3d/README.md Behaviour function signatures match town.js', () => {
+  const readme = readReadme();
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(townJs.includes('export function setAvatarStatusText(THREE, avatar, statusText) {'));
+  assert.ok(townJs.includes('export function buildNoticeBoardOverlayHtml() {'));
+  assert.ok(townJs.includes('function buildWanderState(THREE, scene, avatarSpots, milosGhost) {'));
+  assert.equal(townJs.includes('export function buildWanderState') || townJs.includes('export const buildWanderState'), false, 'buildWanderState must not be exported');
+  for (const fn of ['setAvatarStatusText', 'buildNoticeBoardOverlayHtml', 'buildWanderState']) {
+    assert.ok(readme.includes(fn), `README must name ${fn}`);
+  }
+});
+
+test('town-3d/ static HTML pages contain no <script and are named in README', () => {
+  const readme = readReadme();
+  const pages = [
+    'plots/milo/index.html', 'plots/wick/index.html', 'plots/maren/index.html', 'plots/tomas/index.html',
+    'inn/index.html', 'guestbook/index.html', 'move-in.html',
+    'gazette/issue-001.html', 'gazette/issue-002.html', 'gazette/issue-003.html',
+  ];
+  for (const rel of pages) {
+    const html = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    assert.equal(html.includes('<script'), false, `town-3d/${rel} must contain no <script`);
+    assert.ok(readme.includes('`' + rel + '`') || readme.includes('plots/{milo,wick,maren,tomas}/index.html'), `README must name ${rel}`);
+  }
+});
+
+test('town-3d/ live staging URL is identical in README, PLAN.md header, and feed.xml channel link', () => {
+  const url = 'https://milo.4167360.xyz/ghostlight-town/';
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(readmeNorm.includes('**Staging is live:** `' + url + '` serves the'));
+  const plan = fs.readFileSync(path.join(REPO_ROOT, 'PLAN.md'), 'utf8');
+  const statusLine = plan.match(/^\*\*Status:\*\*.*$/m)[0];
+  assert.ok(statusLine.includes('`' + url + '`'), `PLAN.md Status line must include \`${url}\``);
+  const feed = fs.readFileSync(path.join(__dirname, 'gazette', 'feed.xml'), 'utf8');
+  assert.equal(feed.match(/<channel>[\s\S]*?<link>([^<]+)<\/link>/)[1], url);
+});
+
+test('town-3d/README.md offline wandering claim matches buildWanderState in town.js', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(readmeNorm.includes('**Offline wandering:** deterministic wandering needs no live API.'));
+  const start = townJs.indexOf('function buildWanderState(THREE, scene, avatarSpots, milosGhost) {');
+  assert.ok(start >= 0, 'town.js must define buildWanderState');
+  let depth = 0;
+  let i = townJs.indexOf('{', start);
+  let end = -1;
+  for (; i < townJs.length; i++) {
+    if (townJs[i] === '{') depth++;
+    else if (townJs[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  assert.ok(end > start, 'buildWanderState body must be balanced');
+  const body = townJs.slice(start, end);
+  assert.equal(body.includes('fetch('), false, 'buildWanderState must not call fetch(');
+  assert.equal(body.includes('TownLive'), false, 'buildWanderState must not reference TownLive');
+  assert.equal(body.includes('fetchFn'), false, 'buildWanderState must not reference fetchFn');
+  assert.ok(body.includes('SEED_WANDER_CONFIG'), 'buildWanderState must use SEED_WANDER_CONFIG');
+});
+
+test('town-3d/README.md shipped-table town.js role keywords trace to town.js', () => {
+  const readme = readReadme();
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.equal(readme.split('\n')[0], '# Fallback 3D Client (`town-3d/`)');
+  const role = readme.match(/\| `town\.js` \| ([^|]+) \|/)[1];
+  assert.ok(role.includes('`TownLive`'));
+  assert.ok(townJs.includes('export class TownLive {'));
+  assert.ok(townJs.includes('function buildWanderState('));
+  assert.ok(townJs.includes('export function buildNoticeBoardOverlayHtml()'));
+  assert.ok(townJs.includes('createConceptMiloGhost(THREE, {'));
+  assert.ok(townJs.includes('return buildConceptBandstand(THREE, { includeStageProps: true });'));
+  assert.ok(townJs.includes('createConceptMilosCottage(THREE, {'));
+  for (const kw of ['clearing', 'cottages', 'bandstand', 'ghost', 'wander', 'overlays']) {
+    assert.ok(role.toLowerCase().includes(kw), `town.js role cell must contain ${kw}`);
+  }
+});
