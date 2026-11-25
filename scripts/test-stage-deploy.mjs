@@ -1285,3 +1285,421 @@ test('G10: staging-polyfork exclusions and shared town-3d fallback', async () =>
     await fs.rm(tmpDirB, { recursive: true, force: true });
   }
 });
+
+test('G11: default --out stages under <root>/staging', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g11-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    await createFixtureTree(fixtureRoot);
+
+    const res = runStage(['--root', fixtureRoot]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+
+    const summary = JSON.parse(res.stdout.trim());
+    assert.deepEqual(summary.out, path.join(fixtureRoot, 'staging'));
+    assert.equal(
+      await pathExists(path.join(fixtureRoot, 'staging', 'ghostlight-town', 'MANIFEST.json')),
+      true
+    );
+    assert.equal(summary.town_js_v, '99');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G12: secret guard filename edges: uppercase PEM, credential, token substring, key negative control', async () => {
+  for (const badName of ['MY.PEM', 'a.credential.json', 'tokenizer.js']) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g12-bad-'));
+    try {
+      const fixtureRoot = path.join(tmpDir, 'repo');
+      const outDir = path.join(tmpDir, 'out');
+      await createFixtureTree(fixtureRoot);
+      await fs.writeFile(path.join(fixtureRoot, 'town-3d', 'gazette', badName), 'harmless\n');
+
+      const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+      assert.equal(res.status, 1, `Expected exit 1 for ${badName}`);
+      const errJson = JSON.parse(res.stderr.trim());
+      assert.equal(errJson.ok, false);
+      assert.match(errJson.error, /Secret guard/i);
+      assert.equal(await pathExists(outDir), false, `Expected no staging dir for ${badName}`);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  const tmpDirOk = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g12-ok-'));
+  try {
+    const fixtureRoot = path.join(tmpDirOk, 'repo');
+    const outDir = path.join(tmpDirOk, 'out');
+    await createFixtureTree(fixtureRoot);
+    await fs.writeFile(
+      path.join(fixtureRoot, 'town-3d', 'gazette', 'mykey.txt'),
+      'the word key is harmless\n'
+    );
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0 for mykey.txt, got ${res.status}: ${res.stderr}`);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(
+      manifest.files.some((f) => f.path === 'gazette/mykey.txt'),
+      true
+    );
+  } finally {
+    await fs.rm(tmpDirOk, { recursive: true, force: true });
+  }
+});
+
+test('G13: manifest exact key order, not_staged, staged_at ISO, files sorted', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g13-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.deepEqual(Object.keys(manifest), [
+      'staged_at',
+      'source',
+      'bundle',
+      'town_js_v',
+      'staging_js_v',
+      'files',
+      'total_bytes',
+      'file_count',
+      'not_staged',
+      'excluded',
+    ]);
+    assert.equal(manifest.source, 'ghostlight-town repo tree');
+    assert.deepEqual(manifest.not_staged, [
+      'town-api/ (server-side, separate deploy)',
+      'town-npc/ (server-side, separate deploy)',
+    ]);
+    assert.match(manifest.staged_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.deepEqual(
+      manifest.files.map((f) => f.path),
+      [
+        'CREDITS.md',
+        'concept-bandstand.js',
+        'gazette/issue-001.html',
+        'guestbook/index.html',
+        'index.html',
+        'inn/index.html',
+        'models/bench.glb',
+        'move-in.html',
+        'plots/milo/index.html',
+        'town.js',
+      ]
+    );
+    assert.equal(manifest.file_count, 10);
+    assert.deepEqual(manifest.excluded, [
+      { path: 'gazette/build-feed.mjs', reason: 'build tool, not served content' },
+    ]);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G14: --verify target errors: symlink dir, missing dir, file as dir', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g14-'));
+  try {
+    const realDir = path.join(tmpDir, 'real-dir');
+    const linkDir = path.join(tmpDir, 'link-dir');
+    const missingDir = path.join(tmpDir, 'missing-dir');
+    const fileTarget = path.join(tmpDir, 'regular-file.txt');
+
+    await fs.mkdir(realDir);
+    await fs.symlink(realDir, linkDir);
+    await fs.writeFile(fileTarget, 'not a dir\n');
+
+    const cases = [
+      { name: 'symlink dir', target: linkDir, re: /Refusing symlink verify directory/ },
+      { name: 'missing dir', target: missingDir, re: /Missing verify directory/ },
+      { name: 'file as dir', target: fileTarget, re: /Expected directory for --verify/ },
+    ];
+
+    for (const c of cases) {
+      const res = runStage(['--verify', c.target]);
+      assert.equal(res.status, 1, `Expected exit 1 for ${c.name}`);
+      assert.equal(res.stdout, '', `Expected empty stdout for ${c.name}`);
+      const errJson = JSON.parse(res.stderr.trim());
+      assert.equal(errJson.ok, false);
+      assert.match(errJson.error, c.re);
+    }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G15: pre-existing out dir: stale prefix replaced on success, untouched on pre-write failure', async () => {
+  const tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g15-a-'));
+  try {
+    const fixtureRoot = path.join(tmpDirA, 'repo');
+    const outDir = path.join(tmpDirA, 'out');
+    await createFixtureTree(fixtureRoot);
+    await fs.mkdir(path.join(outDir, 'ghostlight-town'), { recursive: true });
+    await fs.writeFile(path.join(outDir, 'ghostlight-town', 'stale.html'), 'stale\n');
+    await fs.writeFile(path.join(outDir, 'keep.txt'), 'keep\n');
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0 for Run A, got ${res.status}: ${res.stderr}`);
+    assert.equal(await pathExists(path.join(outDir, 'ghostlight-town', 'stale.html')), false);
+    assert.equal(await pathExists(path.join(outDir, 'keep.txt')), true);
+    assert.equal(await pathExists(path.join(outDir, 'ghostlight-town', 'MANIFEST.json')), true);
+  } finally {
+    await fs.rm(tmpDirA, { recursive: true, force: true });
+  }
+
+  const tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g15-b-'));
+  try {
+    const fixtureRoot = path.join(tmpDirB, 'repo');
+    const outDir = path.join(tmpDirB, 'out');
+    await createFixtureTree(fixtureRoot);
+    await fs.mkdir(path.join(outDir, 'ghostlight-town'), { recursive: true });
+    await fs.writeFile(path.join(outDir, 'ghostlight-town', 'stale.html'), 'stale\n');
+    await fs.writeFile(path.join(outDir, 'keep.txt'), 'keep\n');
+    await fs.writeFile(path.join(fixtureRoot, 'town-3d', 'gazette', 'x-token.txt'), 'harmless\n');
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 1, 'Expected exit 1 for Run B');
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.match(errJson.error, /Secret guard/i);
+    assert.equal(await pathExists(outDir), true);
+    assert.equal(await pathExists(path.join(outDir, 'ghostlight-town', 'stale.html')), true);
+    assert.equal(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'stale.html'), 'utf8'),
+      'stale\n'
+    );
+  } finally {
+    await fs.rm(tmpDirB, { recursive: true, force: true });
+  }
+});
+
+test('G16: --verify fails when manifest town_js_v is deleted but staged index still has ?v=99', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g16-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+
+    const stageRes = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(stageRes.status, 0, `Expected exit 0, got ${stageRes.status}: ${stageRes.stderr}`);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    delete manifest.town_js_v;
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.equal(report.bundle, 'town-3d');
+    assert.equal(report.checked, 10);
+    assert.equal(report.ok, 10);
+    assert.equal(report.town_js_v, null);
+    assert.equal(report.staged_town_js_v, '99');
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+async function setupPolyforkFixture(fixtureRoot, includePolyforkFeed) {
+  await createFixtureTree(fixtureRoot);
+  const town3d = path.join(fixtureRoot, 'town-3d');
+  for (const rel of [
+    'gazette/issue-002.html',
+    'gazette/issue-003.html',
+    'gazette/latest.json',
+    'plots/wick/index.html',
+    'plots/maren/index.html',
+    'plots/tomas/index.html',
+  ]) {
+    const dest = path.join(town3d, rel);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.writeFile(dest, `shared:${rel}\n`);
+  }
+  await fs.writeFile(path.join(town3d, 'gazette/feed.xml'), '<feed>town3d</feed>\n');
+
+  const polyfork = path.join(fixtureRoot, 'staging-polyfork');
+  await fs.mkdir(path.join(polyfork, 'gazette'), { recursive: true });
+  await fs.writeFile(
+    path.join(polyfork, 'index.html'),
+    '<!doctype html><script type="module">import "./staging.js?v=41";</script>\n'
+  );
+  await fs.writeFile(path.join(polyfork, 'staging.js'), 'export const STAGING = 41;\n');
+  await fs.writeFile(path.join(polyfork, 'kit.mjs'), 'export const KIT = 1;\n');
+  await fs.writeFile(path.join(polyfork, 'test-foo.mjs'), '// test\n');
+  await fs.writeFile(path.join(polyfork, 'README.md'), '# Polyfork\n');
+  if (includePolyforkFeed) {
+    await fs.writeFile(path.join(polyfork, 'gazette/feed.xml'), '<feed>polyfork</feed>\n');
+  }
+}
+
+test('G17: polyfork bundle fails closed when a shared town-3d file is missing', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g17-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await setupPolyforkFixture(fixtureRoot, true);
+    await fs.rm(path.join(fixtureRoot, 'town-3d', 'plots', 'tomas', 'index.html'));
+
+    const res = runStage(['--root', fixtureRoot, '--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(res.status, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(errJson.error, 'Missing required source file: town-3d/plots/tomas/index.html');
+    assert.equal(await pathExists(outDir), false);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G18: EXCLUDED_FILES export and real-tree town-3d stage exact numbers', async () => {
+  const mod = await import(STAGE_SCRIPT);
+  assert.deepEqual(mod.EXCLUDED_FILES, [
+    {
+      repoPath: 'town-3d/models/pine.glb',
+      relPath: 'models/pine.glb',
+      reason: 'deliberately uncommitted, 2.2 MB — procedural trees stay',
+    },
+  ]);
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g18-'));
+  try {
+    const outDir = path.join(tmpDir, 'out');
+    const res = runStage(['--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    assert.equal(res.stderr, '');
+
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.bundle, 'town-3d');
+    assert.equal(summary.town_js_v, '16');
+    assert.equal(summary.staging_js_v, null);
+    assert.equal(summary.file_count, 25);
+    assert.equal(summary.total_bytes, 434786);
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.deepEqual(
+      manifest.files.map((f) => f.path),
+      [
+        'CREDITS.md',
+        'concept-bandstand.js',
+        'concept-cottage.js',
+        'concept-ghost.js',
+        'gazette/feed.xml',
+        'gazette/issue-001.html',
+        'gazette/issue-002.html',
+        'gazette/issue-003.html',
+        'gazette/latest.json',
+        'guestbook/index.html',
+        'index.html',
+        'inn/index.html',
+        'models/bench.glb',
+        'models/bookshelf.glb',
+        'models/lantern.glb',
+        'models/oil-lamp.glb',
+        'models/post-lantern.glb',
+        'models/street-light.glb',
+        'models/teapot.glb',
+        'move-in.html',
+        'plots/maren/index.html',
+        'plots/milo/index.html',
+        'plots/tomas/index.html',
+        'plots/wick/index.html',
+        'town.js',
+      ]
+    );
+    assert.deepEqual(manifest.excluded, [
+      { path: 'gazette/build-digest.mjs', reason: 'build tool, not served content' },
+      { path: 'gazette/build-feed.mjs', reason: 'build tool, not served content' },
+      {
+        path: 'models/pine.glb',
+        reason: 'deliberately uncommitted, 2.2 MB — procedural trees stay',
+      },
+    ]);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G19: polyfork collector stages kit .glb and excludes subdir test suites', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g19-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await setupPolyforkFixture(fixtureRoot, true);
+
+    const kitDir = path.join(fixtureRoot, 'staging-polyfork', 'kit-medieval');
+    await fs.mkdir(kitDir, { recursive: true });
+    await fs.writeFile(
+      path.join(kitDir, 'tavern.glb'),
+      Buffer.from([0x67, 0x6c, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00])
+    );
+    await fs.writeFile(path.join(kitDir, 'test-tavern.mjs'), '// test\n');
+
+    const res = runStage(['--root', fixtureRoot, '--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(
+      manifest.files.some((f) => f.path === 'kit-medieval/tavern.glb'),
+      true
+    );
+    assert.equal(
+      manifest.files.some((f) => f.path === 'kit-medieval/test-tavern.mjs'),
+      false
+    );
+    assert.ok(
+      manifest.excluded.some(
+        (e) =>
+          e.path === 'kit-medieval/test-tavern.mjs' && e.reason === 'test suite, not served content'
+      )
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G20: file hygiene: 47 unique names, 8 imports, zero banned terms, pinned as-true counts', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'test-stage-deploy.mjs'), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 47);
+  assert.equal(new Set(names).size, 47);
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 8);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
+
+  const mathRandomRe = new RegExp('Math' + '.random');
+  assert.equal(lines.filter((l) => mathRandomRe.test(l)).length, 0);
+
+  assert.equal(BANNED_TERM_RE.test(src), false);
+
+  const stageSrc = await fs.readFile(STAGE_SCRIPT, 'utf8');
+  assert.equal(BANNED_TERM_RE.test(stageSrc), false);
+  assert.equal(new RegExp('\\bfet' + 'ch\\s*\\(').test(stageSrc), false);
+});
