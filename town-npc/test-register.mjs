@@ -1198,3 +1198,297 @@ test('register reactivates a suspended resident', async () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('--npc wick registers only wick', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].handle, 'wick');
+    assert.equal(lines[0].joined, 'created');
+    assert.equal(lines[0].plot, 'ok');
+
+    const residents = readResidents(ctx.dbPath);
+    assert.deepEqual(
+      residents.map((r) => r.handle),
+      ['wick']
+    );
+    assert.equal(residents[0].role, 'npc');
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('duplicate --state-dir flag: last one wins', async () => {
+  const ctx = await startTestServer();
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  const deadDir = path.join(tmpBase, 'dead-dir');
+  const realDir = path.join(tmpBase, 'real-dir');
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      deadDir,
+      '--state-dir',
+      realDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    assert.equal(fs.existsSync(path.join(realDir, 'wick', 'key.pem')), true);
+    assert.equal(fs.existsSync(deadDir), false);
+    assert.equal(readResidents(ctx.dbPath).length, 1);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test('duplicate --operator-key flag: last one wins', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  const wrongKeys = generateKeypair();
+  const wrongKeyPath = path.join(ctx.tmpDir, 'wrong-operator.pem');
+  fs.writeFileSync(wrongKeyPath, wrongKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      wrongKeyPath,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].handle, 'wick');
+    assert.equal(lines[0].joined, 'created');
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('--api-base with three trailing slashes registers all three', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      `${ctx.baseUrl}///`,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(lines.length, 3);
+    assert.deepEqual(
+      lines.map((l) => l.handle),
+      ['wick', 'maren', 'tomas']
+    );
+    for (const row of lines) {
+      assert.equal(row.joined, 'created');
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('plot GET html matches the repo desk note for all three NPCs', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    for (const handle of ['wick', 'maren', 'tomas']) {
+      const plotRes = await fetch(`${ctx.baseUrl}/api/town/plot?handle=${handle}`);
+      assert.equal(plotRes.status, 200);
+      const plotData = await plotRes.json();
+      const expectedHtml = fs.readFileSync(path.join(REPO_PLOTS_DIR, handle, 'desk-note.html'), 'utf8');
+      assert.equal(plotData.html, expectedHtml);
+      if (handle === 'wick') {
+        assert.deepEqual(Object.keys(plotData).sort(), ['handle', 'html', 'manifest', 'plot_updated_at']);
+        assert.equal(plotData.handle, 'wick');
+      }
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('resident pubkey in the db matches pubkey.txt on disk for all three NPCs', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const residents = readResidents(ctx.dbPath);
+    assert.equal(residents.length, 3);
+    for (const r of residents) {
+      const diskPubkey = fs.readFileSync(path.join(stateDir, r.handle, 'pubkey.txt'), 'utf8').trim();
+      assert.equal(diskPubkey, r.pubkey);
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('key.pem is mode 0600 for all three NPCs after a full run', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    for (const handle of ['wick', 'maren', 'tomas']) {
+      const keyPath = path.join(stateDir, handle, 'key.pem');
+      assert.equal(fs.existsSync(keyPath), true);
+      assert.equal(fs.statSync(keyPath).mode & 0o777, 0o600);
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('state_seq advances by exactly 9 across a full run', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const before = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(before.state_seq, 0);
+
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const after = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal(after.state_seq - before.state_seq, 9);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('key_history records one register row per NPC with note joined', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const db = new DatabaseSync(ctx.dbPath, { readOnly: true });
+    let rows;
+    try {
+      rows = db.prepare('SELECT handle, pubkey, action, note FROM key_history ORDER BY handle').all();
+    } finally {
+      db.close();
+    }
+    assert.equal(rows.length, 3);
+
+    const residentsByHandle = new Map(readResidents(ctx.dbPath).map((r) => [r.handle, r]));
+    for (const row of rows) {
+      assert.equal(row.action, 'register');
+      assert.equal(row.note, 'joined');
+      assert.equal(row.pubkey, residentsByHandle.get(row.handle).pubkey);
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('garbage operator key file fails cleanly and the keypair was already created', async () => {
+  const ctx = await startTestServer();
+  const garbagePath = path.join(ctx.tmpDir, 'garbage.pem');
+  fs.writeFileSync(garbagePath, 'this is not a PEM key\n', { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      garbagePath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.equal(errObj.ok, false);
+    assert.ok(typeof errObj.error === 'string' && errObj.error.length > 0);
+    assert.deepEqual(readResidents(ctx.dbPath), []);
+    assert.equal(fs.existsSync(path.join(stateDir, 'wick', 'key.pem')), true);
+  } finally {
+    await ctx.close();
+  }
+});
