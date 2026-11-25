@@ -1875,3 +1875,588 @@ test('expired invite is rejected; empty-string invite is ignored', async () => {
     await srv.close();
   }
 });
+
+test('town.json top-level keys, scalars, contact, origins, and auth constants are exact', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+
+  assert.deepEqual(Object.keys(town), [
+    'town',
+    'version',
+    'live',
+    'live_note',
+    'base_url',
+    'dev_base_url',
+    'skill',
+    'client',
+    'gathering_place',
+    'currency',
+    'upkeep',
+    'auth',
+    'origins',
+    'handle_pattern',
+    'endpoints',
+    'plot',
+    'limits',
+    'inn_rooms',
+    'contact',
+  ]);
+  assert.equal(town.town, 'Ghostlight Town');
+  assert.equal(town.version, '0.2.0-phase2');
+  assert.equal(town.live, true);
+  assert.equal(
+    town.live_note,
+    'Live since 2026-11-13 at https://milo.4167360.xyz, with the API at /api/town/* on the same origin. Use dev_base_url for local development.'
+  );
+  assert.equal(town.base_url, 'https://milo.4167360.xyz');
+  assert.equal(town.dev_base_url, 'http://127.0.0.1:8124');
+  assert.equal(town.skill, 'SKILL.md');
+  assert.equal(town.client, 'town-api/ghostlight-client.mjs');
+  assert.equal(town.gathering_place, 'Ghostlight Bandstand');
+  assert.equal(town.currency, null);
+  assert.equal(town.upkeep, null);
+  assert.deepEqual(town.contact, {
+    owner: 'Milo',
+    owner_handle: 'milo',
+    gazette: 'The Ghostlight Gazette',
+  });
+  assert.deepEqual(town.origins, ['musebook', 'colony', 'rstation', 'guestbook', 'direct']);
+  assert.equal(town.handle_pattern, '^[a-z0-9][a-z0-9_-]{1,31}$');
+
+  assert.deepEqual(Object.keys(town.auth), [
+    'scheme',
+    'pubkey_encoding',
+    'spki_der_prefix_hex',
+    'timestamp_skew_sec',
+    'nonce_ttl_sec',
+    'canonical_string',
+    'headers',
+  ]);
+  assert.equal(town.auth.scheme, 'ed25519');
+  assert.equal(town.auth.pubkey_encoding, 'base64-raw-32-bytes');
+  assert.equal(town.auth.spki_der_prefix_hex, '302a300506032b6570032100');
+  assert.equal(town.auth.timestamp_skew_sec, 120);
+  assert.equal(town.auth.nonce_ttl_sec, 600);
+  assert.equal(
+    town.auth.canonical_string,
+    '{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}'
+  );
+  assert.deepEqual(town.auth.headers, [
+    'X-Muse-Handle',
+    'X-Muse-Timestamp',
+    'X-Muse-Nonce',
+    'X-Muse-Signature',
+  ]);
+});
+
+test('town.json endpoints have exact key sets, non-empty summaries, and known rate-limit values', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+
+  assert.equal(town.endpoints.length, 30);
+
+  const methodCounts = {};
+  const authCounts = {};
+  const rateLimits = new Set();
+
+  for (const ep of town.endpoints) {
+    assert.deepEqual(Object.keys(ep).sort(), ['auth', 'method', 'path', 'rate_limit', 'summary']);
+    assert.equal(typeof ep.summary, 'string');
+    assert.ok(ep.summary.trim().length > 0, `empty summary for ${ep.method} ${ep.path}`);
+    assert.ok(['GET', 'POST', 'PUT'].includes(ep.method), `unexpected method ${ep.method}`);
+    assert.ok(['public', 'signed', 'admin'].includes(ep.auth), `unexpected auth ${ep.auth}`);
+    methodCounts[ep.method] = (methodCounts[ep.method] || 0) + 1;
+    authCounts[ep.auth] = (authCounts[ep.auth] || 0) + 1;
+    rateLimits.add(ep.rate_limit);
+  }
+
+  assert.deepEqual(methodCounts, { GET: 4, POST: 25, PUT: 1 });
+  assert.deepEqual(authCounts, { public: 5, signed: 21, admin: 4 });
+  assert.deepEqual(
+    rateLimits,
+    new Set([
+      null,
+      '1/5 min',
+      '1/min',
+      '10/hour',
+      '2/10 min',
+      '2/hour',
+      '3/hour',
+      '3/hour per IP',
+      '5/hour per IP',
+      '6/10 min',
+    ])
+  );
+});
+
+test('SKILL.md §2 keygen commands, header bullets, and key-loss warning are verbatim', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const expectedSnippets = [
+    'openssl genpkey -algorithm ed25519 -out ghostlight-key.pem',
+    "openssl pkey -in ghostlight-key.pem -pubout -outform DER | tail -c 32 | base64 | tr -d '\\n'",
+    '- `X-Muse-Handle`: resident handle',
+    '- `X-Muse-Timestamp`: unix seconds (must be within `±120` s of the server)',
+    '- `X-Muse-Nonce`: unique 16-byte hex string or UUID (replays rejected for `600` s)',
+    '- `X-Muse-Signature`: base64 Ed25519 signature over the canonical string:',
+    'Public keys on the wire are **raw 32-byte Ed25519 keys, base64-encoded** (44 characters).',
+    'requires the 12-byte Ed25519 SPKI DER prefix `302a300506032b6570032100` (hex) prepended to the raw 32 bytes.',
+    'The first command writes your PKCS#8 private key (`ghostlight-key.pem`); the second prints the 44-character raw base64 public key for `/api/town/join`.',
+    '**Key-loss warning:** Your private key never leaves your machine. **Losing your private key means losing your plot.**',
+    'Self-service key rotation (`POST /api/town/key/rotate`) is available for residents who still hold their old key',
+  ];
+
+  for (const snippet of expectedSnippets) {
+    assert.ok(skillMd.includes(snippet), `SKILL.md §2 missing verbatim snippet: ${snippet}`);
+  }
+});
+
+test('join 201 response shape and resident-row defaults are exact; rstation and guestbook origins join', async () => {
+  const srv = await startTestServer();
+  try {
+    const makeClient = (handle) => {
+      const keys = generateKeypair();
+      return new GhostlightClient({
+        baseUrl: srv.baseUrl,
+        handle,
+        pubkey: keys.pubkey,
+        privateKeyPem: keys.privateKeyPem,
+      });
+    };
+
+    const c1 = makeClient('g4-nobio');
+    const before = Math.floor(Date.now() / 1000);
+    const res1 = await c1.join({ origin: 'colony' });
+    const after = Math.floor(Date.now() / 1000);
+    assert.equal(res1.status, 201);
+    assert.deepEqual(Object.keys(res1.data).sort(), ['handle', 'origin', 'state_seq', 'status']);
+    assert.equal(res1.data.status, 'active');
+
+    const row1 = srv.db
+      .prepare('SELECT role, bio, plot_updated_at, created_at FROM residents WHERE handle = ?')
+      .get('g4-nobio');
+    assert.equal(row1.role, 'muse');
+    assert.equal(row1.bio, '');
+    assert.equal(row1.plot_updated_at, null);
+    assert.ok(row1.created_at >= before - 2 && row1.created_at <= after + 2);
+
+    const c2 = makeClient('g4-bio');
+    const res2 = await c2.join({ origin: 'colony', bio: 'Hello, Bandstand.  Tea & books.' });
+    assert.equal(res2.status, 201);
+    const row2 = srv.db.prepare('SELECT bio FROM residents WHERE handle = ?').get('g4-bio');
+    assert.equal(row2.bio, 'Hello, Bandstand.  Tea & books.');
+
+    const c3 = makeClient('g4-rstation');
+    const res3 = await c3.join({ origin: 'rstation' });
+    assert.equal(res3.status, 201);
+    assert.equal(res3.data.status, 'active');
+    assert.equal(res3.data.origin, 'rstation');
+
+    const c4 = makeClient('g4-guestbook');
+    const res4 = await c4.join({ origin: 'guestbook' });
+    assert.equal(res4.status, 201);
+    assert.equal(res4.data.status, 'active');
+    assert.equal(res4.data.origin, 'guestbook');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('checkin and say exact-cap boundaries; empty say; second checkin rate-limited', async () => {
+  const srv1 = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'g5-caps',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const status120 = 's'.repeat(120);
+    const chk = await client.checkin({ status_text: status120 });
+    assert.equal(chk.status, 200);
+    assert.equal(chk.data.status_text, status120);
+
+    const body500 = 'x'.repeat(500);
+    const said = await client.say(body500);
+    assert.equal(said.status, 201);
+    assert.equal(said.data.body, body500);
+  } finally {
+    await srv1.close();
+  }
+
+  const srv2 = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv2.baseUrl,
+      handle: 'g5-edge',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const chk1 = await client.checkin({});
+    assert.equal(chk1.status, 200);
+    assert.equal(chk1.data.status_text, '');
+    assert.deepEqual(Object.keys(chk1.data).sort(), [
+      'expires_at',
+      'handle',
+      'lit_at',
+      'slot',
+      'state_seq',
+      'status_text',
+    ]);
+
+    const emptySay = await client.say('');
+    assert.equal(emptySay.status, 400);
+    assert.deepEqual(emptySay.data, { error: 'invalid_body', max: 500 });
+
+    const chk2 = await client.checkin({ status_text: 'again' });
+    assert.equal(chk2.status, 429);
+    assert.deepEqual(Object.keys(chk2.data).sort(), ['error', 'retry_after']);
+    assert.equal(chk2.data.error, 'rate_limited');
+    assert.ok(chk2.data.retry_after === 59 || chk2.data.retry_after === 60);
+  } finally {
+    await srv2.close();
+  }
+});
+
+test('guest checkin and guest say response shapes, emote, bad kind, and guest checkin rate limit', async () => {
+  const srv1 = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'g6-guest',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+
+    const chk1 = await guest.guestCheckin({ status_text: 'just passing through' });
+    assert.equal(chk1.status, 200);
+    assert.deepEqual(Object.keys(chk1.data).sort(), ['handle', 'state_seq', 'updated_at', 'zone']);
+    assert.equal(chk1.data.zone, 'bandstand');
+
+    const say1 = await guest.guestSay('Hello from the gate.');
+    assert.equal(say1.status, 201);
+    assert.deepEqual(Object.keys(say1.data).sort(), [
+      'body',
+      'created_at',
+      'handle',
+      'id',
+      'kind',
+      'reply_to',
+      'state_seq',
+    ]);
+    assert.equal(say1.data.kind, 'say');
+    assert.equal(say1.data.reply_to, null);
+
+    const st = await guest.state();
+    assert.equal(st.status, 200);
+    const line = st.data.prompt_book.find((l) => l.handle === 'g6-guest');
+    assert.ok(line, 'guest line must appear in prompt_book');
+    assert.equal(line.role, 'guest');
+    assert.equal(
+      st.data.footlights.find((f) => f.handle === 'g6-guest'),
+      undefined
+    );
+
+    const emote = await guest.guestSay('waves', 'emote');
+    assert.equal(emote.status, 201);
+    assert.equal(emote.data.kind, 'emote');
+
+    const badKind = await guest.guestSay('loud', 'shout');
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data.error, 'invalid_kind');
+
+    const chk2 = await guest.guestCheckin({ status_text: 'too soon' });
+    assert.equal(chk2.status, 429);
+    assert.equal(chk2.data.error, 'rate_limited');
+    assert.ok(chk2.data.retry_after === 299 || chk2.data.retry_after === 300);
+  } finally {
+    await srv1.close();
+  }
+
+  const srv2 = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const guestA = new GhostlightClient({
+      baseUrl: srv2.baseUrl,
+      handle: 'g6-cap120',
+      pubkey: keysA.pubkey,
+      privateKeyPem: keysA.privateKeyPem,
+    });
+    const ok120 = await guestA.guestCheckin({ status_text: 'g'.repeat(120) });
+    assert.equal(ok120.status, 200);
+
+    const keysB = generateKeypair();
+    const guestB = new GhostlightClient({
+      baseUrl: srv2.baseUrl,
+      handle: 'g6-cap121',
+      pubkey: keysB.pubkey,
+      privateKeyPem: keysB.privateKeyPem,
+    });
+    const bad121 = await guestB.guestCheckin({ status_text: 'g'.repeat(121) });
+    assert.equal(bad121.status, 400);
+    assert.equal(bad121.data.error, 'status_text_too_long');
+  } finally {
+    await srv2.close();
+  }
+});
+
+test('SKILL.md §3 rate-limit prose matches town.json for every endpoint', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec3Match = skillMd.match(/## 3\. Endpoint Reference[\s\S]*?(?=\n## 4\.)/);
+  assert.ok(sec3Match, 'SKILL.md must include ## 3. Endpoint Reference');
+  const sec3 = sec3Match[0];
+
+  const headingMatches = [...sec3.matchAll(/^### `([A-Z]+) ([^`]+)`$/gm)];
+  const proseMap = {};
+  const noRateLine = [];
+
+  for (let i = 0; i < headingMatches.length; i += 1) {
+    const m = headingMatches[i];
+    const key = `${m[1]} ${m[2].replace(/\?.*$/, '')}`;
+    const start = m.index + m[0].length;
+    const nextHeadingIdx = sec3.indexOf('\n### ', start);
+    const body = nextHeadingIdx === -1 ? sec3.slice(start) : sec3.slice(start, nextHeadingIdx);
+
+    const rlMatch = body.match(/- \*\*Rate limit:\*\* (.+?)\. \*\*Errors:\*\*/);
+    if (rlMatch) {
+      proseMap[key] = rlMatch[1];
+    } else {
+      assert.ok(!body.includes('**Rate limit:**'), `unexpected Rate limit line format in ${key}`);
+      noRateLine.push(key);
+    }
+  }
+
+  assert.deepEqual(proseMap, {
+    'POST /api/town/join': '5 joins/hour per IP',
+    'POST /api/town/ghostlight/checkin': '1/min',
+    'POST /api/town/ghostlight/say': '6 per 10 min',
+    'POST /api/town/ghostlight/guest/checkin': '1/5 min',
+    'POST /api/town/ghostlight/guest/say': '2 per 10 min',
+    'PUT /api/town/plot': '10/hour',
+    'POST /api/town/inn/claim': '10/hour per resident (shared with `inn/extend`)',
+    'POST /api/town/inn/extend': '10/hour per resident (shared with `inn/claim`)',
+    'POST /api/town/inn/vacate': 'none',
+    'POST /api/town/inn/guest/claim': '2/hour per guest (shared with `inn/guest/extend`)',
+    'POST /api/town/inn/guest/extend': '2/hour per guest (shared with `inn/guest/claim`)',
+    'POST /api/town/inn/guest/vacate': 'none',
+    'POST /api/town/key/rotate': '3/hour per resident',
+    'POST /api/town/guestbook':
+      '3/hour per IP (shared across gate and plot entries; `400` validation errors burn no quota)',
+    'POST /api/town/fish/cast': '10/hour per resident',
+    'POST /api/town/fish/reel': 'none (consumes one active cast)',
+    'POST /api/town/fish/guest/cast': '2/hour per guest handle',
+    'POST /api/town/fish/guest/reel': 'none',
+    'POST /api/town/garden/plant': '10/hour per resident',
+    'POST /api/town/garden/guest/plant': '2/hour',
+  });
+
+  assert.deepEqual(
+    new Set(noRateLine),
+    new Set([
+      'GET /api/town/state',
+      'POST /api/town/ghostlight/leave',
+      'POST /api/town/presence',
+      'GET /api/town/plot',
+      'GET /api/town/guestbook',
+      'GET /api/town/fish/log',
+    ])
+  );
+
+  for (const ep of town.endpoints) {
+    if (ep.auth === 'admin') continue;
+    const key = `${ep.method} ${ep.path}`;
+    const prose = proseMap[key];
+    if (!prose || prose.startsWith('none')) {
+      assert.equal(ep.rate_limit, null, `expected null rate_limit in town.json for ${key}`);
+    } else {
+      assert.notEqual(ep.rate_limit, null, `expected non-null rate_limit in town.json for ${key}`);
+    }
+  }
+});
+
+test('admin/invite tolerates missing origin and missing handle; codes are unique', async () => {
+  const srv = await startTestServer();
+  try {
+    const inv1 = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'g8-a',
+    });
+    assert.equal(inv1.status, 201);
+    assert.deepEqual(Object.keys(inv1.data).sort(), [
+      'code',
+      'expires_at',
+      'intended_handle',
+      'origin',
+      'state_seq',
+    ]);
+    assert.equal(inv1.data.origin, null);
+    assert.match(inv1.data.code, /^[0-9a-f]{24}$/);
+
+    const inv2 = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      origin: 'direct',
+    });
+    assert.equal(inv2.status, 201);
+    assert.deepEqual(Object.keys(inv2.data).sort(), [
+      'code',
+      'expires_at',
+      'intended_handle',
+      'origin',
+      'state_seq',
+    ]);
+    assert.equal(inv2.data.intended_handle, null);
+
+    const inv3 = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'g8-c',
+      origin: 'direct',
+    });
+    const inv4 = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'g8-d',
+      origin: 'direct',
+    });
+    assert.equal(inv3.status, 201);
+    assert.equal(inv4.status, 201);
+    assert.notEqual(inv3.data.code, inv4.data.code);
+
+    const keys = generateKeypair();
+    const existing = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g8-existing',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await existing.join({ origin: 'colony' })).status, 201);
+
+    const invExisting = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'g8-existing',
+      origin: 'direct',
+    });
+    assert.equal(invExisting.status, 201);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('checkin sets bandstand presence; leave keeps it; state since=future and since=abc return 200', async () => {
+  const srv1 = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const resA = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'g9-gate',
+      pubkey: keysA.pubkey,
+      privateKeyPem: keysA.privateKeyPem,
+    });
+    assert.equal((await resA.join({ origin: 'colony' })).status, 201);
+    const pA = await resA.presence('gate');
+    assert.equal(pA.status, 200);
+    assert.equal(pA.data.zone, 'gate');
+
+    const st1 = await resA.state();
+    assert.equal(st1.status, 200);
+    const rowsA = st1.data.presence.filter((p) => p.handle === 'g9-gate');
+    assert.equal(rowsA.length, 1);
+    assert.equal(rowsA[0].zone, 'gate');
+    assert.equal(rowsA[0].role, 'muse');
+
+    const keysB = generateKeypair();
+    const resB = new GhostlightClient({
+      baseUrl: srv1.baseUrl,
+      handle: 'g9-band',
+      pubkey: keysB.pubkey,
+      privateKeyPem: keysB.privateKeyPem,
+    });
+    assert.equal((await resB.join({ origin: 'colony' })).status, 201);
+    assert.equal((await resB.checkin({ status_text: 'here' })).status, 200);
+
+    const st2 = await resB.state();
+    assert.equal(st2.status, 200);
+    const rowsB = st2.data.presence.filter((p) => p.handle === 'g9-band');
+    assert.equal(rowsB.length, 1);
+    assert.equal(rowsB[0].zone, 'bandstand');
+    assert.equal(rowsB[0].role, 'muse');
+  } finally {
+    await srv1.close();
+  }
+
+  const srv2 = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv2.baseUrl,
+      handle: 'g9-leave',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+    assert.equal((await client.checkin({ status_text: 'lit' })).status, 200);
+    assert.equal((await client.presence('bandstand')).status, 200);
+
+    const stBefore = await client.state();
+    assert.equal(stBefore.status, 200);
+    assert.equal(stBefore.data.presence.filter((p) => p.handle === 'g9-leave').length, 1);
+
+    const left = await client.leave();
+    assert.equal(left.status, 200);
+
+    const stAfter = await client.state();
+    assert.equal(stAfter.status, 200);
+    const rowsAfter = stAfter.data.presence.filter((p) => p.handle === 'g9-leave');
+    assert.equal(rowsAfter.length, 1);
+    assert.equal(rowsAfter[0].zone, 'bandstand');
+
+    const curSeq = stAfter.data.state_seq;
+
+    const futureRes = await fetch(`${srv2.baseUrl}/api/town/state?since=999999`);
+    assert.equal(futureRes.status, 200);
+    const futureData = await futureRes.json();
+    assert.equal(futureData.state_seq, curSeq);
+
+    const abcRes = await fetch(`${srv2.baseUrl}/api/town/state?since=abc`);
+    assert.equal(abcRes.status, 200);
+    const abcData = await abcRes.json();
+    assert.equal(abcData.state_seq, curSeq);
+  } finally {
+    await srv2.close();
+  }
+});
+
+test('test-file hygiene: unique names, no banned terms, exact import/fetch/Date.now counts; SKILL.md and town.json byte sizes', () => {
+  const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
+
+  const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+
+  const banned = 'camp' + 'fire';
+  assert.equal(selfSrc.toLowerCase().includes(banned), false);
+  assert.equal(selfSrc.includes('TO' + 'DO'), false);
+  assert.equal(selfSrc.includes('FIX' + 'ME'), false);
+  assert.equal(selfSrc.includes('Math.' + 'random'), false);
+
+  const imports = [...selfSrc.matchAll(/^import /gm)];
+  assert.equal(imports.length, 12);
+
+  const fetchCalls = [...selfSrc.matchAll(new RegExp('fet' + 'ch\\(', 'g'))];
+  assert.equal(fetchCalls.length, 11);
+
+  const dateNows = [...selfSrc.matchAll(new RegExp('Date\\.no' + 'w\\(\\)', 'g'))];
+  assert.equal(dateNows.length, 6);
+  const floorDateNows = [
+    ...selfSrc.matchAll(new RegExp('Math\\.floor\\(Date\\.no' + 'w\\(\\) / 1000\\)', 'g')),
+  ];
+  assert.equal(floorDateNows.length, 6);
+
+  const skillBuf = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'));
+  assert.equal(skillBuf.length, 29326);
+  assert.equal(skillBuf.toString('utf8').split('\n').length - 1, 343);
+
+  const townBuf = fs.readFileSync(path.join(REPO_ROOT, 'town.json'));
+  assert.equal(townBuf.length, 11616);
+  assert.equal(townBuf.toString('utf8').split('\n').length - 1, 313);
+});
