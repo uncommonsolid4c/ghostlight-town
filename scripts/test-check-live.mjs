@@ -1184,3 +1184,332 @@ test('multiple trailing slashes are normalized on --base and --api-base', async 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('getExpectedFiles default bundle matches staging-polyfork and real-tree counts are exact', async () => {
+  const defaultList = await getExpectedFiles(REPO_ROOT);
+  const staging = await getExpectedFiles(REPO_ROOT, 'staging-polyfork');
+  const town3d = await getExpectedFiles(REPO_ROOT, 'town-3d');
+
+  assert.deepEqual(defaultList, staging);
+  assert.equal(staging.length, 195);
+  assert.equal(town3d.length, 25);
+  assert.equal(staging.includes('staging.js'), true);
+  assert.equal(town3d.includes('town.js'), true);
+});
+
+test('staging.js missing concept-bandstand.js marker and non-numeric live staging ?v= fail with exact details', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-staging-edge-'));
+  let server;
+  try {
+    const served = await createStagingFixtureTree(tmpDir);
+    served['staging.js'] = [
+      'function applyStagingState(liveStore) {}',
+      'const liveStore = {};',
+    ].join('\n') + '\n';
+    server = await startFixtureServer(served);
+
+    const resMarker = await runCheck(['--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resMarker.status, 1, `Expected exit 1, got ${resMarker.status}`);
+    const summaryMarker = JSON.parse(resMarker.stdout.trim());
+    const markerFail = summaryMarker.failures.find(
+      (f) => f.file === 'staging.js' && f.problem === 'markers',
+    );
+    assert.ok(markerFail, `Expected staging.js markers failure, got: ${JSON.stringify(summaryMarker.failures)}`);
+    assert.match(markerFail.detail, /concept-bandstand\.js/);
+    assert.match(markerFail.detail, /buildConceptBandstand/);
+
+    served['staging.js'] = [
+      "import { buildConceptBandstand } from './concept-bandstand.js?v=37';",
+      'function applyStagingState(liveStore) {}',
+      'const liveStore = {};',
+    ].join('\n') + '\n';
+    served['index.html'] = '<!doctype html><script type="module" src="./staging.js?v=abc"></script>\n';
+
+    const resNonNum = await runCheck(['--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resNonNum.status, 1, `Expected exit 1, got ${resNonNum.status}`);
+    const summaryNonNum = JSON.parse(resNonNum.stdout.trim());
+    assert.equal(summaryNonNum.staging_js_v, 38);
+    const vFail = summaryNonNum.failures.find(
+      (f) => f.file === 'index.html' && f.problem === 'staging_js_v',
+    );
+    assert.ok(vFail, `Expected index.html staging_js_v failure, got: ${JSON.stringify(summaryNonNum.failures)}`);
+    assert.equal(vFail.detail, 'repo_v=38 vs live_v=null');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('staging-polyfork default-bundle all-ok run makes exact request count and skips excluded files', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-staging-reqcount-'));
+  let server;
+  try {
+    const served = await createStagingFixtureTree(tmpDir);
+    server = await startPathRecordingFixtureServer(served);
+
+    const res = await runCheck(['--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.checked, 15);
+    assert.equal(summary.ok, 15);
+
+    const requests = server.getRequests();
+    assert.equal(requests.length, 16);
+    assert.equal(requests.filter((p) => p === '/api/town/state').length, 1);
+    assert.ok(requests.every((p) => !p.includes('test-staging.mjs') && !p.includes('README.md')));
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--require-api succeeds when API is 200 and combines file mismatch with API 404 failure', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-reqapi-combo-'));
+  let serverOk;
+  let serverFail;
+  try {
+    const servedOk = await createFixtureTree(tmpDir);
+    serverOk = await startFixtureServer(servedOk, { apiStatus: 200 });
+
+    const resOk = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', serverOk.baseUrl,
+      '--root', tmpDir,
+      '--require-api',
+    ]);
+    assert.equal(resOk.status, 0, `Expected exit 0, got ${resOk.status}: ${resOk.stderr}`);
+    const summaryOk = JSON.parse(resOk.stdout.trim());
+    assert.equal(summaryOk.status, 'ok');
+    assert.equal(summaryOk.api, 'live');
+    assert.deepEqual(summaryOk.failures, []);
+
+    const servedFail = { ...servedOk, 'models/bench.glb': Buffer.from('NOT_A_GLTF_FILE') };
+    serverFail = await startFixtureServer(servedFail, { apiStatus: 404 });
+
+    const resFail = await runCheck([
+      '--bundle', 'town-3d',
+      '--base', serverFail.baseUrl,
+      '--root', tmpDir,
+      '--require-api',
+    ]);
+    assert.equal(resFail.status, 1, `Expected exit 1, got ${resFail.status}`);
+    const summaryFail = JSON.parse(resFail.stdout.trim());
+    assert.equal(summaryFail.status, 'fail');
+    assert.equal(summaryFail.failures.length, 2);
+    const glbFail = summaryFail.failures.find(
+      (f) => f.file === 'models/bench.glb' && f.problem === 'mismatch',
+    );
+    const apiFail = summaryFail.failures.find(
+      (f) => f.file === '/api/town/state' && f.problem === 'bad-status',
+    );
+    assert.ok(glbFail, `Expected models/bench.glb mismatch failure, got: ${JSON.stringify(summaryFail.failures)}`);
+    assert.ok(apiFail, `Expected /api/town/state bad-status failure, got: ${JSON.stringify(summaryFail.failures)}`);
+    assert.equal(apiFail.detail, 'HTTP 404');
+  } finally {
+    if (serverOk) await serverOk.close();
+    if (serverFail) await serverFail.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('failure detail strings are exact for ?v= mismatch, corrupt and short GLB, and 404 missing file', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-details-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js?v=12";</script>\n';
+    served['models/bench.glb'] = Buffer.from('NOT_A_GLTF_FILE');
+    delete served['plots/milo/index.html'];
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+
+    const vFail = summary.failures.find((f) => f.file === 'index.html' && f.problem === 'town_js_v');
+    assert.ok(vFail, `Expected index.html failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(vFail.detail, 'repo_v=13 vs live_v=12');
+
+    const glbFail = summary.failures.find((f) => f.file === 'models/bench.glb' && f.problem === 'mismatch');
+    assert.ok(glbFail, `Expected models/bench.glb failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(glbFail.detail, 'expected glTF magic, got "NOT_"');
+
+    const missFail = summary.failures.find((f) => f.file === 'plots/milo/index.html');
+    assert.ok(missFail, `Expected plots/milo/index.html failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(missFail.problem, 'missing');
+    assert.equal(missFail.detail, 'HTTP 404');
+
+    served['models/bench.glb'] = Buffer.from([0x67, 0x6c]);
+    const resShort = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resShort.status, 1, `Expected exit 1, got ${resShort.status}`);
+    const summaryShort = JSON.parse(resShort.stdout.trim());
+    const shortFail = summaryShort.failures.find(
+      (f) => f.file === 'models/bench.glb' && f.problem === 'mismatch',
+    );
+    assert.ok(shortFail, `Expected short GLB mismatch failure, got: ${JSON.stringify(summaryShort.failures)}`);
+    assert.equal(shortFail.detail, 'expected glTF magic, got "gl"');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('failure array order follows sorted expected-file list for town-3d', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-order-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    const expected = await getExpectedFiles(tmpDir, 'town-3d');
+    assert.deepEqual(expected, [
+      'CREDITS.md',
+      'gazette/issue-001.html',
+      'gazette/latest.json',
+      'guestbook/index.html',
+      'index.html',
+      'inn/index.html',
+      'models/bench.glb',
+      'move-in.html',
+      'plots/milo/index.html',
+      'town.js',
+    ]);
+
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js?v=12";</script>\n';
+    served['models/bench.glb'] = Buffer.from('NOT_A_GLTF_FILE');
+    delete served['plots/milo/index.html'];
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.deepEqual(
+      summary.failures.map((f) => `${f.file}:${f.problem}`),
+      [
+        'index.html:town_js_v',
+        'models/bench.glb:mismatch',
+        'plots/milo/index.html:missing',
+      ],
+    );
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('resolveLatestIssueFile rejects non-issue matched entry, non-array issues, uppercase extension, non-string file, and null', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-latest-edges-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served);
+
+    const payloads = [
+      JSON.stringify({
+        latest: 2,
+        issues: [
+          { n: 1, file: 'issue-001.html' },
+          { n: 2, file: 'notes.txt' },
+        ],
+      }),
+      JSON.stringify({ issues: {} }),
+      JSON.stringify({ latest: 4, issues: [{ n: 4, file: 'issue-004.HTML' }] }),
+      JSON.stringify({ issues: [{ n: 1, file: 42 }] }),
+      'null',
+    ];
+
+    for (const payload of payloads) {
+      served['gazette/latest.json'] = payload;
+      const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+      assert.equal(res.status, 1, `Expected exit 1 for payload ${payload}, got ${res.status}`);
+      const summary = JSON.parse(res.stdout.trim());
+      const latestFail = summary.failures.find(
+        (f) => f.file === 'gazette/latest.json' && f.problem === 'mismatch',
+      );
+      assert.ok(latestFail, `Expected gazette/latest.json mismatch for ${payload}, got: ${JSON.stringify(summary.failures)}`);
+      assert.match(latestFail.detail, /missing issue-\*\.html filename/);
+    }
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('staging repo index.html without ?v= fails against live ?v=38 with repo_v=null vs live_v=38', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-staging-reponull-'));
+  let server;
+  try {
+    const served = await createStagingFixtureTree(tmpDir);
+    await fs.writeFile(
+      path.join(tmpDir, 'staging-polyfork', 'index.html'),
+      '<!doctype html><script type="module" src="./staging.js"></script>\n',
+    );
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.staging_js_v, null);
+    const vFail = summary.failures.find(
+      (f) => f.file === 'index.html' && f.problem === 'staging_js_v',
+    );
+    assert.ok(vFail, `Expected index.html staging_js_v failure, got: ${JSON.stringify(summary.failures)}`);
+    assert.equal(vFail.detail, 'repo_v=null vs live_v=38');
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/check-live.mjs source constants and file size/line count are exact', async () => {
+  const raw = await fs.readFile(path.join(__dirname, 'check-live.mjs'));
+  const src = raw.toString('utf8');
+
+  assert.equal(raw.length, 9133);
+  assert.equal(src.split('\n').length, 288);
+  assert.ok(src.includes("const DEFAULT_BASE = 'https://milo.4167360.xyz';"));
+  assert.ok(src.includes('const REQUEST_TIMEOUT_MS = 5000;'));
+  assert.ok(src.includes("const DEFAULT_BUNDLE = 'staging-polyfork';"));
+  assert.ok(src.includes("const VALID_BUNDLES = ['town-3d', 'staging-polyfork'];"));
+  assert.ok(src.includes("entryJs: 'town.js',"));
+  assert.ok(src.includes("entryJs: 'staging.js',"));
+});
+
+test('extra-issue fetch does not inflate checked/ok counts and test-check-live.mjs hygiene holds', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-extraissue-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['gazette/latest.json'] = JSON.stringify({
+      latest: 4,
+      issues: [{ n: 4, file: 'issue-004.html', date: '2026-11-24', headline: 'Issue 4' }],
+    });
+    served['gazette/issue-004.html'] = '<h1>Ghostlight Gazette #4</h1>\n';
+    server = await startPathRecordingFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.checked, 10);
+    assert.equal(summary.ok, 10);
+
+    const requests = server.getRequests();
+    assert.equal(requests.length, 12);
+    assert.ok(requests.includes('/ghostlight-town/gazette/issue-004.html'));
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  const selfSrc = await fs.readFile(path.join(__dirname, 'test-check-live.mjs'), 'utf8');
+  const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 45);
+  assert.equal(new Set(names).size, 45);
+
+  const importLines = selfSrc.split('\n').filter((line) => line.startsWith('import '));
+  assert.equal(importLines.length, 10);
+
+  const countOccurrences = (haystack, needle) => haystack.split(needle).length - 1;
+  assert.equal(countOccurrences(selfSrc, 'TO' + 'DO'), 0);
+  assert.equal(countOccurrences(selfSrc, 'FIX' + 'ME'), 0);
+  assert.equal(countOccurrences(selfSrc, 'Date.' + 'now'), 2);
+  assert.equal(countOccurrences(selfSrc, 'Math.' + 'random'), 1);
+});
