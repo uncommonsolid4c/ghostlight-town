@@ -880,3 +880,251 @@ test('town-api/README.md Node >= 22.5 requirement matches server.mjs and the run
     `Running Node ${process.version} must satisfy >= ${reqMajor}.${reqMinor}`
   );
 });
+
+test('town-api/README.md heading order, title, and closing cross-links match SKILL.md and PLAN.md', () => {
+  const readme = readReadme();
+  const headings = [...readme.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(headings, [
+    'Shipped files',
+    'Test suites',
+    'Environment variables & ports',
+    'Endpoint map',
+    'Startup migrations',
+    'Backups',
+    '`ghostlight-client.mjs` CLI quickstart',
+    'Safety rails',
+    'Honest limits',
+  ]);
+  assert.ok(readme.startsWith('# Town API (`town-api/`)'));
+  assert.ok(readme.includes('See [`../SKILL.md`](../SKILL.md) §3 for the full API reference'));
+  assert.ok(readme.includes('[`../PLAN.md`](../PLAN.md) §§5–6 for architecture and history'));
+  const skill = fs.readFileSync(path.join(ROOT_DIR, 'SKILL.md'), 'utf8');
+  assert.ok(skill.includes('## 3. Endpoint Reference'));
+  const plan = fs.readFileSync(path.join(ROOT_DIR, 'PLAN.md'), 'utf8');
+  assert.ok(plan.includes('## 5. The 3D town'));
+  assert.ok(plan.includes('## 6. NPC seed residents'));
+});
+
+test('town-api/README.md Test suites section has 5 ordered groups totaling 23 registered suites', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Test suites\s+([\s\S]*?)\n## /)[1];
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)];
+  assert.deepEqual(
+    bullets.map((b) => b[1]),
+    [
+      'Core & onboarding',
+      'Plots, Inn, Guestbook, Fishing & Garden',
+      'Events & contracts',
+      'CLI, backups & docs',
+      'Live proxy (env-gated)',
+    ]
+  );
+  const counts = bullets.map((b) => [...b[2].matchAll(/`([a-z0-9-]+\.mjs)`/g)].map((m) => m[1]));
+  assert.deepEqual(counts.map((c) => c.length), [6, 5, 6, 4, 2]);
+  assert.equal(counts.flat().length, 23);
+  const testFiles = fs
+    .readdirSync(__dirname)
+    .filter((f) => isTestFile(f))
+    .sort();
+  assert.deepEqual(counts.flat().sort(), testFiles);
+  const runTests = fs.readFileSync(path.join(ROOT_DIR, 'run-tests.mjs'), 'utf8');
+  for (const f of counts.flat()) {
+    assert.ok(runTests.includes(`'town-api/${f}'`), `${f} must be registered in run-tests.mjs`);
+  }
+});
+
+test('town-api/README.md Shipped files table row order and JSON roles match disk', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Shipped files\s+([\s\S]*?)\n## /)[1];
+  const rows = [...sec.matchAll(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|$/gm)];
+  assert.deepEqual(
+    rows.map((r) => r[1]),
+    [
+      'server.mjs',
+      'schema.sql',
+      'plot-validation.mjs',
+      'ghostlight-client.mjs',
+      'events.mjs',
+      'nightly-topics.json',
+      'daily-games.json',
+      'backup.mjs',
+      'backup-plots.mjs',
+    ]
+  );
+  const roles = new Map(rows.map((r) => [r[1], r[2]]));
+  const topics = JSON.parse(fs.readFileSync(path.join(__dirname, 'nightly-topics.json'), 'utf8'));
+  assert.equal(topics.length, 30);
+  assert.ok(roles.get('nightly-topics.json').includes('30 curated Nightly Call conversation prompts'));
+  const games = JSON.parse(fs.readFileSync(path.join(__dirname, 'daily-games.json'), 'utf8'));
+  assert.equal(games.length, 30);
+  assert.deepEqual([...new Set(games.map((g) => g.format))].sort(), ['riddle', 'story', 'word']);
+  assert.ok(roles.get('daily-games.json').includes('30 daily Bandstand game prompts (riddle, word, story;'));
+});
+
+test('town-api/README.md Endpoint map group order and intro cross-links match contract', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /)[1];
+  const groups = [...sec.matchAll(/^- \*\*([^*]+?):\*\*/gm)].map((m) => m[1]);
+  assert.deepEqual(groups, [
+    'Join / approve / invite',
+    'Checkin / say / leave / presence',
+    'Plot',
+    'Inn',
+    'Guest',
+    'Key rotate',
+    'Guestbook',
+    'Admin',
+  ]);
+  const norm = sec.replace(/\s+/g, ' ');
+  assert.ok(norm.includes('lives in [`../town.json`](../town.json) and [`../SKILL.md`](../SKILL.md) §3'));
+});
+
+test('town-api/README.md Endpoint map annotations trace to server.mjs constants and query/body reads', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const sec = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /)[1];
+  assert.ok(serverSrc.includes('const SETTLE_SEC = 300;'));
+  assert.ok(sec.includes('`POST /api/town/fish/cast` (10/h, 300s settle)'));
+  assert.ok(serverSrc.includes('const GARDEN_SLOTS = 6;'));
+  assert.ok(sec.includes('`POST /api/town/garden/plant` (10/h, 6-slot communal bed)'));
+  assert.ok(sec.includes('`GET /api/town/fish/log?handle=<handle>` (personal collection, cap 50, not a leaderboard)'));
+  assert.ok(serverSrc.includes('const INN_MAX_NIGHTS = 7;'));
+  assert.ok(serverSrc.includes('const INN_KEY_LEN = 12;'));
+  assert.ok(sec.includes('`POST /api/town/inn/vacate` (1–7 nights; one-time 12-char room key)'));
+  assert.ok(serverSrc.includes('const FOOTLIGHT_TTL_SEC = 45 * 60;'));
+  assert.ok(sec.includes('`POST /api/town/ghostlight/checkin` (45-min footlight TTL)'));
+  assert.ok(sec.includes('`GET /api/town/state` (public, optional `?since=<seq>`)'));
+  assert.ok(serverSrc.includes("url.searchParams.get('since')"));
+  assert.ok(sec.includes('`POST /api/town/ghostlight/say` (optional `reply_to`)'));
+  assert.ok(serverSrc.includes('body.reply_to'));
+});
+
+test('town-api/README.md Endpoint map guest, guestbook, and admin annotations match server.mjs', () => {
+  const readme = readReadme();
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const sec = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /)[1];
+  assert.ok(sec.includes('`POST /api/town/ghostlight/guest/checkin` (1/5 min)'));
+  assert.ok(sec.includes('`POST /api/town/ghostlight/guest/say` (2/10 min)'));
+  assert.ok(sec.includes('`POST /api/town/inn/guest/vacate` (guest Inn stays, 2/h shared bucket, no footlight, no plot)'));
+  assert.ok(sec.includes('`POST /api/town/fish/guest/cast` (2/h)'));
+  assert.ok(sec.includes('`POST /api/town/garden/guest/plant` (2/h)'));
+  assert.ok(sec.includes('`POST /api/town/guestbook` (unsigned, moderated)'));
+  assert.ok(sec.includes('(all require `TOWN_OPERATOR_PUBKEY`)'));
+  assert.ok(serverSrc.includes('operatorPubkey for /admin/*'));
+});
+
+test('town-api/README.md CLI quickstart order matches README actual order and pins leave/presence swap vs CLI_USAGE', () => {
+  const readme = readReadme();
+  const clientSrc = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+  const usageMatch = clientSrc.match(/const CLI_USAGE = \[([\s\S]*?)\]\.join\('\\n'\);/);
+  assert.ok(usageMatch, 'CLI_USAGE must exist');
+  const dispatchOrder = [...usageMatch[1].matchAll(/'  ([a-z-]+)\s+--/g)].map((m) => m[1]);
+  assert.deepEqual(dispatchOrder, [
+    'keygen',
+    'guest-checkin',
+    'guest-say',
+    'join',
+    'checkin',
+    'say',
+    'leave',
+    'presence',
+    'plot',
+    'getplot',
+    'state',
+  ]);
+  const qs = readme.match(/## `ghostlight-client\.mjs` CLI quickstart\s+```bash\n([\s\S]*?)\n```/)[1];
+  const qsLines = qs.split('\n').filter((l) => l.includes('ghostlight-client.mjs '));
+  const qsCmds = qsLines.map((l) => l.match(/ghostlight-client\.mjs\s+([a-z-]+)/)[1]);
+  assert.deepEqual(qsCmds, [
+    'keygen',
+    'guest-checkin',
+    'guest-say',
+    'join',
+    'checkin',
+    'say',
+    'presence',
+    'plot',
+    'getplot',
+    'leave',
+    'state',
+  ]);
+  assert.deepEqual([...qsCmds].sort(), [...dispatchOrder].sort());
+  assert.equal(qsCmds.indexOf('presence'), dispatchOrder.indexOf('leave'));
+  assert.ok(qs.split('\n')[0].includes('export TOWN_API_BASE=http://127.0.0.1:8124'));
+});
+
+test('town-api/README.md Safety rails structure, 12 rate-limit phrases, and size caps & retention bullet', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Safety rails\s+([\s\S]*?)\n## /)[1];
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)];
+  assert.deepEqual(
+    bullets.map((b) => b[1]),
+    ['Ed25519 auth', 'Keys by file path only', 'Rate limits', 'Size caps & retention']
+  );
+  const byTitle = new Map(bullets.map((b) => [b[1], b[2]]));
+  for (const phrase of [
+    '`join` `5/h` per IP',
+    '`checkin` `1/min`',
+    '`say` `6/10 min`',
+    '`plot` `10/h`',
+    '`fish/cast` `10/h`',
+    '`inn/claim` & `inn/extend` `10/h`',
+    '`key/rotate` `3/h`',
+    '`guestbook` `3/h` per IP',
+    '`guest-checkin` `1/5 min`',
+    '`guest-say` `2/10 min`',
+    '`inn/guest/claim` & `inn/guest/extend` `2/h` (shared bucket)',
+    '`fish/guest/cast` `2/h`',
+  ]) {
+    assert.ok(byTitle.get('Rate limits').includes(phrase), `Rate limits bullet must include ${phrase}`);
+  }
+  for (const phrase of [
+    '`64 KB` request body cap',
+    '`say` 500 chars',
+    '`status_text` 120 chars',
+    '`bio` 500 chars',
+    '`guestbook` name 40 / body 500 chars',
+    'plot manifest `16 KB` (`12` props max)',
+    'plot HTML `32 KB`',
+    '`prompt_book` rows older than 7 days (`PROMPT_BOOK_RETENTION_SEC`)',
+  ]) {
+    assert.ok(byTitle.get('Size caps & retention').includes(phrase), `Size caps bullet must include ${phrase}`);
+  }
+});
+
+test('town-api/README.md Startup migrations intro and 4 ordered migration bullets', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Startup migrations\s+([\s\S]*?)\n## /)[1];
+  const norm = sec.replace(/\s+/g, ' ');
+  assert.ok(
+    norm.includes(
+      'On startup, `createTownServer` applies `schema.sql` (`CREATE TABLE IF NOT EXISTS` in WAL mode) and runs idempotent migrations for older databases:'
+    )
+  );
+  const bullets = [...sec.matchAll(/^- (.+)$/gm)].map((m) => m[1]);
+  assert.equal(bullets.length, 4);
+  assert.ok(bullets[0].includes('`residents.role`'));
+  assert.ok(bullets[1].includes('`prompt_book.reply_to`'));
+  assert.ok(bullets[2].includes('`guestbook.plot`'));
+  assert.ok(bullets[3].includes('`residents`'));
+});
+
+test('town-api/README.md Honest limits and intro accuracy trace to disk and consumers', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Honest limits\s+([\s\S]*?)$/)[1];
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\*/gm)].map((m) => m[1]);
+  assert.deepEqual(bullets, ['Live state keys', 'No pinned live counters']);
+  assert.ok(!/state_seq \d/.test(readme));
+  assert.ok(!/Prompt Book \d+/.test(readme));
+  assert.ok(readme.includes('Signed, zero-dependency SQLite-backed state server'));
+  assert.ok(readme.includes('(Node built-ins + `node:sqlite` only; requires Node >= 22.5)'));
+  assert.ok(!fs.existsSync(path.join(__dirname, 'package.json')));
+  const norm = readme.replace(/\s+/g, ' ');
+  assert.ok(
+    norm.includes('Every browser client, the 3D town, and the seed NPC runner poll or write against this HTTP API')
+  );
+  const townJs = fs.readFileSync(path.join(ROOT_DIR, 'town-3d/town.js'), 'utf8');
+  assert.ok(townJs.includes('/api/town/state'));
+  const runAll = fs.readFileSync(path.join(ROOT_DIR, 'town-npc/run-all.mjs'), 'utf8');
+  assert.ok(runAll.includes('/api/town/state'));
+});
