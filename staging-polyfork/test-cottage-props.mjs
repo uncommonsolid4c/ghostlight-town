@@ -1099,3 +1099,244 @@ test('buildProp remap formula extra spot checks including just-below-boundary cl
   assert.ok(Math.abs(passThrough.position.y - 0.04) < 1e-12);
   assert.equal(passThrough.position.z, 12);
 });
+
+test('buildProp remap formula quarter-point spot checks beyond the existing tables', () => {
+  const THREE = makeFakeThree();
+  const cases = [
+    [-1.5, 3.275],
+    [-0.25, 2.8375],
+    [0.5, 2.575],
+    [1.75, 2.1375],
+    [-2.000001, 3.45],
+    [2.0499999, 2.05],
+  ];
+
+  for (const [z, expectedZ] of cases) {
+    const built = buildProp(THREE, { kind: 'desk', x: 0.25, y: 0.1, z, rot_y: 30, color: '#7a5230' });
+    assert.ok(Math.abs(built.position.z - expectedZ) < 1e-12, `z=${z} got ${built.position.z}`);
+    assert.ok(Math.abs(built.position.y - 0.64) < 1e-12, `z=${z} y got ${built.position.y}`);
+    assert.equal(built.position.x, 0.25);
+    assert.ok(Math.abs(built.rotation.y - (30 * Math.PI) / 180) < 1e-12);
+  }
+});
+
+test('group props keep children unrotated while the group rotates', () => {
+  const THREE = makeFakeThree();
+
+  const lantern = buildProp(THREE, { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 270, color: '#6b492b' });
+  assert.ok(Math.abs(lantern.rotation.y - (270 * Math.PI) / 180) < 1e-12);
+  assert.equal(lantern.children.length, 3);
+  for (const child of lantern.children) {
+    assert.equal(child.rotation.x, 0);
+    assert.equal(child.rotation.y, 0);
+    assert.equal(child.rotation.z, 0);
+  }
+
+  const planter = buildProp(THREE, { kind: 'planter', x: 0, y: 0, z: 2.2, rot_y: 45, color: '#7a5230' });
+  assert.ok(Math.abs(planter.rotation.y - (45 * Math.PI) / 180) < 1e-12);
+  assert.equal(planter.children.length, 5);
+  for (const child of planter.children) {
+    assert.equal(child.rotation.x, 0);
+    assert.equal(child.rotation.y, 0);
+    assert.equal(child.rotation.z, 0);
+  }
+});
+
+test('attachPlotProps builds each NPC manifest prop at its exact remapped porch position', async () => {
+  const THREE = makeFakeThree();
+  const expectedByHandle = {
+    wick: [
+      { name: 'prop_desk', args: [1.1, 0.72, 0.6], x: -1.0, y: 0.54, z: 2.96, rot: 0, color: '#6b3e1b' },
+      { name: 'prop_rug', args: [1.6, 0.04, 1.1], x: 0, y: 0.20, z: 2.435, rot: 0, color: '#9c5a2c' },
+      { name: 'prop_poster_frame', args: [0.7, 0.9, 0.06], x: 1.1, y: 1.38, z: 3.24, rot: 0, color: '#c8922e' },
+    ],
+    maren: [
+      { name: 'prop_desk', args: [1.1, 0.72, 0.6], x: -0.9, y: 0.54, z: 2.925, rot: 0, color: '#3d4650' },
+      { name: 'prop_typewriter', args: [0.36, 0.18, 0.3], x: -0.9, y: 0.99, z: 2.925, rot: 0, color: '#1e2328' },
+      { name: 'prop_bookshelf', args: [0.9, 1.4, 0.35], x: 1.1, y: 0.88, z: 3.03, rot: 270, color: '#43505c' },
+      { name: 'prop_poster_frame', args: [0.7, 0.9, 0.06], x: 0.2, y: 1.38, z: 3.24, rot: 0, color: '#1e2328' },
+    ],
+    tomas: [
+      { name: 'prop_rug', args: [1.6, 0.04, 1.1], x: 0, y: 0.20, z: 2.645, rot: 0, color: '#8c4a2b' },
+      { name: 'prop_bookshelf', args: [0.9, 1.4, 0.35], x: -0.8, y: 0.88, z: 2.995, rot: 30, color: '#4b2e1e' },
+      { name: 'prop_tea_kettle', args: [0.14, 0.18, 0.24, 8], x: 0.7, y: 0.30, z: 2.61, rot: 0, color: '#b5633a' },
+      { name: 'prop_cat', args: [0.16, 0.36, 6], x: -0.4, y: 0.36, z: 2.54, rot: 45, color: '#4b2e1e' },
+    ],
+  };
+
+  for (const [handle, expected] of Object.entries(expectedByHandle)) {
+    const manifestPath = path.join(REPO_ROOT, 'town-npc', 'plots', handle, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const cottage = new THREE.Group();
+    const attached = attachPlotProps(THREE, cottage, manifest.props);
+
+    assert.equal(attached, expected.length, `${handle} attached count`);
+    assert.equal(cottage.children.length, expected.length, `${handle} children count`);
+
+    for (let i = 0; i < expected.length; i++) {
+      const child = cottage.children[i];
+      const exp = expected[i];
+      assert.equal(child.name, exp.name, `${handle}[${i}] name`);
+      assert.deepEqual(child.geometry.args, exp.args, `${handle}[${i}] args`);
+      assert.equal(child.position.x, exp.x, `${handle}[${i}] x`);
+      assert.ok(Math.abs(child.position.y - exp.y) < 1e-12, `${handle}[${i}] y`);
+      assert.ok(Math.abs(child.position.z - exp.z) < 1e-12, `${handle}[${i}] z`);
+      assert.ok(Math.abs(child.rotation.y - (exp.rot * Math.PI) / 180) < 1e-12, `${handle}[${i}] rot`);
+      assert.equal(child.material.color, exp.color, `${handle}[${i}] color`);
+    }
+  }
+});
+
+test('buildProp rejects missing axes and non-object props', () => {
+  const THREE = makeFakeThree();
+  const invalidInputs = [
+    { kind: 'desk', y: 0, z: 2.2, rot_y: 0, color: '#ffffff' },
+    { kind: 'desk', x: 0, z: 2.2, rot_y: 0, color: '#ffffff' },
+    { kind: 'desk', x: 0, y: 0, rot_y: 0, color: '#ffffff' },
+    { kind: 'desk', x: null, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' },
+    { kind: 'desk', x: 0, y: null, z: 2.2, rot_y: 0, color: '#ffffff' },
+    { kind: 'desk', x: 0, y: 0, z: null, rot_y: 0, color: '#ffffff' },
+    { kind: 'desk' },
+    [],
+    42,
+    true,
+  ];
+
+  for (const input of invalidInputs) {
+    assert.equal(buildProp(THREE, input), null);
+  }
+});
+
+test('safeColor fallback passthrough and HEX_COLOR_RE statelessness', async () => {
+  const { HEX_COLOR_RE, safeColor } = await import('./cottage-props.mjs');
+
+  assert.equal(safeColor('bad', 'red'), 'red');
+  assert.equal(safeColor('#abc', '#000000'), '#000000');
+  assert.equal(safeColor(undefined, undefined), undefined);
+  assert.equal(safeColor('#abcdef', null), '#abcdef');
+  assert.equal(safeColor('bad', { hex: '#123456' }).hex, '#123456');
+
+  for (let i = 0; i < 3; i++) {
+    assert.equal(HEX_COLOR_RE.test('#123456'), true);
+  }
+  for (let i = 0; i < 3; i++) {
+    assert.equal(HEX_COLOR_RE.test('#12345'), false);
+  }
+  assert.equal(HEX_COLOR_RE.test('#123456'), true);
+});
+
+test('attachPorchDeck deck block matches town-3d/town.js buildPorchDeck verbatim', async () => {
+  const townSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8');
+  const propsSrc = await fs.readFile(path.join(__dirname, 'cottage-props.mjs'), 'utf8');
+
+  const fnStart = townSrc.indexOf('function buildPorchDeck(THREE) {');
+  assert.ok(fnStart !== -1, 'buildPorchDeck not found in town.js');
+  const blockStart = townSrc.indexOf('const deck = new THREE.Mesh(', fnStart);
+  const endMarker = 'deck.position.set(0, 0.09, 2.9);';
+  const blockEnd = townSrc.indexOf(endMarker, blockStart);
+  assert.ok(blockStart !== -1 && blockEnd !== -1, 'deck block markers not found in town.js');
+
+  const block = townSrc.slice(blockStart, blockEnd + endMarker.length);
+  assert.equal(propsSrc.includes(block), true);
+
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const deck = attachPorchDeck(THREE, cottage);
+  assert.ok(deck !== null);
+  assert.equal(deck.rotation.y, 0);
+  assert.equal(cottage.children.length, 1);
+  assert.equal(cottage.children[0], deck);
+});
+
+test('staging.js cottage-props import line verbatim and minimal usage', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+
+  assert.equal(
+    stagingSrc.includes(
+      "import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=36';"
+    ),
+    true
+  );
+  assert.equal(stagingSrc.split('MILO_PLOT_PROPS').length - 1, 2);
+  for (const sym of ['buildProp', 'VALID_PROP_KINDS', 'safeColor', 'HEX_COLOR_RE']) {
+    assert.equal(stagingSrc.split(sym).length - 1, 0, `unexpected ${sym} in staging.js`);
+  }
+  assert.equal(stagingSrc.split("from './cottage-props.mjs").length - 1, 1);
+});
+
+test('combined porch: deck, trim, and MILO props rest on the deck top in order', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+
+  const deck = attachPorchDeck(THREE, cottage);
+  const trim = attachPorchTrim(THREE, cottage);
+  const attached = attachPlotProps(THREE, cottage, MILO_PLOT_PROPS);
+
+  assert.equal(attached, 3);
+  assert.deepEqual(
+    cottage.children.map((c) => c.name),
+    ['cottage_porch_deck', 'cottage_porch_trim', 'prop_desk', 'prop_tea_kettle', 'prop_cat']
+  );
+  assert.equal(cottage.children[0], deck);
+  assert.equal(cottage.children[1], trim);
+
+  const [, , desk, kettle, cat] = cottage.children;
+  assert.ok(Math.abs(desk.position.y - 0.36 - 0.18) < 1e-12);
+  assert.ok(Math.abs(cat.position.y - 0.18 - 0.18) < 1e-12);
+  assert.ok(Math.abs(kettle.position.y - 0.12 - 0.96) < 1e-12);
+  for (const prop of [desk, kettle, cat]) {
+    assert.ok(prop.position.z >= 2.05 && prop.position.z <= 3.45);
+  }
+});
+
+test('single-mesh kinds y-offset table at a remapped z with nonzero y', () => {
+  const THREE = makeFakeThree();
+  const expectedYByKind = [
+    ['desk', 1.04],
+    ['bookshelf', 1.38],
+    ['rug', 0.70],
+    ['tea_kettle', 0.80],
+    ['typewriter', 0.77],
+    ['cat', 0.86],
+    ['poster_frame', 1.58],
+  ];
+
+  for (const [kind, expectedY] of expectedYByKind) {
+    const built = buildProp(THREE, { kind, x: 0, y: 0.5, z: -1, rot_y: 0, color: '#ffffff' });
+    assert.ok(Math.abs(built.position.z - 3.1) < 1e-12, `${kind} z`);
+    assert.ok(Math.abs(built.position.y - expectedY) < 1e-12, `${kind} y`);
+  }
+});
+
+test('file hygiene: 47 unique names, 6 imports, zero banned terms, pinned as-true counts', async () => {
+  const src = await fs.readFile(new URL(import.meta.url), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 47);
+  assert.equal(new Set(names).size, 47);
+
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 6);
+  assert.deepEqual(lines.slice(6, 14), [
+    'import {',
+    '  VALID_PROP_KINDS,',
+    '  buildProp,',
+    '  MILO_PLOT_PROPS,',
+    '  attachPlotProps,',
+    '  attachPorchDeck,',
+    '  attachPorchTrim,',
+    "} from './cottage-props.mjs';",
+  ]);
+
+  const bannedWord = 'camp' + 'fire';
+  assert.equal(lines.filter((l) => l.toLowerCase().includes(bannedWord)).length, 0);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '\\.random').test(l)).length, 0);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
+});
