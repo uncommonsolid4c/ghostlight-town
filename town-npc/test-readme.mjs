@@ -1124,3 +1124,350 @@ test('town-npc/README.md register join origin/bio and runAll summary shape match
   });
   assert.deepEqual(resNope, { ok: false, results: [] });
 });
+
+test('town-npc/README.md exact byte size, line count, headings, opening, and closing paragraph', () => {
+  const readme = readReadme();
+  assert.equal(fs.statSync(README_PATH).size, 4982);
+  const lines = readme.split('\n');
+  assert.equal(lines.length, 94);
+  assert.equal(lines[lines.length - 1], '');
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('#')),
+    [
+      '# Seed NPCs (`town-npc/`)',
+      '## Characters',
+      '## Files',
+      '## Running it',
+      '## The brain',
+      '## Safety rails',
+      '## Honest limits',
+    ]
+  );
+  assert.ok(readme.startsWith('# Seed NPCs (`town-npc/`)\n'));
+  assert.ok(
+    readme.includes(
+      'See [`../SKILL.md`](../SKILL.md) for the resident move-in guide and\n[`../PLAN.md`](../PLAN.md) §6 for the full NPC design.'
+    )
+  );
+});
+
+test('town-npc/README.md Characters bullets and plots sentences match verbatim', () => {
+  const readme = readReadme();
+  const section = readme.match(/## Characters\n\n([\s\S]*?)\n\n`plots\/milo\//);
+  assert.ok(section, 'town-npc/README.md must have a ## Characters bullet list before `plots/milo/`');
+  assert.deepEqual(section[1].split('\n'), [
+    '- **Wick** (`wick`) — Stagehand / Lamp-Trimmer, plot 2 (`plots/wick/`).',
+    '- **Maren** (`maren`) — Retired Typesetter, plot 3 (`plots/maren/`).',
+    '- **Tomas** (`tomas`) — Props-Master / Tea-Urn Keeper, plot 4 (`plots/tomas/`).',
+  ]);
+  assert.ok(
+    readme.includes(
+      "`plots/milo/` is plot 1 (the founder's cottage, not an NPC). `plots/` holds the\nrepo source-of-truth `manifest.json` and `desk-note.html` files."
+    )
+  );
+});
+
+test('town-npc/README.md Files table Role column matches exact text in order', () => {
+  const readme = readReadme();
+  const tableSection = readme.match(/## Files\n\n([\s\S]*?)\n\nTest suites:/);
+  assert.ok(tableSection, 'town-npc/README.md must have a ## Files table followed by Test suites:');
+  const rows = [...tableSection[1].matchAll(/^\| `([^`]+)` \| ([^|]+) \|$/gm)];
+  assert.deepEqual(
+    rows.map((m) => m[1]),
+    [
+      'characters.mjs',
+      'daily-game.mjs',
+      'stepback.mjs',
+      'honesty.mjs',
+      'keygen.mjs',
+      'register.mjs',
+      'run.mjs',
+      'run-all.mjs',
+    ]
+  );
+  assert.deepEqual(
+    rows.map((m) => m[2].trim()),
+    [
+      'Defines `CHARACTERS` (wick, maren, tomas), `getStatusText`, and `buildSystemPrompt`.',
+      'Daily game host rotation (`dailyGameHostForDate`, `buildDailyGameLine`, `isDailyGamePosted`).',
+      'Pure turn-decision rules (`decideTurn`, `selectReplierForLine`, `findAddressedLines`).',
+      'Pure output gate (`checkHonesty`, `MAX_SAY_LEN = 500`, denylist, attribution check).',
+      'Generates and loads Ed25519 keys (`key.pem` mode `0600`, `pubkey.txt` 44-char base64).',
+      "Probes API, ensures keypair, joins, approves `role: 'npc'`, and PUTs `plots/<handle>/`.",
+      'Executes one turn for one NPC (`runTurn`, `trimMemory`, `getPartOfDay`, `buildTurnPrompt`).',
+      'Wrapper running `wick` → `maren` → `tomas` sequentially with stagger and API probe.',
+    ]
+  );
+});
+
+test('town-npc/README.md Test suites list matches exact 7 suites in README order', () => {
+  const readme = readReadme();
+  const lineMatch = readme.match(/^Test suites:\s*([^\n]+(?:\n[^\n]+)*?)\.\s*$/m);
+  assert.ok(lineMatch, 'town-npc/README.md must have a Test suites: line');
+  const listed = [...lineMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  assert.deepEqual(listed, [
+    'test-daily-game.mjs',
+    'test-npc.mjs',
+    'test-plots.mjs',
+    'test-real-brain.mjs',
+    'test-register.mjs',
+    'test-run-all.mjs',
+    'test-readme.mjs',
+  ]);
+});
+
+test('town-npc/README.md getStatusText 3x3 table and fallback precedence match characters.mjs', async () => {
+  const { getStatusText } = await import('./characters.mjs');
+  assert.deepEqual(
+    CHARACTERS.map((c) => [c.status.morning, c.status.afternoon, c.status.evening]),
+    [
+      ['Sweeping the bandstand steps', 'Browsing the Gazette newsstand', 'Tending the Ghostlight bulb'],
+      [
+        'Sorting lead sorts at the plot desk',
+        'Walking the newsstand, hunting a good line',
+        'Listening by the Bandstand steps for a line worth keeping',
+      ],
+      [
+        'Polishing the copper samovar',
+        'Carrying a thermos past the newsstand',
+        'Setting the samovar steaming on the corner step',
+      ],
+    ]
+  );
+  for (const c of CHARACTERS) {
+    for (const p of ['morning', 'afternoon', 'evening']) {
+      assert.equal(getStatusText(c, p), c.status[p]);
+    }
+  }
+  assert.equal(getStatusText({ status: { morning: 'S' }, routine: { morning: 'R' }, title: 'T' }, 'morning'), 'S');
+  assert.equal(getStatusText({ routine: { morning: 'R' }, title: 'T' }, 'morning'), 'R');
+  assert.equal(getStatusText({ title: 'T' }, 'morning'), 'T');
+  assert.equal(getStatusText(CHARACTERS[0], 'night'), 'Stagehand / Lamp-Trimmer');
+  assert.equal(getStatusText({ status: {}, routine: {} }, 'morning'), '');
+  assert.equal(getStatusText(undefined, 'morning'), '');
+});
+
+test('town-npc/README.md buildSystemPrompt exact lines for maren, tomas, and default partOfDay', async () => {
+  const { buildSystemPrompt } = await import('./characters.mjs');
+
+  const marenMorning = buildSystemPrompt(CHARACTERS[1], 'morning');
+  assert.ok(marenMorning.startsWith('You are Maren (Retired Typesetter) in Ghostlight Town.\n'));
+  assert.ok(marenMorning.includes('Current morning routine: sort lead sorts on the plot desk and read the porch note.'));
+  assert.ok(
+    marenMorning.includes(
+      "Town time is America/Los_Angeles; it is currently morning by the town clock. Visitors may be on other clocks — never correct a visitor's sense of the hour, and never assume their morning is yours."
+    )
+  );
+  assert.equal(
+    marenMorning.split('\n')[5],
+    'Current morning routine: sort lead sorts on the plot desk and read the porch note.'
+  );
+
+  const tomasEvening = buildSystemPrompt(CHARACTERS[2], 'evening');
+  assert.ok(tomasEvening.startsWith('You are Tomas (Props-Master / Tea-Urn Keeper) in Ghostlight Town.\n'));
+  assert.ok(tomasEvening.includes('Current evening routine: set the samovar steaming on the Bandstand corner step.'));
+
+  const wickDefault = buildSystemPrompt(CHARACTERS[0]);
+  assert.equal(wickDefault.split('\n').length, 15);
+  assert.ok(wickDefault.includes('Current evening routine:'));
+  assert.ok(
+    wickDefault.endsWith(
+      '- Reply with ONLY one short line to say in the Prompt Book (under 500 characters), or the single word NOTHING if there is genuinely nothing to say.'
+    )
+  );
+});
+
+test('town-npc/README.md formatPresenceForPrompt zones, own plot, 3h cutoff, and malformed entries match run.mjs', async () => {
+  const { formatPresenceForPrompt } = await import('./run.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const npc = CHARACTERS[0];
+  const emptyStr = '(No visitors are about right now.)';
+
+  assert.equal(formatPresenceForPrompt({ npc, presence: [], now }), emptyStr);
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'bandstand', updated_at: now - 60 }], now }),
+    '- muse is at the Bandstand.'
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'gate', updated_at: now - 60 }], now }),
+    '- muse is at the gate.'
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'plot:maren', updated_at: now - 60 }], now }),
+    "- muse is at Maren's cottage."
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'plot: stranger', updated_at: now - 60 }], now }),
+    "- muse is at  stranger's cottage."
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'somewhere-else', updated_at: now - 60 }], now }),
+    '- muse is at around town.'
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'plot:wick', updated_at: now - 60 }], now }),
+    '- muse is at your cottage.\nA visitor is at your cottage — you are the host; greet them or answer from your doorway.'
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'wick', zone: 'bandstand', updated_at: now - 60 }], now }),
+    emptyStr
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'bandstand', updated_at: now - 10800 }], now }),
+    '- muse is at the Bandstand.'
+  );
+  assert.equal(
+    formatPresenceForPrompt({ npc, presence: [{ handle: 'muse', zone: 'bandstand', updated_at: now - 10801 }], now }),
+    emptyStr
+  );
+
+  const malformed = [
+    null,
+    { handle: '', zone: 'bandstand', updated_at: now },
+    { handle: 'muse', zone: '', updated_at: now },
+    { handle: 'muse', zone: 'bandstand' },
+    { handle: 'muse', zone: 'bandstand', updated_at: 'soon' },
+    { handle: 'muse', zone: 'plot:', updated_at: now - 60 },
+  ];
+  for (const entry of malformed) {
+    assert.equal(formatPresenceForPrompt({ npc, presence: [entry], now }), emptyStr);
+  }
+});
+
+test('town-npc/README.md buildTurnPrompt sections, slicing, reply guidance, and memory trim match run.mjs', async () => {
+  const { buildTurnPrompt } = await import('./run.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const baseArgs = {
+    npc: CHARACTERS[0],
+    partOfDay: 'evening',
+    decision: { action: 'initiate' },
+    promptBook: [],
+    presence: [],
+    memoryText: '',
+    now,
+  };
+
+  const quiet = buildTurnPrompt(baseArgs);
+  assert.ok(quiet.includes('(The Prompt Book is quiet.)'));
+  assert.ok(quiet.includes('(No prior memories recorded yet.)'));
+  assert.ok(quiet.includes('(No visitors are about right now.)'));
+  assert.ok(
+    quiet.includes(
+      'Turn context: This is a quiet routine moment at the Bandstand. Offer one short in-character line or observation, or NOTHING if you prefer to stay quiet.'
+    )
+  );
+  assert.ok(quiet.includes('Remember: stay under 500 characters, output ONLY the single line to say (or NOTHING).'));
+  assert.deepEqual(
+    quiet.match(/^(Recent Prompt Book lines:|Where everyone is:|Your recent memory:|Turn context: |Remember: )/gm),
+    ['Recent Prompt Book lines:', 'Where everyone is:', 'Your recent memory:', 'Turn context: ', 'Remember: ']
+  );
+
+  const withLines = buildTurnPrompt({
+    ...baseArgs,
+    promptBook: [
+      { role: 'muse', kind: 'say', handle: 'muse', body: 'Hello Wick' },
+      { role: 'npc', kind: 'emote', handle: 'maren', body: 'nods' },
+    ],
+  });
+  assert.ok(withLines.includes('- [MUSE] muse: Hello Wick'));
+  assert.ok(withLines.includes('- [NPC] maren (emote): nods'));
+
+  const twentyOne = Array.from({ length: 21 }, (_, i) => ({
+    role: 'muse',
+    kind: 'say',
+    handle: 'muse',
+    body: `line ${i}`,
+  }));
+  const sliced = buildTurnPrompt({ ...baseArgs, promptBook: twentyOne });
+  assert.equal(sliced.includes('- [MUSE] muse: line 0'), false);
+  assert.equal(sliced.includes('- [MUSE] muse: line 20'), true);
+
+  const replyWithId = buildTurnPrompt({
+    ...baseArgs,
+    decision: { action: 'reply', replyLine: { handle: 'muse', id: 7 } },
+  });
+  assert.ok(
+    replyWithId.includes(
+      "Turn context: Answer muse's line #7 briefly in character. You are the one neighbor answering this line; the others will stay quiet."
+    )
+  );
+
+  const replyNoId = buildTurnPrompt({
+    ...baseArgs,
+    decision: { action: 'reply', replyLine: { handle: 'muse' } },
+  });
+  assert.ok(
+    replyNoId.includes(
+      "Turn context: Answer muse's line briefly in character. You are the one neighbor answering this line; the others will stay quiet."
+    )
+  );
+
+  const replyNoLine = buildTurnPrompt({
+    ...baseArgs,
+    decision: { action: 'reply' },
+  });
+  assert.ok(
+    replyNoLine.includes('Turn context: Someone mentioned you recently in the Prompt Book. Reply briefly in character.')
+  );
+
+  const withMemory = buildTurnPrompt({
+    ...baseArgs,
+    memoryText: '  2026-11-22: swept the steps.\n  ',
+  });
+  assert.ok(withMemory.includes('2026-11-22: swept the steps.'));
+});
+
+test('town-npc/README.md stepback constants, 30-minute boundary, and localDateString match stepback.mjs', async () => {
+  const { AMBIENT_DAILY_CAP, localDateString, findAddressedLines } = await import('./stepback.mjs');
+  assert.equal(AMBIENT_DAILY_CAP, 2);
+
+  const stepbackSrc = fs.readFileSync(path.join(__dirname, 'stepback.mjs'), 'utf8');
+  assert.ok(stepbackSrc.includes('const DAY_SEC = 24 * 3600;'));
+  assert.ok(stepbackSrc.includes('const SIX_HOURS_SEC = 6 * 3600;'));
+  assert.ok(stepbackSrc.includes('const THREE_HOURS_SEC = 3 * 3600;'));
+  assert.ok(stepbackSrc.includes('const THIRTY_MIN_SEC = 30 * 60;'));
+
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const addressed = findAddressedLines({
+    npc: CHARACTERS[0],
+    promptBook: [
+      { id: 1, handle: 'muse', body: 'Wick?', created_at: now - 1800 },
+      { id: 2, handle: 'muse', body: 'Wick?', created_at: now - 1801 },
+    ],
+    now,
+  });
+  assert.deepEqual(
+    addressed.map((l) => l.id),
+    [1]
+  );
+
+  const jan = Math.floor(Date.parse('2026-01-05T12:00:00Z') / 1000);
+  for (const ts of [now, jan]) {
+    const out = localDateString(ts);
+    assert.match(out, /^\d{4}-\d{2}-\d{2}$/);
+    const d = new Date(ts * 1000);
+    const expected = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    assert.equal(out, expected);
+  }
+});
+
+test('town-npc/test-readme.mjs file hygiene: 44 unique tests, 6 imports, and banned-needle counts', () => {
+  const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+
+  const importLines = selfSrc.split('\n').filter((line) => line.startsWith('import '));
+  assert.equal(importLines.length, 6);
+
+  assert.doesNotMatch(selfSrc, BANNED_TERM_RE);
+  assert.equal(selfSrc.includes(`TO${'DO'}`), false);
+  assert.equal(selfSrc.includes(`FIX${'ME'}`), false);
+  assert.equal(selfSrc.includes(`Date.${'now'}`), false);
+
+  const mathRandomMatches = selfSrc.match(new RegExp(`Math\\.${'random'}`, 'g')) || [];
+  assert.equal(mathRandomMatches.length, 5);
+
+  const fetchMatches = selfSrc.match(new RegExp(`fet${'ch'}\\(`, 'g')) || [];
+  assert.equal(fetchMatches.length, 2);
+});
