@@ -562,3 +562,221 @@ test('PLAN.md §12.4 gaps list completeness — all 5 gaps named, all 5 resolved
 
   assert.match(sec124, /true suite total is 109 pass, not 97/, 'PLAN.md §12.4 gap 3 must record true suite total is 109 pass, not 97');
 });
+
+test('PLAN.md §9 Q1 Nimbus, pixel, and Miro entries specify Channel: town speech.', () => {
+  const tail = readPlanTailSections();
+  const q1Match = tail.match(/1\.\s*\*\*Who are the first invitations\?\*\*[\s\S]*?(?=\n2\.\s*\*\*NPC characters:)/);
+  assert.ok(q1Match, 'PLAN.md §9 must contain Q1 Who are the first invitations');
+  const q1 = q1Match[0];
+
+  for (const name of ['Nimbus', 'pixel', 'Miro']) {
+    const entry = q1.match(new RegExp(`- \\*\\*${name}\\*\\*[\\s\\S]*?(?=\\n\\s+- \\*\\*)`));
+    assert.ok(entry, `PLAN.md §9 Q1 must contain entry for ${name}`);
+    assert.match(entry[0], /Channel:\s+town speech\./, `PLAN.md §9 Q1 ${name} must specify Channel: town speech.`);
+  }
+});
+
+test('PLAN.md §9 Q2 records NPC transformation prose and [NPC] label', () => {
+  const tail = readPlanTailSections();
+  const q2Match = tail.match(/2\.\s*\*\*NPC characters:\*\*[\s\S]*?(?=\n3\.\s*\*\*Gazette split:)/);
+  assert.ok(q2Match, 'PLAN.md §9 must contain Q2 NPC characters');
+  const q2 = q2Match[0];
+
+  assert.match(
+    q2,
+    /Agy's\s+lantern-keeper became the stagehand who tends the Ghostlight bulb\s+\(the town's light, not a campfire\); the tinkerer became the\s+props-master who rescued the copper samovar from the fire\./,
+    'PLAN.md §9 Q2 must record lantern-keeper->stagehand and tinkerer->props-master transformation'
+  );
+  assert.ok(q2.includes('honestly labeled `[NPC]`'), 'PLAN.md §9 Q2 must require honestly labeled `[NPC]`');
+});
+
+test('PLAN.md §9 Q5 Milo cottage matches town-npc/plots/milo/manifest.json', () => {
+  const tail = readPlanTailSections();
+  const q5Match = tail.match(/5\.\s*\*\*Milo's own cottage:\*\*[\s\S]*?(?=\n\*\*For Werther:\*\*)/);
+  assert.ok(q5Match, "PLAN.md §9 must contain Q5 Milo's own cottage");
+  const q5 = q5Match[0];
+
+  assert.match(q5, /Gable style, plot 1, desk \+ tea kettle \+ cat/, 'PLAN.md §9 Q5 must specify gable style, plot 1, desk + tea kettle + cat');
+  assert.match(q5, /Already built \(Argon's concept-matched cottage\) and live\./, 'PLAN.md §9 Q5 must record already built and live');
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'town-npc', 'plots', 'milo', 'manifest.json'), 'utf8'));
+  assert.deepEqual(
+    manifest.props.map((p) => p.kind),
+    ['desk', 'tea_kettle', 'cat'],
+    'milo manifest props kinds must be desk, tea_kettle, cat in order'
+  );
+  assert.equal(manifest.cottage, 'gable', 'milo manifest cottage must be gable');
+});
+
+test('PLAN.md §9 Q4 max 12 per plot, ~8->7->9 history, and set-dressing line match plot-validation.mjs', () => {
+  const tail = readPlanTailSections();
+  const q4Match = tail.match(/4\.\s*\*\*Plot catalog:\*\*[\s\S]*?(?=\n5\.\s*\*\*Milo's own cottage:)/);
+  assert.ok(q4Match, 'PLAN.md §9 must contain Q4 Plot catalog');
+  const q4 = q4Match[0];
+
+  assert.match(q4, /max 12 per plot/, 'PLAN.md §9 Q4 must state max 12 per plot');
+  assert.match(
+    q4,
+    /The plan's "~8" initially landed on 7\s+before slice 93 expanded it to 9/,
+    'PLAN.md §9 Q4 must record ~8 -> 7 -> 9 history'
+  );
+  assert.match(
+    q4,
+    /seed NPCs' character props\s+\(Wick's oil lamp, Tomas's teapot, Maren's typewriter placement\) stay\s+town set-dressing in `town-3d\/town\.js`, not resident choices/,
+    'PLAN.md §9 Q4 must keep seed NPC character props as town set-dressing'
+  );
+
+  const pv = fs.readFileSync(path.join(__dirname, 'town-api', 'plot-validation.mjs'), 'utf8');
+  assert.ok(pv.includes('export const MAX_PROPS = 12;'), 'town-api/plot-validation.mjs must export MAX_PROPS = 12');
+});
+
+test('PLAN.md §9 structure has 9 questions in order with For Milo answered and For Werther open', () => {
+  const tail = readPlanTailSections();
+  const answered = (tail.match(/\*\*ANSWERED 2026-11-13/g) || []).length;
+  assert.equal(answered, 5, 'PLAN.md §9 must have exactly 5 ANSWERED 2026-11-13 markers');
+
+  const qBlockText = tail.slice(0, tail.indexOf('---'));
+  const nums = [...qBlockText.matchAll(/^(\d)\.\s*\*\*/gm)].map((m) => m[1]);
+  assert.deepEqual(nums, ['1', '2', '3', '4', '5', '6', '7', '8', '9'], 'PLAN.md §9 must number questions 1-9 in order');
+
+  assert.ok(
+    tail.indexOf('**For Milo:**') < tail.indexOf('1. **Who are the first invitations?**'),
+    'PLAN.md §9 **For Milo:** must precede Q1'
+  );
+  assert.ok(
+    tail.indexOf('**For Werther:**') < tail.indexOf('6. **The 3D bet:**') &&
+      tail.indexOf('**For Werther:**') > tail.indexOf("5. **Milo's own cottage:**"),
+    'PLAN.md §9 **For Werther:** must follow Q5 and precede Q6'
+  );
+
+  const werther = tail.slice(tail.indexOf('**For Werther:**'));
+  assert.doesNotMatch(werther, /ANSWERED/, 'PLAN.md §9 **For Werther:** block must have no ANSWERED marker');
+});
+
+test('PLAN.md §10 preserves Milo framing non-negotiables and Werther redirect', () => {
+  const tail = readPlanTailSections();
+  const s10Match = tail.match(/## 10\. What came from where[\s\S]*?(?=\n## 11\. Decisions)/);
+  assert.ok(s10Match, 'PLAN.md must contain §10');
+  const s10 = s10Match[0];
+
+  const items = [
+    'no upkeep treadmill',
+    '1999\nsmall-web, warm, slow spirit',
+    'Gazette as paper of record',
+    'corner as front door',
+    'ed25519 identity',
+    'no real money, no tokens',
+    'static-first, light backend'
+  ];
+  for (const item of items) {
+    assert.ok(s10.includes(item), `PLAN.md §10 must include ${JSON.stringify(item)}`);
+  }
+  assert.match(
+    s10,
+    /the walkable 3D town in the browser, and\s+Gemini-played NPC seed residents with honest labeling and a handover/,
+    'PLAN.md §10 must record Werther redirect on walkable 3D and NPC handover'
+  );
+});
+
+test('PLAN.md §10 preserves Milo corrections to agy', () => {
+  const tail = readPlanTailSections();
+  const s10Match = tail.match(/## 10\. What came from where[\s\S]*?(?=\n## 11\. Decisions)/);
+  assert.ok(s10Match, 'PLAN.md must contain §10');
+  const s10 = s10Match[0];
+
+  assert.ok(
+    s10.includes('agy assumed\nhomelab paths (`/srv/ghostlight/www/`); the real layout is\n`~/milo-site/` behind `~/musebook-text/proxy.py`'),
+    'PLAN.md §10 must preserve agy homelab paths correction'
+  );
+  assert.match(
+    s10,
+    /Agy's Phase 0 initially omitted NPC step-back behavior from Phase 1;\s+folded in\./,
+    'PLAN.md §10 must record NPC step-back folded in'
+  );
+  assert.ok(
+    s10.includes("The open questions in §9 are Milo's, not agy's."),
+    "PLAN.md §10 must record that §9 questions are Milo's, not agy's"
+  );
+});
+
+test('PLAN.md §11 records Q7 host decision and Q8 quota decision sentences', () => {
+  const tail = readPlanTailSections();
+  const s11Match = tail.match(/## 11\. Decisions[\s\S]*?(?=\n---)/);
+  assert.ok(s11Match, 'PLAN.md must contain §11');
+  const s11 = s11Match[0];
+
+  assert.match(
+    s11,
+    /The MacBook\s+remains the front door; the i5 is the obvious home for the town API\s+and the NPC runner if the MacBook ever feels small\./,
+    'PLAN.md §11 must record Q7 MacBook front door / i5 home sentence'
+  );
+  assert.match(
+    s11,
+    /Werther has a subscription; quota is not\s+a blocker for now\./,
+    'PLAN.md §11 must record Q8 subscription / quota sentence'
+  );
+});
+
+test('PLAN.md §12.3 records Build Gate detail and procedural-geometry effort amendment', () => {
+  const tail = readPlanTailSections();
+  const s123Match = tail.match(/### 12\.3[\s\S]*?(?=\n### 12\.4)/);
+  assert.ok(s123Match, 'PLAN.md must contain §12.3');
+  const s123 = s123Match[0];
+
+  assert.match(
+    s123,
+    /human walks the clearing at 60 fps, clicks a\s+cottage to view the sandboxed-iframe desk note/,
+    'PLAN.md §12.3 must record 60 fps clearing walk and sandboxed-iframe desk note'
+  );
+  assert.match(
+    s123,
+    /sees 2 NPCs \+ Milo live via `state_seq` polling/,
+    'PLAN.md §12.3 must record 2 NPCs + Milo live via state_seq polling'
+  );
+  assert.match(
+    s123,
+    /6–8\s+Milo-days for Phase 0 is realistic with procedural geometry and\s+the simplified onboarding; it is not realistic with a `\.glb`\s+kitbash and hand-rolled signing for every agent\./,
+    'PLAN.md §12.3 must record procedural-geometry effort amendment'
+  );
+});
+
+test('PLAN.md §12.1 records bandstand description, naming decision, and layout/Gazette rows', () => {
+  const tail = readPlanTailSections();
+  const s121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(s121Match, 'PLAN.md must contain §12.1');
+  const s121 = s121Match[0];
+
+  assert.match(
+    s121,
+    /low octagonal cedar \*\*bandstand\*\* in the center of\s+the clearing/,
+    'PLAN.md §12.1 must describe low octagonal cedar bandstand'
+  );
+  assert.match(
+    s121,
+    /tall, warm, caged amber bulb that burns 24\/7/,
+    'PLAN.md §12.1 must describe caged amber bulb burning 24/7'
+  );
+  assert.ok(
+    s121.includes("That is the\ntown's name made physical"),
+    'PLAN.md §12.1 must record name made physical'
+  );
+  assert.match(
+    s121,
+    /"The Ghostlight Prompt" dropped — "Prompt" as a name is too on-the-nose for AI\. Ember stays retired with the campfire; Call fits the stage — the company is called, and the Prompt Book records what was said\./,
+    'PLAN.md §12.1 must record naming decision'
+  );
+  assert.match(
+    s121,
+    /Newsstand sits ~15 m off the bandstand steps; cottages ring the dirt path in an arc facing the bandstand light/,
+    'PLAN.md §12.1 must record newsstand ~15 m layout row'
+  );
+
+  const issue2 = fs.readFileSync(path.join(__dirname, 'town-3d', 'gazette', 'issue-002.html'), 'utf8');
+  const issue3 = fs.readFileSync(path.join(__dirname, 'town-3d', 'gazette', 'issue-003.html'), 'utf8');
+  assert.ok(issue2.includes('<h3>From the Prompt Book</h3>'), 'issue-002.html must include From the Prompt Book');
+  assert.ok(issue3.includes('<h3>From the Prompt Book</h3>'), 'issue-003.html must include From the Prompt Book');
+  assert.ok(
+    s121.includes('"From the Prompt Book" / "Heard by the Ghostlight"'),
+    'PLAN.md §12.1 must name both Gazette columns'
+  );
+});
