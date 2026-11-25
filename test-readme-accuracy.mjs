@@ -572,3 +572,120 @@ test('README.md intro Gazette paper of record matches town-3d/gazette/latest.jso
     'town-3d/gazette/issue-003.html must include "The Town Reads Itself Aloud"'
   );
 });
+
+
+test('README.md ## Status deployed-line ?v= and 195-file bundle count match staging-polyfork', async () => {
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  const m = statusSec.match(/The `\?v=(\d+)` \/ 195-file bundle deployed 2026-11-23 \(no pending deploy candidate\)/);
+  assert.ok(m, 'README Status must carry the deployed-line sentence');
+  const staged = stagingHtml.match(/staging\.js\?v=(\d+)/);
+  assert.ok(staged, 'staging html must reference staging.js?v=');
+  assert.equal(m[1], staged[1], 'deployed-line ?v must equal staged ?v');
+  const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
+  assert.equal(files.length, 195);
+});
+
+test('README.md Gazette issues 001 and 002 titles and first headlines match town-3d/gazette/', () => {
+  assert.equal(latestJson.issues[0].file, 'issue-001.html');
+  assert.equal(latestJson.issues[1].file, 'issue-002.html');
+  const issue1 = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/gazette/issue-001.html'), 'utf8');
+  const issue2 = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/gazette/issue-002.html'), 'utf8');
+  assert.ok(issue1.includes('<title>The Ghostlight Gazette — Issue #1</title>'));
+  assert.ok(issue2.includes('<title>The Ghostlight Gazette — Issue #2</title>'));
+  const h2s1 = [...issue1.matchAll(/<h2>([^<]*)<\/h2>/g)].map((x) => x[1]);
+  const h2s2 = [...issue2.matchAll(/<h2>([^<]*)<\/h2>/g)].map((x) => x[1]);
+  assert.equal(h2s1[0], "A Town Where Nobody's Cottage Gets Torn Down");
+  assert.equal(h2s2[0], 'The Light Reached Someone');
+});
+
+test('README.md ## Repo Map has 9 bullets, 11 link targets in order, and key descriptions', () => {
+  const repoMapSec = getSection(readmeMd, 'Repo Map');
+  const bullets = repoMapSec.split('\n').filter((l) => l.startsWith('- ['));
+  assert.equal(bullets.length, 9, `expected 9 Repo Map bullets, got ${bullets.length}`);
+  const targets = [...repoMapSec.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map((m) => m[1].trim());
+  assert.deepEqual(targets, [
+    'PLAN.md',
+    'SKILL.md',
+    'town.json',
+    'staging-polyfork/',
+    'staging-polyfork/README.md',
+    'town-3d/',
+    'town-api/',
+    'town-npc/',
+    'scripts/',
+    'concept/',
+    'CONCEPT.md',
+  ]);
+  for (const phrase of [
+    'full architecture, phased roadmap, and Argon review',
+    'agent onboarding quickstart, signing spec, and endpoint reference',
+    'machine-readable endpoints, auth parameters, and plot limits',
+  ]) {
+    assert.ok(norm(repoMapSec).includes(phrase), `Repo Map must include "${phrase}"`);
+  }
+});
+
+test('README.md ## How a Muse Joins step 1 lists openssl, Node crypto, and generateKeypair in order', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(joinSec.includes('1. Bring or generate an ed25519 keypair (`openssl`, Node `crypto`, or `generateKeypair` from'));
+  const i1 = joinSec.indexOf('`openssl`');
+  const i2 = joinSec.indexOf('Node `crypto`');
+  const i3 = joinSec.indexOf('`generateKeypair`');
+  assert.ok(i1 !== -1 && i2 !== -1 && i3 !== -1 && i1 < i2 && i2 < i3, 'step 1 sources must appear openssl, Node crypto, generateKeypair in order');
+  assert.ok(clientSrc.includes('export function generateKeypair('));
+});
+
+test('README.md ## How a Muse Joins step 4 names checkin before say and Prompt Book hello', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  const step4 = joinSec.match(/4\. Check in at the Bandstand[\s\S]*?(?=5\. Claim and furnish)/);
+  assert.ok(step4, 'step 4 must be extractable');
+  assert.ok(step4[0].includes('say hello in the Prompt Book'));
+  const c = step4[0].indexOf('POST /api/town/ghostlight/checkin');
+  const s = step4[0].indexOf('POST /api/town/ghostlight/say');
+  assert.ok(c !== -1 && s !== -1 && c < s, 'step 4 must name checkin before say');
+});
+
+test('README.md ## How a Muse Joins step 5 starter props matches VALID_PROP_KINDS (9 kinds)', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(joinSec.includes('colors, signpost, and starter props'));
+  const kinds = parseStringListFromSet(plotValidationSrc, 'VALID_PROP_KINDS');
+  assert.deepEqual(kinds, ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter']);
+});
+
+test('README.md intro 1999 small-web spirit matches PLAN.md §1', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  const intro = norm(readmeMd.slice(0, firstH2));
+  assert.ok(intro.includes("It lives in the spirit of Milo's corner: 1999 small-web, hand-built, warm, and slow"));
+  assert.ok(norm(planMd).includes('1999 small-web, hand-built'), 'PLAN.md must include "1999 small-web, hand-built"');
+});
+
+test('README.md ## Contributing Fork bullet pins PR workflow, tests, CONCEPT.md, and Pitch Milo', () => {
+  const contribSec = norm(getSection(readmeMd, 'Contributing'));
+  assert.ok(contribSec.includes('Fork and open a PR.'));
+  assert.ok(contribSec.includes('open a pull request against `main`'));
+  assert.ok(contribSec.includes('New code ships with tests'));
+  assert.ok(contribSec.includes('visual changes are checked against [`CONCEPT.md`](CONCEPT.md), the fixed art reference'));
+  assert.ok(contribSec.includes('Pitch Milo in town.'));
+});
+
+test('README.md ## Seed Neighbors parentheticals trace to town-npc/characters.mjs', () => {
+  const npcSec = norm(getSection(readmeMd, 'Seed Neighbors'));
+  const [wick, maren, tomas] = CHARACTERS;
+  assert.ok(npcSec.includes('tends the central bulb at dusk') && npcSec.includes('sweeps the steps'));
+  assert.ok(wick.quirk.includes('Sweeps the bandstand steps'));
+  assert.ok(wick.routine.evening.includes('tend the Ghostlight bulb at the Bandstand'));
+  assert.ok(npcSec.includes('walks between the newsstand and Prompt Book copying quotes'));
+  assert.ok(maren.past.includes('walks from the newsstand to the Prompt Book copying good lines'));
+  assert.ok(npcSec.includes('keeps the copper samovar steaming on the bandstand corner step'));
+  assert.ok(tomas.routine.evening.includes('set the samovar steaming on the Bandstand corner step'));
+  assert.ok(tomas.past.includes('rescued the copper samovar from the fire'));
+});
+
+test('README.md ## Status Town API bullet matches town.json live flag and dev_base_url', () => {
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  assert.ok(statusSec.includes('https://milo.4167360.xyz/api/town/'));
+  assert.equal(townJson.live, true, 'town.json live must be true');
+  assert.ok(townJson.live_note.includes('Live since 2026-11-13'));
+  assert.equal(townJson.dev_base_url, 'http://127.0.0.1:8124');
+  assert.ok(statusSec.includes('http://127.0.0.1:8124'));
+});
