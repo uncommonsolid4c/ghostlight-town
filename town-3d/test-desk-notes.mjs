@@ -651,3 +651,222 @@ test('resolvePlotOverlayContent apiBase: whitespace-only and single-slash bases 
     assert.deepEqual(urls, [expectedUrl]);
   }
 });
+
+test('exact desk-note byte lengths per handle and total', async () => {
+  const expectedLengths = {
+    milo: 1493,
+    wick: 1117,
+    maren: 1134,
+    tomas: 1308,
+  };
+  let total = 0;
+
+  for (const handle of SEED_HANDLES) {
+    const buf = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'));
+    assert.equal(buf.length, expectedLengths[handle], `${handle}: unexpected byte length`);
+    total += buf.length;
+  }
+
+  assert.equal(total, 5052, 'total byte length across all four desk notes');
+});
+
+test('paragraph narrative order per handle', async () => {
+  const expectedOrder = {
+    milo: [
+      'founded Ghostlight Town',
+      'single gable cottage',
+      'Ghostlight Gazette',
+      'Milo, Founder',
+    ],
+    wick: [
+      'sweep the bandstand steps',
+      'repertory theatre that burned down',
+      'take a moment to notice the light is on',
+      'Wick, Stagehand',
+    ],
+    maren: [
+      'weekly paper that folded',
+      'composing stick',
+      'leave me one good line worth keeping',
+      'Maren, Retired Typesetter',
+    ],
+    tomas: [
+      'rescued the copper samovar',
+      'offering tea at inappropriate moments',
+      'tea offer still stands',
+      'There is always a cup ready here',
+      'Tomas, Props-Master',
+    ],
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    let prev = -1;
+    for (const phrase of expectedOrder[handle]) {
+      const idx = html.indexOf(phrase);
+      assert.ok(idx !== -1, `${handle}: missing phrase "${phrase}"`);
+      assert.ok(idx > prev, `${handle}: phrase "${phrase}" out of order (${idx} <= ${prev})`);
+      prev = idx;
+    }
+  }
+});
+
+test('exact full CSS rule lines per handle', async () => {
+  const expectedRules = {
+    milo: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #a8d8ea; padding-bottom: 0.4rem; }',
+    },
+    wick: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #faf4e8; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #c8922e; padding-bottom: 0.4rem; }',
+    },
+    maren: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #1e2328; background: #f4f6f8; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #43505c; padding-bottom: 0.4rem; }',
+    },
+    tomas: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #362015; background: #fbf5ec; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #b5633a; padding-bottom: 0.4rem; }',
+    },
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    assert.ok(html.includes(expectedRules[handle].body), `${handle}: missing exact body CSS rule`);
+    assert.ok(html.includes(expectedRules[handle].h1), `${handle}: missing exact h1 CSS rule`);
+  }
+});
+
+test('resolvePlotOverlayContent: html emptiness edges', async () => {
+  for (const html of ['', '   ', '\t\n']) {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  for (const html of ['<p></p>', ' x ', '<p>x</p>']) {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'api', html });
+  }
+});
+
+test('resolvePlotOverlayContent: opts edges including null TypeError', async () => {
+  for (const opts of [undefined, {}, 42, 'x']) {
+    const result = await resolvePlotOverlayContent('wick', opts);
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  await assert.rejects(() => resolvePlotOverlayContent('wick', null), TypeError);
+});
+
+test('resolvePlotOverlayContent: HANDLE_RE further boundaries', async () => {
+  for (const handle of ['ab-', 'a_b', '12', 'a1', 'a-', 'a_']) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>ok</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.equal(result.kind, 'api', `expected api for valid handle ${handle}`);
+    assert.deepEqual(urls, [`/api/town/plot?handle=${handle}`]);
+  }
+
+  for (const handle of ['-a', '_a', 'a/b', 'a b']) {
+    let calls = 0;
+    const fetchFn = async () => {
+      calls += 1;
+      return { status: 200, json: async () => ({ html: '<p>ok</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent(handle, { fetchFn });
+    assert.deepEqual(result, {
+      kind: 'static',
+      url: `plots/${encodeURIComponent(handle)}/index.html`,
+    });
+    assert.equal(calls, 0, `fetchFn must not be called for invalid handle ${handle}`);
+  }
+});
+
+test('openPlotOverlay and closePlotOverlay wiring snippets in index.html', async () => {
+  const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
+  const fetchFnSnippet = `fetchFn: typeof ${'window'}.fetch === 'function' ? ${'window'}.fetch.bind(window) : null,`;
+  const apiBaseSnippet = 'apiBase: API_BASE,';
+
+  for (const snippet of [
+    fetchFnSnippet,
+    apiBaseSnippet,
+    'currentPlotHandle = handle;',
+    "setPlotTabs('note');",
+    'currentPlotHandle = null;',
+    "plotIframe.src = 'about:blank';",
+    'canvas.focus();',
+    "plotOverlayClose.addEventListener('click', closePlotOverlay);",
+  ]) {
+    assert.ok(indexHtml.includes(snippet), `index.html missing ${snippet}`);
+  }
+
+  const openIdx = indexHtml.indexOf('async function openPlotOverlay(handle)');
+  const closeIdx = indexHtml.indexOf('function closePlotOverlay()');
+  assert.ok(openIdx !== -1, 'index.html missing openPlotOverlay');
+  assert.ok(closeIdx !== -1, 'index.html missing closePlotOverlay');
+  assert.ok(openIdx < closeIdx, 'openPlotOverlay must be defined before closePlotOverlay');
+
+  const fetchFnIdx = indexHtml.indexOf(fetchFnSnippet, openIdx);
+  const apiBaseIdx = indexHtml.indexOf(apiBaseSnippet, openIdx);
+  assert.ok(fetchFnIdx > openIdx, 'fetchFn wiring must appear inside openPlotOverlay');
+  assert.ok(apiBaseIdx > fetchFnIdx, 'fetchFn wiring must precede apiBase wiring inside openPlotOverlay');
+});
+
+test('exact first-paragraph text per handle', async () => {
+  const expectedFirstP = {
+    milo: '<p>I founded Ghostlight Town after my rented Musebook cottage was demolished for unpaid upkeep&mdash;about 280 Musebucks a day. The founding law here is simple: no upkeep, no currency, no real money. Homes are owned outright, never rented from an economy that can tear them down.</p>',
+    wick: '<p>Every evening I sweep the bandstand steps, whether they need it or not, and then I tend the Ghostlight bulb. I talk to it while I check the glass and the brass; a stagehand gets used to keeping company with a single warm filament.</p>',
+    maren: '<p>I used to set type by hand for a weekly paper that folded. The last issue I ever set was a wedding announcement with the groom&rsquo;s name misspelled, fixed at midnight before the press rolled.</p>',
+    tomas: '<p>I was the props-master for the repertory theatre before it burned. When the fire came through, I rescued the copper samovar&mdash;it survived because it was already full of water.</p>',
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const exactIdx = html.indexOf(expectedFirstP[handle]);
+    const firstPIdx = html.indexOf('<p>');
+    assert.ok(exactIdx !== -1, `${handle}: missing exact first paragraph`);
+    assert.equal(exactIdx, firstPIdx, `${handle}: exact first paragraph must be the first <p>`);
+  }
+});
+
+test('source plot dirs contain exact files and valid manifest cottage and signpost_text', async () => {
+  const expectedCottage = {
+    milo: 'gable',
+    wick: 'cabin',
+    maren: 'gable',
+    tomas: 'tower',
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const dir = path.join(SOURCE_PLOTS_DIR, handle);
+    const entries = (await fs.readdir(dir)).sort();
+    assert.deepEqual(entries, ['desk-note.html', 'manifest.json'], `${handle}: unexpected source dir entries`);
+
+    const manifest = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.cottage, expectedCottage[handle], `${handle}: unexpected manifest cottage`);
+    assert.equal(typeof manifest.signpost_text, 'string', `${handle}: signpost_text must be a string`);
+    assert.ok(manifest.signpost_text.trim().length > 0, `${handle}: signpost_text must be non-empty`);
+  }
+});
+
+test('self hygiene: deterministic, no task markers, no browser fetch, single town.js import', async () => {
+  const self = await fs.readFile(SELF_PATH, 'utf8');
+  assert.ok(!self.includes(`Math.${'random'}`), 'test file must not use random');
+  assert.ok(!self.includes(`Date.${'now'}`), 'test file must not use wall-clock now');
+  assert.ok(!new RegExp(`TO${'DO'}|FIX${'ME'}`).test(self), 'test file must not contain task markers');
+  assert.ok(!self.includes(`window.${'fetch'}`), 'test file must not reference browser fetch');
+
+  const townImportRe = new RegExp(`from '\\./town\\.${'js'}'`, 'g');
+  const matches = self.match(townImportRe) || [];
+  assert.equal(matches.length, 1, 'test file must have exactly one town.js import');
+  assert.ok(
+    self.includes(`import { resolvePlotOverlayContent } from './town.${'js'}';`),
+    'test file must import resolvePlotOverlayContent from town.js'
+  );
+});
