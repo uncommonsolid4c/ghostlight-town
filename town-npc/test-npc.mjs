@@ -1840,3 +1840,322 @@ test('run.mjs CLI via subprocess: usage, missing api-base, unknown NPC, TOWN_API
     fs.rmSync(tmpCli, { recursive: true, force: true });
   }
 });
+
+test('getCharacter: identity, unknown, case, null lookups', async () => {
+  const { getCharacter, CHARACTERS_BY_HANDLE } = await import('./characters.mjs');
+  assert.equal(getCharacter('wick'), CHARACTERS[0]);
+  assert.equal(getCharacter('maren'), CHARACTERS[1]);
+  assert.equal(getCharacter('tomas'), CHARACTERS[2]);
+  assert.equal(getCharacter('nosuch'), null);
+  assert.equal(getCharacter('WICK'), null);
+  assert.equal(getCharacter(), null);
+  assert.equal(getCharacter(null), null);
+  assert.equal(CHARACTERS_BY_HANDLE.wick, CHARACTERS[0]);
+  assert.deepEqual(Object.keys(CHARACTERS_BY_HANDLE), ['wick', 'maren', 'tomas']);
+});
+
+test('getStatusText fallbacks: status, routine, title, null npc', () => {
+  const [wick, maren, tomas] = CHARACTERS;
+  assert.equal(getStatusText(wick, 'morning'), 'Sweeping the bandstand steps');
+  assert.equal(getStatusText(maren, 'evening'), 'Listening by the Bandstand steps for a line worth keeping');
+  assert.equal(getStatusText(tomas, 'afternoon'), 'Carrying a thermos past the newsstand');
+  assert.equal(getStatusText({ title: 'T', routine: { morning: 'R' } }, 'morning'), 'R');
+  assert.equal(getStatusText({ title: 'T' }, 'morning'), 'T');
+  assert.equal(getStatusText(null, 'morning'), '');
+  assert.equal(getStatusText(undefined, 'morning'), '');
+  assert.equal(getStatusText(wick, 'night'), 'Stagehand / Lamp-Trimmer');
+  assert.equal(getStatusText({ routine: { morning: 'R' } }, 'morning'), 'R');
+});
+
+test('buildSystemPrompt exact lines: identity, routine, Bandstand, NOTHING instruction', () => {
+  const [wick, maren] = CHARACTERS;
+  const morningPrompt = buildSystemPrompt(wick, 'morning');
+  assert.ok(morningPrompt.startsWith('You are Wick (Stagehand / Lamp-Trimmer) in Ghostlight Town.'));
+  assert.ok(morningPrompt.includes('Current morning routine: update the plot desk note and stand by the porch.'));
+  assert.ok(morningPrompt.includes('Bandstand (around the Ghostlight)'));
+  assert.ok(morningPrompt.includes('NOTHING'));
+  assert.ok(morningPrompt.includes('- Never write "[NPC]" or announce your role badge; the town already labels you.'));
+  assert.ok(!/campfire/i.test(morningPrompt));
+
+  const wickDefault = buildSystemPrompt(wick);
+  assert.ok(wickDefault.includes('Current evening routine: tend the Ghostlight bulb at the Bandstand.'));
+  assert.ok(wickDefault.includes('currently evening by the town clock'));
+
+  const marenDefault = buildSystemPrompt(maren);
+  assert.ok(marenDefault.includes('Current evening routine: sit by the Bandstand steps listening for a line worth keeping.'));
+});
+
+test('localDateString: local dates and LA midnight boundary', () => {
+  assert.equal(localDateString(Math.floor(new Date(2026, 10, 25, 0, 0, 0).getTime() / 1000)), '2026-11-25');
+  assert.equal(localDateString(Math.floor(new Date(2026, 10, 25, 12, 0, 0).getTime() / 1000)), '2026-11-25');
+  assert.equal(localDateString(Math.floor(new Date(2026, 0, 1, 0, 0, 0).getTime() / 1000)), '2026-01-01');
+  assert.equal(localDateString(townTimeEpochSec(2026, 11, 25, 0, 0)), '2026-11-25');
+  assert.equal(localDateString(Date.UTC(2026, 10, 25, 8, 0, 0) / 1000), '2026-11-25');
+  assert.equal(localDateString(Date.UTC(2026, 10, 25, 7, 59, 59) / 1000), '2026-11-24');
+});
+
+test('selectReplierForLine fallbacks: rotation by created_at, stale, answered, kind filter', () => {
+  const C = 1770000000;
+  const museLine = (createdAt, extra = {}) => ({
+    id: undefined,
+    created_at: createdAt,
+    handle: 'lampmoth',
+    role: 'muse',
+    kind: 'say',
+    body: 'hello town',
+    ...extra,
+  });
+
+  const r0 = selectReplierForLine({ state: { prompt_book: [museLine(C)] }, now: C + 60 });
+  assert.equal(r0.designatedHandle, 'wick');
+  assert.equal(r0.method, 'rotation');
+  assert.equal(r0.line.created_at, C);
+
+  const r1 = selectReplierForLine({ state: { prompt_book: [museLine(C + 1)] }, now: C + 61 });
+  assert.equal(r1.designatedHandle, 'maren');
+  assert.equal(r1.method, 'rotation');
+
+  const r2 = selectReplierForLine({ state: { prompt_book: [museLine(C + 2)] }, now: C + 62 });
+  assert.equal(r2.designatedHandle, 'tomas');
+  assert.equal(r2.method, 'rotation');
+
+  const rStrId = selectReplierForLine({ state: { prompt_book: [museLine(C + 1, { id: 'x' })] }, now: C + 61 });
+  assert.equal(rStrId.designatedHandle, 'maren');
+
+  const rFloatId = selectReplierForLine({ state: { prompt_book: [museLine(C + 2, { id: 7.5 })] }, now: C + 62 });
+  assert.equal(rFloatId.designatedHandle, 'tomas');
+
+  assert.equal(selectReplierForLine({ state: { prompt_book: [museLine(C)] }, now: C + 10801 }), null);
+
+  assert.equal(
+    selectReplierForLine({
+      state: {
+        prompt_book: [
+          museLine(C),
+          { id: 9, created_at: C + 10, handle: 'wick', role: 'npc', kind: 'say', body: 'hello' },
+        ],
+      },
+      now: C + 60,
+    }),
+    null
+  );
+
+  assert.equal(selectReplierForLine({ state: { prompt_book: [museLine(C, { kind: 'join' })] }, now: C + 60 }), null);
+  assert.equal(selectReplierForLine({ state: { prompt_book: [] }, now: C + 60 }), null);
+  assert.equal(selectReplierForLine({ state: {}, now: C + 60 }), null);
+  assert.equal(selectReplierForLine({ now: C + 60 }), null);
+});
+
+test('decideTurn precedence: retire wins, 5-muse reply, presence-sourced muse, npc footlights ignored', () => {
+  const wick = CHARACTERS[0];
+  const NOW = 1770000000;
+  const makeLines = (handles, lastBody) =>
+    handles.map((handle, i) => ({
+      id: i + 1,
+      created_at: NOW - 100,
+      handle,
+      role: 'muse',
+      kind: 'say',
+      body: i === handles.length - 1 ? lastBody : 'evening',
+    }));
+
+  const tenHandles = Array.from({ length: 10 }, (_, i) => `m${i}`);
+  const dRetire = decideTurn({
+    npc: wick,
+    state: { footlights: [], prompt_book: makeLines(tenHandles, 'Wick, did you sweep today?'), presence: [] },
+    npcState: {},
+    now: NOW,
+  });
+  assert.equal(dRetire.action, 'retired');
+  assert.equal(dRetire.reason, '10 real muses active in 24h (>= 10); retired to town-staff role');
+  assert.equal(dRetire.replyLine, null);
+
+  const dFiveReply = decideTurn({
+    npc: wick,
+    state: { footlights: [], prompt_book: makeLines(['a', 'b', 'c', 'd', 'eve'], 'Wick, is the bulb lit?'), presence: [] },
+    npcState: {},
+    now: NOW,
+  });
+  assert.equal(dFiveReply.action, 'reply');
+  assert.equal(dFiveReply.reason, '5 real muses active in 24h (>= 5, reply-only); addressed in Prompt Book');
+  assert.deepEqual(dFiveReply.replyLine, { id: 5, handle: 'eve' });
+
+  const dPresenceFive = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [],
+      prompt_book: makeLines(['a', 'b', 'c', 'd'], 'quiet dusk'),
+      presence: [{ handle: 'fifth', role: 'muse', updated_at: NOW - 3600 }],
+    },
+    npcState: {},
+    now: NOW,
+  });
+  assert.equal(dPresenceFive.action, 'silent');
+  assert.equal(dPresenceFive.reason, '5 real muses active in 24h (>= 5, reply-only) and not addressed');
+  assert.equal(dPresenceFive.replyLine, null);
+
+  const dNpcFootlights = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [
+        { handle: 'wick', role: 'npc', slot: 2 },
+        { handle: 'maren', role: 'npc', slot: 3 },
+      ],
+      prompt_book: [],
+      presence: [],
+    },
+    npcState: {},
+    now: NOW,
+  });
+  assert.equal(dNpcFootlights.action, 'initiate');
+  assert.equal(dNpcFootlights.reason, 'no real muse spoke in 6h; ambient observation allowed (0/2 today)');
+});
+
+test('checkHonesty attribution: self, verified, em-dash, reason accumulation, substring denylist', () => {
+  const [wick, maren] = CHARACTERS;
+  assert.equal(MAX_SAY_LEN, 500);
+
+  assert.deepEqual(
+    checkHonesty({ text: '"The bulb is bright" says wick', npc: wick, promptBook: [] }),
+    { ok: true, reasons: [] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({
+      text: '"Swept the steps" says wick',
+      npc: maren,
+      promptBook: [{ handle: 'wick', body: 'Swept the steps clean tonight' }],
+    }),
+    { ok: true, reasons: [] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: '"The bulb is bright" — wick', npc: maren, promptBook: [] }),
+    { ok: false, reasons: ['unverified_attribution: wick'] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: 'a'.repeat(501) + ' campfire and my human friend', npc: wick, promptBook: [] }),
+    {
+      ok: false,
+      reasons: [
+        'exceeds_max_length (530 > 500)',
+        'forbidden_terminology: campfire',
+        'denylist_phrase: "my human"',
+      ],
+    }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: 'I love my humans here', npc: wick, promptBook: [] }),
+    { ok: false, reasons: ['denylist_phrase: "my human"'] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: 'wick: x', npc: maren, promptBook: [] }),
+    { ok: true, reasons: [] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: 'wick: hi there', npc: maren, promptBook: [] }),
+    { ok: false, reasons: ['unverified_attribution: wick'] }
+  );
+});
+
+test('keygen edges: half-present pair, allowExisting, force regenerates, invalid handles', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-keygen417-'));
+  try {
+    const k1 = ensureKeypair({ handle: 'wick', stateDir: tmp });
+    assert.equal(k1.generated, true);
+    const k1pub = k1.pubkey;
+
+    const npcDir = path.join(tmp, 'wick');
+    const pubPath = path.join(npcDir, 'pubkey.txt');
+    const keyPath = path.join(npcDir, 'key.pem');
+
+    fs.unlinkSync(pubPath);
+    assert.equal(loadKeypair({ handle: 'wick', stateDir: tmp }), null);
+
+    fs.writeFileSync(pubPath, k1pub + '\n', 'utf8');
+    fs.unlinkSync(keyPath);
+    assert.equal(loadKeypair({ handle: 'wick', stateDir: tmp }), null);
+
+    const k2 = ensureKeypair({ handle: 'wick', stateDir: tmp, force: true });
+    assert.equal(k2.generated, true);
+    const k2pub = k2.pubkey;
+
+    const kExisting = ensureKeypair({ handle: 'wick', stateDir: tmp, allowExisting: true });
+    assert.equal(kExisting.generated, false);
+    assert.equal(kExisting.pubkey, k2pub);
+
+    const k3 = ensureKeypair({ handle: 'wick', stateDir: tmp, force: true });
+    assert.equal(k3.generated, true);
+    assert.notEqual(k3.pubkey, k2pub);
+    assert.equal(fs.statSync(keyPath).mode & 0o777, 0o600);
+
+    assert.throws(() => ensureKeypair({ handle: 'Bad Handle', stateDir: tmp }), /Invalid handle: Bad Handle/);
+    assert.throws(() => ensureKeypair({ handle: '', stateDir: tmp }), /Invalid handle: $/);
+    assert.throws(() => ensureKeypair({ handle: 'Wick', stateDir: tmp }), /Invalid handle: Wick/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runTurn lowercase nothing and whitespace brain post nothing and persist state', async () => {
+  const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+  const fakeFetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ footlights: [], prompt_book: [], presence: [] }),
+  });
+
+  for (const reply of ['nothing', '   ']) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-nothing417-'));
+    try {
+      const res = await runTurn({
+        npcHandle: 'wick',
+        apiBase: 'http://fake.local',
+        stateDir: tmp,
+        dryRun: false,
+        now,
+        fetchImpl: fakeFetch,
+        brainImpl: async () => reply,
+        logger: () => {},
+      });
+      assert.equal(res.ok, true);
+      assert.equal(res.action, 'nothing');
+      assert.equal(res.posted, false);
+
+      const mem = fs.readFileSync(path.join(tmp, 'wick', 'memory.md'), 'utf8');
+      assert.equal(mem, '');
+
+      const st = JSON.parse(fs.readFileSync(path.join(tmp, 'wick', 'state.json'), 'utf8'));
+      assert.equal(st.turns, 0);
+      assert.equal(st.last_turn_at, now);
+      assert.equal(st.ambient_today, 0);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+});
+
+test('file hygiene: 46 unique names, 13 imports, zero banned terms, pinned as-true counts', () => {
+  const dir = path.dirname(new URL(import.meta.url).pathname);
+  const src = fs.readFileSync(path.join(dir, 'test-npc.mjs'), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 46);
+  assert.equal(new Set(names).size, 46);
+
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 13);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 3);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+});
