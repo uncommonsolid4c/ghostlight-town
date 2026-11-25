@@ -414,7 +414,7 @@ test('join 409s consume the per-IP join budget (unlike rotate 409s)', async () =
   }
 });
 
-test('suspended resident cannot rotate: 403 resident_not_active', async () => {
+test('suspended-at-join resident cannot rotate: 403 resident_not_active', async () => {
   const ctx = await startTestServer();
   try {
     const { client: susp, keys: suspKeys } = await createResident(ctx, 'susp', { approved: false });
@@ -509,7 +509,7 @@ test('rotate to a suspended resident key returns 409 and suspended owner keeps t
   }
 });
 
-test('suspended resident cannot rotate: 403 resident_not_active', async () => {
+test('suspended resident cannot rotate after DB status flip: 403 resident_not_active', async () => {
   const ctx = await startTestServer();
   try {
     const { client: alice, keys: aliceKeys } = await createResident(ctx, 'alice');
@@ -1062,4 +1062,329 @@ test('rotate back to a freed key taken by another resident returns 409 pubkey_ta
   } finally {
     await ctx.close();
   }
+});
+
+test('all 44 top-level test names in this file are unique and include both renamed suspended-rotate tests', () => {
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+  assert.ok(names.includes('suspended-at-join resident cannot rotate: 403 resident_not_active'));
+  assert.ok(names.includes('suspended resident cannot rotate after DB status flip: 403 resident_not_active'));
+});
+
+test('rotate 200 returns exact body keys and records exact key_history rotate row', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    const seqBefore = (await alice.state()).data.state_seq;
+    const newKeys = generateKeypair();
+
+    const tBefore = ctx.nowSec();
+    const rotRes = await alice.rotateKey(newKeys.pubkey);
+    const tAfter = ctx.nowSec();
+
+    assert.equal(rotRes.status, 200);
+    assert.deepEqual(rotRes.data, { handle: 'alice', rotated: true, state_seq: seqBefore + 1 });
+    assert.deepEqual(Object.keys(rotRes.data), ['handle', 'rotated', 'state_seq']);
+
+    const rows = ctx.db
+      .prepare("SELECT * FROM key_history WHERE handle = ? AND action = 'rotate'")
+      .all('alice');
+    assert.equal(rows.length, 1);
+    const row = rows[0];
+    assert.deepEqual(Object.keys(row), ['id', 'handle', 'pubkey', 'action', 'created_at', 'note']);
+    assert.equal(row.handle, 'alice');
+    assert.equal(row.pubkey, newKeys.pubkey);
+    assert.equal(row.action, 'rotate');
+    assert.equal(row.note, 'self-service rotation');
+    assert.ok(row.created_at >= tBefore && row.created_at <= tAfter);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate 429 returns exact keys with retry_after in {3599, 3600} and non-increasing on 5th attempt', async () => {
+  const ctx = await startTestServer();
+  try {
+    let { client: alice } = await createResident(ctx, 'alice');
+    const seqBefore = (await alice.state()).data.state_seq;
+
+    let lastKeys;
+    for (let i = 0; i < 3; i += 1) {
+      const nextKeys = generateKeypair();
+      const rotRes = await alice.rotateKey(nextKeys.pubkey);
+      assert.equal(rotRes.status, 200);
+      alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nextKeys });
+      lastKeys = nextKeys;
+    }
+
+    assert.equal((await alice.state()).data.state_seq, seqBefore + 3);
+
+    const fourthRes = await alice.rotateKey(generateKeypair().pubkey);
+    assert.equal(fourthRes.status, 429);
+    assert.deepEqual(Object.keys(fourthRes.data), ['error', 'retry_after']);
+    assert.equal(fourthRes.data.error, 'rate_limited');
+    assert.ok(
+      fourthRes.data.retry_after === 3599 || fourthRes.data.retry_after === 3600,
+      `expected retry_after 3599 or 3600, got ${fourthRes.data.retry_after}`
+    );
+
+    const fifthRes = await alice.rotateKey(generateKeypair().pubkey);
+    assert.equal(fifthRes.status, 429);
+    assert.deepEqual(Object.keys(fifthRes.data), ['error', 'retry_after']);
+    assert.equal(fifthRes.data.error, 'rate_limited');
+    assert.ok(fifthRes.data.retry_after <= fourthRes.data.retry_after);
+
+    const row = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(row.pubkey, lastKeys.pubkey);
+    assert.equal((await alice.state()).data.state_seq, seqBefore + 3);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate validation and collision checks beat the rate limit even when 3/hour budget is exhausted', async () => {
+  const ctx = await startTestServer();
+  try {
+    let { client: alice } = await createResident(ctx, 'alice');
+    const { keys: bobKeys } = await createResident(ctx, 'bob');
+
+    for (let i = 0; i < 3; i += 1) {
+      const nextKeys = generateKeypair();
+      const rotRes = await alice.rotateKey(nextKeys.pubkey);
+      assert.equal(rotRes.status, 200);
+      alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nextKeys });
+    }
+
+    const missingRes = await alice.rotateKey('');
+    assert.equal(missingRes.status, 400);
+    assert.deepEqual(missingRes.data, { error: 'missing_pubkey' });
+    assert.deepEqual(Object.keys(missingRes.data), ['error']);
+
+    const invalidRes = await alice.rotateKey('not-a-key');
+    assert.equal(invalidRes.status, 400);
+    assert.deepEqual(invalidRes.data, { error: 'invalid_pubkey' });
+
+    const currentRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    const sameRes = await alice.rotateKey(currentRow.pubkey);
+    assert.equal(sameRes.status, 400);
+    assert.deepEqual(sameRes.data, { error: 'same_pubkey' });
+
+    const takenRes = await alice.rotateKey(bobKeys.pubkey);
+    assert.equal(takenRes.status, 409);
+    assert.deepEqual(takenRes.data, { error: 'pubkey_taken' });
+    assert.deepEqual(Object.keys(takenRes.data), ['error']);
+
+    const limitedRes = await alice.rotateKey(generateKeypair().pubkey);
+    assert.equal(limitedRes.status, 429);
+    assert.equal(limitedRes.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join 409 returns exact single-key body and leaves state_seq and key_history untouched', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: bob, keys: bobKeys } = await createResident(ctx, 'bob');
+    const seqBefore = (await bob.state()).data.state_seq;
+
+    const carol = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...bobKeys });
+    const carolRes = await carol.join({ origin: 'musebook' });
+    assert.equal(carolRes.status, 409);
+    assert.deepEqual(carolRes.data, { error: 'pubkey_taken' });
+    assert.deepEqual(Object.keys(carolRes.data), ['error']);
+
+    assert.equal((await bob.state()).data.state_seq, seqBefore);
+
+    const carolHistory = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('carol');
+    assert.equal(carolHistory.length, 0);
+
+    const bobHistory = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('bob');
+    assert.equal(bobHistory.length, 1);
+    assert.equal(bobHistory[0].action, 'register');
+    assert.equal(bobHistory[0].note, 'joined');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join writes exact register key_history row with wall-clock created_at', async () => {
+  const ctx = await startTestServer();
+  try {
+    const aliceKeys = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...aliceKeys });
+
+    const tBefore = ctx.nowSec();
+    const joinRes = await alice.join({ origin: 'musebook' });
+    const tAfter = ctx.nowSec();
+    assert.equal(joinRes.status, 201);
+
+    const rows = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('alice');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].action, 'register');
+    assert.equal(rows[0].note, 'joined');
+    assert.equal(rows[0].pubkey, aliceKeys.pubkey);
+    assert.ok(rows[0].created_at >= tBefore && rows[0].created_at <= tAfter);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join precedence remaining combos: invalid_handle > pubkey_taken, invalid_origin > bio_too_long, bio_too_long > handle_taken and pubkey_taken', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: aliceKeys } = await createResident(ctx, 'alice');
+
+    const probeA = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'BAD!', ...aliceKeys });
+    const resA = await probeA.join({ origin: 'musebook' });
+    assert.equal(resA.status, 400);
+    assert.equal(resA.data.error, 'invalid_handle');
+
+    const probeB = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...generateKeypair() });
+    const resB = await probeB.join({ origin: 'bogus', bio: 'x'.repeat(501) });
+    assert.equal(resB.status, 400);
+    assert.equal(resB.data.error, 'invalid_origin');
+
+    const probeC = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...generateKeypair() });
+    const resC = await probeC.join({ origin: 'musebook', bio: 'y'.repeat(501) });
+    assert.equal(resC.status, 400);
+    assert.deepEqual(resC.data, { error: 'bio_too_long', max: 500 });
+
+    const probeD = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'dave', ...aliceKeys });
+    const resD = await probeD.join({ origin: 'musebook', bio: 'z'.repeat(501) });
+    assert.equal(resD.status, 400);
+    assert.equal(resD.data.error, 'bio_too_long');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('dupe-DB rotate-away frees alice without disturbing bob or creating UNIQUE(pubkey)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-key-dupe-rotate-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const sharedKeys = generateKeypair();
+  createOldSchemaDb(dbPath, [
+    { handle: 'alice', pubkey: sharedKeys.pubkey },
+    { handle: 'bob', pubkey: sharedKeys.pubkey },
+  ]);
+
+  const ctx = await startTestServer({ dbPath, tmpDir });
+  try {
+    const aliceOld = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...sharedKeys });
+    const freshKeys = generateKeypair();
+    const rotRes = await aliceOld.rotateKey(freshKeys.pubkey);
+    assert.equal(rotRes.status, 200);
+    assert.equal(rotRes.data.rotated, true);
+
+    const bobRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('bob');
+    assert.equal(bobRow.pubkey, sharedKeys.pubkey);
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow.pubkey, freshKeys.pubkey);
+
+    const dave = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'dave', ...sharedKeys });
+    const daveRes = await dave.join({ origin: 'musebook' });
+    assert.equal(daveRes.status, 409);
+    assert.equal(daveRes.data.error, 'pubkey_taken');
+
+    const aliceOldCheckin = await aliceOld.checkin('old key');
+    assert.equal(aliceOldCheckin.status, 401);
+
+    const bobClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...sharedKeys });
+    const bobCheckin = await bobClient.checkin('still bob');
+    assert.equal(bobCheckin.status, 200);
+
+    const indexes = ctx.db.prepare('PRAGMA index_list(residents)').all();
+    const hasPubkeyUnique = indexes.some((idx) => {
+      if (!idx.unique) return false;
+      const cols = ctx.db.prepare(`PRAGMA index_info("${idx.name.replace(/"/g, '""')}")`).all();
+      return cols.length === 1 && cols[0].name === 'pubkey';
+    });
+    assert.equal(hasPubkeyUnique, false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate preserves resident row columns, plot manifest/html, and plot_updated_at', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    const manifest = {
+      cottage: 'gable',
+      wall: '#d8c8a8',
+      roof: '#5a3d2b',
+      trim: '#2f4f4f',
+      signpost_text: 'Scratch desk',
+      props: [{ kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' }],
+    };
+    const html = '<p>hello</p>';
+
+    const putRes = await alice.plot(manifest, html);
+    assert.equal(putRes.status, 200);
+
+    const rowBefore = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('alice');
+    const plotBefore = await alice.getPlot('alice');
+    assert.equal(plotBefore.status, 200);
+    const seqBefore = (await alice.state()).data.state_seq;
+
+    const freshKeys = generateKeypair();
+    const rotRes = await alice.rotateKey(freshKeys.pubkey);
+    assert.equal(rotRes.status, 200);
+
+    const rowAfter = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('alice');
+    assert.equal(rowAfter.pubkey, freshKeys.pubkey);
+    const { pubkey: _pkBefore, ...restBefore } = rowBefore;
+    const { pubkey: _pkAfter, ...restAfter } = rowAfter;
+    assert.deepEqual(restAfter, restBefore);
+
+    const plotAfter = await alice.getPlot('alice');
+    assert.equal(plotAfter.status, 200);
+    assert.deepEqual(plotAfter.data.manifest, plotBefore.data.manifest);
+    assert.equal(plotAfter.data.html, plotBefore.data.html);
+
+    const stateAfter = (await alice.state()).data;
+    assert.equal(stateAfter.plots.alice, rowBefore.plot_updated_at);
+    assert.equal(stateAfter.state_seq, seqBefore + 1);
+
+    const oldCheckin = await alice.checkin('old key');
+    assert.equal(oldCheckin.status, 401);
+
+    const newAlice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...freshKeys });
+    const newCheckin = await newAlice.checkin('new key');
+    assert.equal(newCheckin.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('self hygiene of town-api/test-key-collision.mjs', () => {
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  assert.equal(src.includes('Math' + '.' + 'random'), false);
+  assert.equal(src.includes('TO' + 'DO'), false);
+  assert.equal(src.includes('FIX' + 'ME'), false);
+  assert.equal(src.toLowerCase().includes('camp' + 'fire'), false);
+
+  const dateNowNeedle = 'Date' + '.now';
+  const dateNowCount = src.split(dateNowNeedle).length - 1;
+  assert.equal(dateNowCount, 4);
+  const floorDateNowNeedle = 'Math.floor(' + dateNowNeedle + '() / 1000)';
+  assert.equal(src.split(floorDateNowNeedle).length - 1, 4);
+
+  const fetchNeedle = 'fet' + 'ch(';
+  assert.equal(src.split(fetchNeedle).length - 1, 2);
+
+  const importLines = src.match(/^import .*$/gm) || [];
+  assert.equal(importLines.length, 8);
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { DatabaseSync } from 'node:sqlite';",
+    "import { createTownServer } from './server.mjs';",
+    "import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';",
+  ]);
 });
