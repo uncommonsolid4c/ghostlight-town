@@ -1722,3 +1722,282 @@ test('server integration: overlapping now events override earliest-start host an
     fs.rmSync(tmpDir2, { recursive: true, force: true });
   }
 });
+
+test('duration_min boundaries: 15 and 240 accepted, 14.999/240.001/0/-30 rejected, 15-minute window ends exactly at start+15:00', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const base = {
+    title: 'Tea',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: 15 }], NOW)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: 240 }], NOW)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: 14.999 }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: 240.001 }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: 0 }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: -30 }], NOW), null);
+  assert.equal(
+    apiSelectCurrentEvent(
+      [{ ...base, duration_min: 15, start_at: new Date(NOW - (14 * 60 + 59) * 1000).toISOString() }],
+      NOW
+    )?.status,
+    'now'
+  );
+  assert.equal(
+    apiSelectCurrentEvent(
+      [{ ...base, duration_min: 15, start_at: new Date(NOW - 15 * 60 * 1000).toISOString() }],
+      NOW
+    ),
+    null
+  );
+});
+
+test('duration_min type edges: string, boolean, null, NaN, Infinity rejected', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const base = {
+    title: 'Tea',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: '60' }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: true }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: null }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: NaN }], NOW), null);
+  assert.equal(apiSelectCurrentEvent([{ ...base, duration_min: Infinity }], NOW), null);
+});
+
+test('loadEventsFile keeps duplicate identical entries in order', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const A = {
+    title: 'First',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const B = { ...A, title: 'Second' };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-dup-'));
+  try {
+    const eventsPath = path.join(tmpDir, 'events.json');
+    fs.writeFileSync(eventsPath, JSON.stringify({ events: [A, B, A] }), 'utf8');
+    const loaded = loadEventsFile(eventsPath);
+    assert.equal(loaded.events.length, 3);
+    assert.equal(loaded.events.map((e) => e.title).join(','), 'First,Second,First');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('loadEventsFile fails open on BOM prefix and trailing garbage', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const ev = {
+    title: 'Tea',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-malformed-'));
+  try {
+    const bomPath = path.join(tmpDir, 'bom.json');
+    fs.writeFileSync(bomPath, '\uFEFF' + JSON.stringify({ events: [ev] }), 'utf8');
+    assert.equal(loadEventsFile(bomPath).events.length, 0);
+
+    const garbagePath = path.join(tmpDir, 'garbage.json');
+    fs.writeFileSync(garbagePath, JSON.stringify({ events: [ev] }) + ' garbage', 'utf8');
+    assert.equal(loadEventsFile(garbagePath).events.length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('loadEventsFile fails open on top-level array, null, string, and number JSON', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const ev = {
+    title: 'Tea',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-shapes-'));
+  try {
+    const arrPath = path.join(tmpDir, 'array.json');
+    fs.writeFileSync(arrPath, JSON.stringify([ev]), 'utf8');
+    assert.equal(loadEventsFile(arrPath).events.length, 0);
+
+    const nullPath = path.join(tmpDir, 'null.json');
+    fs.writeFileSync(nullPath, 'null', 'utf8');
+    assert.equal(loadEventsFile(nullPath).events.length, 0);
+
+    const strPath = path.join(tmpDir, 'string.json');
+    fs.writeFileSync(strPath, '"hello"', 'utf8');
+    assert.equal(loadEventsFile(strPath).events.length, 0);
+
+    const numPath = path.join(tmpDir, 'number.json');
+    fs.writeFileSync(numPath, '42', 'utf8');
+    assert.equal(loadEventsFile(numPath).events.length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('selectCurrentEvent ignores an invalid earlier-start entry when picking next', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const bad = {
+    title: 'Bad',
+    host_handle: 'host',
+    start_at: new Date(NOW + 1 * 60 * 1000).toISOString(),
+    duration_min: 5,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const good = {
+    title: 'Good',
+    host_handle: 'host',
+    start_at: new Date(NOW + 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+
+  const picked = apiSelectCurrentEvent([bad, good], NOW);
+  assert.equal(picked?.status, 'next');
+  assert.equal(picked?.event?.title, 'Good');
+});
+
+test('selectNowNext returns now plus an overlapping future next', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const nowEv = {
+    title: 'Now',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const nextEv = {
+    title: 'Next',
+    host_handle: 'host',
+    start_at: new Date(NOW + 15 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+
+  const res = selectNowNext([nowEv, nextEv], NOW);
+  assert.equal(res.now?.title, 'Now');
+  assert.equal(res.next?.title, 'Next');
+});
+
+test('server integration: blurb/location edits do not bump state_seq (304); title/start_at edits do (200)', async () => {
+  const baseNow = 1793000000;
+  const startIso = new Date((baseNow - 60) * 1000).toISOString();
+  const baseEvent = {
+    title: 'Steady',
+    host_handle: 'host',
+    start_at: startIso,
+    duration_min: 30,
+    location: 'bandstand',
+    blurb: 'first',
+  };
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-keyonly-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  fs.writeFileSync(eventsPath, JSON.stringify({ events: [baseEvent] }), 'utf8');
+  const t1 = new Date('2026-11-15T17:00:00Z');
+  fs.utimesSync(eventsPath, t1, t1);
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res1.status, 200);
+    const s1 = await res1.json();
+    assert.equal(s1.events.now?.title, 'Steady');
+    const seq1 = s1.state_seq;
+
+    fs.writeFileSync(eventsPath, JSON.stringify({ events: [{ ...baseEvent, blurb: 'second' }] }), 'utf8');
+    const t2 = new Date('2026-11-15T17:05:00Z');
+    fs.utimesSync(eventsPath, t2, t2);
+    const res2 = await fetch(`${ctx.baseUrl}/api/town/state?since=${seq1}`);
+    assert.equal(res2.status, 304);
+
+    fs.writeFileSync(eventsPath, JSON.stringify({ events: [{ ...baseEvent, location: 'gate' }] }), 'utf8');
+    const t3 = new Date('2026-11-15T17:06:00Z');
+    fs.utimesSync(eventsPath, t3, t3);
+    const res3 = await fetch(`${ctx.baseUrl}/api/town/state?since=${seq1}`);
+    assert.equal(res3.status, 304);
+
+    fs.writeFileSync(eventsPath, JSON.stringify({ events: [{ ...baseEvent, title: 'Renamed' }] }), 'utf8');
+    const t4 = new Date('2026-11-15T17:07:00Z');
+    fs.utimesSync(eventsPath, t4, t4);
+    const res4 = await fetch(`${ctx.baseUrl}/api/town/state?since=${seq1}`);
+    assert.equal(res4.status, 200);
+    const s4 = await res4.json();
+    assert.ok(s4.state_seq > seq1);
+    assert.equal(s4.events.now?.title, 'Renamed');
+    const seq4 = s4.state_seq;
+
+    fs.writeFileSync(
+      eventsPath,
+      JSON.stringify({
+        events: [{ ...baseEvent, title: 'Renamed', start_at: new Date((baseNow - 120) * 1000).toISOString() }],
+      }),
+      'utf8'
+    );
+    const t5 = new Date('2026-11-15T17:08:00Z');
+    fs.utimesSync(eventsPath, t5, t5);
+    const res5 = await fetch(`${ctx.baseUrl}/api/town/state?since=${seq4}`);
+    assert.equal(res5.status, 200);
+    const s5 = await res5.json();
+    assert.ok(s5.state_seq > seq4);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('server integration: eventsPath pointing at a directory serves null/null without crashing', async () => {
+  const baseNow = 1793000000;
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-dir-'));
+  const ctx = await startTestServer({ baseNow, eventsPath: tmpEventsDir });
+  try {
+    const res = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res.status, 200);
+    const s = await res.json();
+    assert.equal(s.events.now, null);
+    assert.equal(s.events.next, null);
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('file hygiene: 47 unique names, 9 imports, zero banned terms, pinned as-true counts', () => {
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const lines = src.split('\n');
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 47);
+  assert.equal(new Set(names).size, 47);
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 9);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 13);
+  assert.ok(lines.filter((l) => l.includes('fet' + 'ch(')).length >= 35);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+  assert.equal(lines.filter((l) => l.includes('camp' + 'fire')).length, 0);
+});
