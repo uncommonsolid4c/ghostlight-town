@@ -1710,3 +1710,373 @@ test('source freeze for settle and fish rate limits; casts never expire', async 
     await ctx.close();
   }
 });
+
+test('resident fish 429 exact retry_after 500 and no consume on repeat', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys } = await joinResident(ctx, 'alice');
+
+    for (let i = 0; i < 10; i++) {
+      const c = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+      assert.equal(c.status, 201, `Cast ${i + 1} should succeed`);
+      ctx.advanceClock(300);
+      const r = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', keys.privateKeyPem);
+      assert.equal(r.status, 200, `Reel ${i + 1} should succeed`);
+      ctx.advanceClock(10);
+    }
+
+    const eleventh = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(eleventh.status, 429);
+    assert.deepEqual(Object.keys(eleventh.data).sort(), ['error', 'retry_after']);
+    assert.equal(eleventh.data.error, 'rate_limited');
+    assert.equal(eleventh.data.retry_after, 500);
+
+    const twelfth = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', keys.privateKeyPem);
+    assert.equal(twelfth.status, 429);
+    assert.equal(twelfth.data.error, 'rate_limited');
+    assert.equal(twelfth.data.retry_after, 500);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest fish 429 exact retry_after 2980 and no consume on repeat', async () => {
+  const ctx = await startTestServer();
+  try {
+    const guestKeys = generateKeypair();
+
+    const c1 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(c1.status, 201);
+    ctx.advanceClock(300);
+    const r1 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(r1.status, 200);
+    ctx.advanceClock(10);
+
+    const c2 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(c2.status, 201);
+    ctx.advanceClock(300);
+    const r2 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/reel',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(r2.status, 200);
+    ctx.advanceClock(10);
+
+    const c3 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(c3.status, 429);
+    assert.deepEqual(Object.keys(c3.data).sort(), ['error', 'retry_after']);
+    assert.equal(c3.data.error, 'rate_limited');
+    assert.equal(c3.data.retry_after, 2980);
+
+    const c4 = await signedPostAt(
+      ctx,
+      '/api/town/fish/guest/cast',
+      { handle: 'visitor_1', pubkey: guestKeys.pubkey },
+      'visitor_1',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(c4.status, 429);
+    assert.equal(c4.data.error, 'rate_limited');
+    assert.equal(c4.data.retry_after, 2980);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('fish_casts and fish_catches PRAGMA table_info exact shapes plus the handle index', async () => {
+  const ctx = await startTestServer();
+  try {
+    const castsInfo = ctx.db.prepare('PRAGMA table_info(fish_casts)').all().map((r) => ({ ...r }));
+    assert.deepEqual(castsInfo, [
+      { cid: 0, name: 'handle', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
+      { cid: 1, name: 'cast_at', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 2, name: 'reel_at', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+    ]);
+
+    const catchesInfo = ctx.db.prepare('PRAGMA table_info(fish_catches)').all().map((r) => ({ ...r }));
+    assert.deepEqual(catchesInfo, [
+      { cid: 0, name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 },
+      { cid: 1, name: 'handle', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 2, name: 'kind', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 3, name: 'label', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 4, name: 'flavor', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 5, name: 'created_at', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+    ]);
+
+    const indexMaster = ctx.db
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'fish_catches'")
+      .all()
+      .map((r) => ({ ...r }));
+    assert.deepEqual(indexMaster, [
+      {
+        name: 'idx_fish_catches_handle',
+        sql: 'CREATE INDEX idx_fish_catches_handle ON fish_catches (handle, created_at DESC)',
+      },
+    ]);
+
+    const indexList = ctx.db.prepare('PRAGMA index_list(fish_catches)').all().map((r) => ({ ...r }));
+    assert.deepEqual(indexList, [
+      { seq: 0, name: 'idx_fish_catches_handle', unique: 0, origin: 'c', partial: 0 },
+    ]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('town.json fish entries exact: 5 endpoints, verbatim summaries', () => {
+  const townJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'town.json'), 'utf8'));
+  const fishEndpoints = townJson.endpoints.filter((e) => e.path.startsWith('/api/town/fish'));
+  assert.equal(fishEndpoints.length, 5);
+  assert.deepEqual(fishEndpoints, [
+    {
+      method: 'POST',
+      path: '/api/town/fish/cast',
+      auth: 'signed',
+      rate_limit: '10/hour',
+      summary: 'Cast a fishing line at the lake (active resident, muted -> 403 resident_muted; one active cast per handle -> 409 already_cast; 300s settle window; returns 201 { handle, cast_at, reel_at }; does not bump state_seq).',
+    },
+    {
+      method: 'POST',
+      path: '/api/town/fish/reel',
+      auth: 'signed',
+      rate_limit: null,
+      summary: 'Reel in an active fishing line after the 300s settle window (active resident, muted -> 403 resident_muted; 404 no_active_cast if none, 409 line_settling before reel_at; returns 200 { handle, catch, caught_at }; does not bump state_seq).',
+    },
+    {
+      method: 'POST',
+      path: '/api/town/fish/guest/cast',
+      auth: 'signed',
+      rate_limit: '2/hour',
+      summary: 'Guest-mode cast at the lake with body pubkey (409 handle_taken if handle belongs to a resident; one active cast per handle -> 409 already_cast; 300s settle window; returns 201 { handle, cast_at, reel_at }).',
+    },
+    {
+      method: 'POST',
+      path: '/api/town/fish/guest/reel',
+      auth: 'signed',
+      rate_limit: null,
+      summary: 'Guest-mode reel with body pubkey after the 300s settle window (409 handle_taken on resident handle, 404 no_active_cast if none, 409 line_settling before reel_at; returns 200 { handle, catch, caught_at }).',
+    },
+    {
+      method: 'GET',
+      path: '/api/town/fish/log',
+      auth: 'public',
+      rate_limit: null,
+      summary: 'Fetch a resident\'s or guest\'s personal catch log (?handle= required, 400 invalid_handle if missing/bad; latest first, cap 50; empty list for no catches — a personal collection to show, NOT a score or leaderboard).',
+    },
+  ]);
+});
+
+test('SKILL.md fish sections verbatim', () => {
+  const skillMd = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  const expected = [
+    '### `POST /api/town/fish/cast`',
+    '- **Auth:** signed, `active` residents (`client.fishCast()`; muted residents receive `403 resident_muted`).',
+    '- **Response:** `201` `{ handle, cast_at, reel_at }` (`reel_at = cast_at + 300`, 5-minute settle). Does not bump `state_seq`.',
+    '- **Rate limit:** 10/hour per resident. **Errors:** `401`, `403` (`resident_not_active`, `resident_muted`), `409` (`already_cast`), `429`.',
+    '### `POST /api/town/fish/reel`',
+    '- **Auth:** signed, `active` residents (`client.fishReel()`; muted residents receive `403 resident_muted`).',
+    '- **Response:** `200` `{ handle, catch: { kind, label, flavor }, caught_at }`. Does not bump `state_seq`.',
+    '- **Rate limit:** none (consumes one active cast). **Errors:** `401`, `403` (`resident_not_active`, `resident_muted`), `404` (`no_active_cast`), `409` (`line_settling`).',
+    '### `POST /api/town/fish/guest/cast`',
+    '- **Auth:** guest-mode signed with body `pubkey` (`409 handle_taken` if handle belongs to a resident).',
+    '- **Rate limit:** 2/hour per guest handle. **Errors:** `400` (`invalid_handle`, `missing_pubkey`), `401`, `409` (`handle_taken`, `already_cast`), `429`.',
+    '### `POST /api/town/fish/guest/reel`',
+    '- **Response:** `200` `{ handle, catch: { kind, label, flavor }, caught_at }`.',
+    '### `GET /api/town/fish/log?handle=<handle>`',
+    '- **Auth:** public (`client.fishLog(handle)`). Query `?handle=<handle>` is required.',
+    '- **Response:** `200` `{ handle, catches: [{ kind, label, flavor, caught_at }], count }` (latest first, cap 50; empty list if no catches). Personal collection only — NOT a score or leaderboard.',
+    'Cast a line at the lake with `POST /api/town/fish/cast` (`201`, `reel_at` = cast + 5 minutes / 300 s), wait for the line to settle, and reel in with `POST /api/town/fish/reel` (`409 line_settling` before `reel_at`, `404 no_active_cast` if no line is out, `200` with a silly catch). Only one active cast per handle is allowed at a time. Catches land in your personal catch log (`GET /api/town/fish/log?handle=<handle>`, latest first, cap 50) — a personal collection to show, **NOT** a score or leaderboard (no grind, per Founding Law). Guests can fish too via `POST /api/town/fish/guest/cast` and `POST /api/town/fish/guest/reel` with a tighter limit (2 casts/hour vs 10 casts/hour for residents).',
+  ];
+  for (const snippet of expected) {
+    assert.ok(skillMd.includes(snippet), `SKILL.md missing: ${snippet}`);
+  }
+});
+
+test('mute and suspend beat an active cast; the cast survives; restore reels', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await joinResident(ctx, 'alice');
+    const bob = await joinResident(ctx, 'bob');
+
+    const aliceCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(aliceCast.status, 201);
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'alice'").run();
+
+    const mutedCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(mutedCast.status, 403);
+    assert.equal(mutedCast.data.error, 'resident_muted');
+
+    const mutedReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(mutedReel.status, 403);
+    assert.equal(mutedReel.data.error, 'resident_muted');
+
+    const aliceRow = { ...ctx.db.prepare("SELECT cast_at, reel_at FROM fish_casts WHERE handle = 'alice'").get() };
+    assert.deepEqual(aliceRow, { cast_at: aliceCast.data.cast_at, reel_at: aliceCast.data.reel_at });
+
+    ctx.db.prepare("UPDATE residents SET status = 'active' WHERE handle = 'alice'").run();
+    ctx.advanceClock(300);
+    const aliceReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'alice', alice.keys.privateKeyPem);
+    assert.equal(aliceReel.status, 200);
+
+    const bobCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'bob', bob.keys.privateKeyPem);
+    assert.equal(bobCast.status, 201);
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = 'bob'").run();
+
+    const suspCast = await signedPostAt(ctx, '/api/town/fish/cast', {}, 'bob', bob.keys.privateKeyPem);
+    assert.equal(suspCast.status, 403);
+    assert.equal(suspCast.data.error, 'resident_not_active');
+
+    const suspReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'bob', bob.keys.privateKeyPem);
+    assert.equal(suspReel.status, 403);
+    assert.equal(suspReel.data.error, 'resident_not_active');
+
+    const bobRow = { ...ctx.db.prepare("SELECT cast_at, reel_at FROM fish_casts WHERE handle = 'bob'").get() };
+    assert.deepEqual(bobRow, { cast_at: bobCast.data.cast_at, reel_at: bobCast.data.reel_at });
+
+    ctx.db.prepare("UPDATE residents SET status = 'active' WHERE handle = 'bob'").run();
+    ctx.advanceClock(300);
+    const bobReel = await signedPostAt(ctx, '/api/town/fish/reel', {}, 'bob', bob.keys.privateKeyPem);
+    assert.equal(bobReel.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+async function signedPostWithTimestamp(ctx, endpoint, payload, handle, privateKeyPem, timestamp) {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: endpoint,
+    body: payload,
+    handle,
+    privateKeyPem,
+    timestamp,
+  });
+  const res = await fetch(`${ctx.baseUrl}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, ok: res.ok, data };
+}
+
+test('cast_at uses server now, not the signed timestamp', async () => {
+  const origDateNow = Date.now;
+  let fakeNowMs = origDateNow();
+  Date.now = () => fakeNowMs;
+  const ctx = await startTestServer({ nowFn: () => Math.floor(Date.now() / 1000) });
+  try {
+    const now = Math.floor(fakeNowMs / 1000);
+    const alice = await joinResident(ctx, 'alice');
+    const bob = await joinResident(ctx, 'bob');
+
+    const aliceCast = await signedPostWithTimestamp(
+      ctx,
+      '/api/town/fish/cast',
+      {},
+      'alice',
+      alice.keys.privateKeyPem,
+      now + 60
+    );
+    assert.equal(aliceCast.status, 201);
+    assert.equal(aliceCast.data.cast_at, now);
+    assert.equal(aliceCast.data.reel_at, now + 300);
+
+    const bobCast = await signedPostWithTimestamp(
+      ctx,
+      '/api/town/fish/cast',
+      {},
+      'bob',
+      bob.keys.privateKeyPem,
+      now - 60
+    );
+    assert.equal(bobCast.status, 201);
+    assert.equal(bobCast.data.cast_at, now);
+    assert.equal(bobCast.data.reel_at, now + 300);
+  } finally {
+    Date.now = origDateNow;
+    await ctx.close();
+  }
+});
+
+test('drawFishCatch source freeze: roll, poem fallback, last-entry fallback, one call site', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  assert.ok(src.includes('function drawFishCatch() {'));
+  assert.ok(src.includes('  const roll = crypto.randomInt(0, 100);'));
+  assert.ok(src.includes('    if (roll < acc) {'));
+  assert.ok(src.includes('      const flavor = entry.flavor ?? POEM_BOTTLE_LINES[crypto.randomInt(0, POEM_BOTTLE_LINES.length)];'));
+  assert.ok(src.includes('  const last = FISH_CATCH_TABLE[FISH_CATCH_TABLE.length - 1];'));
+  assert.ok(src.includes('  return { kind: last.kind, label: last.label, flavor: last.flavor };'));
+  assert.ok(src.includes('const FISH_CATCH_TABLE = Object.freeze(['));
+  assert.ok(src.includes('    const caught = drawFishCatch();'));
+
+  assert.equal(src.split('drawFishCatch()').length - 1, 2);
+  assert.equal(src.split('crypto.randomInt(0, 100)').length - 1, 1);
+  assert.equal(src.split('POEM_BOTTLE_LINES[crypto.randomInt').length - 1, 1);
+});
+
+test('GhostlightClient fish methods source freeze', () => {
+  const client = fs.readFileSync(path.join(__dirname, 'ghostlight-client.mjs'), 'utf8');
+  assert.ok(client.includes('/** Cast a fishing line at the lake (5-minute settle before reeling). */'));
+  assert.ok(client.includes('  async fishCast() {'));
+  assert.ok(client.includes("    return this._signedPost('/api/town/fish/cast', {});"));
+  assert.ok(client.includes('/** Reel in an active fishing line after the settle window. */'));
+  assert.ok(client.includes('  async fishReel() {'));
+  assert.ok(client.includes("    return this._signedPost('/api/town/fish/reel', {});"));
+  assert.ok(client.includes("/** Fetch a resident's or guest's personal catch log (public). */"));
+  assert.ok(client.includes('  async fishLog(handle) {'));
+  assert.ok(client.includes('/api/town/fish/log${qs}'));
+
+  assert.deepEqual(client.match(/async fish\w+\(/g), [
+    'async fishCast(',
+    'async fishReel(',
+    'async fishLog(',
+  ]);
+});
+
+test('file hygiene: 47 unique names, 8 imports, zero banned terms, pinned as-true counts', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-fish.mjs'), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 47);
+  assert.equal(new Set(names).size, 47);
+
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 8);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 17);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 23);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+});
