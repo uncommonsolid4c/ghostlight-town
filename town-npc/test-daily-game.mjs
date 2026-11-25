@@ -14,6 +14,7 @@ import { ensureKeypair } from './keygen.mjs';
 import { checkHonesty, MAX_SAY_LEN } from './honesty.mjs';
 import { runTurn } from './run.mjs';
 import { localDateString } from './stepback.mjs';
+import { CHARACTERS } from './characters.mjs';
 import {
   FORMAT_LABELS,
   dailyGameHostForDate,
@@ -796,6 +797,17 @@ test('runTurn integration: game already quoted by a muse — host stays silent, 
     const host = dailyGameHostForDate(stateBefore.daily_game.date);
     const gameLine = buildDailyGameLine({ dailyGame: stateBefore.daily_game });
 
+    // selectReplierForLine designates CHARACTERS[id % CHARACTERS.length] for a
+    // muse line. If the game line's Prompt Book id designates the daily-game
+    // host, decideTurn returns 'reply' and the game duty never steals a reply
+    // turn — so the host would reply via the brain instead of staying silent.
+    // Pad with neutral filler lines from alice so the game line's id never
+    // designates the host on any UTC date.
+    const base = stateBefore.prompt_book.length;
+    const hostIdx = CHARACTERS.findIndex((c) => c.handle === host);
+    let fillers = 0;
+    while (((base + fillers + 1) % CHARACTERS.length) === hostIdx) fillers++;
+
     const kp = generateKeypair();
     const muse = new GhostlightClient({ baseUrl: env.baseUrl, handle: 'alice', ...kp });
     const joinRes = await muse.join({ origin: 'musebook', bio: 'Real muse' });
@@ -804,8 +816,21 @@ test('runTurn integration: game already quoted by a muse — host stays silent, 
       handle: 'alice',
     });
     assert.equal(approveRes.status, 200);
+    for (let i = 0; i < fillers; i++) {
+      const fillerRes = await muse.say('A quiet evening by the steps.', 'say');
+      assert.equal(fillerRes.status, 201);
+    }
     const sayRes = await muse.say(gameLine, 'say');
     assert.equal(sayRes.status, 201);
+
+    const stateWithGame = await (await fetch(`${env.baseUrl}/api/town/state`)).json();
+    const postedGameLine = stateWithGame.prompt_book.find((l) => l.body === gameLine);
+    assert.ok(postedGameLine, 'game line should be in prompt_book');
+    assert.notEqual(
+      CHARACTERS[postedGameLine.id % CHARACTERS.length].handle,
+      host,
+      'precondition: game line id must not designate the daily-game host'
+    );
 
     let brainCalled = false;
     const res = await runTurn({
