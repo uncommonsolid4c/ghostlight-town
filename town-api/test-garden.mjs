@@ -1686,3 +1686,458 @@ test('GhostlightClient garden error round-trips and missing-pubkey guard', async
     await ctx.close();
   }
 });
+
+test('guest handle validation runs before seed validation and failed attempts consume nothing', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    await joinResident(ctx, 'alice');
+    const seqBefore = (await watcher.state()).data.state_seq;
+
+    const badKeys = generateKeypair();
+    const badRes = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'BAD!', pubkey: badKeys.pubkey, seed: 'rose' },
+      'BAD!',
+      badKeys.privateKeyPem
+    );
+    assert.equal(badRes.status, 400);
+    assert.deepEqual(badRes.data, { error: 'invalid_handle' });
+
+    const takenKeys = generateKeypair();
+    const takenRes = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'alice', pubkey: takenKeys.pubkey, seed: 'rose' },
+      'alice',
+      takenKeys.privateKeyPem
+    );
+    assert.equal(takenRes.status, 409);
+    assert.deepEqual(takenRes.data, { error: 'handle_taken' });
+
+    const gaKeys = generateKeypair();
+    const ga = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: gaKeys.pubkey, seed: 'moonflower' },
+      'guest_a',
+      gaKeys.privateKeyPem
+    );
+    assert.equal(ga.status, 201);
+    assert.equal(ga.data.slot, 0);
+
+    const gbKeys = generateKeypair();
+    const gb = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b', pubkey: gbKeys.pubkey, seed: 'tea_mint' },
+      'guest_b',
+      gbKeys.privateKeyPem
+    );
+    assert.equal(gb.status, 201);
+    assert.equal(gb.data.slot, 1);
+
+    const gcKeys = generateKeypair();
+    const gc = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_c', pubkey: gcKeys.pubkey, seed: 'starwort' },
+      'guest_c',
+      gcKeys.privateKeyPem
+    );
+    assert.equal(gc.status, 429);
+    assert.equal(gc.data.error, 'rate_limited');
+
+    const seqAfter = (await watcher.state()).data.state_seq;
+    assert.equal(seqAfter, seqBefore + 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('muted resident precedence beats invalid seed, already-planted, and bed-full', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: mutedOneKeys } = await joinResident(ctx, 'muted_one');
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = ?").run('muted_one');
+
+    const badSeed = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'rose' },
+      'muted_one',
+      mutedOneKeys.privateKeyPem
+    );
+    assert.equal(badSeed.status, 403);
+    assert.deepEqual(badSeed.data, { error: 'resident_muted' });
+
+    const { keys: mutedTwoKeys } = await joinResident(ctx, 'muted_two');
+    const first = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'muted_two',
+      mutedTwoKeys.privateKeyPem
+    );
+    assert.equal(first.status, 201);
+    assert.equal(first.data.slot, 0);
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = ?").run('muted_two');
+    const dupMuted = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'muted_two',
+      mutedTwoKeys.privateKeyPem
+    );
+    assert.equal(dupMuted.status, 403);
+    assert.deepEqual(dupMuted.data, { error: 'resident_muted' });
+
+    const fillerSeeds = ['lantern_poppy', 'tea_mint', 'starwort', 'ghost_bell', 'silver_thyme'];
+    for (let i = 0; i < fillerSeeds.length; i++) {
+      if (i === 2) ctx.advanceClock(3601);
+      const handle = `filler_${i + 1}`;
+      const { keys } = await joinResident(ctx, handle);
+      const planted = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: fillerSeeds[i] },
+        handle,
+        keys.privateKeyPem
+      );
+      assert.equal(planted.status, 201);
+      assert.equal(planted.data.slot, i + 1);
+    }
+
+    const mutedOnFull = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'muted_one',
+      mutedOneKeys.privateKeyPem
+    );
+    assert.equal(mutedOnFull.status, 403);
+    assert.deepEqual(mutedOnFull.data, { error: 'resident_muted' });
+
+    const { keys: controlKeys } = await joinResident(ctx, 'control_seven');
+    const controlFull = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'control_seven',
+      controlKeys.privateKeyPem
+    );
+    assert.equal(controlFull.status, 409);
+    assert.deepEqual(controlFull.data, { error: 'bed_full' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('getClientIp edges: multi-value first entry, whitespace trim, and no-header socket bucket', async () => {
+  const ctx = await startTestServer();
+  try {
+    const plantGuest = (handle, seed, headers = {}) => {
+      const keys = generateKeypair();
+      return signedPostAt(
+        ctx,
+        '/api/town/garden/guest/plant',
+        { handle, pubkey: keys.pubkey, seed },
+        handle,
+        keys.privateKeyPem,
+        headers
+      );
+    };
+
+    const a1 = await plantGuest('ip_a1', 'moonflower', { 'x-forwarded-for': '203.0.113.7, 198.51.100.9' });
+    assert.equal(a1.status, 201);
+    assert.equal(a1.data.slot, 0);
+
+    const a2 = await plantGuest('ip_a2', 'tea_mint', { 'x-forwarded-for': '203.0.113.7, 198.51.100.9' });
+    assert.equal(a2.status, 201);
+    assert.equal(a2.data.slot, 1);
+
+    const a3 = await plantGuest('ip_a3', 'starwort', { 'x-forwarded-for': '203.0.113.7, 198.51.100.9' });
+    assert.equal(a3.status, 429);
+    assert.equal(a3.data.error, 'rate_limited');
+
+    const b1 = await plantGuest('ip_b1', 'lantern_poppy', { 'x-forwarded-for': '198.51.100.9' });
+    assert.equal(b1.status, 201);
+    assert.equal(b1.data.slot, 2);
+
+    const a4 = await plantGuest('ip_a4', 'ghost_bell', { 'x-forwarded-for': '  203.0.113.7  ' });
+    assert.equal(a4.status, 429);
+    assert.equal(a4.data.error, 'rate_limited');
+
+    const n1 = await plantGuest('ip_n1', 'ghost_bell');
+    assert.equal(n1.status, 201);
+    assert.equal(n1.data.slot, 3);
+
+    const n2 = await plantGuest('ip_n2', 'silver_thyme');
+    assert.equal(n2.status, 201);
+    assert.equal(n2.data.slot, 4);
+
+    const n3 = await plantGuest('ip_n3', 'moonflower');
+    assert.equal(n3.status, 429);
+    assert.equal(n3.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('source pins: garden rate limits, slot loop, state SELECT, and schema DDL', () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  const schemaSrc = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+
+  assert.ok(serverSrc.includes('  gardenPlant: { max: 10, windowSec: 60 * 60 },'));
+  assert.ok(serverSrc.includes('  guestGardenPlant: { max: 2, windowSec: 60 * 60 },'));
+  assert.ok(serverSrc.includes('for (let i = 0; i < GARDEN_SLOTS; i++)'));
+  assert.ok(serverSrc.includes('SELECT slot, handle, seed, planted_at FROM garden_plants ORDER BY slot ASC'));
+
+  const expectedDdl = [
+    'CREATE TABLE IF NOT EXISTS garden_plants (',
+    '    slot            INTEGER PRIMARY KEY CHECK (slot >= 0 AND slot <= 5),',
+    '    handle          TEXT NOT NULL UNIQUE,',
+    '    seed            TEXT NOT NULL,',
+    '    planted_at      INTEGER NOT NULL',
+    ');',
+  ].join('\n');
+  assert.ok(schemaSrc.includes(expectedDdl));
+});
+
+test('garden_plants DB row exact shape and PRAGMA table_info schema', async () => {
+  let now = 1795000000;
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const { keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const p1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(p1.status, 201);
+
+    now += 3600;
+    const { keys: bobKeys } = await joinResident(ctx, 'bob');
+    const p2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'tea_mint' },
+      'bob',
+      bobKeys.privateKeyPem
+    );
+    assert.equal(p2.status, 201);
+
+    const rows = ctx.db
+      .prepare('SELECT slot, handle, seed, planted_at FROM garden_plants ORDER BY slot ASC')
+      .all()
+      .map((r) => ({ ...r }));
+    assert.deepEqual(rows, [
+      { slot: 0, handle: 'alice', seed: 'moonflower', planted_at: 1795000000 },
+      { slot: 1, handle: 'bob', seed: 'tea_mint', planted_at: 1795003600 },
+    ]);
+
+    const cols = ctx.db
+      .prepare("PRAGMA table_info('garden_plants')")
+      .all()
+      .map((r) => ({ ...r }));
+    assert.deepEqual(cols.map((c) => c.name), ['slot', 'handle', 'seed', 'planted_at']);
+    assert.deepEqual(cols.map((c) => c.type), ['INTEGER', 'TEXT', 'TEXT', 'INTEGER']);
+    assert.deepEqual(cols.map((c) => c.pk), [1, 0, 0, 0]);
+    assert.deepEqual(cols.map((c) => c.notnull), [0, 1, 1, 1]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest plant does not create a resident so the handle stays joinable', async () => {
+  const ctx = await startTestServer();
+  try {
+    const gKeys = generateKeypair();
+    const planted = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_rose', pubkey: gKeys.pubkey, seed: 'starwort' },
+      'guest_rose',
+      gKeys.privateKeyPem
+    );
+    assert.equal(planted.status, 201);
+
+    const { client } = await joinResident(ctx, 'guest_rose');
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.garden.slots.length, 1);
+    assert.equal(st.data.garden.slots[0].handle, 'guest_rose');
+    assert.deepEqual(st.data.presence, []);
+    assert.equal(st.data.footlights.some((f) => f.handle === 'guest_rose'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest plant drives state?since= like a resident plant', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    const seqBefore = (await watcher.state()).data.state_seq;
+
+    const gKeys = generateKeypair();
+    const planted = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_since', pubkey: gKeys.pubkey, seed: 'moonflower' },
+      'guest_since',
+      gKeys.privateKeyPem
+    );
+    assert.equal(planted.status, 201);
+    assert.equal(planted.data.state_seq, seqBefore + 1);
+
+    const st200 = await watcher.state(seqBefore);
+    assert.equal(st200.status, 200);
+    assert.equal(st200.data.state_seq, seqBefore + 1);
+    assert.equal(st200.data.garden.slots.length, 1);
+    assert.equal(st200.data.garden.slots[0].handle, 'guest_since');
+
+    const st304 = await watcher.state(seqBefore + 1);
+    assert.equal(st304.status, 304);
+    assert.equal(st304.data, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('seed must match exactly and unknown extra body fields are ignored', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: aliceKeys } = await joinResident(ctx, 'alice');
+    for (const badSeed of [' moonflower', 'moonflower ', 'MOONFLOWER', 'MoonFlower', 'moonflower\n']) {
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: badSeed },
+        'alice',
+        aliceKeys.privateKeyPem
+      );
+      assert.equal(r.status, 400);
+      assert.deepEqual(r.data, { error: 'invalid_seed' });
+    }
+
+    const resOk = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower', note: 'hello', plot: 9, watered: true },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(resOk.status, 201);
+    assert.equal(resOk.data.slot, 0);
+    assert.equal(resOk.data.seed, 'moonflower');
+    assert.deepEqual(
+      Object.keys(resOk.data).sort(),
+      ['handle', 'planted_at', 'seed', 'slot', 'stage', 'state_seq']
+    );
+
+    const gxKeys = generateKeypair();
+    const gx = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_x', pubkey: gxKeys.pubkey, seed: 'tea_mint' },
+      'guest_x',
+      gxKeys.privateKeyPem
+    );
+    assert.equal(gx.status, 201);
+    assert.equal(gx.data.slot, 1);
+
+    const gyKeys = generateKeypair();
+    const gy = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_y', pubkey: gyKeys.pubkey, seed: 'starwort', note: 'hi' },
+      'guest_y',
+      gyKeys.privateKeyPem
+    );
+    assert.equal(gy.status, 201);
+    assert.equal(gy.data.slot, 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest duplicate on a full bed echoes the original because already_planted beats bed_full', async () => {
+  const ctx = await startTestServer();
+  try {
+    const g1Keys = generateKeypair();
+    const g1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_full', pubkey: g1Keys.pubkey, seed: 'starwort' },
+      'guest_full',
+      g1Keys.privateKeyPem
+    );
+    assert.equal(g1.status, 201);
+    assert.equal(g1.data.slot, 0);
+    const plantedAt = g1.data.planted_at;
+
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    const seeds = ['moonflower', 'lantern_poppy', 'tea_mint', 'ghost_bell', 'silver_thyme'];
+    for (let i = 0; i < seeds.length; i++) {
+      if (i === 3) ctx.advanceClock(3601);
+      const handle = `fill_${i + 1}`;
+      const { keys } = await joinResident(ctx, handle);
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: seeds[i] },
+        handle,
+        keys.privateKeyPem
+      );
+      assert.equal(r.status, 201);
+      assert.equal(r.data.slot, i + 1);
+    }
+
+    const seqAfterFills = (await watcher.state()).data.state_seq;
+
+    const g2Keys = generateKeypair();
+    const dup = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_full', pubkey: g2Keys.pubkey, seed: 'moonflower' },
+      'guest_full',
+      g2Keys.privateKeyPem
+    );
+    assert.equal(dup.status, 409);
+    assert.deepEqual(dup.data, {
+      error: 'already_planted',
+      slot: 0,
+      seed: 'starwort',
+      planted_at: plantedAt,
+    });
+    assert.equal((await watcher.state()).data.state_seq, seqAfterFills);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('file hygiene: 46 unique names, 8 imports, zero banned terms, pinned as-true counts', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-garden.mjs'), 'utf8');
+  const lines = src.split('\n');
+
+  const names = lines
+    .map((l) => l.match(/^test\('([^']+)'/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  assert.equal(names.length, 46);
+  assert.equal(new Set(names).size, 46);
+
+  const importLines = lines.filter((l) => l.startsWith('import '));
+  assert.equal(importLines.length, 8);
+
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 2);
+});
