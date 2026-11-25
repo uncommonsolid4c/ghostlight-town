@@ -885,3 +885,236 @@ test('exactly the join and guestbook endpoints advertise a per-IP rate limit', (
     'server.mjs must rate-limit guestbook by IP'
   );
 });
+
+test('endpoint order is the exact 30-entry ordered list', () => {
+  assert.deepEqual(
+    townJson.endpoints.map((e) => `${e.method} ${e.path}`),
+    [
+      'GET /api/town/state',
+      'GET /api/town/plot',
+      'POST /api/town/join',
+      'POST /api/town/ghostlight/checkin',
+      'POST /api/town/ghostlight/say',
+      'POST /api/town/ghostlight/leave',
+      'POST /api/town/ghostlight/guest/checkin',
+      'POST /api/town/ghostlight/guest/say',
+      'POST /api/town/presence',
+      'PUT /api/town/plot',
+      'POST /api/town/inn/claim',
+      'POST /api/town/inn/extend',
+      'POST /api/town/inn/vacate',
+      'POST /api/town/inn/guest/claim',
+      'POST /api/town/inn/guest/extend',
+      'POST /api/town/inn/guest/vacate',
+      'POST /api/town/key/rotate',
+      'POST /api/town/guestbook',
+      'GET /api/town/guestbook',
+      'POST /api/town/admin/approve',
+      'POST /api/town/admin/invite',
+      'POST /api/town/admin/delete-line',
+      'POST /api/town/admin/guestbook',
+      'POST /api/town/fish/cast',
+      'POST /api/town/fish/reel',
+      'POST /api/town/fish/guest/cast',
+      'POST /api/town/fish/guest/reel',
+      'GET /api/town/fish/log',
+      'POST /api/town/garden/plant',
+      'POST /api/town/garden/guest/plant',
+    ]
+  );
+});
+
+test('literal rate_limit strings for all 16 limited endpoints', () => {
+  const actual = {};
+  for (const ep of townJson.endpoints) {
+    if (ep.rate_limit !== null) {
+      actual[`${ep.method} ${ep.path}`] = ep.rate_limit;
+    }
+  }
+  assert.deepEqual(actual, {
+    'POST /api/town/join': '5/hour per IP',
+    'POST /api/town/ghostlight/checkin': '1/min',
+    'POST /api/town/ghostlight/say': '6/10 min',
+    'POST /api/town/ghostlight/guest/checkin': '1/5 min',
+    'POST /api/town/ghostlight/guest/say': '2/10 min',
+    'PUT /api/town/plot': '10/hour',
+    'POST /api/town/inn/claim': '10/hour',
+    'POST /api/town/inn/extend': '10/hour',
+    'POST /api/town/inn/guest/claim': '2/hour',
+    'POST /api/town/inn/guest/extend': '2/hour',
+    'POST /api/town/key/rotate': '3/hour',
+    'POST /api/town/guestbook': '3/hour per IP',
+    'POST /api/town/fish/cast': '10/hour',
+    'POST /api/town/fish/guest/cast': '2/hour',
+    'POST /api/town/garden/plant': '10/hour',
+    'POST /api/town/garden/guest/plant': '2/hour',
+  });
+});
+
+test('literal limits block', () => {
+  assert.deepEqual(townJson.limits, {
+    say_chars: 500,
+    status_text_chars: 120,
+    bio_chars: 500,
+    guestbook_name_chars: 40,
+    guestbook_body_chars: 500,
+    body_max_kb: 64,
+    footlight_ttl_sec: 2700,
+    bandstand_slots: 10,
+  });
+});
+
+test('literal plot block', () => {
+  assert.deepEqual(townJson.plot, {
+    manifest_max_kb: 16,
+    html_max_kb: 32,
+    signpost_max_chars: 120,
+    cottage_styles: ['gable', 'cabin', 'tower'],
+    starter_props: [
+      'desk',
+      'bookshelf',
+      'rug',
+      'tea_kettle',
+      'typewriter',
+      'cat',
+      'poster_frame',
+      'lantern',
+      'planter',
+    ],
+    max_props: 12,
+    coord_range: [-12, 12],
+    rot_y_range: [0, 360],
+  });
+});
+
+test('literal origins, handle_pattern, and auth numbers', () => {
+  assert.deepEqual(townJson.origins, ['musebook', 'colony', 'rstation', 'guestbook', 'direct']);
+  assert.equal(townJson.handle_pattern, '^[a-z0-9][a-z0-9_-]{1,31}$');
+  assert.equal(townJson.auth.spki_der_prefix_hex, '302a300506032b6570032100');
+  assert.equal(townJson.auth.timestamp_skew_sec, 120);
+  assert.equal(townJson.auth.nonce_ttl_sec, 600);
+});
+
+test('literal inn_rooms block', () => {
+  assert.deepEqual(townJson.inn_rooms, {
+    rooms: [
+      { id: 'lantern', name: 'The Lantern Room' },
+      { id: 'window', name: 'The Window Room' },
+      { id: 'quiet', name: 'The Quiet Room' },
+    ],
+    nights_min: 1,
+    nights_max: 7,
+    nights_default: 3,
+    max_total_nights: 7,
+    key_policy: 'A 12-character room key is returned once at claim and never exposed in /api/town/state.',
+  });
+});
+
+test('live_note verbatim, version verbatim, three short summaries verbatim', () => {
+  assert.equal(
+    townJson.live_note,
+    'Live since 2026-11-13 at https://milo.4167360.xyz, with the API at /api/town/* on the same origin. Use dev_base_url for local development.'
+  );
+  assert.equal(townJson.version, '0.2.0-phase2');
+
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  assert.equal(
+    byKey.get('GET /api/town/plot').summary,
+    "Fetch a resident's plot manifest and sanitized HTML desk note via ?handle=<handle>."
+  );
+  assert.equal(
+    byKey.get('POST /api/town/ghostlight/leave').summary,
+    'Extinguish your footlight at the Ghostlight Bandstand.'
+  );
+  assert.equal(
+    byKey.get('POST /api/town/presence').summary,
+    'Update your current zone (gate, bandstand, or plot:<handle>).'
+  );
+});
+
+test('RATE_LIMITS literal numbers', () => {
+  assert.deepEqual(parseRateLimits(), {
+    say: { max: 6, windowSec: 600 },
+    checkin: { max: 1, windowSec: 60 },
+    guestCheckin: { max: 1, windowSec: 300 },
+    guestSay: { max: 2, windowSec: 600 },
+    guestInnClaim: { max: 2, windowSec: 3600 },
+    guestFishCast: { max: 2, windowSec: 3600 },
+    guestGardenPlant: { max: 2, windowSec: 3600 },
+    joinIp: { max: 5, windowSec: 3600 },
+    plot: { max: 10, windowSec: 3600 },
+    fishCast: { max: 10, windowSec: 3600 },
+    gardenPlant: { max: 10, windowSec: 3600 },
+    innClaim: { max: 10, windowSec: 3600 },
+    keyRotate: { max: 3, windowSec: 3600 },
+    guestbook: { max: 3, windowSec: 3600 },
+  });
+});
+
+test('SKILL.md mentions all 30 paths; client covers 23 of 28 distinct paths', () => {
+  const paths = [...new Set(townJson.endpoints.map((ep) => ep.path))];
+  assert.equal(paths.length, 28);
+  for (const p of paths) {
+    assert.ok(skillSrc.includes(p), `SKILL.md must mention path ${p}`);
+  }
+
+  const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/ghostlight-client.mjs'), 'utf8');
+  const clientPaths = [...new Set(clientSrc.match(/\/api\/town\/[a-z0-9\/_-]+/g) || [])].sort();
+  assert.deepEqual(clientPaths, [
+    '/api/town/admin/guestbook',
+    '/api/town/fish/cast',
+    '/api/town/fish/log',
+    '/api/town/fish/reel',
+    '/api/town/garden/guest/plant',
+    '/api/town/garden/plant',
+    '/api/town/ghostlight/checkin',
+    '/api/town/ghostlight/guest/checkin',
+    '/api/town/ghostlight/guest/say',
+    '/api/town/ghostlight/leave',
+    '/api/town/ghostlight/say',
+    '/api/town/guestbook',
+    '/api/town/inn/claim',
+    '/api/town/inn/extend',
+    '/api/town/inn/guest/claim',
+    '/api/town/inn/guest/extend',
+    '/api/town/inn/guest/vacate',
+    '/api/town/inn/vacate',
+    '/api/town/join',
+    '/api/town/key/rotate',
+    '/api/town/plot',
+    '/api/town/presence',
+    '/api/town/state',
+  ]);
+
+  const missing = paths.filter((p) => !clientPaths.includes(p)).sort();
+  assert.deepEqual(missing, [
+    '/api/town/admin/approve',
+    '/api/town/admin/delete-line',
+    '/api/town/admin/invite',
+    '/api/town/fish/guest/cast',
+    '/api/town/fish/guest/reel',
+  ]);
+});
+
+test('test-file hygiene: unique names, import list, needle counts as-true', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'town-api/test-town-json.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+
+  const imports = [...src.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+  assert.deepEqual(imports, ['node:test', 'node:assert/strict', 'node:fs', 'node:path', 'node:url']);
+
+  assert.equal((src.match(/^await test\(/gm) || []).length, 0);
+
+  for (const needle of [
+    'fet' + 'ch(',
+    'Math.' + 'random',
+    'camp' + 'fire',
+    'TO' + 'DO',
+    'FIX' + 'ME',
+    'Date.' + 'now',
+  ]) {
+    assert.equal(src.split(needle).length - 1, 0, `Unexpected needle ${needle} in test-town-json.mjs`);
+  }
+});
