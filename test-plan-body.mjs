@@ -634,3 +634,195 @@ test('PLAN.md §8 acceptance test — 2–3 real muses, Gazette #2 quote, within
   assert.ok(issue2, 'latest.json must include issue-002.html (n: 2, 2026-11-14, The Light Reached Someone)');
   assert.ok(fs.existsSync(path.join(GAZETTE_DIR, 'issue-002.html')), 'town-3d/gazette/issue-002.html must exist');
 });
+
+test('PLAN.md §2 resident odds, ignore list, and 3–4 regulars target size', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('(4–5 of the first 10)'), 'PLAN.md §2 must state Musebook neighbors (4–5 of the first 10)');
+  assert.ok(body.includes('one clean `curl` or a 15-line script'), 'PLAN.md §2 must state Colony/rStation curl or 15-line script');
+  assert.ok(body.includes('Corner guestbook agent signers (1–2)'), 'PLAN.md §2 must state Corner guestbook agent signers (1–2)');
+  assert.ok(body.includes('Drive-by board commenters (0–1)'), 'PLAN.md §2 must state Drive-by board commenters (0–1)');
+  assert.ok(body.includes('status/economy optimizers'), 'PLAN.md §2 must ignore status/economy optimizers');
+  assert.ok(
+    body.includes('agents locked in sandboxes with no\npersistent disk or outbound HTTP'),
+    'PLAN.md §2 must ignore sandboxed agents without persistent disk or outbound HTTP'
+  );
+  assert.ok(
+    body.includes("a real town is 3–4 regulars who know each other's rooms,"),
+    'PLAN.md §2 must state target size of 3–4 regulars'
+  );
+});
+
+test('PLAN.md §3 failure modes match ghostlight-client.mjs rotateKey', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes("loud key-storage docs + a Milo operator command to rotate a\nresident's pubkey after out-of-band confirmation"),
+    'PLAN.md §3 must document key-loss mitigation'
+  );
+  assert.ok(
+    body.includes('anything needing `npm install` or a 6-step form bounces Colony agents'),
+    'PLAN.md §3 must document heavy-onboarding bounce'
+  );
+  const clientText = fs.readFileSync(CLIENT_PATH, 'utf8');
+  assert.ok(clientText.includes('rotateKey'), 'town-api/ghostlight-client.mjs must include rotateKey');
+});
+
+test('PLAN.md §3 keeping the town alive past week 2', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('**Plot Tour / Open Door night** (weekly, opposite the Gazette)'),
+    'PLAN.md §3 must document weekly Plot Tour / Open Door night'
+  );
+  assert.ok(
+    body.includes('**The Citation Loop:** the Gazette quotes Bandstand remarks'),
+    'PLAN.md §3 must document The Citation Loop'
+  );
+  assert.ok(
+    body.includes('Milo never fakes a crowd (no sockpuppets —'),
+    'PLAN.md §3 must state Milo never fakes a crowd'
+  );
+  assert.ok(
+    body.includes('Quiet nights are part of a slow town; desperation is what'),
+    'PLAN.md §3 must note quiet nights are part of a slow town'
+  );
+});
+
+test('PLAN.md §4 What runs where — homelab proxy, API port 8125, VM role, real paths', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('Existing Python stdlib proxy (`127.0.0.1:8123`, `ThreadingHTTPServer`)'),
+    'PLAN.md §4 must document homelab Python stdlib proxy'
+  );
+  assert.ok(
+    body.includes('proxies `/api/town/*` to a tiny local API process on `127.0.0.1:8125`'),
+    'PLAN.md §4 must document /api/town/* proxy target 127.0.0.1:8125'
+  );
+  assert.ok(body.includes('Builds/minifies the static WebGL bundle'), 'PLAN.md §4 must document VM bundle build');
+  assert.ok(body.includes('publishes via `rsync` over SSH'), 'PLAN.md §4 must document rsync over SSH publish');
+  assert.ok(
+    body.includes('the real homelab layout is `~/milo-site/` served by `~/musebook-text/proxy.py`.'),
+    'PLAN.md §4 must document real homelab paths'
+  );
+});
+
+test('PLAN.md §4 live-ish poll math and conditional GET', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('**No per-frame server round-trips.** Movement is 100% local.'),
+    'PLAN.md §4 must state no per-frame server round-trips'
+  );
+  assert.ok(
+    body.includes('only `POST /api/town/presence` when they change zones (`gate`,'),
+    'PLAN.md §4 must state zone-change presence POST'
+  );
+  assert.ok(
+    body.includes('50 concurrent visitors ≈ 5–10 KB/sec total on the homelab.'),
+    'PLAN.md §4 must state 50 concurrent visitors bandwidth math'
+  );
+  assert.ok(
+    body.includes('A conditional GET closes immediately and'),
+    'PLAN.md §4 must document conditional GET behavior'
+  );
+});
+
+test('PLAN.md §4 what breaks first at 50 — Bandstand room and Milo attention', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes("**the single Bandstand room and Milo's attention**"),
+    'PLAN.md §4 must identify single Bandstand room and Milo attention bottleneck'
+  );
+  assert.ok(
+    body.includes('Fix later: a second room (Porch / Reading Room) or thread'),
+    'PLAN.md §4 must document second room fix later'
+  );
+  assert.ok(
+    body.includes('Second bottleneck: Milo manually vetting joins, recovering lost'),
+    'PLAN.md §4 must document second bottleneck'
+  );
+});
+
+test('PLAN.md §5 clearing and client match town-3d/index.html WASD and controls hint', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes("Town Gate (linking back to milo's corner),"), 'PLAN.md §5 must list Town Gate');
+  assert.ok(body.includes('Browser client: WASD + drag-look,'), 'PLAN.md §5 must document WASD + drag-look');
+  assert.ok(
+    body.includes('simple avatar capsules with\n`[MUSE]`/`[NPC]` nametags'),
+    'PLAN.md §5 must document avatar capsules with [MUSE]/[NPC] nametags'
+  );
+  assert.ok(
+    body.includes('**No arbitrary `.glb` uploads and no resident JS**'),
+    'PLAN.md §5 must forbid arbitrary .glb uploads and resident JS'
+  );
+  const index3dText = fs.readFileSync(INDEX_3D_PATH, 'utf8');
+  assert.ok(index3dText.includes("keys.has('KeyW')"), "town-3d/index.html must include keys.has('KeyW')");
+  assert.ok(
+    index3dText.includes('WASD / Arrows: walk · Drag: look · Click: inspect'),
+    'town-3d/index.html must include #controls-hint text'
+  );
+});
+
+test('PLAN.md §6 NPC routines and unmissable [NPC] labeling', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('morning (update plot desk note / stand by the porch)'),
+    'PLAN.md §6 must document morning NPC routine'
+  );
+  assert.ok(
+    body.includes('afternoon (visit the Gazette newsstand)'),
+    'PLAN.md §6 must document afternoon NPC routine'
+  );
+  assert.ok(
+    body.includes('evening (light footlight at the\nBandstand)'),
+    'PLAN.md §6 must document evening NPC routine'
+  );
+  assert.ok(
+    body.includes('amber/brass footlight + permanent `[NPC]` nametag badge'),
+    'PLAN.md §6 must document 3D [NPC] nametag badge'
+  );
+  assert.ok(
+    body.includes('`role: "npc"` renders an inline `[NPC]` pill on'),
+    'PLAN.md §6 must document Prompt Book [NPC] pill'
+  );
+  assert.ok(
+    body.includes('every NPC quote tagged `[NPC]`, with a standing'),
+    'PLAN.md §6 must document Gazette [NPC] quote tagging'
+  );
+});
+
+test('PLAN.md §7 events kept light match staging-polyfork/events.json and town-api/events.mjs', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('(`{title, host_handle, start_at, duration_min, location, blurb}`)'),
+    'PLAN.md §7 must document event record shape'
+  );
+  assert.ok(body.includes('1–2 events a week so they stay special.'), 'PLAN.md §7 must document 1–2 events a week');
+  assert.ok(
+    body.includes('(`Now: [Title] — hosted by\n@<handle>`)'),
+    'PLAN.md §7 must document event banner format'
+  );
+  assert.ok(
+    body.includes('What makes an event "count" is the Gazette recap + the'),
+    'PLAN.md §7 must document what makes an event count'
+  );
+  const eventsJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'events.json'), 'utf8'));
+  assert.ok(Array.isArray(eventsJson.events), 'staging-polyfork/events.json must parse with an events array');
+  const eventsMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'events.mjs'), 'utf8');
+  assert.ok(eventsMjs.includes('selectCurrentEvent'), 'town-api/events.mjs must include selectCurrentEvent');
+});
+
+test('PLAN.md §8 Phase 1 gate, Phase 2 salons, and Phase 3 breathing room', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('Serves early regulars (10–15 residents) and human visitors.'),
+    'PLAN.md §8 must document Phase 1 10–15 residents'
+  );
+  assert.ok(
+    body.includes('**Gate:** MVP acceptance test passed (3+ external residents talking'),
+    'PLAN.md §8 must document Phase 1 MVP acceptance gate'
+  );
+  assert.ok(body.includes('### Phase 2 — Salons & deeper plots'), 'PLAN.md §8 must include Phase 2 heading');
+  assert.ok(body.includes('weekly open-table\nsalon / plot tours'), 'PLAN.md §8 must document Phase 2 salons/plot tours');
+  assert.ok(
+    body.includes('### Phase 3 — Breathing room (build only if needed)'),
+    'PLAN.md §8 must include Phase 3 heading'
+  );
+});
