@@ -703,3 +703,221 @@ test('updateNpcAnimations honors custom .values(), rejects non-iterable objects,
   assert.ok(stagingSrc.includes("['maren', {"));
   assert.ok(stagingSrc.includes("['tomas', {"));
 });
+
+test('vendored anim-idle.json top-level schema and exact 22-bone Mixamo track set', () => {
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  assert.deepEqual(Object.keys(idle).sort(), ['cc0', 'hips', 'name', 'times', 'tracks']);
+  assert.equal(Object.keys(idle.tracks).length, 22);
+  assert.deepEqual(new Set(Object.keys(idle.tracks)), MIXAMO_HUMANOID_BONES);
+  assert.equal(idle.name, 'Idle');
+  assert.equal(idle.cc0, true);
+});
+
+test('vendored anim-idle.json has 76 times at ~30 fps steps, 228 hips values, and 304 values per track', () => {
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  assert.equal(idle.times.length, 76);
+  assert.equal(idle.times[0], 0);
+  assert.equal(idle.times[75], 2.5);
+
+  const steps = new Set();
+  for (let i = 1; i < idle.times.length; i++) {
+    steps.add(Number((idle.times[i] - idle.times[i - 1]).toFixed(4)));
+  }
+  assert.deepEqual([...steps].sort((a, b) => a - b), [0.0333, 0.0334]);
+
+  assert.equal(idle.hips.length, 228);
+  for (const [bone, values] of Object.entries(idle.tracks)) {
+    assert.equal(values.length, 304, `track ${bone} must have 76 * 4 values`);
+  }
+});
+
+test('vendored anim-idle.json hips bob ranges match exact min/max bounds', () => {
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (let i = 0; i < idle.hips.length; i += 3) {
+    const x = idle.hips[i];
+    const y = idle.hips[i + 1];
+    const z = idle.hips[i + 2];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  assert.deepEqual([minX, minY, minZ], [-0.0026, -0.0498, -0.0395]);
+  assert.deepEqual([maxX, maxY, maxZ], [0.0055, -0.041, -0.0374]);
+});
+
+test('attachNpcAnimation warns with thrown string value and Idle/Walk label when non-Error is thrown', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = await attachNpcAnimation({}, { name: 'plain-npc' }, {
+      animateFn: async () => {
+        throw 'plain failure';
+      },
+    });
+    assert.equal(result, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('[npc-animation]'));
+    assert.ok(warnings[0].includes('Idle/Walk clips'));
+    assert.ok(warnings[0].includes('failed to attach'));
+    assert.ok(warnings[0].includes('stand-in stays still'));
+    assert.ok(warnings[0].includes('plain failure'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('attachIdleAnimation warns with stringified thrown number and plain object', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const numResult = await attachIdleAnimation({}, { name: 'num-err' }, {
+      animateFn: async () => {
+        throw 42;
+      },
+    });
+    assert.equal(numResult, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('42'));
+
+    warnings.length = 0;
+    const objResult = await attachIdleAnimation({}, { name: 'obj-err' }, {
+      animateFn: async () => {
+        throw {};
+      },
+    });
+    assert.equal(objResult, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('[object Object]'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('attachIdleAnimation and attachNpcAnimation with no options warn once and return null', async () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const idleResult = await attachIdleAnimation({}, { name: 'no-opts-idle' });
+    assert.equal(idleResult, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('[npc-animation]'));
+    assert.ok(warnings[0].includes('failed to attach'));
+
+    warnings.length = 0;
+    const npcResult = await attachNpcAnimation({}, { name: 'no-opts-npc' });
+    assert.equal(npcResult, null);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('[npc-animation]'));
+    assert.ok(warnings[0].includes('failed to attach'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('attachIdleAnimation passes empty string base verbatim while explicit undefined falls back to default', async () => {
+  const seen = [];
+  const fakeAnimate = async (_group, opts) => {
+    seen.push(opts);
+    return { update() {} };
+  };
+
+  await attachIdleAnimation({}, { name: 'empty-base' }, { animateFn: fakeAnimate, base: '' });
+  await attachNpcAnimation({}, { name: 'undef-base' }, { animateFn: fakeAnimate, base: undefined });
+
+  assert.deepEqual(seen, [
+    { clips: ['Idle'], base: '' },
+    { clips: ['Idle', 'Walk'], base: './anim/' },
+  ]);
+});
+
+test('updateNpcAnimations handles mid-call self-nulling anim, return values, string input, and non-iterable .values()', () => {
+  const recorded = [];
+  const selfNulling = {
+    anim: {
+      update(dt) {
+        recorded.push(dt);
+        selfNulling.anim = null;
+      },
+    },
+  };
+  const surviving = {
+    anim: {
+      update(dt) {
+        recorded.push(dt);
+      },
+    },
+  };
+  const standIns = new Map([
+    ['first', selfNulling],
+    ['second', surviving],
+  ]);
+
+  updateNpcAnimations(standIns, 0.016);
+  assert.deepEqual(recorded, [0.016, 0.016]);
+
+  recorded.length = 0;
+  updateNpcAnimations(standIns, 0.033);
+  assert.deepEqual(recorded, [0.033]);
+
+  const nextCalls = [];
+  const retStandIns = new Map([
+    ['ret', { anim: { update: () => 'ok' } }],
+    ['next', { anim: { update: (dt) => nextCalls.push(dt) } }],
+  ]);
+  assert.doesNotThrow(() => updateNpcAnimations(retStandIns, 0.02));
+  assert.deepEqual(nextCalls, [0.02]);
+
+  assert.doesNotThrow(() => updateNpcAnimations('wick', 0.016));
+  assert.throws(() => updateNpcAnimations({ values: () => 42 }, 0.016), TypeError);
+});
+
+test('staging.js NPC stand-in wiring has exact call-site counts, homes, and figure specs', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.equal(src.split('attachNpcAnimation(').length - 1, 1);
+  assert.equal(src.split('updateNpcAnimations(').length - 1, 1);
+  assert.ok(src.includes('updateNpcAnimations(npcStandIns, dt);'));
+  assert.ok(src.includes('counts.npcs = npcStandIns.size;'));
+
+  assert.ok(src.includes('{ x: 4.16, z: 4.99 }'));
+  assert.ok(src.includes('{ x: -3.53, z: 5.46 }'));
+  assert.ok(src.includes('{ x: 0.76, z: -6.46 }'));
+
+  assert.ok(src.includes("figure: 'masculine', age: 'adult', expression: 'alert', build: 0.9"));
+  assert.ok(src.includes("tunic: '#7a6a55'"));
+  assert.ok(src.includes("figure: 'feminine', age: 'old', expression: 'warm', build: 0.9"));
+  assert.ok(src.includes("tunic: '#6a7a8a'"));
+  assert.ok(src.includes("figure: 'masculine', age: 'old', expression: 'warm', build: 1.0"));
+  assert.ok(src.includes("tunic: '#8a7a5a'"));
+});
+
+test('file hygiene: 45 unique names, 7 imports, zero banned terms, pinned as-true counts', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-npc-animation.mjs'), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [];
+  for (const line of lines) {
+    const m = /^test\('([^']+)'/.exec(line);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 45);
+  assert.equal(new Set(names).size, 45);
+
+  const importLines = lines.filter((l) => l.startsWith('import '));
+  assert.equal(importLines.length, 7);
+
+  const countLines = (needle) => lines.filter((l) => l.includes(needle)).length;
+  assert.equal(countLines('TO' + 'DO'), 0);
+  assert.equal(countLines('FIX' + 'ME'), 0);
+  assert.equal(countLines('Date' + '.now'), 0);
+  assert.equal(countLines('fet' + 'ch('), 2);
+  assert.equal(countLines('Math' + '.random'), 2);
+});
