@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { attachSeedDoorProp } from './seed-door-props.mjs';
 import { CHARACTERS } from '../town-npc/characters.mjs';
+import { TOWN_LAYOUT, SEED_HOME_PADS } from './avatar.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
@@ -763,4 +764,267 @@ test('a duck-typed cottage works, with no instanceof gate', () => {
   assert.equal(added[0], prop);
   assert.equal(cottage.children[0], prop);
   assert.equal(prop.name, 'seed_door_prop_tomas');
+});
+
+test('town-3d/town.js PROP_PLACEMENTS full blocks pin coordinates, rotY, and GLB sizing fields', async () => {
+  const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
+
+  const wickMatch = townSrc.match(/\{[^}]*?id:\s*'wick_oil_lamp'[^}]*?\}/);
+  assert.ok(wickMatch, 'expected wick_oil_lamp block in town-3d/town.js');
+  for (const literal of ['x: 14.41,', 'z: -6.05,', 'rotY: -1.1733,', 'targetSize: 0.9,', "scaleAxis: 'y',"]) {
+    assert.ok(wickMatch[0].includes(literal), `expected ${literal} in wick_oil_lamp block`);
+  }
+
+  const tomasMatch = townSrc.match(/\{[^}]*?id:\s*'tomas_teapot'[^}]*?\}/);
+  assert.ok(tomasMatch, 'expected tomas_teapot block in town-3d/town.js');
+  for (const literal of ['x: 2.06,', 'z: -15.49,', 'rotY: -0.1322,', 'targetSize: 0.9,', "scaleAxis: 'y',"]) {
+    assert.ok(tomasMatch[0].includes(literal), `expected ${literal} in tomas_teapot block`);
+  }
+
+  const marenMatch = townSrc.match(/\{[^}]*?id:\s*'maren_typewriter'[^}]*?\}/);
+  assert.ok(marenMatch, 'expected maren_typewriter block in town-3d/town.js');
+  for (const literal of ['x: 9.49,', 'z: -12.42,', 'rotY: -0.6525,']) {
+    assert.ok(marenMatch[0].includes(literal), `expected ${literal} in maren_typewriter block`);
+  }
+  assert.ok(!marenMatch[0].includes('targetSize'), 'maren_typewriter block must not have targetSize');
+  assert.ok(!marenMatch[0].includes('scaleAxis'), 'maren_typewriter block must not have scaleAxis');
+});
+
+test('staging-derived live world positions, world-facing rotY, and ~0.9 m gap to town.js placements', () => {
+  const THREE = makeFakeThree();
+  // Exact gaps between staging-derived world positions and town.js PROP_PLACEMENTS:
+  // wick: 0.9074 m, maren: 0.9028 m, tomas: 0.9100 m
+  const expected = [
+    {
+      handle: 'wick',
+      plotNumber: 2,
+      plotX: 17.833,
+      plotZ: -4.922,
+      plotRotY: -1.3015,
+      wx: 14.265966532668191,
+      wz: -6.94592495980825,
+      worldRotY: -2.4748,
+      townX: 14.41,
+      townZ: -6.05,
+    },
+    {
+      handle: 'maren',
+      plotNumber: 3,
+      plotX: 13.023,
+      plotZ: -13.14,
+      plotRotY: -0.7809,
+      wx: 8.921822160005313,
+      wz: -13.121552107531894,
+      worldRotY: -1.4334,
+      townX: 9.49,
+      townZ: -12.42,
+    },
+    {
+      handle: 'tomas',
+      plotNumber: 4,
+      plotX: 4.761,
+      plotZ: -17.877,
+      plotRotY: -0.2603,
+      wx: 1.2123185233939904,
+      wz: -15.821067175807196,
+      worldRotY: -0.39249999999999996,
+      townX: 2.06,
+      townZ: -15.49,
+    },
+  ];
+
+  for (const spec of expected) {
+    assert.equal(SEED_HOME_PADS[spec.handle], spec.plotNumber);
+    const plot = TOWN_LAYOUT.plots.find((p) => p.plotNumber === SEED_HOME_PADS[spec.handle]);
+    assert.ok(plot, `expected plot ${spec.plotNumber} for ${spec.handle}`);
+    assert.equal(plot.x, spec.plotX);
+    assert.equal(plot.z, spec.plotZ);
+    assert.equal(plot.rotY, spec.plotRotY);
+
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), spec.handle);
+    const wx = plot.x + Math.cos(plot.rotY) * prop.position.x + Math.sin(plot.rotY) * prop.position.z;
+    const wz = plot.z + -Math.sin(plot.rotY) * prop.position.x + Math.cos(plot.rotY) * prop.position.z;
+    const worldRotY = plot.rotY + prop.rotation.y;
+
+    assert.ok(Math.abs(wx - spec.wx) < 1e-9, `${spec.handle} wx drift: ${wx}`);
+    assert.ok(Math.abs(wz - spec.wz) < 1e-9, `${spec.handle} wz drift: ${wz}`);
+    assert.ok(Math.abs(worldRotY - spec.worldRotY) < 1e-9, `${spec.handle} worldRotY drift: ${worldRotY}`);
+
+    const gap = Math.hypot(wx - spec.townX, wz - spec.townZ);
+    assert.ok(gap > 0.8 && gap < 1, `${spec.handle} gap ${gap} expected in (0.8, 1)`);
+  }
+});
+
+test('builders never name children; only the prop group is named', () => {
+  const THREE = makeFakeThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.equal(prop.name, `seed_door_prop_${handle}`);
+    assert.equal(prop.children.length, 3);
+    for (const child of prop.children) {
+      assert.equal(child.name, '');
+    }
+  }
+});
+
+test('fresh materials per call and mutation independence at material level', () => {
+  const THREE = makeFakeThree();
+  const wickA = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  const wickB = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  assert.notEqual(wickA.children[0].material, wickB.children[0].material);
+  assert.notEqual(wickA.children[1].material, wickB.children[1].material);
+  wickA.children[0].material.color = '#000000';
+  assert.equal(wickB.children[0].material.color, '#9a7b3e');
+
+  const maren = attachSeedDoorProp(THREE, new THREE.Group(), 'maren');
+  assert.notEqual(maren.children[0].material, maren.children[1].material);
+  assert.notEqual(maren.children[0].material, maren.children[2].material);
+  assert.notEqual(maren.children[1].material, maren.children[2].material);
+
+  const tomasA = attachSeedDoorProp(THREE, new THREE.Group(), 'tomas');
+  const tomasB = attachSeedDoorProp(THREE, new THREE.Group(), 'tomas');
+  assert.notEqual(tomasA.children[0].material, tomasB.children[0].material);
+});
+
+test('child rotation table across all nine children', () => {
+  const THREE = makeFakeThree();
+  for (const handle of ['wick', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    for (const child of prop.children) {
+      assert.deepEqual(child.rotation, { x: 0, y: 0, z: 0 });
+    }
+  }
+
+  const maren = attachSeedDoorProp(THREE, new THREE.Group(), 'maren');
+  const [stand, body, roller] = maren.children;
+  assert.deepEqual(stand.rotation, { x: 0, y: 0, z: 0 });
+  assert.deepEqual(body.rotation, { x: 0, y: 0, z: 0 });
+  assert.equal(roller.rotation.x, 0);
+  assert.equal(roller.rotation.y, 0);
+  assert.ok(Math.abs(roller.rotation.z - Math.PI / 2) < 1e-12);
+});
+
+test('prop vertical extents sit flush at bottom 0 with exact tops under 0.5', () => {
+  const THREE = makeFakeThree();
+  const expectedTops = { wick: 0.38, maren: 0.33, tomas: 0.36 };
+
+  for (const [handle, expectedTop] of Object.entries(expectedTops)) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const child of prop.children) {
+      const halfH = child.geometry.type === 'CylinderGeometry'
+        ? (Math.abs(child.rotation.z - Math.PI / 2) < 1e-6
+          ? Math.max(child.geometry.args[0], child.geometry.args[1])
+          : child.geometry.args[2] / 2)
+        : child.geometry.args[1] / 2;
+      minY = Math.min(minY, child.position.y - halfH);
+      maxY = Math.max(maxY, child.position.y + halfH);
+    }
+    assert.equal(minY, 0, `${handle} bottom must be 0`);
+    assert.ok(Math.abs(maxY - expectedTop) < 1e-9, `${handle} top ${maxY} expected ${expectedTop}`);
+    assert.ok(maxY < 0.5, `${handle} top must be < 0.5`);
+  }
+});
+
+test('SEED_DOOR_PROPS source order, rotY literals, and builder order', async () => {
+  const modSrc = await fs.readFile(MODULE_PATH, 'utf8');
+  const propsMatch = modSrc.match(/const SEED_DOOR_PROPS = \{([\s\S]*?)\n\};/);
+  assert.ok(propsMatch, 'expected SEED_DOOR_PROPS object literal in seed-door-props.mjs');
+
+  const block = propsMatch[1];
+  const keysInOrder = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+  assert.deepEqual(keysInOrder, ['wick', 'maren', 'tomas']);
+
+  for (const literal of ['rotY: -1.1733', 'rotY: -0.6525', 'rotY: -0.1322']) {
+    assert.ok(block.includes(literal), `expected ${literal} in SEED_DOOR_PROPS`);
+  }
+
+  const lampIdx = block.indexOf('buildProceduralOilLamp');
+  const typeIdx = block.indexOf('buildProceduralTypewriter');
+  const teaIdx = block.indexOf('buildProceduralTeapot');
+  assert.ok(lampIdx !== -1 && typeIdx !== -1 && teaIdx !== -1);
+  assert.ok(lampIdx < typeIdx && typeIdx < teaIdx);
+});
+
+test('module header comment accuracy against live cottage-props.mjs and staging.js', async () => {
+  const [modSrc, stagingSrc] = await Promise.all([
+    fs.readFile(MODULE_PATH, 'utf8'),
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+  ]);
+
+  assert.ok(modSrc.includes('[-2.4, 2.4]'));
+  assert.ok(modSrc.includes('[2.3, 3.5]'));
+  assert.ok(modSrc.includes('(2.3, 0.18, 2.6)'));
+
+  const { attachPorchDeck } = await import('./cottage-props.mjs');
+  const THREE = makeFakeThree();
+  const deck = attachPorchDeck(THREE, new THREE.Group());
+  assert.deepEqual(deck.geometry.args, [4.8, 0.18, 1.2]);
+  assertPos(deck, 0, 0.09, 2.9);
+  assert.deepEqual(
+    [deck.position.x - deck.geometry.args[0] / 2, deck.position.x + deck.geometry.args[0] / 2],
+    [-2.4, 2.4]
+  );
+  assert.deepEqual(
+    [deck.position.z - deck.geometry.args[2] / 2, deck.position.z + deck.geometry.args[2] / 2],
+    [2.3, 3.5]
+  );
+
+  assert.ok(stagingSrc.includes('sign.position.set(2.3, 0.18, 2.6);'));
+});
+
+test('material opts exact key sets across all nine children', () => {
+  const THREE = makeFakeThree();
+  const wick = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  assert.deepEqual(
+    wick.children.map((c) => Object.keys(c.material.opts).sort()),
+    [
+      ['color', 'roughness'],
+      ['color', 'emissive', 'emissiveIntensity'],
+      ['color', 'roughness'],
+    ]
+  );
+  assert.equal(wick.children[1].material.opts.roughness, undefined);
+
+  const maren = attachSeedDoorProp(THREE, new THREE.Group(), 'maren');
+  assert.deepEqual(
+    maren.children.map((c) => Object.keys(c.material.opts).sort()),
+    [
+      ['color', 'roughness'],
+      ['color', 'roughness'],
+      ['color', 'roughness'],
+    ]
+  );
+
+  const tomas = attachSeedDoorProp(THREE, new THREE.Group(), 'tomas');
+  assert.deepEqual(
+    tomas.children.map((c) => Object.keys(c.material.opts).sort()),
+    [
+      ['color', 'roughness'],
+      ['color', 'roughness'],
+      ['color', 'roughness'],
+    ]
+  );
+});
+
+test('single import and single call in staging.js, no town.js copy, and single import in module', async () => {
+  const [stagingSrc, townSrc, modSrc] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+    fs.readFile(TOWN_JS_PATH, 'utf8'),
+    fs.readFile(MODULE_PATH, 'utf8'),
+  ]);
+
+  const stagingImports = stagingSrc.match(
+    /import\s*\{[^}]*attachSeedDoorProp[^}]*\}\s*from\s*'[^']*seed-door-props\.mjs[^']*';/g
+  ) || [];
+  assert.equal(stagingImports.length, 1);
+
+  const callCount = stagingSrc.split('attachSeedDoorProp(THREE, cottage, handle);').length - 1;
+  assert.equal(callCount, 1);
+
+  assert.ok(!townSrc.includes('attachSeedDoorProp'), 'town-3d/town.js must not reference attachSeedDoorProp');
+
+  const modImports = modSrc.match(/^import /gm) || [];
+  assert.equal(modImports.length, 1);
 });
