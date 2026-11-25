@@ -760,3 +760,246 @@ test('--help documents the GHOSTLIGHT_TEST_SUITES override', async () => {
   assert.match(res.stdout, /Usage:/);
   assert.match(res.stdout, /skip/i);
 });
+
+test('--help prints the live suite count and all six areas', async () => {
+  const suites = extractTestSuites();
+  const res = await runRunner(['--help']);
+
+  assert.equal(res.code, 0, `Expected exit 0 for --help, got ${res.code}`);
+  const countMatch = res.stdout.match(/(\d+) explicit suites/);
+  assert.ok(countMatch, 'Expected --help output to print "<n> explicit suites"');
+  assert.equal(Number(countMatch[1]), suites.length);
+  for (const area of ['repo root', 'scripts/', 'staging-polyfork/', 'town-3d/', 'town-api/', 'town-npc/']) {
+    assert.equal(res.stdout.includes(area), true, `Expected --help output to include ${area}`);
+  }
+});
+
+test('TEST_SUITES has no duplicates and no session/ or argon-concept-test/ entries', () => {
+  const suites = extractTestSuites();
+  assert.equal(new Set(suites).size, suites.length);
+  assert.equal(suites.some((s) => s.startsWith('session/')), false);
+  assert.equal(suites.some((s) => s.startsWith('argon-concept-test/')), false);
+});
+
+test('TEST_SUITES section comment numbers match computed counts', () => {
+  const src = fs.readFileSync(RUNNER_PATH, 'utf8');
+  const suites = extractTestSuites();
+  const comments = [...src.matchAll(/^  \/\/ (.+?) \((\d+)\)$/gm)];
+  assert.equal(comments.length, 5, `Expected 5 section comments, got ${comments.length}`);
+
+  const expected = {
+    'root & scripts': suites.filter((s) => !s.includes('/') || s.startsWith('scripts/')).length,
+    'town-3d': suites.filter((s) => s.startsWith('town-3d/')).length,
+    'town-api': suites.filter((s) => s.startsWith('town-api/')).length,
+    'town-npc': suites.filter((s) => s.startsWith('town-npc/')).length,
+    'staging-polyfork': suites.filter((s) => s.startsWith('staging-polyfork/')).length,
+  };
+
+  for (const [, label, num] of comments) {
+    assert.equal(Number(num), expected[label], `Section comment ${label} (${num}) should match ${expected[label]}`);
+  }
+});
+
+test('TEST_SUITES sections are ordered and contiguous', () => {
+  const suites = extractTestSuites();
+  const first = (pred) => suites.findIndex(pred);
+  const idx = [
+    first((s) => !s.includes('/') || s.startsWith('scripts/')),
+    first((s) => s.startsWith('town-3d/')),
+    first((s) => s.startsWith('town-api/')),
+    first((s) => s.startsWith('town-npc/')),
+    first((s) => s.startsWith('staging-polyfork/')),
+  ];
+  assert.equal(idx.every((i) => i >= 0), true, `Expected all sections present, got ${JSON.stringify(idx)}`);
+  assert.equal(
+    idx.every((v, i) => i === 0 || v > idx[i - 1]),
+    true,
+    `Expected section first-indices strictly increasing, got ${JSON.stringify(idx)}`
+  );
+
+  const sectionOf = (s) =>
+    !s.includes('/') || s.startsWith('scripts/')
+      ? 0
+      : s.startsWith('town-3d/')
+        ? 1
+        : s.startsWith('town-api/')
+          ? 2
+          : s.startsWith('town-npc/')
+            ? 3
+            : 4;
+  const seq = suites.map(sectionOf);
+  assert.equal(
+    seq.every((v, i) => i === 0 || v >= seq[i - 1]),
+    true,
+    'Expected TEST_SUITES sections to be contiguous (non-decreasing)'
+  );
+});
+
+test('summary with skipped > 0, fail=0, and exit 0 is a green pass', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-skip-pass-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 's.mjs'),
+      [
+        "console.log('ℹ tests 3');",
+        "console.log('ℹ pass 2');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 1');",
+      ].join('\n') + '\n',
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['s.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}`);
+    assert.match(res.stdout, /^s\.mjs pass=2 fail=0 skipped=1$/m);
+    assert.match(res.stdout, /^TOTAL pass=2 fail=0 skipped=1 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('exit 2 with a valid fail=0 summary names exit 2 and preserves skipped', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-exit2-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 's.mjs'),
+      [
+        "console.log('ℹ tests 2');",
+        "console.log('ℹ pass 2');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 1');",
+        'process.exit(2);',
+      ].join('\n') + '\n',
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['s.mjs']),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1, got ${res.code}`);
+    assert.match(res.stdout, /^s\.mjs ERROR \(exit 2 with fail=0 in summary\)$/m);
+    assert.match(res.stdout, /^TOTAL pass=0 fail=1 skipped=1 suites=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('reason-less skip JSON still counts as a skip', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-skip-no-reason-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 's.mjs'),
+      'console.log(JSON.stringify({ status: "skip" }));\n',
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['s.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}`);
+    assert.match(res.stdout, /^s\.mjs pass=0 fail=0 skipped=1$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('missing, failing, and skipping suites in one run sum correctly', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-mix-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'bad.mjs'),
+      [
+        "console.log('ℹ tests 2');",
+        "console.log('ℹ pass 1');",
+        "console.log('ℹ fail 1');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n') + '\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'sk.mjs'),
+      'console.log(JSON.stringify({ status: "skip", reason: "x" }));\n',
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['gone.mjs', 'bad.mjs', 'sk.mjs']),
+    });
+
+    assert.equal(res.code, 1, `Expected exit 1, got ${res.code}`);
+    assert.match(res.stdout, /^gone\.mjs MISSING$/m);
+    assert.match(res.stdout, /^bad\.mjs pass=1 fail=1 skipped=0$/m);
+    assert.match(res.stdout, /^sk\.mjs pass=0 fail=0 skipped=1$/m);
+    assert.match(res.stdout, /^TOTAL pass=1 fail=2 skipped=1 suites=3$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('suite lines print in list order and TOTAL is the last line', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-order-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'a.mjs'),
+      [
+        "console.log('ℹ tests 1');",
+        "console.log('ℹ pass 1');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n') + '\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'b.mjs'),
+      [
+        "console.log('ℹ tests 1');",
+        "console.log('ℹ pass 1');",
+        "console.log('ℹ fail 0');",
+        "console.log('ℹ skipped 0');",
+      ].join('\n') + '\n',
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['a.mjs', 'b.mjs']),
+    });
+
+    const lines = res.stdout.split(/\r?\n/).filter(Boolean);
+    assert.match(lines[lines.length - 1] || '', /^TOTAL /);
+    assert.ok(res.stdout.indexOf('a.mjs pass=') < res.stdout.indexOf('b.mjs pass='));
+    assert.ok(res.stdout.indexOf('b.mjs pass=') < res.stdout.indexOf('TOTAL '));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CRLF summary lines parse cleanly', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runner-crlf-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'crlf.mjs'),
+      "process.stdout.write('ℹ tests 2\\r\\n');\nprocess.stdout.write('ℹ pass 2\\r\\n');\nprocess.stdout.write('ℹ fail 0\\r\\n');\nprocess.stdout.write('ℹ skipped 0\\r\\n');\n",
+      'utf8'
+    );
+
+    const res = await runRunner([], {
+      GHOSTLIGHT_TEST_ROOT: tmpDir,
+      GHOSTLIGHT_TEST_SUITES: JSON.stringify(['crlf.mjs']),
+    });
+
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}`);
+    assert.match(res.stdout, /^crlf\.mjs pass=2 fail=0 skipped=0$/m);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
