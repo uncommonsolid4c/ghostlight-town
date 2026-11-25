@@ -1320,3 +1320,348 @@ test('admin delete-line on a reply removes the reply, preserves the top line, an
     await ctx.close();
   }
 });
+
+test('say reply_to: reply ids are consecutive and created_at matches between response and state', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const r1 = await maren.say('Top line.');
+    assert.equal(r1.status, 201);
+    const r2 = await lampmoth.say('First reply.', 'say', r1.data.id);
+    assert.equal(r2.status, 201);
+    const r3 = await maren.say('Reply to reply.', 'say', r2.data.id);
+    assert.equal(r3.status, 201);
+
+    assert.deepEqual([r1.data.id, r2.data.id, r3.data.id], [1, 2, 3]);
+    for (const r of [r1, r2, r3]) {
+      assert.equal(Number.isInteger(r.data.created_at), true);
+    }
+
+    const st = await maren.state();
+    assert.equal(st.status, 200);
+    assert.deepEqual(st.data.prompt_book.map((e) => e.id), [1, 2, 3]);
+    assert.deepEqual(
+      st.data.prompt_book.map((e) => e.created_at),
+      [r1.data.created_at, r2.data.created_at, r3.data.created_at]
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: incremental state?since= returns 200 with updated seq and 304 when caught up', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const top = await maren.say('Top line.');
+    assert.equal(top.status, 201);
+    const stBefore = await maren.state();
+    assert.equal(stBefore.status, 200);
+    const seqBefore = stBefore.data.state_seq;
+
+    const reply = await lampmoth.say('Reply line.', 'say', top.data.id);
+    assert.equal(reply.status, 201);
+
+    const inc = await maren.state(seqBefore);
+    assert.equal(inc.status, 200);
+    assert.equal(inc.data.state_seq, seqBefore + 1);
+    assert.deepEqual(inc.data.prompt_book.map((e) => e.id), [top.data.id, reply.data.id]);
+    assert.equal(inc.data.prompt_book[1].reply_to, top.data.id);
+
+    const notMod = await maren.state(inc.data.state_seq);
+    assert.equal(notMod.status, 304);
+    assert.equal(notMod.data, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: reply to a muted author line is accepted', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const top = await maren.say('Line before mute.');
+    assert.equal(top.status, 201);
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'maren'").run();
+
+    const reply = await lampmoth.say('Replying to muted maren.', 'say', top.data.id);
+    assert.equal(reply.status, 201);
+    assert.equal(reply.data.reply_to, top.data.id);
+
+    const st = await lampmoth.state();
+    assert.equal(st.status, 200);
+    const entry = st.data.prompt_book.find((e) => e.id === reply.data.id);
+    assert.ok(entry);
+    assert.equal(entry.reply_to, top.data.id);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('admin delete-line: deleting top of a 3-level chain preserves replies and lets chain grow', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const r1 = await maren.say('Level 0');
+    assert.equal(r1.status, 201);
+    const r2 = await lampmoth.say('Level 1', 'say', r1.data.id);
+    assert.equal(r2.status, 201);
+    const r3 = await maren.say('Level 2', 'say', r2.data.id);
+    assert.equal(r3.status, 201);
+    const r4 = await lampmoth.say('Level 3', 'say', r3.data.id);
+    assert.equal(r4.status, 201);
+
+    const del = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/delete-line', {
+      id: r1.data.id,
+    });
+    assert.equal(del.status, 200);
+
+    const st = await maren.state();
+    assert.equal(st.status, 200);
+    assert.deepEqual(
+      st.data.prompt_book.map((e) => [e.id, e.reply_to]),
+      [[2, 1], [3, 2], [4, 3]]
+    );
+
+    const badReply = await maren.say('Reply to deleted 1', 'say', r1.data.id);
+    assert.equal(badReply.status, 400);
+    assert.equal(badReply.data.error, 'invalid_reply_to');
+
+    const goodReply = await maren.say('Reply to surviving 4', 'say', r4.data.id);
+    assert.equal(goodReply.status, 201);
+    assert.equal(goodReply.data.reply_to, 4);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply_to: resident 7th say as a reply returns exact 429 body without mutating state', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const target = await lampmoth.say('Target line.');
+    assert.equal(target.status, 201);
+
+    for (let i = 1; i <= 5; i++) {
+      const r = await maren.say(`Top say ${i}`);
+      assert.equal(r.status, 201);
+    }
+    const sixth = await maren.say('Sixth as reply.', 'say', target.data.id);
+    assert.equal(sixth.status, 201);
+
+    const stBefore = await maren.state();
+    assert.equal(stBefore.status, 200);
+    const seqBefore = stBefore.data.state_seq;
+    const lenBefore = stBefore.data.prompt_book.length;
+
+    const seventh = await maren.say('Seventh as reply.', 'say', target.data.id);
+    assert.equal(seventh.status, 429);
+    assert.deepEqual(Object.keys(seventh.data), ['error', 'retry_after']);
+    assert.equal(seventh.data.error, 'rate_limited');
+    assert.equal(Number.isInteger(seventh.data.retry_after), true);
+    assert.equal(seventh.data.retry_after >= 1 && seventh.data.retry_after <= 600, true);
+
+    const stAfter = await maren.state();
+    assert.equal(stAfter.status, 200);
+    assert.equal(stAfter.data.prompt_book.length, lenBefore);
+    assert.equal(stAfter.data.state_seq, seqBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('CLI say --reply-to edges: 0 and -1 exit 2, padded " 2 " succeeds, and 1e2 hits server 400', async () => {
+  const ctx = await startTestServer();
+  const keyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-cli-say-g6-'));
+  try {
+    const { client: maren, keys } = await createResident(ctx, 'maren');
+    const l1 = await maren.say('Line one.');
+    assert.equal(l1.status, 201);
+    assert.equal(l1.data.id, 1);
+    const l2 = await maren.say('Line two.');
+    assert.equal(l2.status, 201);
+    assert.equal(l2.data.id, 2);
+
+    const keyPath = path.join(keyDir, 'maren.pem');
+    fs.writeFileSync(keyPath, keys.privateKeyPem, { mode: 0o600 });
+
+    const baseArgs = [
+      'say',
+      '--api-base',
+      ctx.baseUrl,
+      '--handle',
+      'maren',
+      '--key',
+      keyPath,
+      '--body',
+      'CLI edge reply',
+      '--reply-to',
+    ];
+
+    const res0 = await runCliAsync([...baseArgs, '0']);
+    assert.equal(res0.status, 2);
+    assert.match(res0.stderr, /Invalid --reply-to "0" \(must be a positive integer\)/);
+
+    const resNeg = await runCliAsync([...baseArgs, '-1']);
+    assert.equal(resNeg.status, 2);
+    assert.match(resNeg.stderr, /Invalid --reply-to "-1" \(must be a positive integer\)/);
+
+    const resPad = await runCliAsync([...baseArgs, ' 2 ']);
+    assert.equal(resPad.status, 0);
+    const padParsed = JSON.parse(resPad.stdout.trim());
+    assert.equal(padParsed.ok, true);
+    assert.equal(padParsed.status, 201);
+    assert.equal(padParsed.data.reply_to, 2);
+
+    const resSci = await runCliAsync([...baseArgs, '1e2']);
+    assert.equal(resSci.status, 0);
+    const sciParsed = JSON.parse(resSci.stdout.trim());
+    assert.equal(sciParsed.ok, false);
+    assert.equal(sciParsed.status, 400);
+    assert.equal(sciParsed.data.error, 'invalid_reply_to');
+  } finally {
+    fs.rmSync(keyDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('say reply_to numeric edges: 2.0 accepted, MAX_SAFE_INTEGER and 1e3 rejected without seq bump', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const l1 = await maren.say('First.');
+    assert.equal(l1.status, 201);
+    assert.equal(l1.data.id, 1);
+    const l2 = await lampmoth.say('Second.');
+    assert.equal(l2.status, 201);
+    assert.equal(l2.data.id, 2);
+
+    const stBefore = await maren.state();
+    assert.equal(stBefore.status, 200);
+    const seqBefore = stBefore.data.state_seq;
+
+    const rFloat = await maren.say('Float two.', 'say', 2.0);
+    assert.equal(rFloat.status, 201);
+    assert.equal(rFloat.data.reply_to, 2);
+
+    const rMax = await maren.say('Max safe.', 'say', Number.MAX_SAFE_INTEGER);
+    assert.equal(rMax.status, 400);
+    assert.equal(rMax.data.error, 'invalid_reply_to');
+
+    const rSci = await maren.say('Thousand.', 'say', 1e3);
+    assert.equal(rSci.status, 400);
+    assert.equal(rSci.data.error, 'invalid_reply_to');
+
+    const stAfter = await maren.state();
+    assert.equal(stAfter.status, 200);
+    assert.equal(stAfter.data.state_seq, seqBefore + 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('prompt_book DB storage layer: exact row shape and column list', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const top = await maren.say('Top line.');
+    assert.equal(top.status, 201);
+    const reply = await lampmoth.say('Reply line.', 'say', top.data.id);
+    assert.equal(reply.status, 201);
+
+    const rows = ctx.db
+      .prepare('SELECT id, handle, kind, body, reply_to, created_at FROM prompt_book ORDER BY id')
+      .all()
+      .map((r) => ({ ...r }));
+    assert.deepStrictEqual(rows, [
+      {
+        id: top.data.id,
+        handle: 'maren',
+        kind: 'say',
+        body: 'Top line.',
+        reply_to: null,
+        created_at: top.data.created_at,
+      },
+      {
+        id: reply.data.id,
+        handle: 'lampmoth',
+        kind: 'say',
+        body: 'Reply line.',
+        reply_to: top.data.id,
+        created_at: reply.data.created_at,
+      },
+    ]);
+
+    const cols = ctx.db.prepare('PRAGMA table_info(prompt_book)').all().map((c) => c.name);
+    assert.deepStrictEqual(cols, ['id', 'handle', 'kind', 'body', 'reply_to', 'created_at']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('prompt_book AUTOINCREMENT: deleted max id is never reused', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+
+    const l1 = await maren.say('One.');
+    assert.equal(l1.status, 201);
+    const l2 = await maren.say('Two.');
+    assert.equal(l2.status, 201);
+    const l3 = await maren.say('Three.');
+    assert.equal(l3.status, 201);
+    assert.deepEqual([l1.data.id, l2.data.id, l3.data.id], [1, 2, 3]);
+
+    const del = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/delete-line', {
+      id: 3,
+    });
+    assert.equal(del.status, 200);
+
+    const l4 = await maren.say('Four.');
+    assert.equal(l4.status, 201);
+    assert.equal(l4.data.id, 4);
+
+    const badReply = await lampmoth.say('Reply to deleted 3.', 'say', 3);
+    assert.equal(badReply.status, 400);
+    assert.equal(badReply.data.error, 'invalid_reply_to');
+
+    const goodReply = await lampmoth.say('Reply to fresh 4.', 'say', 4);
+    assert.equal(goodReply.status, 201);
+    assert.equal(goodReply.data.reply_to, 4);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('test-say-reply.mjs hygiene: 45 unique tests, 11 imports, and pinned literal counts', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-say-reply.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 45);
+  assert.equal(new Set(names).size, 45);
+
+  const imports = src.split('\n').filter((line) => line.startsWith('import '));
+  assert.equal(imports.length, 11);
+
+  const countOf = (needle) => src.split(needle).length - 1;
+  assert.equal(countOf('TO' + 'DO'), 0);
+  assert.equal(countOf('FIX' + 'ME'), 0);
+  assert.equal(countOf('Math.' + 'random'), 0);
+  assert.equal(countOf('Date.' + 'now'), 9);
+  assert.equal(countOf('fet' + 'ch('), 1);
+});
