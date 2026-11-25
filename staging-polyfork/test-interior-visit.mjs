@@ -1324,3 +1324,429 @@ test('exit calls only setVisible, never palette/dressing again, and leaves the r
     poseSnapshot
   );
 });
+
+test('enter with rotation pi/4 places eye and lookAt target at exact world coords', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+    setDressing: setInteriorDressing,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  milo.rotation.y = Math.PI / 4;
+
+  assert.equal(visit.enter(milo), true);
+  assert.ok(Math.abs(camera.position.x - 18.556396103067893) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - 1.55) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - 5.236396103067893) < 1e-9);
+  assert.ok(Math.abs(controls.target.x - 17.000761184457488) < 1e-9);
+  assert.ok(Math.abs(controls.target.y - 1.15) < 1e-9);
+  assert.ok(Math.abs(controls.target.z - 3.680761184457488) < 1e-9);
+  assert.equal(camera.lookAtCalls.length, 1);
+  assert.ok(Math.abs(camera.lookAtCalls[0].x - 17.000761184457488) < 1e-9);
+  assert.ok(Math.abs(camera.lookAtCalls[0].y - 1.15) < 1e-9);
+  assert.ok(Math.abs(camera.lookAtCalls[0].z - 3.680761184457488) < 1e-9);
+  assert.deepEqual(camera.lookAtCalls[0], {
+    x: controls.target.x,
+    y: controls.target.y,
+    z: controls.target.z,
+  });
+  assert.equal(visit.exit(), true);
+});
+
+test('lookBy combined drag updates local target exactly while keeping camera eye fixed', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+    setDressing: setInteriorDressing,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  milo.rotation.y = Math.PI / 4;
+
+  assert.equal(visit.enter(milo), true);
+  const eyeBefore = {
+    x: camera.position.x,
+    y: camera.position.y,
+    z: camera.position.z,
+  };
+
+  assert.equal(visit.lookBy(50, -40), true);
+  const localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - 0.5530998053285574) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - 1.595045896612638) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - -1.2661143719905184) < 1e-6);
+  assert.deepEqual(
+    { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    eyeBefore
+  );
+  assert.equal(visit.exit(), true);
+});
+
+test('rayHitsInteriorDoor diagonal and rising-ray doorway boundaries', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: -0.5, y: 0, z: 0.54 }),
+    true
+  );
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.55, z: 0.9 }, { x: -0.51, y: 0, z: 0.54 }),
+    false
+  );
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0.2, y: 1.55, z: 0.9 }, { x: 0.3, y: 0, z: 0.54 }),
+    true
+  );
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0.2, y: 1.55, z: 0.9 }, { x: 0.31, y: 0, z: 0.54 }),
+    false
+  );
+
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.45, z: 0.9 }, { x: 0, y: 1, z: 1 }),
+    true
+  );
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.46, z: 0.9 }, { x: 0, y: 1, z: 1 }),
+    true
+  );
+  assert.equal(
+    rayHitsInteriorDoor(room, { x: 0, y: 1.47, z: 0.9 }, { x: 0, y: 1, z: 1 }),
+    false
+  );
+});
+
+test('isDoorHit rotated kit and milo cottages transform world hits via worldToLocal at pi/2', () => {
+  const THREE = makeFakeThree();
+
+  const kit = new THREE.Group();
+  kit.userData = { clickable: true, kind: 'cottage', handle: 'ada' };
+  kit.position.set(5, 0, 5);
+  kit.rotation.y = Math.PI / 2;
+
+  const kitDoorWorld = kit.localToWorld(makeVec3(0, 1, 1.6));
+  assert.ok(Math.abs(kitDoorWorld.x - 6.6) < 1e-9);
+  assert.ok(Math.abs(kitDoorWorld.y - 1) < 1e-9);
+  assert.ok(Math.abs(kitDoorWorld.z - 5) < 1e-9);
+  assert.equal(isDoorHit(kit, { object: {}, point: kitDoorWorld }), true);
+
+  const kitWallWorld = kit.localToWorld(makeVec3(1.1, 1, 1.6));
+  assert.ok(Math.abs(kitWallWorld.x - 6.6) < 1e-9);
+  assert.ok(Math.abs(kitWallWorld.y - 1) < 1e-9);
+  assert.ok(Math.abs(kitWallWorld.z - 3.9) < 1e-9);
+  assert.equal(isDoorHit(kit, { object: {}, point: kitWallWorld }), false);
+
+  const kitBackWorld = kit.localToWorld(makeVec3(0, 1, 1.39));
+  assert.ok(Math.abs(kitBackWorld.x - 6.39) < 1e-9);
+  assert.ok(Math.abs(kitBackWorld.y - 1) < 1e-9);
+  assert.ok(Math.abs(kitBackWorld.z - 5) < 1e-9);
+  assert.equal(isDoorHit(kit, { object: {}, point: kitBackWorld }), false);
+
+  const milo = new THREE.Group();
+  milo.userData = { clickable: true, kind: 'cottage', handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  milo.rotation.y = Math.PI / 2;
+
+  const miloDoorWorld = milo.localToWorld(makeVec3(0, 1, 1.7));
+  assert.ok(Math.abs(miloDoorWorld.x - 19.62) < 1e-9);
+  assert.ok(Math.abs(miloDoorWorld.y - 1) < 1e-9);
+  assert.ok(Math.abs(miloDoorWorld.z - 4.6) < 1e-9);
+  assert.equal(isDoorHit(milo, { object: {}, point: miloDoorWorld }), true);
+
+  const miloBackWorld = milo.localToWorld(makeVec3(0, 1, 1.49));
+  assert.ok(Math.abs(miloBackWorld.x - 19.41) < 1e-9);
+  assert.ok(Math.abs(miloBackWorld.y - 1) < 1e-9);
+  assert.ok(Math.abs(miloBackWorld.z - 4.6) < 1e-9);
+  assert.equal(isDoorHit(milo, { object: {}, point: miloBackWorld }), false);
+});
+
+test('dressing and palette persist while hidden and re-enter re-applies them', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const dressingCalls = [];
+  const paletteCalls = [];
+
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette(r, h) {
+      paletteCalls.push(h);
+      setInteriorPalette(r, h);
+    },
+    setDressing(r, h) {
+      dressingCalls.push(h);
+      setInteriorDressing(r, h);
+    },
+  });
+
+  const wick = new THREE.Group();
+  wick.userData = { handle: 'wick' };
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+
+  const backWall = room.children.find((c) => c.name === 'interior_wall_back');
+  const wickDressing = room.children.find((c) => c.name === 'interior_dressing_wick');
+  const miloDressing = room.children.find((c) => c.name === 'interior_dressing_milo');
+
+  assert.equal(visit.enter(wick), true);
+  assert.equal(visit.exit(), true);
+  assert.equal(room.visible, false);
+  assert.equal(wickDressing.visible, true);
+  assert.equal(backWall.material.color, '#c8922e');
+
+  assert.equal(visit.enter(wick), true);
+  assert.deepEqual(dressingCalls, ['wick', 'wick']);
+  assert.deepEqual(paletteCalls, ['wick', 'wick']);
+  assert.equal(wickDressing.visible, true);
+  assert.equal(visit.exit(), true);
+
+  assert.equal(visit.enter(milo), true);
+  assert.equal(miloDressing.visible, true);
+  assert.equal(wickDressing.visible, false);
+  assert.equal(visit.exit(), true);
+});
+
+test('maren and tomas palette accents, dressing toggles, and buildInteriorRoom palette opts', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const backWall = room.children.find((c) => c.name === 'interior_wall_back');
+  const miloDressing = room.children.find((c) => c.name === 'interior_dressing_milo');
+  const marenDressing = room.children.find((c) => c.name === 'interior_dressing_maren');
+  const tomasDressing = room.children.find((c) => c.name === 'interior_dressing_tomas');
+
+  assert.equal(setInteriorPalette(room, 'maren'), true);
+  assert.equal(backWall.material.color, '#43505c');
+  assert.equal(setInteriorPalette(room, 'tomas'), true);
+  assert.equal(backWall.material.color, '#b5633a');
+
+  assert.equal(setInteriorDressing(room, 'maren'), true);
+  assert.equal(marenDressing.visible, true);
+  assert.equal(miloDressing.visible, false);
+
+  assert.equal(setInteriorDressing(room, 'tomas'), true);
+  assert.equal(tomasDressing.visible, true);
+  assert.equal(marenDressing.visible, false);
+
+  const marenBuilt = buildInteriorRoom(THREE, { palette: 'maren' });
+  const marenBack = marenBuilt.children.find((c) => c.name === 'interior_wall_back');
+  assert.equal(marenBack.material.color, '#f5efe0');
+
+  const miloBuilt = buildInteriorRoom(THREE, { palette: 'milo' });
+  const miloBack = miloBuilt.children.find((c) => c.name === 'interior_wall_back');
+  assert.equal(miloBack.material.color, '#a8d8ea');
+});
+
+test('buildInteriorRoom structure inventory matches exact names, dimensions, and positions', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  assert.equal(room.name, 'interior_room');
+  assert.equal(room.visible, false);
+  assert.equal(room.children.length, 19);
+  assert.deepEqual(
+    room.children.map((c) => c.name),
+    [
+      'interior_floor',
+      'interior_wall_back',
+      'interior_wall_left',
+      'interior_wall_right',
+      'interior_wall_front_left',
+      'interior_wall_front_right',
+      'interior_wall_front_lintel',
+      'interior_window_glow_left',
+      'interior_window_glow_right',
+      'interior_rafter_1',
+      'interior_rafter_2',
+      'interior_rafter_3',
+      'interior_rafter_4',
+      'interior_desk',
+      'interior_rug',
+      'interior_dressing_milo',
+      'interior_dressing_wick',
+      'interior_dressing_maren',
+      'interior_dressing_tomas',
+    ]
+  );
+
+  const byName = (n) => room.children.find((c) => c.name === n);
+  const floor = byName('interior_floor');
+  assert.deepEqual(floor.geometry.args, [3.7, 0.08, 3.0]);
+  assert.deepEqual(
+    { x: floor.position.x, y: floor.position.y, z: floor.position.z },
+    { x: 0, y: 0.04, z: 0 }
+  );
+
+  const rafter1 = byName('interior_rafter_1');
+  assert.equal(rafter1.position.y, 2.66);
+  assert.equal(rafter1.position.z, -1.05);
+
+  const glowLeft = byName('interior_window_glow_left');
+  assert.equal(glowLeft.material.color, '#ffbe5c');
+  assert.equal(glowLeft.material.emissiveIntensity, 1.4);
+
+  const desk = byName('interior_desk');
+  assert.deepEqual(
+    { x: desk.position.x, y: desk.position.y, z: desk.position.z },
+    { x: -0.95, y: 0.44, z: -0.85 }
+  );
+
+  const rug = byName('interior_rug');
+  assert.deepEqual(
+    { x: rug.position.x, y: rug.position.y, z: rug.position.z },
+    { x: 0.25, y: 0.1, z: 0.15 }
+  );
+
+  const wickDressing = byName('interior_dressing_wick');
+  assert.ok(Math.abs(wickDressing.position.x - -0.8) < 1e-9);
+  assert.ok(Math.abs(wickDressing.position.y - 0.8) < 1e-9);
+  assert.ok(Math.abs(wickDressing.position.z - -0.85) < 1e-9);
+
+  const miloDressing = byName('interior_dressing_milo');
+  const kettle = miloDressing.children.find((c) => c.name === 'interior_tea_kettle');
+  assert.ok(Math.abs(kettle.position.x - -0.8) < 1e-9);
+  assert.ok(Math.abs(kettle.position.y - 0.92) < 1e-9);
+  assert.ok(Math.abs(kettle.position.z - -0.85) < 1e-9);
+
+  const cat = miloDressing.children.find((c) => c.name === 'interior_cat');
+  assert.ok(Math.abs(cat.position.x - 1.35) < 1e-9);
+  assert.ok(Math.abs(cat.position.y - 0.26) < 1e-9);
+  assert.ok(Math.abs(cat.position.z - -0.9) < 1e-9);
+});
+
+test('setInterior* null-safety, Boolean coercion, .set color path, and dressing idempotence', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+
+  assert.equal(setInteriorVisible(null, true), false);
+  assert.equal(setInteriorVisible(undefined, false), false);
+  assert.equal(setInteriorVisible(room, 'yes'), true);
+  assert.equal(room.visible, true);
+  assert.equal(setInteriorVisible(room, 0), false);
+  assert.equal(room.visible, false);
+  assert.equal(setInteriorVisible(room, 1), true);
+
+  assert.equal(setInteriorPalette(null, 'milo'), false);
+  assert.equal(setInteriorPalette({ children: [] }, 'milo'), false);
+  assert.equal(
+    setInteriorPalette({ children: [{ name: 'interior_wall_back' }] }, 'milo'),
+    false
+  );
+
+  assert.equal(setInteriorDressing(null, 'milo'), false);
+  assert.equal(setInteriorDressing({ children: [] }, 'milo'), false);
+
+  const wickDressing = room.children.find((c) => c.name === 'interior_dressing_wick');
+  assert.equal(setInteriorDressing(room, 'wick'), true);
+  assert.equal(wickDressing.visible, true);
+  assert.equal(setInteriorDressing(room, 'wick'), true);
+  assert.equal(wickDressing.visible, true);
+
+  const seen = [];
+  const setRoom = {
+    children: [
+      {
+        name: 'interior_wall_back',
+        material: {
+          color: {
+            set(v) {
+              seen.push(v);
+            },
+          },
+        },
+      },
+    ],
+  };
+  assert.equal(setInteriorPalette(setRoom, 'milo'), true);
+  assert.deepEqual(seen, ['#a8d8ea']);
+  assert.equal(setInteriorPalette(setRoom, 'nope'), true);
+  assert.deepEqual(seen, ['#a8d8ea', '#f5efe0']);
+});
+
+test('interior-visit.mjs and interior-room.mjs export surfaces and source discipline', async () => {
+  const visitSrc = await fs.readFile(path.join(__dirname, 'interior-visit.mjs'), 'utf8');
+  const visitExports = [...visitSrc.matchAll(/^export (?:async function|function|const) (\w+)/gm)]
+    .map((m) => m[1])
+    .sort();
+  assert.deepEqual(visitExports, [
+    'INTERIOR_EYE_LOCAL',
+    'INTERIOR_LOOK_SENSITIVITY',
+    'INTERIOR_PITCH_LIMIT',
+    'INTERIOR_TARGET_LOCAL',
+    'createInteriorVisit',
+    'isDoorHit',
+    'rayHitsInteriorDoor',
+  ]);
+  assert.equal(/^import /m.test(visitSrc), false);
+  assert.equal(visitSrc.startsWith('/**'), true);
+  assert.equal(visitSrc.includes('Walk-in Cottage Interior Visit'), true);
+
+  const roomSrc = await fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8');
+  const roomExports = [...roomSrc.matchAll(/^export (?:async function|function|const) (\w+)/gm)]
+    .map((m) => m[1])
+    .sort();
+  assert.deepEqual(roomExports, [
+    'buildInteriorRoom',
+    'buildProceduralOilLamp',
+    'buildProceduralTeapot',
+    'buildProceduralTypewriter',
+    'setInteriorDressing',
+    'setInteriorPalette',
+    'setInteriorVisible',
+  ]);
+  assert.equal(/^import /m.test(roomSrc), false);
+});
+
+test('staging.js interior wiring contract and ?v=34 version pin', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+
+  assert.equal(
+    stagingSrc.includes(
+      "import { buildInteriorRoom, setInteriorVisible, setInteriorPalette, setInteriorDressing } from './interior-room.mjs?v=34';"
+    ),
+    true
+  );
+  assert.equal(
+    stagingSrc.includes(
+      "import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=34';"
+    ),
+    true
+  );
+  assert.equal(stagingSrc.includes('const interiorVisit = createInteriorVisit({'), true);
+  assert.equal(stagingSrc.includes('  room: interiorRoom,'), true);
+  assert.equal(stagingSrc.includes('  setVisible: setInteriorVisible,'), true);
+  assert.equal(stagingSrc.includes('  setPalette: setInteriorPalette,'), true);
+  assert.equal(stagingSrc.includes('  setDressing: setInteriorDressing,'), true);
+  assert.equal(stagingSrc.includes('if (isDoorHit(target, hit)) {'), true);
+  assert.equal(
+    stagingSrc.includes(
+      'if (rayHitsInteriorDoor(interiorRoom, raycaster.ray.origin, raycaster.ray.direction)) {'
+    ),
+    true
+  );
+
+  const roomV34Count = stagingSrc.split('interior-room.mjs?v=34').length - 1;
+  const visitV34Count = stagingSrc.split('interior-visit.mjs?v=34').length - 1;
+  assert.equal(roomV34Count, 1);
+  assert.equal(visitV34Count, 1);
+});
