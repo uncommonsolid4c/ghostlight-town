@@ -981,3 +981,229 @@ test('getPlotTargetPosition every plot target sits 3.6 m toward the centre at ra
     assert.equal(t.rotY, plot.rotY);
   }
 });
+
+test('staging badge rule is two-way (npc vs muse); role guest falls back to [MUSE] (pins town.js drift)', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument((drawnTexts) => {
+    const g = createAvatarCapsule(THREE, { handle: 'visitor', role: 'guest' });
+    assert.equal(g.userData.role, 'muse');
+    assert.equal(g.children[0].material.color, '#6cb4d8');
+
+    drawnTexts.length = 0;
+    setAvatarStatusText(THREE, g, 'Hello');
+    assert.deepEqual(
+      drawnTexts.map((d) => d.text),
+      ['[MUSE] visitor', 'Hello']
+    );
+  });
+
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const townSrc = fs.readFileSync(path.join(dir, '..', 'town-3d', 'town.js'), 'utf8');
+  const avatarSrc = fs.readFileSync(path.join(dir, 'avatar.mjs'), 'utf8');
+  assert.equal(townSrc.includes("role === 'guest' ? `[guest] ${handle}`"), true);
+  assert.equal(avatarSrc.includes('[guest]'), false);
+});
+
+test('getPlotTargetPosition exact index-0 targets for plots 2, 3, 4, 6, 7, 8', () => {
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[1], 0), { x: 14.3627, y: 0, z: -3.9642, rotY: -1.3015 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[2], 0), { x: 10.4889, y: 0, z: -10.583, rotY: -0.7809 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[3], 0), { x: 3.8345, y: 0, z: -14.3983, rotY: -0.2603 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[5], 0), { x: -10.4889, y: 0, z: -10.583, rotY: 0.7809 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[6], 0), { x: -14.3627, y: 0, z: -3.9642, rotY: 1.3015 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[7], 0), { x: -14.4321, y: 0, z: 3.7058, rotY: 1.8221 });
+});
+
+test('TOWN_LAYOUT plots exact rotY list for all 8 plots', () => {
+  assert.deepEqual(
+    TOWN_LAYOUT.plots.map((p) => p.rotY),
+    [-1.8221, -1.3015, -0.7809, -0.2603, 0.2603, 0.7809, 1.3015, 1.8221]
+  );
+});
+
+test('pickBandstandSpot preferredSlot 0, omitted, and null; exact return keys and fresh objects', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set();
+
+  const a = pickBandstandSpot(spots, used, 0);
+  assert.equal(a.slot, 0);
+  assert.deepEqual(Object.keys(a), ['x', 'y', 'z', 'rotY', 'slot', 'nametagLift']);
+
+  const b = pickBandstandSpot(spots, used);
+  assert.equal(b.slot, 1);
+
+  const c = pickBandstandSpot(spots, used, null);
+  assert.equal(c.slot, 2);
+
+  assert.notEqual(a, b);
+  a.x = 999;
+  assert.equal(spots[0].x, 0);
+});
+
+test('pickBandstandSpot overflow exact coords for idx 19 and idx 29 plus pre-filled empty-spots fallback', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set();
+
+  for (let i = 0; i < 19; i++) {
+    pickBandstandSpot(spots, used, null);
+  }
+  const slot19 = pickBandstandSpot(spots, used, null);
+  assert.equal(slot19.slot, 19);
+  assert.equal(slot19.x, +(Math.sin((9 / 10) * Math.PI * 2 + 0.15) * 6.6).toFixed(4));
+  assert.equal(slot19.z, +(Math.cos((9 / 10) * Math.PI * 2 + 0.15) * 6.6).toFixed(4));
+  assert.equal(slot19.y, 0);
+  assert.equal(slot19.nametagLift, 0.5);
+
+  for (let i = 0; i < 9; i++) {
+    pickBandstandSpot(spots, used, null);
+  }
+  const slot29 = pickBandstandSpot(spots, used, null);
+  assert.equal(slot29.slot, 29);
+  assert.equal(slot29.x, +(Math.sin((9 / 10) * Math.PI * 2 + 0.15) * 7.5).toFixed(4));
+  assert.equal(slot29.z, +(Math.cos((9 / 10) * Math.PI * 2 + 0.15) * 7.5).toFixed(4));
+  assert.equal(slot29.y, 0);
+  assert.equal(slot29.nametagLift, 0.5);
+
+  const emptyFallback = pickBandstandSpot([], new Set([0, 1]), null);
+  assert.equal(emptyFallback.slot, 2);
+  assert.equal(emptyFallback.x, +(Math.sin((2 / 10) * Math.PI * 2 + 0.15) * 5.7).toFixed(4));
+  assert.equal(emptyFallback.z, +(Math.cos((2 / 10) * Math.PI * 2 + 0.15) * 5.7).toFixed(4));
+  assert.equal(emptyFallback.y, 0);
+});
+
+test('createAvatarCapsule child positions, userData key order, and long-handle badge verbatim', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument((drawnTexts) => {
+    const av = createAvatarCapsule(THREE, {
+      handle: 'a-very-long-handle-name-that-keeps-going',
+      role: 'muse',
+      nametagLift: 0.25,
+    });
+    for (const child of av.children) {
+      assert.equal(child.position.x, 0);
+      assert.equal(child.position.z, 0);
+    }
+    assert.equal(av.children[0].position.y, 0.5);
+    assert.equal(av.children[1].position.y, 1.2);
+    assert.equal(av.children[2].position.y, 2.05);
+    assert.deepEqual(Object.keys(av.userData), ['handle', 'role', 'nametagLift', 'nametagSprite']);
+    assert.equal(av.name, 'avatar_a-very-long-handle-name-that-keeps-going');
+    assert.deepEqual(
+      drawnTexts.map((d) => d.text),
+      ['[MUSE] a-very-long-handle-name-that-keeps-going']
+    );
+  });
+});
+
+test('setAvatarStatusText dispose tally across set/set/set/clear lifecycle and undefined-map null-status no-op', () => {
+  const THREE = createFakeTHREE();
+  withFakeDocument(() => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    const sprite = muse.userData.nametagSprite;
+    let disposed = 0;
+    const arm = () => {
+      sprite.material.map.dispose = () => {
+        disposed += 1;
+      };
+    };
+
+    arm();
+    setAvatarStatusText(THREE, muse, 'First');
+    assert.equal(disposed, 1);
+
+    arm();
+    setAvatarStatusText(THREE, muse, 'Second');
+    assert.equal(disposed, 2);
+
+    arm();
+    setAvatarStatusText(THREE, muse, 'Third');
+    assert.equal(disposed, 3);
+    assert.equal(muse.userData.statusText, 'Third');
+
+    arm();
+    setAvatarStatusText(THREE, muse, '');
+    assert.equal(disposed, 4);
+    assert.equal(muse.userData.statusText, null);
+
+    const npc2 = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    npc2.userData.nametagSprite.material.map = undefined;
+    setAvatarStatusText(THREE, npc2, null);
+    assert.equal(npc2.userData.nametagSprite.material.map, undefined);
+    assert.equal(npc2.userData.statusText, null);
+  });
+});
+
+test('setAvatarStatusText muse status texture full call list and badge-only restore call list', () => {
+  const THREE = createFakeTHREE();
+  withRecordingDocument((calls) => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+
+    calls.length = 0;
+    setAvatarStatusText(THREE, muse, 'Quiet tea');
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 144],
+      ['strokeRect', '#9be0ff', 8, 8, 8, 368, 128],
+      ['fillText', 'bold 30px monospace', '#9be0ff', '[MUSE] sol', 192, 48],
+      ['fillText', 'bold 22px monospace', '#9be0ff', 'Quiet tea', 192, 96],
+    ]);
+
+    calls.length = 0;
+    setAvatarStatusText(THREE, muse, '');
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 96],
+      ['strokeRect', '#9be0ff', 8, 8, 8, 368, 80],
+      ['fillText', 'bold 30px monospace', '#9be0ff', '[MUSE] sol', 192, 48],
+    ]);
+  });
+});
+
+test('TOWN_LAYOUT plot objects have exact key order, plotNumber 1..8, and y 0', () => {
+  for (let i = 0; i < 8; i++) {
+    const plot = TOWN_LAYOUT.plots[i];
+    assert.deepEqual(Object.keys(plot), ['plotNumber', 'x', 'y', 'z', 'rotY']);
+    assert.equal(plot.plotNumber, i + 1);
+    assert.equal(plot.y, 0);
+  }
+});
+
+test('avatar.mjs source discipline, export surface, and test-avatar.mjs hygiene', () => {
+  const selfPath = fileURLToPath(import.meta.url);
+  const dir = path.dirname(selfPath);
+  const avatarSrc = fs.readFileSync(path.join(dir, 'avatar.mjs'), 'utf8');
+  const selfSrc = fs.readFileSync(selfPath, 'utf8');
+
+  const fetchToken = 'fet' + 'ch(';
+  const randomToken = 'Math.' + 'random';
+  const legacyToken = 'camp' + 'fire';
+
+  assert.equal(/^import /m.test(avatarSrc), false);
+  assert.equal(avatarSrc.includes(fetchToken), false);
+  assert.equal(avatarSrc.includes(randomToken), false);
+  assert.equal(avatarSrc.includes(legacyToken), false);
+
+  const exports = Array.from(avatarSrc.matchAll(/^export (?:const|function) (\w+)/gm), (m) => m[1]).sort();
+  assert.deepEqual(exports, [
+    'SEED_HOME_PADS',
+    'TOWN_LAYOUT',
+    'createAvatarCapsule',
+    'getPlotTargetPosition',
+    'pickBandstandSpot',
+    'setAvatarStatusText',
+  ]);
+  assert.equal(avatarSrc.startsWith('// Copied verbatim from town-3d/town.js:'), true);
+
+  assert.equal(selfSrc.includes(fetchToken), false);
+  assert.equal(selfSrc.includes(randomToken), false);
+  assert.equal(selfSrc.includes(legacyToken), false);
+});
