@@ -846,3 +846,255 @@ test('GARDEN_BED is exactly {x: 6.5, z: 0}; raised-bed plants stay at soil heigh
   assert.ok(Math.abs(plants.children[0].position.x - -0.7) < 1e-9);
   assert.ok(Math.abs(plants.children[0].position.z - -0.3) < 1e-9);
 });
+
+test('SEED_COLORS is the exact six-seed map in written key order', () => {
+  assert.deepEqual(SEED_COLORS, {
+    moonflower: '#dfe9ff',
+    lantern_poppy: '#ff9a3c',
+    tea_mint: '#7fb069',
+    starwort: '#c9a7eb',
+    ghost_bell: '#a8d8ea',
+    silver_thyme: '#b8c4b0',
+  });
+  assert.deepEqual(Object.keys(SEED_COLORS), [
+    'moonflower',
+    'lantern_poppy',
+    'tea_mint',
+    'starwort',
+    'ghost_bell',
+    'silver_thyme',
+  ]);
+});
+
+test('gardenStageForAgeDays exact float boundaries and non-coercing inputs', () => {
+  assert.equal(gardenStageForAgeDays(1.9999999), 'sprout');
+  assert.equal(gardenStageForAgeDays(2.0), 'leaf');
+  assert.equal(gardenStageForAgeDays(3.9999999), 'leaf');
+  assert.equal(gardenStageForAgeDays(4.0), 'bloom');
+  assert.equal(gardenStageForAgeDays(-1e-9), 'sprout');
+  assert.equal(gardenStageForAgeDays(2n), 'sprout');
+  assert.equal(gardenStageForAgeDays(), 'sprout');
+  assert.equal(gardenStageForAgeDays(Symbol('x')), 'sprout');
+});
+
+test('buildGardenPlant groups sit at the origin; stem and flower are centered on x/z', () => {
+  const THREE = makeFakeThree();
+  for (const stage of ['sprout', 'leaf', 'bloom']) {
+    const group = buildGardenPlant(THREE, { seed: 'moonflower', stage });
+    assert.equal(group.position.x, 0);
+    assert.equal(group.position.y, 0);
+    assert.equal(group.position.z, 0);
+  }
+
+  const leaf = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'leaf' });
+  const stem = leaf.getObjectByName('plant-stem');
+  assert.equal(stem.position.x, 0);
+  assert.equal(stem.position.z, 0);
+
+  const bloom = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'bloom' });
+  const flower = bloom.getObjectByName('plant-flower');
+  assert.equal(flower.position.x, 0);
+  assert.equal(flower.position.z, 0);
+
+  const sprout = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'sprout' });
+  assert.equal(sprout.getObjectByName('plant-sprout-leaf-0').position.z, 0);
+  assert.equal(sprout.getObjectByName('plant-sprout-leaf-1').position.z, 0);
+});
+
+test('each buildGardenPlant and buildGardenBed call mints fresh materials', () => {
+  const THREE = makeFakeThree();
+  const s1 = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'sprout' });
+  const s2 = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'sprout' });
+  assert.notEqual(
+    s1.getObjectByName('plant-sprout-leaf-0').material,
+    s2.getObjectByName('plant-sprout-leaf-0').material
+  );
+
+  const b1 = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'bloom' });
+  const b2 = buildGardenPlant(THREE, { seed: 'moonflower', stage: 'bloom' });
+  assert.notEqual(
+    b1.getObjectByName('plant-flower').material,
+    b2.getObjectByName('plant-flower').material
+  );
+
+  const bed1 = buildGardenBed(THREE);
+  const bed2 = buildGardenBed(THREE);
+  assert.notEqual(
+    bed1.getObjectByName('garden-frame-north').material,
+    bed2.getObjectByName('garden-frame-north').material
+  );
+  assert.notEqual(
+    bed1.getObjectByName('garden-soil').material,
+    bed2.getObjectByName('garden-soil').material
+  );
+});
+
+test('buildGardenBed y edges: negative, undefined, NaN, unknown keys, and no args', () => {
+  const THREE = makeFakeThree();
+
+  const negBed = buildGardenBed(THREE, { y: -0.5 });
+  assert.equal(negBed.position.y, -0.5);
+  assert.equal(negBed.children.length, 6);
+
+  const undefBed = buildGardenBed(THREE, { y: undefined });
+  assert.equal(undefBed.position.y, 0);
+
+  const nanBed = buildGardenBed(THREE, { y: Number.NaN });
+  assert.equal(Number.isNaN(nanBed.position.y), true);
+
+  const extraBed = buildGardenBed(THREE, { y: 0, foo: 'bar', garden: { slots: [] } });
+  assert.equal(extraBed.children.length, 6);
+  assert.equal(extraBed.position.x, 6.5);
+
+  const noArgsBed = buildGardenBed(THREE);
+  assert.equal(noArgsBed.position.x, 6.5);
+  assert.equal(noArgsBed.position.y, 0);
+  assert.equal(noArgsBed.position.z, 0);
+  assert.equal(noArgsBed.children.length, 6);
+});
+
+test('updateGardenBed never mutates its input garden and rebuilds fresh each call', () => {
+  const THREE = makeFakeThree();
+  const bed = buildGardenBed(THREE, {
+    garden: { slots: [{ slot: 0, seed: 'moonflower', stage: 'sprout' }] },
+  });
+
+  const input = { slots: [{ slot: 1, seed: 'tea_mint', stage: 'leaf' }] };
+  const snapshot = JSON.stringify(input);
+
+  const first = updateGardenBed(THREE, bed, input);
+  assert.equal(JSON.stringify(input), snapshot);
+  assert.equal(first, bed.getObjectByName('garden-plants'));
+
+  const second = updateGardenBed(THREE, bed, input);
+  assert.notEqual(second, first);
+  assert.equal(second, bed.getObjectByName('garden-plants'));
+  assert.equal(JSON.stringify(input), snapshot);
+});
+
+test('garden bed derived dimensions: deck clearance, soil inset, rail meeting, tops', () => {
+  assert.ok(Math.abs((GARDEN_BED.x - 1.2) - 4.5 - 0.8) < 1e-9);
+
+  const THREE = makeFakeThree();
+  const bed = buildGardenBed(THREE);
+  const soil = bed.getObjectByName('garden-soil');
+  const north = bed.getObjectByName('garden-frame-north');
+  const west = bed.getObjectByName('garden-frame-west');
+
+  const [soilW, soilH, soilD] = soil.geometry.args;
+  assert.ok(Math.abs(soilW - 2.2) < 1e-9);
+  assert.ok(Math.abs(soilH - 0.22) < 1e-9);
+  assert.ok(Math.abs(soilD - 1.4) < 1e-9);
+  assert.ok(Math.abs((2.4 - soilW) / 2 - 0.1) < 1e-9);
+  assert.ok(Math.abs((1.6 - soilD) / 2 - 0.1) < 1e-9);
+
+  assert.ok(Math.abs(north.geometry.args[0] - 2.4) < 1e-9);
+  assert.ok(Math.abs(west.geometry.args[2] - 1.4) < 1e-9);
+
+  const soilTop = soil.position.y + soilH / 2;
+  const frameTop = north.position.y + north.geometry.args[1] / 2;
+  assert.ok(Math.abs(soilTop - 0.22) < 1e-9);
+  assert.ok(Math.abs(frameTop - 0.28) < 1e-9);
+  assert.ok(Math.abs(frameTop - soilTop - 0.06) < 1e-9);
+});
+
+test('server GARDEN_SEEDS table, GARDEN_SLOTS, and the plant 201 response shape', () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(serverSrc.includes('const GARDEN_SLOTS = 6;'));
+  assert.ok(serverSrc.includes('const GARDEN_SEED_SET = new Set(GARDEN_SEEDS.map((s) => s.kind));'));
+
+  const tableMatch = serverSrc.match(/const\s+GARDEN_SEEDS\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/);
+  assert.ok(tableMatch, 'Could not find GARDEN_SEEDS in town-api/server.mjs');
+  const rows = [
+    ...tableMatch[1].matchAll(
+      /Object\.freeze\(\{\s*kind:\s*'([^']+)',\s*label:\s*'([^']+)',\s*color:\s*'([^']+)'\s*\}\)/g
+    ),
+  ].map((m) => [m[1], m[2], m[3]]);
+  assert.deepEqual(rows, [
+    ['moonflower', 'Moonflower', '#dfe9ff'],
+    ['lantern_poppy', 'Lantern Poppy', '#ff9a3c'],
+    ['tea_mint', 'Tea Mint', '#7fb069'],
+    ['starwort', 'Starwort', '#c9a7eb'],
+    ['ghost_bell', 'Ghost Bell', '#a8d8ea'],
+    ['silver_thyme', 'Silver Thyme', '#b8c4b0'],
+  ]);
+
+  assert.ok(serverSrc.includes('Math.floor((now - plantedAt) / 86400)'));
+
+  const blocks = [...serverSrc.matchAll(/sendJson\(res,\s*201,\s*\{([\s\S]*?)\}\)/g)].map((m) => m[1]);
+  const plantBlock = blocks.find((b) => b.includes("stage: 'sprout'"));
+  assert.ok(plantBlock, 'Could not find garden plant 201 response block');
+  const keys = plantBlock
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.match(/^(\w+)/)?.[1])
+    .filter(Boolean);
+  assert.deepEqual(keys, ['handle', 'slot', 'seed', 'planted_at', 'stage', 'state_seq']);
+});
+
+test('staging.js garden wiring: versioned import, single scene add, hotfix comment', () => {
+  const stagingSrc = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(stagingSrc.includes("from './garden.mjs?v=40';"));
+  assert.equal((stagingSrc.match(/scene\.add\(gardenBed\);/g) || []).length, 1);
+  assert.ok(stagingSrc.includes("moonflower never rendered because this call didn't exist"));
+  assert.equal((stagingSrc.match(/\bgardenBed\b/g) || []).length, 3);
+});
+
+test('test-file hygiene: unique names, export surface, color constants, no banned terms or wall-clock reads', () => {
+  const testSrc = fs.readFileSync(path.join(__dirname, 'test-garden.mjs'), 'utf8');
+  const modSrc = fs.readFileSync(path.join(__dirname, 'garden.mjs'), 'utf8');
+
+  const names = [...testSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+
+  const exports = [...modSrc.matchAll(/^export (?:const|function) (\w+)/gm)]
+    .map((m) => m[1])
+    .sort();
+  assert.deepEqual(exports, [
+    'GARDEN_BED',
+    'SEED_COLORS',
+    'buildGardenBed',
+    'buildGardenPlant',
+    'gardenStageForAgeDays',
+    'updateGardenBed',
+  ]);
+
+  for (const literal of [
+    "const CEDAR = '#6b492b'",
+    "const SOIL = '#3b2a1d'",
+    "const SPROUT_GREEN = '#a8c686'",
+    "const STEM_GREEN = '#5a8f49'",
+    "const LEAF_GREEN = '#7fb069'",
+  ]) {
+    assert.ok(modSrc.includes(literal), `garden.mjs missing ${literal}`);
+  }
+
+  const fetchNeedle = 'fet' + 'ch(';
+  const dateNowNeedle = 'Date' + '.now';
+  const todoNeedle = 'TO' + 'DO';
+  const fixmeNeedle = 'FIX' + 'ME';
+  const mathRndNeedle = 'Math' + '.random';
+  const retiredRe = new RegExp('camp' + 'fire', 'i');
+
+  for (const needle of [fetchNeedle, dateNowNeedle, 'setTimeout', 'setInterval', todoNeedle, fixmeNeedle]) {
+    assert.equal(modSrc.includes(needle), false, `garden.mjs must not contain ${needle}`);
+  }
+
+  assert.equal(retiredRe.test(testSrc), false, 'test-garden.mjs must not contain retired term');
+  for (const needle of [mathRndNeedle, dateNowNeedle, fetchNeedle, todoNeedle, fixmeNeedle]) {
+    assert.equal(testSrc.includes(needle), false, `test-garden.mjs must not contain ${needle}`);
+  }
+
+  const imports = [...testSrc.matchAll(/^import[\s\S]*?from\s+'([^']+)';/gm)].map((m) => m[1]);
+  assert.equal(imports.length, 6);
+  assert.deepEqual(imports, [
+    'node:test',
+    'node:assert/strict',
+    'node:fs',
+    'node:path',
+    'node:url',
+    './garden.mjs',
+  ]);
+});
