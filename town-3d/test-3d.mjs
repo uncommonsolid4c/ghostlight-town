@@ -1806,3 +1806,348 @@ test('Slice 93: buildProp supports lantern and planter with worked child geometr
   // Unknown kind still returns null
   assert.equal(buildProp(THREE, { kind: 'fountain', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' }), null);
 });
+
+test('Slice 410 G1: TOWN_LAYOUT exact constants and computed 8-plot arc', () => {
+  assert.deepEqual(TOWN_LAYOUT, {
+    clearingRadius: 30,
+    bandstand: { x: 0, y: 0, z: 0, radius: 4.5, height: 0.6 },
+    gate: { x: 0, y: 0, z: 27 },
+    newsstand: { x: 6, y: 0, z: 14 },
+    noticeBoard: { x: -6, y: 0, z: 14 },
+    inn: { x: -11, y: 0, z: 20 },
+    plotRadius: 18.5,
+    plots: [
+      { plotNumber: 1, x: 17.919, y: 0, z: 4.601, rotY: -1.8221 },
+      { plotNumber: 2, x: 17.833, y: 0, z: -4.922, rotY: -1.3015 },
+      { plotNumber: 3, x: 13.023, y: 0, z: -13.14, rotY: -0.7809 },
+      { plotNumber: 4, x: 4.761, y: 0, z: -17.877, rotY: -0.2603 },
+      { plotNumber: 5, x: -4.761, y: 0, z: -17.877, rotY: 0.2603 },
+      { plotNumber: 6, x: -13.023, y: 0, z: -13.14, rotY: 0.7809 },
+      { plotNumber: 7, x: -17.833, y: 0, z: -4.922, rotY: 1.3015 },
+      { plotNumber: 8, x: -17.919, y: 0, z: 4.601, rotY: 1.8221 },
+    ],
+  });
+});
+
+test('Slice 410 G2: footlight palettes via buildTown and applyState', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+
+  const fl0 = town.parts.footlights[0];
+  assert.equal(fl0.userData.slot, 0);
+  assert.equal(fl0.userData.shell.material.color, '#bfeaff');
+  assert.equal(fl0.userData.shell.material.emissive, '#9be0ff');
+  assert.equal(fl0.userData.shell.material.emissiveIntensity, 0.9);
+  assert.equal(fl0.userData.lit, true);
+  assert.equal(fl0.userData.handle, 'milo');
+  assert.equal(fl0.userData.role, 'muse');
+  assert.equal(fl0.userData.permanent, true);
+  assert.equal(fl0.userData.placard.rotation.x, -0.55);
+  assert.equal(fl0.userData.placard.position.y, 0.14);
+
+  applyState(town, { footlights: [{ handle: 'wick', slot: 1, role: 'npc' }] });
+  const fl1 = town.parts.footlights[1];
+  assert.equal(fl1.userData.shell.material.color, '#ffbe55');
+  assert.equal(fl1.userData.shell.material.emissive, '#ffaa33');
+  assert.equal(fl1.userData.shell.material.emissiveIntensity, 1.0);
+  assert.equal(fl1.userData.lit, true);
+  assert.equal(fl1.userData.handle, 'wick');
+  assert.equal(fl1.userData.role, 'npc');
+
+  applyState(town, { footlights: [{ handle: 'milo', slot: 3, role: 'muse' }] });
+  const fl3 = town.parts.footlights[3];
+  assert.equal(fl3.userData.shell.material.color, '#7a6230');
+  assert.equal(fl3.userData.shell.material.emissive, '#000000');
+  assert.equal(fl3.userData.shell.material.emissiveIntensity, 0);
+  assert.equal(fl3.userData.lit, false);
+  assert.equal(fl3.userData.handle, null);
+  assert.equal(fl3.userData.placard.rotation.x, 0);
+  assert.equal(fl3.userData.placard.position.y, 0.06);
+  assert.equal(fl3.userData.placard.material.map, null);
+  assert.equal(fl3.userData.placard.material.color, '#4d301c');
+  assert.equal(fl0.userData.lit, true);
+  assert.equal(fl0.userData.handle, 'milo');
+});
+
+test('Slice 410 G3: formatPromptBookEntries normalization, coercion, defaults, and 100-line cap', () => {
+  assert.deepEqual(formatPromptBookEntries(null), []);
+  assert.deepEqual(formatPromptBookEntries('nope'), []);
+
+  assert.deepEqual(formatPromptBookEntries([{ handle: 'muse', body: 'hi' }]), [
+    { id: null, handle: 'muse', kind: 'say', body: 'hi', reply_to: null, created_at: 0, role: 'muse' },
+  ]);
+
+  assert.deepEqual(
+    formatPromptBookEntries([
+      { kind: 'emote', role: 'npc', handle: 'wick', body: 'bows', reply_to: 4, created_at: 99, id: 7 },
+    ]),
+    [{ id: 7, handle: 'wick', kind: 'emote', body: 'bows', reply_to: 4, created_at: 99, role: 'npc' }]
+  );
+
+  assert.equal(formatPromptBookEntries([{ handle: 'muse', body: 'a', kind: 'shout' }])[0].kind, 'say');
+  assert.equal(formatPromptBookEntries([{ handle: 'muse', body: 'a', kind: 'system' }])[0].kind, 'system');
+
+  assert.equal(formatPromptBookEntries([{ handle: 'muse', body: 'a', role: 'guest' }])[0].role, 'guest');
+  assert.equal(formatPromptBookEntries([{ handle: 'muse', body: 'a', role: 'wizard' }])[0].role, 'muse');
+
+  assert.equal(formatPromptBookEntries([{ handle: 'muse', body: 'a', reply_to: 2.5 }])[0].reply_to, null);
+  assert.equal(formatPromptBookEntries([{ handle: 'muse', body: 'a', reply_to: '3' }])[0].reply_to, null);
+
+  const def = formatPromptBookEntries([{ handle: 42, body: 7 }])[0];
+  assert.equal(def.handle, 'unknown');
+  assert.equal(def.body, '');
+
+  const rows105 = Array.from({ length: 105 }, (_, i) => ({
+    id: i + 1,
+    handle: 'muse',
+    body: 'line ' + (i + 1),
+  }));
+  const capped = formatPromptBookEntries(rows105);
+  assert.equal(capped.length, 100);
+  assert.equal(capped[0].id, 6);
+  assert.equal(capped[99].id, 105);
+
+  const exact100 = formatPromptBookEntries(rows105.slice(0, 100));
+  assert.equal(exact100.length, 100);
+});
+
+test('Slice 410 G4: getPlotTargetPosition exact coordinates for plot 1 indices 0..3', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  assert.deepEqual(getPlotTargetPosition(plot1, 0), { x: 14.4321, y: 0, z: 3.7058, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(plot1, 1), { x: 14.2083, y: 0, z: 4.5775, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(plot1, 2), { x: 14.6559, y: 0, z: 2.8341, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(plot1, 3), { x: 13.9845, y: 0, z: 5.4493, rotY: -1.8221 });
+});
+
+test('Slice 410 G5: buildProp single-mesh geometry, porch remap, validation, and color fallback', () => {
+  const THREE = createThreeStub();
+  const base = { x: 1, y: 0, z: 3.0, rot_y: 90, color: '#aabbcc' };
+  const cases = [
+    ['desk', 'BoxGeometry', { width: 1.1, height: 0.72, depth: 0.6 }, [1, 0.54, 3]],
+    ['bookshelf', 'BoxGeometry', { width: 0.9, height: 1.4, depth: 0.35 }, [1, 0.18 + 0.7, 3]],
+    ['rug', 'BoxGeometry', { width: 1.6, height: 0.04, depth: 1.1 }, [1, 0.18 + 0.02, 3]],
+    ['tea_kettle', 'CylinderGeometry', { radiusTop: 0.14, radiusBottom: 0.18, height: 0.24, radialSegments: 8 }, [1, 0.3, 3]],
+    ['typewriter', 'BoxGeometry', { width: 0.36, height: 0.18, depth: 0.3 }, [1, 0.27, 3]],
+    ['cat', 'ConeGeometry', { radius: 0.16, height: 0.36, radialSegments: 6 }, [1, 0.36, 3]],
+    ['poster_frame', 'BoxGeometry', { width: 0.7, height: 0.9, depth: 0.06 }, [1, 1.08, 3]],
+  ];
+
+  for (const [kind, geomType, params, pos] of cases) {
+    const mesh = buildProp(THREE, { ...base, kind });
+    assert.ok(mesh, `buildProp should build ${kind}`);
+    assert.equal(mesh.name, `prop_${kind}`);
+    assert.equal(mesh.rotation.y, Math.PI / 2);
+    assert.equal(mesh.geometry.type, geomType);
+    assert.deepEqual(mesh.geometry.parameters, params);
+    assert.deepEqual([mesh.position.x, mesh.position.y, mesh.position.z], pos);
+  }
+
+  // Porch remap for interior z values
+  const z0 = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: '#aabbcc' });
+  assert.equal(z0.position.z, 2.75);
+  assert.equal(z0.position.y, 0.54);
+  const zNeg2 = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 0, color: '#aabbcc' });
+  assert.equal(zNeg2.position.z, 3.45);
+  const zPos2 = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2, rot_y: 0, color: '#aabbcc' });
+  assert.equal(zPos2.position.z, 2.05);
+
+  // Invalid inputs return null
+  assert.equal(buildProp(THREE, null), null);
+  assert.equal(buildProp(THREE, { ...base, kind: 'fountain' }), null);
+  assert.equal(buildProp(THREE, { ...base, kind: 'desk', x: 13 }), null);
+  assert.equal(buildProp(THREE, { ...base, kind: 'desk', rot_y: 360 }), null);
+  assert.equal(buildProp(THREE, { ...base, kind: 'desk', rot_y: -1 }), null);
+  assert.equal(buildProp(THREE, { ...base, kind: 'desk', x: NaN }), null);
+
+  // Bad color falls back to #8a6240
+  const badColor = buildProp(THREE, { ...base, kind: 'desk', color: 'red' });
+  assert.equal(badColor.material.color, '#8a6240');
+});
+
+test('Slice 410 G6: inn room windows claimed, vacant, empty, and missing-state preservation', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const { roomWindows, commonWindowMaterial } = town.parts.inn.userData;
+
+  assert.deepEqual(Object.keys(roomWindows).sort(), ['lantern', 'quiet', 'window']);
+  assert.equal(roomWindows.lantern.name, 'inn_window_4');
+  assert.equal(roomWindows.window.name, 'inn_window_5');
+  assert.equal(roomWindows.quiet.name, 'inn_window_6');
+
+  assert.equal(roomWindows.lantern.material.color, '#ffbe5c');
+  assert.equal(roomWindows.lantern.material.emissive, '#ffbe5c');
+  assert.equal(roomWindows.lantern.material.emissiveIntensity, 1.4);
+  assert.equal(commonWindowMaterial.color, '#ffbe5c');
+
+  applyState(town, {
+    inn: {
+      lantern: { handle: 'a', room: 'lantern' },
+      window: null,
+      quiet: { handle: 'b', room: 'quiet' },
+    },
+  });
+  assert.equal(roomWindows.lantern.material.emissiveIntensity, 1.4);
+  assert.equal(roomWindows.window.material.color, '#3d2814');
+  assert.equal(roomWindows.window.material.emissive, '#4a2e10');
+  assert.equal(roomWindows.window.material.emissiveIntensity, 0.15);
+  assert.equal(roomWindows.quiet.material.emissiveIntensity, 1.4);
+  assert.equal(commonWindowMaterial.emissiveIntensity, 1.4);
+
+  applyState(town, { inn: {} });
+  assert.equal(roomWindows.lantern.material.emissiveIntensity, 0.15);
+  assert.equal(commonWindowMaterial.emissiveIntensity, 0.15);
+  assert.equal(commonWindowMaterial.color, '#3d2814');
+
+  const town2 = buildTown(THREE, { loadProps: false });
+  applyState(town2, {});
+  assert.equal(town2.parts.inn.userData.roomWindows.lantern.material.emissiveIntensity, 1.4);
+  assert.equal(town2.parts.inn.userData.commonWindowMaterial.emissiveIntensity, 1.4);
+});
+
+test('Slice 410 G7: applyPlotManifest guards, seed pad pinning, stranger assignment, and re-apply replacement', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const wickManifest = {
+    cottage: 'cabin',
+    wall: '#c9a06a',
+    roof: '#5a4332',
+    trim: '#f5efe0',
+    label: 'Wick — Plot 2',
+    props: [],
+  };
+
+  assert.equal(applyPlotManifest(town, 'milo', MILO_REBUILD_MANIFEST), null);
+  assert.equal(applyPlotManifest(town, 'wick', null), null);
+  assert.equal(applyPlotManifest(null, 'wick', wickManifest), null);
+
+  const wick1 = applyPlotManifest(town, 'wick', wickManifest);
+  assert.ok(wick1);
+  assert.equal(wick1.name, 'cottage_wick');
+  assert.equal(wick1.userData.handle, 'wick');
+  assert.equal(wick1.userData.plotNumber, 2);
+  assert.equal(wick1.userData.clickable, true);
+  assert.equal(wick1.userData.kind, 'cottage');
+  assert.equal(wick1.position.x, TOWN_LAYOUT.plots[1].x);
+  assert.equal(wick1.position.z, TOWN_LAYOUT.plots[1].z);
+  assert.equal(wick1.rotation.y, TOWN_LAYOUT.plots[1].rotY);
+  assert.equal(town.scene.children.some((c) => c.name === 'plot_pad_2'), false);
+
+  const lampmoth = applyPlotManifest(town, 'lampmoth', {
+    cottage: 'gable',
+    wall: '#ffffff',
+    roof: '#333333',
+    trim: '#eeeeee',
+    label: 'Lampmoth',
+    props: [],
+  });
+  assert.ok(lampmoth);
+  assert.equal(lampmoth.userData.plotNumber, 5);
+  assert.equal(lampmoth.name, 'cottage_lampmoth');
+
+  const wick2 = applyPlotManifest(town, 'wick', { ...wickManifest, label: 'Wick — Plot 2 (v2)' });
+  assert.ok(wick2);
+  assert.notEqual(wick2, wick1);
+  assert.equal(town.scene.children.filter((c) => c.name === 'cottage_wick').length, 1);
+  assert.equal(town.scene.children.includes(wick1), false);
+});
+
+test('Slice 410 G8: createAvatarCapsule exact geometry, NPC lift, and role normalization', () => {
+  const THREE = createThreeStub();
+  const av = createAvatarCapsule(THREE, { handle: 'muse', role: 'muse' });
+  assert.equal(av.name, 'avatar_muse');
+  assert.equal(av.userData.handle, 'muse');
+  assert.equal(av.userData.role, 'muse');
+  assert.equal(av.userData.nametagLift, 0);
+  assert.equal(av.userData.nametagSprite, av.children[2]);
+
+  const body = av.children[0];
+  assert.equal(body.geometry.type, 'CylinderGeometry');
+  assert.deepEqual(body.geometry.parameters, {
+    radiusTop: 0.28,
+    radiusBottom: 0.32,
+    height: 1.0,
+    radialSegments: 8,
+  });
+  assert.equal(body.position.y, 0.5);
+  assert.equal(body.material.color, '#6cb4d8');
+
+  const head = av.children[1];
+  assert.equal(head.geometry.type, 'SphereGeometry');
+  assert.deepEqual(head.geometry.parameters, {
+    radius: 0.24,
+    widthSegments: 8,
+    heightSegments: 6,
+  });
+  assert.equal(head.position.y, 1.2);
+  assert.equal(head.material.color, '#f2dcc4');
+
+  const sprite = av.children[2];
+  assert.equal(sprite.name, 'nametag_sprite');
+  assert.equal(sprite.position.y, 1.8);
+  assert.deepEqual([sprite.scale.x, sprite.scale.y, sprite.scale.z], [1.5, 0.375, 1]);
+
+  const npc = createAvatarCapsule(THREE, { handle: 'wick', role: 'npc', nametagLift: 0.5 });
+  assert.equal(npc.children[0].material.color, '#d49a45');
+  assert.equal(npc.userData.role, 'npc');
+  assert.equal(npc.children[2].position.y, 2.3);
+
+  const wiz = createAvatarCapsule(THREE, { handle: 'wiz', role: 'wizard' });
+  assert.equal(wiz.userData.role, 'muse');
+  assert.equal(wiz.children[0].material.color, '#6cb4d8');
+
+  const guest = createAvatarCapsule(THREE, { handle: 'visitor', role: 'guest' });
+  assert.equal(guest.userData.role, 'guest');
+  assert.equal(guest.children[0].material.color, '#6cb4d8');
+});
+
+test('Slice 410 G9: setAvatarStatusText truncation, scale, trimming, and clearing', () => {
+  const THREE = createThreeStub();
+  const av = createAvatarCapsule(THREE, { handle: 'muse', role: 'muse' });
+  const sprite = av.userData.nametagSprite;
+
+  setAvatarStatusText(THREE, av, 'Sweeping the steps');
+  assert.equal(av.userData.statusText, 'Sweeping the steps');
+  assert.equal(sprite.scale.y, 0.5625);
+  assert.equal(sprite.material.needsUpdate, true);
+
+  setAvatarStatusText(THREE, av, 'a'.repeat(30));
+  assert.equal(av.userData.statusText, 'a'.repeat(23) + '…');
+  assert.equal(av.userData.statusText.length, 24);
+
+  setAvatarStatusText(THREE, av, 'a'.repeat(24));
+  assert.equal(av.userData.statusText, 'a'.repeat(24));
+
+  setAvatarStatusText(THREE, av, 'a'.repeat(25));
+  assert.equal(av.userData.statusText, 'a'.repeat(23) + '…');
+
+  setAvatarStatusText(THREE, av, '');
+  assert.equal(av.userData.statusText, null);
+  assert.equal(sprite.scale.y, 0.375);
+
+  setAvatarStatusText(THREE, av, 42);
+  assert.equal(av.userData.statusText, null);
+
+  setAvatarStatusText(THREE, av, '  padded  ');
+  assert.equal(av.userData.statusText, 'padded');
+
+  setAvatarStatusText(THREE, av, null);
+  assert.equal(av.userData.statusText, null);
+});
+
+test('Slice 410 G10: test-3d.mjs file hygiene and pinned needle counts', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'test-3d.mjs'), 'utf8');
+  const testNames = [...src.matchAll(/^(?:await )?test\((['"])((?:\\.|(?!\1).)*)\1/gm)].map((m) => m[2]);
+  assert.equal(testNames.length, 45);
+  assert.equal(new Set(testNames).size, 45);
+
+  const importLines = src.match(/^import /gm) || [];
+  assert.equal(importLines.length, 6);
+
+  assert.equal(src.includes('TO' + 'DO'), false);
+  assert.equal(src.includes('FIX' + 'ME'), false);
+  assert.equal(src.includes('Date.' + 'now'), false);
+  assert.equal(src.includes('Math.' + 'random'), false);
+
+  assert.equal(src.split('camp' + 'fire').length - 1, 5);
+  assert.equal(src.split('fet' + 'ch(').length - 1, 5);
+});
