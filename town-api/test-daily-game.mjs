@@ -931,3 +931,280 @@ test('dailyGameHostForDate maintains 3-cycle continuity across day-before-anchor
   assert.equal(dec31, 'maren');
   assert.equal(jan01, 'tomas');
 });
+
+test('FORMAT_LABELS pins the exact label for each game format', () => {
+  assert.deepEqual(FORMAT_LABELS, {
+    riddle: 'Riddle',
+    word: 'Word game',
+    story: 'Story chain',
+  });
+  assert.equal(new Set(Object.values(FORMAT_LABELS)).size, 3);
+
+  const riddleLine = buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: 'What has keys but opens no locks?' } });
+  const wordLine = buildDailyGameLine({ dailyGame: { format: 'word', prompt: 'Name a word that\u2026' } });
+  const storyLine = buildDailyGameLine({ dailyGame: { format: 'story', prompt: 'Once upon a\u2026' } });
+
+  assert.equal(riddleLine, 'Today\u0027s game \u2014 Riddle: What has keys but opens no locks?');
+  assert.equal(wordLine, 'Today\u0027s game \u2014 Word game: Name a word that\u2026');
+  assert.equal(storyLine, 'Today\u0027s game \u2014 Story chain: Once upon a\u2026');
+  assert.ok(riddleLine.includes(`${FORMAT_LABELS.riddle}: `));
+  assert.ok(wordLine.includes(`${FORMAT_LABELS.word}: `));
+  assert.ok(storyLine.includes(`${FORMAT_LABELS.story}: `));
+});
+
+test('real daily-games.json serves exact prompts for 2026-11-22 through 2026-11-26', async () => {
+  const games = JSON.parse(fs.readFileSync(GAMES_PATH, 'utf8'));
+  const cases = [
+    {
+      y: 2026,
+      m: 11,
+      d: 22,
+      date: '2026-11-22',
+      idx: 19,
+      format: 'word',
+      prompt: 'Last-letter lake: name something that lives near water, starting with the last letter of the previous answer. I start: minnow.',
+    },
+    {
+      y: 2026,
+      m: 11,
+      d: 23,
+      date: '2026-11-23',
+      idx: 20,
+      format: 'story',
+      prompt: 'Under the floorboards of the newsstand, someone had hidden... Continue it in one line.',
+    },
+    {
+      y: 2026,
+      m: 11,
+      d: 24,
+      date: '2026-11-24',
+      idx: 21,
+      format: 'riddle',
+      prompt: 'What gets wetter the more it dries?',
+    },
+    {
+      y: 2026,
+      m: 11,
+      d: 25,
+      date: '2026-11-25',
+      idx: 22,
+      format: 'word',
+      prompt: 'Opposite day: what is the opposite of lantern-light?',
+    },
+    {
+      y: 2026,
+      m: 11,
+      d: 26,
+      date: '2026-11-26',
+      idx: 23,
+      format: 'story',
+      prompt: 'The town woke to find every cottage had swapped... Continue it in one line.',
+    },
+  ];
+
+  for (const c of cases) {
+    const expected = expectedGameForNow(games, Date.UTC(c.y, c.m - 1, c.d, 12, 0, 0) / 1000);
+    const idx = ((expected.dayNumber % games.length) + games.length) % games.length;
+    assert.equal(expected.date, c.date);
+    assert.equal(idx, c.idx);
+    assert.equal(expected.game.format, c.format);
+    assert.equal(expected.game.prompt, c.prompt);
+  }
+
+  const baseNow = Math.floor(Date.UTC(2026, 10, 25, 12, 0, 0) / 1000);
+  const ctx = await startTestServer({ baseNow });
+  try {
+    const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+    assert.equal(res.status, 200);
+    assert.equal(res.data.daily_game.date, '2026-11-25');
+    assert.equal(res.data.daily_game.format, 'word');
+    assert.equal(res.data.daily_game.prompt, 'Opposite day: what is the opposite of lantern-light?');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('short games file rotates by negative dayNumber before the epoch', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-dg-neg-'));
+  const gamesPath = path.join(tmpDir, 'games.json');
+  try {
+    fs.writeFileSync(
+      gamesPath,
+      JSON.stringify([
+        { format: 'riddle', prompt: 'First game prompt' },
+        { format: 'word', prompt: 'Second game prompt' },
+      ]),
+      'utf8'
+    );
+
+    const cases = [
+      { y: 1969, m: 12, d: 31, date: '1969-12-31', prompt: 'Second game prompt' },
+      { y: 1969, m: 12, d: 30, date: '1969-12-30', prompt: 'First game prompt' },
+      { y: 1969, m: 12, d: 29, date: '1969-12-29', prompt: 'Second game prompt' },
+    ];
+
+    for (const c of cases) {
+      const baseNow = Math.floor(Date.UTC(c.y, c.m - 1, c.d, 12, 0, 0) / 1000);
+      const ctx = await startTestServer({ gamesPath, baseNow });
+      try {
+        const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+        assert.equal(res.status, 200);
+        assert.equal(res.data.daily_game.date, c.date);
+        assert.equal(res.data.daily_game.prompt, c.prompt);
+      } finally {
+        await ctx.close();
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('non-string gamesPath omits daily_game softly without failing state', async () => {
+  for (const gamesPath of [42, null]) {
+    const ctx = await startTestServer({ gamesPath });
+    try {
+      const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+      assert.equal(res.status, 200);
+      assert.equal(res.data.daily_game, undefined);
+      assert.ok(res.data.nightly_call);
+    } finally {
+      await ctx.close();
+    }
+  }
+});
+
+test('daily game host rejects year 0-99 dates and non-leap February 29', () => {
+  assert.equal(dailyGameHostForDate('0000-01-01'), null);
+  assert.equal(dailyGameHostForDate('0099-06-15'), null);
+  assert.equal(dailyGameHostForDate('0100-01-01'), 'maren');
+  assert.equal(dailyGameHostForDate('2026-02-29'), null);
+  assert.equal(dailyGameHostForDate('2027-02-29'), null);
+});
+
+test('buildDailyGameLine does not enforce the 160-char server cap', () => {
+  const longRiddle = 'x'.repeat(161);
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'riddle', prompt: longRiddle } }),
+    `Today's game \u2014 Riddle: ${longRiddle}`
+  );
+  const longWord = 'y'.repeat(1000);
+  assert.equal(
+    buildDailyGameLine({ dailyGame: { format: 'word', prompt: longWord } }),
+    `Today's game \u2014 Word game: ${longWord}`
+  );
+});
+
+test('isDailyGamePosted ignores prompt book entries without a string body', () => {
+  const junk = [{}, { body: undefined }, 42, 'string', null, { body: 42 }];
+  assert.equal(
+    isDailyGamePosted({ promptBook: junk, dailyGame: { prompt: 'What has keys?' } }),
+    false
+  );
+  assert.equal(
+    isDailyGamePosted({
+      promptBook: [...junk, { body: 'Say What has keys? now' }],
+      dailyGame: { prompt: 'What has keys?' },
+    }),
+    true
+  );
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{}], dailyGame: { prompt: 'x' } }),
+    false
+  );
+});
+
+test('isDailyGamePosted matches prompts literally, not as regex', () => {
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{ body: 'axxb' }], dailyGame: { prompt: 'a.*b' } }),
+    false
+  );
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{ body: 'the a.*b pattern' }], dailyGame: { prompt: 'a.*b' } }),
+    true
+  );
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{ body: 'Say: What (is) this? ok' }], dailyGame: { prompt: 'What (is) this?' } }),
+    true
+  );
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{ body: '$^' }], dailyGame: { prompt: '$^' } }),
+    true
+  );
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{ body: 'aXb' }], dailyGame: { prompt: 'a.b' } }),
+    false
+  );
+});
+
+test('daily game host shifts by two over a 365-day year while the game cycle differs', async () => {
+  assert.equal(dailyGameHostForDate('2027-11-21'), 'tomas');
+  assert.equal(dailyGameHostForDate('2027-11-22'), 'wick');
+  assert.equal(dailyGameHostForDate('2027-11-23'), 'maren');
+
+  const ctx2026 = await startTestServer({ baseNow: Math.floor(Date.UTC(2026, 10, 21, 12, 0, 0) / 1000) });
+  let prompt2026;
+  try {
+    const res = await new GhostlightClient({ baseUrl: ctx2026.baseUrl }).state();
+    assert.equal(res.status, 200);
+    prompt2026 = res.data.daily_game.prompt;
+    assert.equal(
+      prompt2026,
+      'I run but never walk. I have a mouth but never talk. I have a bed but never sleep. What am I?'
+    );
+  } finally {
+    await ctx2026.close();
+  }
+
+  const ctx2027 = await startTestServer({ baseNow: Math.floor(Date.UTC(2027, 10, 21, 12, 0, 0) / 1000) });
+  let prompt2027;
+  try {
+    const res = await new GhostlightClient({ baseUrl: ctx2027.baseUrl }).state();
+    assert.equal(res.status, 200);
+    prompt2027 = res.data.daily_game.prompt;
+    assert.equal(res.data.daily_game.date, '2027-11-21');
+    assert.equal(
+      prompt2027,
+      'The town woke to find every cottage had swapped... Continue it in one line.'
+    );
+  } finally {
+    await ctx2027.close();
+  }
+
+  assert.notEqual(prompt2026, prompt2027);
+});
+
+test('file hygiene: 47 unique names, 9 imports, pinned as-true counts', () => {
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 47);
+  assert.equal(new Set(names).size, 47);
+
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 9);
+  assert.deepEqual(lines.slice(3, 9), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+  ]);
+  assert.deepEqual(lines.slice(10, 13), [
+    "import { createTownServer } from './server.mjs';",
+    "import { GhostlightClient, generateKeypair } from './ghostlight-client.mjs';",
+    "import { dailyGameHostForDate, buildDailyGameLine, isDailyGamePosted, FORMAT_LABELS } from '../town-npc/daily-game.mjs';",
+  ]);
+
+  assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => new RegExp('Date' + '.now').test(l)).length, 2);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 0);
+});
