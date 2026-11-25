@@ -999,3 +999,455 @@ test('PROP_PLACEMENTS completeness, unique IDs, valid parents, and model-less ex
   assert.equal(modelLess[0].id, 'maren_typewriter');
 });
 
+
+test('credited GLB exact byte sizes and total are pinned', async () => {
+  const expectedSizes = new Map([
+    ['post-lantern.glb', 44024],
+    ['lantern.glb', 29616],
+    ['bench.glb', 24816],
+    ['street-light.glb', 11056],
+    ['bookshelf.glb', 24780],
+    ['oil-lamp.glb', 10136],
+    ['teapot.glb', 24584],
+  ]);
+
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+  assert.equal(creditedFiles.length, expectedSizes.size);
+
+  let totalBytes = 0;
+  for (const file of creditedFiles) {
+    const stat = await fs.stat(path.join(MODELS_DIR, file));
+    assert.equal(stat.size, expectedSizes.get(file), `${file} exact byte size`);
+    totalBytes += stat.size;
+  }
+  assert.equal(totalBytes, 169012, 'total credited GLB byte size');
+});
+
+test('credited GLB exact triangle and vertex counts and totals are pinned', async () => {
+  const expected = new Map([
+    ['post-lantern.glb', { triangles: 568, vertices: 695 }],
+    ['lantern.glb', { triangles: 264, vertices: 338 }],
+    ['bench.glb', { triangles: 44, vertices: 80 }],
+    ['street-light.glb', { triangles: 324, vertices: 265 }],
+    ['bookshelf.glb', { triangles: 236, vertices: 454 }],
+    ['oil-lamp.glb', { triangles: 276, vertices: 240 }],
+    ['teapot.glb', { triangles: 618, vertices: 496 }],
+  ]);
+
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+
+  let totalTriangles = 0;
+  let totalVertices = 0;
+  for (const { file, gltf } of glbs) {
+    let triangles = 0;
+    let vertices = 0;
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        const idxCount = gltf.accessors[prim.indices].count;
+        assert.equal(idxCount % 3, 0, `${file} index count must be divisible by 3`);
+        triangles += idxCount / 3;
+        vertices += gltf.accessors[prim.attributes.POSITION].count;
+      }
+    }
+    const exp = expected.get(file);
+    assert.equal(triangles, exp.triangles, `${file} triangle count`);
+    assert.equal(vertices, exp.vertices, `${file} vertex count`);
+    totalTriangles += triangles;
+    totalVertices += vertices;
+  }
+  assert.equal(totalTriangles, 2330, 'total credited GLB triangles');
+  assert.equal(totalVertices, 2568, 'total credited GLB vertices');
+});
+
+test('credited GLB exact PBR factors, FBX extras, and baseColorTexture shape are pinned', async () => {
+  const expectedPbr = new Map([
+    [
+      'post-lantern.glb',
+      {
+        HalloweenBits: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 1,
+          baseColorFactor: [1, 1, 1, 1],
+        },
+      },
+    ],
+    [
+      'lantern.glb',
+      {
+        HalloweenBits: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 1,
+          baseColorFactor: [1, 1, 1, 1],
+        },
+      },
+    ],
+    [
+      'bench.glb',
+      {
+        citybits_texture: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 0.229415729641914,
+          baseColorFactor: [1, 1, 1, 1],
+        },
+      },
+    ],
+    [
+      'street-light.glb',
+      {
+        Grey: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 0.415087103843689,
+          baseColorFactor: [0.219741851091385, 0.229952678084373, 0.281226128339767, 1],
+        },
+        Light: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 1,
+          baseColorFactor: [0.800000011920929, 0.800000011920929, 0.800000011920929, 1],
+        },
+      },
+    ],
+    [
+      'bookshelf.glb',
+      {
+        Material: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 0.272165536880493,
+          baseColorFactor: [1, 1, 1, 1],
+        },
+      },
+    ],
+    [
+      'oil-lamp.glb',
+      {
+        White: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 0.415087103843689,
+          baseColorFactor: [0.358380317687988, 0.354632526636124, 0.343526810407639, 1],
+        },
+        LightMetal: {
+          metallicFactor: 0.400000005960464,
+          roughnessFactor: 0.415087103843689,
+          baseColorFactor: [0.13868173956871, 0.13868173956871, 0.13868173956871, 1],
+        },
+      },
+    ],
+    [
+      'teapot.glb',
+      {
+        'Solid.151': {
+          metallicFactor: 0,
+          roughnessFactor: 0.775,
+          baseColorFactor: [1, 1, 1, 1],
+        },
+      },
+    ],
+  ]);
+
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    const fileExp = expectedPbr.get(file);
+    assert.ok(fileExp, `missing expected PBR map for ${file}`);
+    for (const mat of gltf.materials) {
+      const exp = fileExp[mat.name];
+      assert.ok(exp, `unexpected material ${mat.name} in ${file}`);
+      const pbr = mat.pbrMetallicRoughness;
+      assert.equal(pbr.metallicFactor, exp.metallicFactor, `${file} ${mat.name} metallicFactor`);
+      assert.equal(pbr.roughnessFactor, exp.roughnessFactor, `${file} ${mat.name} roughnessFactor`);
+      assert.deepEqual(pbr.baseColorFactor, exp.baseColorFactor, `${file} ${mat.name} baseColorFactor`);
+
+      if (file === 'teapot.glb') {
+        assert.equal('extras' in mat, false, 'teapot material must have no extras key');
+        assert.deepEqual(mat.emissiveFactor, [0, 0, 0], 'teapot emissiveFactor must be [0, 0, 0]');
+        assert.equal(mat.doubleSided, false, 'teapot doubleSided must be false');
+        assert.deepEqual(pbr.baseColorTexture, { index: 0 }, 'teapot baseColorTexture must be { index: 0 }');
+        assert.equal('texCoord' in pbr.baseColorTexture, false, 'teapot baseColorTexture must omit texCoord');
+      } else {
+        assert.deepEqual(
+          mat.extras?.fromFBX,
+          { shadingModel: 'Phong', isTruePBR: false },
+          `${file} ${mat.name} extras.fromFBX`
+        );
+        if (TEXTURED_GLBS.has(file)) {
+          assert.ok(pbr.baseColorTexture, `${file} ${mat.name} must have baseColorTexture`);
+          assert.equal(pbr.baseColorTexture.texCoord, 0, `${file} ${mat.name} baseColorTexture.texCoord must be 0`);
+        } else {
+          assert.equal(pbr.baseColorTexture, undefined, `${file} ${mat.name} must not have baseColorTexture`);
+        }
+      }
+    }
+  }
+});
+
+test('credited GLB exact JSON/BIN chunk lengths and buffer byteLength are pinned', async () => {
+  const expected = new Map([
+    ['post-lantern.glb', { jsonLen: 3252, binLen: 40744 }],
+    ['lantern.glb', { jsonLen: 2092, binLen: 27496 }],
+    ['bench.glb', { jsonLen: 2076, binLen: 22712 }],
+    ['street-light.glb', { jsonLen: 2724, binLen: 8304 }],
+    ['bookshelf.glb', { jsonLen: 2080, binLen: 22672 }],
+    ['oil-lamp.glb', { jsonLen: 2692, binLen: 7416 }],
+    ['teapot.glb', { jsonLen: 4220, binLen: 20336 }],
+  ]);
+
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+
+  for (const { file, buf, jsonLen, binLen, gltf } of glbs) {
+    const exp = expected.get(file);
+    assert.equal(jsonLen, exp.jsonLen, `${file} jsonLen`);
+    assert.equal(binLen, exp.binLen, `${file} binLen`);
+    assert.equal(gltf.buffers[0].byteLength, exp.binLen, `${file} buffers[0].byteLength`);
+    assert.equal(12 + 8 + jsonLen + 8 + binLen, buf.length, `${file} chunk sum matches file size`);
+  }
+});
+
+test('credited GLB exact image names, bufferView indices, and untextured absence are pinned', async () => {
+  const expectedImages = new Map([
+    ['post-lantern.glb', { name: 'halloweenbits_texture.png', bufferView: 0, mimeType: 'image/png' }],
+    ['lantern.glb', { name: 'halloweenbits_texture.png', bufferView: 0, mimeType: 'image/png' }],
+    ['bench.glb', { name: 'citybits_texture.png', bufferView: 0, mimeType: 'image/png' }],
+    ['bookshelf.glb', { name: 'House_Props_Diffuse.png', bufferView: 0, mimeType: 'image/png' }],
+    ['teapot.glb', { name: 'misc_kettle', bufferView: 4, mimeType: 'image/png' }],
+  ]);
+
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    if (expectedImages.has(file)) {
+      const exp = expectedImages.get(file);
+      assert.equal(gltf.images.length, 1, `${file} must have 1 image`);
+      assert.equal(gltf.images[0].name, exp.name, `${file} image.name`);
+      assert.equal(gltf.images[0].bufferView, exp.bufferView, `${file} image.bufferView`);
+      assert.equal(gltf.images[0].mimeType, exp.mimeType, `${file} image.mimeType`);
+    } else {
+      assert.ok(UNTEXTURED_GLBS.has(file), `${file} must be untextured`);
+      assert.equal('images' in gltf, false, `${file} must not have images key`);
+    }
+  }
+});
+
+test('credited GLB exact node names and scene root indices are pinned', async () => {
+  const expectedNodes = new Map([
+    ['post-lantern.glb', ['RootNode', 'post_lantern', 'post_lantern_lantern']],
+    ['lantern.glb', ['RootNode', 'lantern_standing']],
+    ['bench.glb', ['RootNode', 'bench']],
+    ['street-light.glb', ['RootNode', 'StreetLight']],
+    ['bookshelf.glb', ['RootNode', 'Bookshelf']],
+    ['oil-lamp.glb', ['RootNode', 'Light_Floor2']],
+    [
+      'teapot.glb',
+      ['misc_kettle_cover_Cylinder.018', 'misc_kettle_nozzle_Cylinder.019', 'misc_kettle_Cylinder.017'],
+    ],
+  ]);
+
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expectedNodes.size);
+
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.nodes.map((n) => n.name),
+      expectedNodes.get(file),
+      `${file} node names`
+    );
+    const expectedRoots = file === 'teapot.glb' ? [0, 1, 2] : [0];
+    assert.deepEqual(gltf.scenes[0].nodes, expectedRoots, `${file} scenes[0].nodes`);
+  }
+});
+
+test('PROP_PLACEMENTS deep-equals all 9 placements in exact order and key shape', () => {
+  const expected = [
+    {
+      id: 'gate_lantern_left',
+      kind: 'post-lantern',
+      model: 'models/post-lantern.glb',
+      parent: 'scene',
+      x: -3.2,
+      y: 0,
+      z: 26.2,
+      rotY: 0,
+      targetSize: 2.2,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'gate_lantern_right',
+      kind: 'post-lantern',
+      model: 'models/post-lantern.glb',
+      parent: 'scene',
+      x: 3.2,
+      y: 0,
+      z: 26.2,
+      rotY: 0,
+      targetSize: 2.2,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'bandstand_bench',
+      kind: 'bench',
+      model: 'models/bench.glb',
+      parent: 'scene',
+      x: -6.2,
+      y: 0,
+      z: 5.5,
+      rotY: 2.2964,
+      targetSize: 1.8,
+      scaleAxis: 'length',
+    },
+    {
+      id: 'newsstand_lantern',
+      kind: 'lantern',
+      model: 'models/lantern.glb',
+      parent: 'newsstand',
+      x: 0.65,
+      y: 1.03,
+      z: 0.78,
+      rotY: 0,
+      targetSize: 0.35,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'newsstand_street_light',
+      kind: 'street-light',
+      model: 'models/street-light.glb',
+      parent: 'scene',
+      x: 7.8,
+      y: 0,
+      z: 15.2,
+      rotY: 0,
+      targetSize: 3,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'newsstand_bookshelf',
+      kind: 'bookshelf',
+      model: 'models/bookshelf.glb',
+      parent: 'scene',
+      x: 4.6,
+      y: 0,
+      z: 15,
+      rotY: -2.844,
+      targetSize: 1.6,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'wick_oil_lamp',
+      kind: 'oil-lamp',
+      model: 'models/oil-lamp.glb',
+      parent: 'scene',
+      x: 14.41,
+      y: 0,
+      z: -6.05,
+      rotY: -1.1733,
+      targetSize: 0.9,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'tomas_teapot',
+      kind: 'teapot',
+      model: 'models/teapot.glb',
+      parent: 'scene',
+      x: 2.06,
+      y: 0,
+      z: -15.49,
+      rotY: -0.1322,
+      targetSize: 0.9,
+      scaleAxis: 'y',
+    },
+    {
+      id: 'maren_typewriter',
+      kind: 'typewriter',
+      parent: 'scene',
+      x: 9.49,
+      y: 0,
+      z: -12.42,
+      rotY: -0.6525,
+    },
+  ];
+
+  assert.deepEqual(PROP_PLACEMENTS, expected);
+
+  const maren = PROP_PLACEMENTS[8];
+  assert.deepEqual(Object.keys(maren), ['id', 'kind', 'parent', 'x', 'y', 'z', 'rotY']);
+  assert.equal('model' in maren, false);
+  assert.equal('targetSize' in maren, false);
+  assert.equal('scaleAxis' in maren, false);
+});
+
+test('CREDITS.md and town-3d/README.md exact byte sizes and line geometry are pinned', async () => {
+  const [creditsStat, creditsMd, readmeStat, readmeMd] = await Promise.all([
+    fs.stat(CREDITS_PATH),
+    fs.readFile(CREDITS_PATH, 'utf8'),
+    fs.stat(README_PATH),
+    fs.readFile(README_PATH, 'utf8'),
+  ]);
+
+  assert.equal(creditsStat.size, 1445, 'CREDITS.md exact byte size');
+  const newlineCount = (creditsMd.match(/\n/g) ?? []).length;
+  assert.equal(newlineCount, 48, 'CREDITS.md exact newline count');
+
+  const lines = creditsMd.split('\n');
+  assert.equal(lines.length, 49, 'CREDITS.md split("\\n") length');
+  assert.equal(lines[lines.length - 1], '', 'CREDITS.md trailing empty element after final newline');
+
+  const headerLines = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].startsWith('- **')) {
+      headerLines.push(i + 1);
+    }
+  }
+  assert.deepEqual(headerLines, [8, 14, 20, 26, 32, 38, 44], 'CREDITS.md 1-based entry header line numbers');
+
+  for (const blankLine of [13, 19, 25, 31, 37, 43]) {
+    assert.equal(lines[blankLine - 1], '', `CREDITS.md line ${blankLine} must be blank`);
+  }
+  assert.equal(lines[47].trim(), '- Licence: CC0 1.0', 'CREDITS.md line 48 must be the last entry 4th field');
+
+  assert.equal(readmeStat.size, 4255, 'town-3d/README.md exact byte size');
+  assert.equal(readmeMd.split('\n').length, 83, 'town-3d/README.md split("\\n") length');
+});
+
+test('credited GLB samplers count and exact objects are pinned across all 7 models', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  let totalSamplers = 0;
+  for (const { file, gltf } of glbs) {
+    assert.equal(gltf.samplers?.length, 1, `${file} must have exactly 1 sampler`);
+    totalSamplers += gltf.samplers.length;
+    if (file === 'teapot.glb') {
+      assert.deepEqual(gltf.samplers[0], { wrapS: 10497, wrapT: 10497 }, 'teapot.glb sampler');
+    } else {
+      assert.deepEqual(gltf.samplers[0], {}, `${file} sampler must be empty object`);
+    }
+  }
+  assert.equal(totalSamplers, 7, 'total samplers across credited GLBs must be 7');
+});
+
+test('test-credits.mjs file hygiene and CREDITS.md Poly Pizza URL exclusivity are pinned', async () => {
+  const [selfSrc, creditsMd] = await Promise.all([
+    fs.readFile(fileURLToPath(import.meta.url), 'utf8'),
+    fs.readFile(CREDITS_PATH, 'utf8'),
+  ]);
+
+  const testNames = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(testNames.length, 44, 'test-credits.mjs must have exactly 44 top-level tests');
+  assert.equal(new Set(testNames).size, 44, 'all 44 top-level test names must be unique');
+
+  const importLines = selfSrc.match(/^import /gm) ?? [];
+  assert.equal(importLines.length, 6, 'test-credits.mjs must have exactly 6 top-level import lines');
+
+  const bannedNeedles = [
+    'camp' + 'fire',
+    'Math.' + 'random',
+    'fetch' + '(',
+    'TO' + 'DO',
+    'FIX' + 'ME',
+    'Date.' + 'now',
+  ];
+  for (const needle of bannedNeedles) {
+    assert.equal(selfSrc.includes(needle), false, `test-credits.mjs must not contain ${needle}`);
+  }
+
+  const polyPizzaUrls = creditsMd.match(/https:\/\/poly\.pizza\/m\//g) ?? [];
+  assert.equal(polyPizzaUrls.length, 7, 'CREDITS.md must contain exactly 7 https://poly.pizza/m/ URLs');
+  const allHttp = creditsMd.match(/http/gi) ?? [];
+  assert.equal(allHttp.length, 7, 'CREDITS.md must contain no http substring outside the 7 Poly Pizza URLs');
+});
