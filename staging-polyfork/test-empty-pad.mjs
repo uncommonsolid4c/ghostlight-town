@@ -891,3 +891,281 @@ test('buildEmptyPadMarker creates fresh userData objects per build with expected
   assert.equal(g2.children[1].userData.signpostText, 'OPEN PLOT #2');
   assert.deepEqual(Object.keys(g2.userData).sort(), ['clickable', 'kind', 'label', 'plotNumber']);
 });
+
+test('TOWN_LAYOUT constants are exact: clearing, plot ring, bandstand, gate, newsstand, notice board, inn, and all 8 plots', () => {
+  assert.equal(TOWN_LAYOUT.clearingRadius, 30);
+  assert.equal(TOWN_LAYOUT.plotRadius, 18.5);
+  assert.deepEqual(TOWN_LAYOUT.bandstand, { x: 0, y: 0, z: 0, radius: 4.5, height: 0.6 });
+  assert.deepEqual(TOWN_LAYOUT.gate, { x: 0, y: 0, z: 27 });
+  assert.deepEqual(TOWN_LAYOUT.newsstand, { x: 6, y: 0, z: 14 });
+  assert.deepEqual(TOWN_LAYOUT.noticeBoard, { x: -6, y: 0, z: 14 });
+  assert.deepEqual(TOWN_LAYOUT.inn, { x: -11, y: 0, z: 20 });
+
+  const expectedPlots = [
+    [1, 17.919, 4.601, -1.8221],
+    [2, 17.833, -4.922, -1.3015],
+    [3, 13.023, -13.14, -0.7809],
+    [4, 4.761, -17.877, -0.2603],
+    [5, -4.761, -17.877, 0.2603],
+    [6, -13.023, -13.14, 0.7809],
+    [7, -17.833, -4.922, 1.3015],
+    [8, -17.919, 4.601, 1.8221],
+  ];
+  assert.equal(TOWN_LAYOUT.plots.length, expectedPlots.length);
+  for (let i = 0; i < expectedPlots.length; i++) {
+    const [plotNumber, x, z, rotY] = expectedPlots[i];
+    assert.deepEqual(TOWN_LAYOUT.plots[i], { plotNumber, x, y: 0, z, rotY });
+  }
+});
+
+test('buildEmptyPadMarker material option objects are exact and children are real THREE instances', () => {
+  const THREE = makeFakeThree();
+  const plot = TOWN_LAYOUT.plots[1]; // plotNumber 2
+  const tex = { isKnownTexture: true };
+  const group = buildEmptyPadMarker(THREE, plot, 0, () => tex);
+
+  assert.ok(group instanceof THREE.Group);
+  const [slab, sign] = group.children;
+  assert.ok(slab instanceof THREE.Mesh);
+  assert.ok(sign instanceof THREE.Mesh);
+  assert.deepEqual(slab.material.opts, { color: '#6e7278', roughness: 0.95 });
+  assert.deepEqual(sign.material.opts, { map: tex, roughness: 0.85 });
+  assert.equal(slab.material.type, 'MeshStandardMaterial');
+  assert.equal(sign.material.type, 'MeshStandardMaterial');
+  assert.equal(slab.geometry.type, 'BoxGeometry');
+  assert.equal(sign.geometry.type, 'BoxGeometry');
+});
+
+test('buildEmptyPadMarker ignores plot.y, passes Infinity and NaN groundY through, and builds a synthetic plot 9', () => {
+  const THREE = makeFakeThree();
+  const plotWithY = { ...TOWN_LAYOUT.plots[1], y: 5 };
+  const g1 = buildEmptyPadMarker(THREE, plotWithY, 1.5, () => ({}));
+  assert.equal(g1.position.y, 1.5);
+
+  const gInf = buildEmptyPadMarker(THREE, TOWN_LAYOUT.plots[1], Infinity, () => ({}));
+  assert.equal(gInf.position.y, Infinity);
+
+  const gNaN = buildEmptyPadMarker(THREE, TOWN_LAYOUT.plots[1], NaN, () => ({}));
+  assert.ok(Number.isNaN(gNaN.position.y));
+
+  const syntheticPlot = { plotNumber: 9, x: 1, z: 2, rotY: 0.5 };
+  const g9 = buildEmptyPadMarker(THREE, syntheticPlot, 0, () => ({}));
+  assert.equal(g9.name, 'plot_pad_9');
+  assert.equal(g9.userData.label, 'OPEN PLOT #9');
+  assert.equal(g9.children[1].name, 'plot_9_signpost');
+  assert.equal(g9.position.x, 1);
+  assert.equal(g9.position.z, 2);
+  assert.equal(g9.rotation.y, 0.5);
+});
+
+test('syncEmptyPadMarkers adds markers in plot order 2..8 with scene as parent and THREE as the texture first arg', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const texCalls = [];
+  const makeTextTexture = (threeArg, lines, opts) => {
+    texCalls.push({ threeArg, lines, opts });
+    return {};
+  };
+
+  syncEmptyPadMarkers(scene, liveStore, { THREE, makeTextTexture, groundAt: () => 0 });
+
+  assert.equal(scene.addCalls, 7);
+  assert.equal(scene.children.length, 7);
+  assert.equal(texCalls.length, 7);
+  for (let i = 0; i < 7; i++) {
+    assert.equal(scene.children[i].name, `plot_pad_${i + 2}`);
+    assert.equal(scene.children[i].parent, scene);
+    assert.equal(texCalls[i].threeArg, THREE);
+    assert.deepEqual(texCalls[i].lines, [`OPEN PLOT #${i + 2}`]);
+  }
+});
+
+test('syncEmptyPadMarkers error edges: undefined entry, NaN and -0 plotNumbers, missing plotAssignments, numeric Map key', () => {
+  const THREE = makeFakeThree();
+  const opts = { THREE, makeTextTexture: () => ({}), groundAt: () => 0 };
+
+  assert.throws(
+    () =>
+      syncEmptyPadMarkers(
+        makeFakeScene(),
+        { plotAssignments: new Map([['ghost', undefined]]), emptyPadMarkers: new Map() },
+        opts
+      ),
+    { name: 'TypeError', message: /plotNumber/ }
+  );
+
+  const sceneNan = makeFakeScene();
+  const storeNan = {
+    plotAssignments: new Map([
+      ['nan', { plotNumber: NaN }],
+      ['negZero', { plotNumber: -0 }],
+    ]),
+    emptyPadMarkers: new Map(),
+  };
+  assert.equal(syncEmptyPadMarkers(sceneNan, storeNan, opts), 7);
+  assert.equal(storeNan.emptyPadMarkers.size, 7);
+  assert.equal(sceneNan.children.length, 7);
+
+  assert.throws(
+    () => syncEmptyPadMarkers(makeFakeScene(), { emptyPadMarkers: new Map() }, opts),
+    { name: 'TypeError', message: /values/ }
+  );
+
+  const sceneNum = makeFakeScene();
+  const storeNum = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  assert.equal(syncEmptyPadMarkers(sceneNum, storeNum, opts), 7);
+  storeNum.plotAssignments.set(2, { plotNumber: 2 });
+  assert.equal(syncEmptyPadMarkers(sceneNum, storeNum, opts), 6);
+  assert.equal(storeNum.emptyPadMarkers.has(2), false);
+});
+
+test('syncEmptyPadMarkers propagates texture and groundAt throws with partial state', () => {
+  const THREE = makeFakeThree();
+
+  const scene1 = makeFakeScene();
+  const store1 = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const texErr = new Error('tex boom');
+  assert.throws(
+    () =>
+      syncEmptyPadMarkers(scene1, store1, {
+        THREE,
+        makeTextTexture: (_three, lines) => {
+          if (lines[0] === 'OPEN PLOT #4') throw texErr;
+          return {};
+        },
+        groundAt: () => 0,
+      }),
+    (err) => err === texErr
+  );
+  assert.equal(store1.emptyPadMarkers.size, 2);
+  assert.equal(store1.emptyPadMarkers.has(2), true);
+  assert.equal(store1.emptyPadMarkers.has(3), true);
+  assert.equal(store1.emptyPadMarkers.has(4), false);
+  assert.equal(scene1.children.length, 2);
+  assert.equal(scene1.addCalls, 2);
+
+  const scene2 = makeFakeScene();
+  const store2 = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  const groundErr = new Error('ground boom');
+  assert.throws(
+    () =>
+      syncEmptyPadMarkers(scene2, store2, {
+        THREE,
+        makeTextTexture: () => ({}),
+        groundAt: () => {
+          throw groundErr;
+        },
+      }),
+    (err) => err === groundErr
+  );
+  assert.equal(store2.emptyPadMarkers.size, 0);
+  assert.equal(scene2.children.length, 0);
+});
+
+test('syncEmptyPadMarkers keeps a pre-seeded orphan marker without adding it to the scene', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const orphan = new THREE.Group();
+  assert.equal(orphan.parent, null);
+  const liveStore = {
+    plotAssignments: new Map(),
+    emptyPadMarkers: new Map([[2, orphan]]),
+  };
+
+  const count = syncEmptyPadMarkers(scene, liveStore, {
+    THREE,
+    makeTextTexture: () => ({}),
+    groundAt: () => 0,
+  });
+
+  assert.equal(count, 7);
+  assert.equal(scene.addCalls, 6);
+  assert.equal(scene.children.length, 6);
+  assert.equal(liveStore.emptyPadMarkers.get(2), orphan);
+  assert.equal(orphan.parent, null);
+  assert.equal(orphan.removedCount, 0);
+});
+
+test('plot angles step evenly around the ring and rotY recomputes from atan2', () => {
+  const expectedStep = ((1.58 - 0.42) * Math.PI) / 7;
+  for (let i = 0; i < TOWN_LAYOUT.plots.length - 1; i++) {
+    const a = TOWN_LAYOUT.plots[i];
+    const b = TOWN_LAYOUT.plots[i + 1];
+    let diff = Math.atan2(b.x, b.z) - Math.atan2(a.x, a.z);
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+    assert.ok(
+      Math.abs(diff - expectedStep) < 1e-3,
+      `step between plots ${a.plotNumber} and ${b.plotNumber} should match expectedStep`
+    );
+  }
+
+  for (const p of TOWN_LAYOUT.plots) {
+    const recomputed = +Math.atan2(-p.x, -p.z).toFixed(4);
+    assert.ok(
+      Math.abs(recomputed - p.rotY) < 1e-4,
+      `plot ${p.plotNumber} rotY should match recomputed atan2`
+    );
+  }
+});
+
+test('syncEmptyPadMarkers rebuilds two freed plots with fresh groundAt values and fresh textures', () => {
+  const THREE = makeFakeThree();
+  const scene = makeFakeScene();
+  const liveStore = { plotAssignments: new Map(), emptyPadMarkers: new Map() };
+  let groundY = 1.0;
+  let texCount = 0;
+  const opts = {
+    THREE,
+    makeTextTexture: () => ({ id: ++texCount }),
+    groundAt: () => groundY,
+  };
+
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(texCount, 7);
+  const old2 = liveStore.emptyPadMarkers.get(2);
+  const old5 = liveStore.emptyPadMarkers.get(5);
+
+  liveStore.plotAssignments.set('wick', { plotNumber: 2 });
+  liveStore.plotAssignments.set('maren', { plotNumber: 5 });
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 5);
+
+  groundY = 3.5;
+  liveStore.plotAssignments.delete('wick');
+  liveStore.plotAssignments.delete('maren');
+  assert.equal(syncEmptyPadMarkers(scene, liveStore, opts), 7);
+  assert.equal(texCount, 9);
+
+  const new2 = liveStore.emptyPadMarkers.get(2);
+  const new5 = liveStore.emptyPadMarkers.get(5);
+  assert.notEqual(new2, old2);
+  assert.notEqual(new5, old5);
+  assert.equal(new2.position.y, 3.5);
+  assert.equal(new5.position.y, 3.5);
+  assert.equal(new2.children[1].material.map.id, 8);
+  assert.equal(new5.children[1].material.map.id, 9);
+});
+
+test('test-file hygiene: unique names, no banned terms, exact import count, no live calls or wall-clock reads', () => {
+  const src = readFileSync(new URL('./test-empty-pad.mjs', import.meta.url), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 44);
+  assert.equal(new Set(names).size, 44);
+
+  assert.equal(src.toLowerCase().includes('camp' + 'fire'), false);
+  assert.equal(src.includes('Math' + '.random'), false);
+  assert.equal(src.includes('Date' + '.now'), false);
+  assert.equal(src.includes('fet' + 'ch('), false);
+  assert.equal(src.includes('TO' + 'DO'), false);
+  assert.equal(src.includes('FIX' + 'ME'), false);
+
+  const imports = [...src.matchAll(/^import\b[\s\S]*?\bfrom\s+'([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(imports.length, 5);
+  assert.deepEqual(imports, [
+    'node:test',
+    'node:assert/strict',
+    'node:fs',
+    './avatar.mjs',
+    './empty-pad.mjs',
+  ]);
+});
