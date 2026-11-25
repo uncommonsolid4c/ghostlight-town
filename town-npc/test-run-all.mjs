@@ -1391,3 +1391,294 @@ test('10-muse retirement: all three retire, run stays ok, brain never called', a
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('CLI duplicate --state-dir: last one wins', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-statedir-'));
+  const deadDir = path.join(tmpBase, 'dead-dir');
+  let realDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    realDir = makeStateDirFromKeys(sharedKeysDir, ['wick']);
+    const res = await runAllCli(
+      [
+        '--api-base',
+        ctx.baseUrl,
+        '--state-dir',
+        deadDir,
+        '--state-dir',
+        realDir,
+        '--npc',
+        'wick',
+        '--stagger-ms',
+        '0',
+      ],
+      { NPC_BRAIN_CMD: 'printf "The bulb is steady.\\n"' }
+    );
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs[0].posted, true);
+    assert.equal(fs.existsSync(deadDir), false);
+    assert.equal(fs.existsSync(path.join(realDir, 'wick', 'memory.md')), true);
+  } finally {
+    if (realDir) fs.rmSync(realDir, { recursive: true, force: true });
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI duplicate --stagger-ms: last one wins', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-stagger-'));
+  try {
+    const t0 = Date.now();
+    const res = await runAllCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--stagger-ms',
+      '5000',
+      '--stagger-ms',
+      '0',
+      '--dry-run',
+    ]);
+    const elapsed = Date.now() - t0;
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    assert.ok(elapsed < 8000, `expected elapsed < 8000ms, got ${elapsed}ms`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.ok, true);
+    assert.equal(summary.npcs.length, 3);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('CLI --api-base of only slashes fails as missing apiBase', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-slashes-'));
+  try {
+    const res = await runAllCli(['--api-base', '///', '--state-dir', stateDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stderr, '');
+    const lines = res.stdout.trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    assert.deepEqual(JSON.parse(lines[0]), {
+      action: 'error',
+      ok: false,
+      error: 'Missing apiBase',
+    });
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI invalid --stagger-ms values are rejected with exact text', async () => {
+  for (const v of ['NaN', 'Infinity', '-1', '1e']) {
+    const res = await runAllCli(['--api-base', 'http://127.0.0.1:9', '--stagger-ms', v]);
+    assert.equal(res.code, 1, `expected exit 1 for --stagger-ms ${v}`);
+    assert.equal(res.stdout, '', `expected empty stdout for --stagger-ms ${v}`);
+    const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(
+      res.stderr,
+      new RegExp(`Invalid --stagger-ms "${escaped}" \\(expected non-negative number\\)`)
+    );
+    assert.match(res.stderr, /Usage:/);
+  }
+});
+
+test('CLI unknown flag and bare -- are rejected with exact message', async () => {
+  for (const flag of ['--bogus', '--']) {
+    const res = await runAllCli([
+      '--api-base',
+      'http://127.0.0.1:9',
+      '--state-dir',
+      '/tmp/nope',
+      flag,
+    ]);
+    assert.equal(res.code, 1, `expected exit 1 for ${flag}`);
+    assert.equal(res.stdout, '', `expected empty stdout for ${flag}`);
+    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(res.stderr, new RegExp(`Unknown or incomplete argument: ${escaped}`));
+    assert.match(res.stderr, /Usage:/);
+  }
+});
+
+test('multi-slash apiBase probes the stripped URL', async () => {
+  const urls = [];
+  const statePayload = {
+    state_seq: 0,
+    footlights: [],
+    prompt_book: [],
+    presence: [],
+    daily_game: null,
+    nightly_call: null,
+    garden: [],
+    plots: {},
+    events: { now: null, next: null },
+  };
+  const recServer = http.createServer((req, res) => {
+    urls.push(req.url);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(statePayload));
+  });
+  await new Promise((resolve) => recServer.listen(0, '127.0.0.1', resolve));
+  const { port } = recServer.address();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-multislash-'));
+  try {
+    const logs = [];
+    const res = await runAll({
+      apiBase: `http://127.0.0.1:${port}///`,
+      stateDir,
+      staggerMs: 0,
+      dryRun: true,
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(
+      res.results.map((r) => r.action),
+      ['dry_run', 'dry_run', 'dry_run']
+    );
+    assert.ok(urls.length >= 4, `expected >= 4 recorded urls, got ${urls.length}`);
+    for (const u of urls) {
+      assert.equal(u, '/api/town/state');
+    }
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+  } finally {
+    await new Promise((resolve) => recServer.close(resolve));
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('runAll return, result rows, and run_all summary have exact key sets', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const logs = [];
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 0,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Wick')) return 'The bulb is steady on the steps tonight.';
+        if (prompt.includes('You are Maren')) return 'A clean line is worth keeping in the pocket.';
+        return 'The copper kettle is warm if anyone stops by.';
+      },
+      logger: (obj) => logs.push(obj),
+      sleepImpl: async () => {},
+    });
+    assert.deepEqual(Object.keys(res).sort(), ['ok', 'results']);
+    for (const row of res.results) {
+      assert.deepEqual(Object.keys(row).sort(), ['action', 'npc', 'ok', 'posted']);
+    }
+    const summary = logs[logs.length - 1];
+    assert.deepEqual(Object.keys(summary).sort(), ['action', 'npcs', 'ok']);
+    for (const row of summary.npcs) {
+      assert.deepEqual(Object.keys(row).sort(), ['action', 'npc', 'ok', 'posted']);
+    }
+    assert.deepEqual(res.results, summary.npcs);
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('runAll with no options uses defaults and logs Missing apiBase', async () => {
+  const resDefault = await runAll();
+  assert.deepEqual(resDefault, { ok: false, results: [] });
+
+  let fetchCalled = false;
+  const logs = [];
+  const resInjected = await runAll({
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error('no');
+    },
+    logger: (obj) => logs.push(obj),
+    sleepImpl: async () => {},
+  });
+  assert.deepEqual(resInjected, { ok: false, results: [] });
+  assert.equal(fetchCalled, false);
+  assert.deepEqual(logs, [{ action: 'error', ok: false, error: 'Missing apiBase' }]);
+});
+
+test('CLI --dry-run twice is accepted', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-dryrun2-'));
+  try {
+    const res = await runAllCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--stagger-ms',
+      '0',
+      '--dry-run',
+      '--dry-run',
+    ]);
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code}, stderr: ${res.stderr}`);
+    const lines = res.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const summary = lines[lines.length - 1];
+    assert.equal(summary.action, 'run_all');
+    assert.equal(summary.ok, true);
+    assert.deepEqual(
+      summary.npcs.map((n) => n.action),
+      ['dry_run', 'dry_run', 'dry_run']
+    );
+    assert.deepEqual(fs.readdirSync(stateDir), []);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
+
+test('happy path writes per-NPC state files for all three NPCs', async () => {
+  const ctx = await startTestServer();
+  const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
+  let stateDir = null;
+  try {
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
+    stateDir = makeStateDirFromKeys(sharedKeysDir);
+    const res = await runAll({
+      apiBase: ctx.baseUrl,
+      stateDir,
+      staggerMs: 0,
+      brainImpl: async (prompt) => {
+        if (prompt.includes('You are Wick')) return 'The bulb is steady on the steps tonight.';
+        if (prompt.includes('You are Maren')) return 'A clean line is worth keeping in the pocket.';
+        return 'The copper kettle is warm if anyone stops by.';
+      },
+      logger: () => {},
+      sleepImpl: async () => {},
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(fs.readdirSync(stateDir).sort(), ['maren', 'tomas', 'wick']);
+    for (const handle of ['wick', 'maren', 'tomas']) {
+      for (const fname of ['key.pem', 'pubkey.txt', 'memory.md', 'state.json']) {
+        assert.equal(
+          fs.existsSync(path.join(stateDir, handle, fname)),
+          true,
+          `expected ${handle}/${fname} to exist`
+        );
+      }
+      const memLen = fs.readFileSync(path.join(stateDir, handle, 'memory.md'), 'utf8').length;
+      assert.ok(memLen > 0 && memLen < 2048, `expected 0 < memory.md length < 2048 for ${handle}, got ${memLen}`);
+    }
+  } finally {
+    if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sharedKeysDir, { recursive: true, force: true });
+    await ctx.close();
+  }
+});
