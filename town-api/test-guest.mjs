@@ -1545,3 +1545,381 @@ test('same keypair, two guest handles, two Inn rooms; guest presence never expir
     await ctx.close();
   }
 });
+
+test('guest say reply_to nonexistent positive id 400s free and reply to resident line succeeds', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: resClient } = await createResident(ctx, 'res-one');
+    const resSay = await resClient.say('a resident line');
+    assert.equal(resSay.status, 201);
+    const resId = resSay.data.id;
+
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'reply-guest', ...keys });
+
+    const bad = await guest.guestSay('nope', 'say', 9999);
+    assert.equal(bad.status, 400);
+    assert.deepEqual(bad.data, { error: 'invalid_reply_to' });
+
+    const reply = await guest.guestSay('hello back', 'say', resId);
+    assert.equal(reply.status, 201);
+    assert.equal(reply.data.reply_to, resId);
+
+    const plain = await guest.guestSay('plain line');
+    assert.equal(plain.status, 201);
+
+    const limited = await guest.guestSay('third line');
+    assert.equal(limited.status, 429);
+    assert.equal(limited.data.error, 'rate_limited');
+
+    const st = await guest.state();
+    assert.equal(st.status, 200);
+    const entry = st.data.prompt_book.find((e) => e.id === reply.data.id);
+    assert.ok(entry);
+    assert.equal(entry.role, 'guest');
+    assert.equal(entry.reply_to, resId);
+    assert.equal(entry.body, 'hello back');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest say 201 exact response keys, kind edges, and per-handle say buckets', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'keys-guest', ...keys });
+
+    const first = await guest.guestSay('first');
+    assert.equal(first.status, 201);
+    assert.deepEqual(Object.keys(first.data).sort(), [
+      'body',
+      'created_at',
+      'handle',
+      'id',
+      'kind',
+      'reply_to',
+      'state_seq',
+    ]);
+    assert.equal(first.data.kind, 'say');
+    assert.equal(first.data.reply_to, null);
+
+    const second = await signedPost(ctx, 'keys-guest', keys, '/api/town/ghostlight/guest/say', {
+      handle: 'keys-guest',
+      pubkey: keys.pubkey,
+      body: 'second',
+      kind: null,
+    });
+    assert.equal(second.status, 201);
+    assert.equal(second.data.kind, 'say');
+
+    const badCase = await signedPost(ctx, 'keys-guest', keys, '/api/town/ghostlight/guest/say', {
+      handle: 'keys-guest',
+      pubkey: keys.pubkey,
+      body: 'bad case',
+      kind: 'Say',
+    });
+    assert.equal(badCase.status, 400);
+    assert.deepEqual(badCase.data, { error: 'invalid_kind' });
+
+    const emptyKind = await signedPost(ctx, 'keys-guest', keys, '/api/town/ghostlight/guest/say', {
+      handle: 'keys-guest',
+      pubkey: keys.pubkey,
+      body: 'empty kind',
+      kind: '',
+    });
+    assert.equal(emptyKind.status, 400);
+    assert.deepEqual(emptyKind.data, { error: 'invalid_kind' });
+
+    const keysB = generateKeypair();
+    const guestB = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'keys-guest-b', ...keysB });
+    assert.equal((await guestB.guestSay('b1')).status, 201);
+    assert.equal((await guestB.guestSay('b2')).status, 201);
+    const b3 = await guestB.guestSay('b3');
+    assert.equal(b3.status, 429);
+    assert.equal(b3.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest can join as resident afterwards and roles flip at read time', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'soon-resident', ...keys });
+
+    assert.equal((await guest.guestCheckin()).status, 200);
+    const say = await guest.guestSay('visiting first');
+    assert.equal(say.status, 201);
+    const sayId = say.data.id;
+    assert.equal((await guest.guestInnClaim('lantern', 2)).status, 201);
+
+    const before = await guest.state();
+    assert.equal(before.status, 200);
+    const presBefore = before.data.presence.find((p) => p.handle === 'soon-resident');
+    assert.ok(presBefore);
+    assert.equal(presBefore.role, 'guest');
+
+    const joined = await guest.join({ origin: 'musebook' });
+    assert.equal(joined.status, 201);
+    const approved = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'soon-resident',
+      role: 'muse',
+    });
+    assert.equal(approved.status, 200);
+
+    const after = await guest.state();
+    assert.equal(after.status, 200);
+    const presAfter = after.data.presence.find((p) => p.handle === 'soon-resident');
+    assert.ok(presAfter);
+    assert.equal(presAfter.role, 'muse');
+    const lineAfter = after.data.prompt_book.find((e) => e.id === sayId);
+    assert.ok(lineAfter);
+    assert.equal(lineAfter.role, 'muse');
+    assert.equal(after.data.inn.lantern.handle, 'soon-resident');
+    assert.equal(after.data.inn.lantern.guest, true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest inn extend expiry is anchored to claimed_at, not to now', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'extend-guest', ...keys });
+
+    const claim = await guest.guestInnClaim('window', 2);
+    assert.equal(claim.status, 201);
+    const claimedAt = claim.data.claimed_at;
+    assert.equal(claim.data.expires_at, claimedAt + 2 * NIGHT_SEC);
+
+    ctx.advanceClock(NIGHT_SEC);
+
+    const ext = await signedPost(ctx, 'extend-guest', keys, '/api/town/inn/guest/extend', {
+      handle: 'extend-guest',
+      pubkey: keys.pubkey,
+      room: 'window',
+      key: claim.data.key,
+      extra_nights: 1,
+    });
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.nights, 3);
+    assert.equal(ext.data.claimed_at, claimedAt);
+    assert.equal(ext.data.expires_at, claimedAt + 3 * NIGHT_SEC);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('wrong pubkey with right key returns 403 pubkey_mismatch on extend and vacate and claim survives', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'mismatch-guest', ...keys });
+
+    const claim = await guest.guestInnClaim('lantern', 2);
+    assert.equal(claim.status, 201);
+
+    const otherKeys = generateKeypair();
+    const imposter = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'mismatch-guest', ...otherKeys });
+
+    const badExt = await imposter.guestInnExtend('lantern', claim.data.key, 1);
+    assert.equal(badExt.status, 403);
+    assert.deepEqual(badExt.data, { error: 'pubkey_mismatch' });
+
+    const badVac = await imposter.guestInnVacate('lantern', claim.data.key);
+    assert.equal(badVac.status, 403);
+    assert.deepEqual(badVac.data, { error: 'pubkey_mismatch' });
+
+    const st = await guest.state();
+    assert.equal(st.status, 200);
+    assert.equal(st.data.inn.lantern.handle, 'mismatch-guest');
+    assert.equal(st.data.inn.lantern.nights, 2);
+
+    const okVac = await guest.guestInnVacate('lantern', claim.data.key);
+    assert.equal(okVac.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest inn vacate is not rate-limited and consumes no claim bucket', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'nolimit-guest', ...keys });
+
+    const claim = await guest.guestInnClaim('quiet', 1);
+    assert.equal(claim.status, 201);
+
+    const ext = await guest.guestInnExtend('quiet', claim.data.key, 1);
+    assert.equal(ext.status, 200);
+
+    const vac = await guest.guestInnVacate('quiet', claim.data.key);
+    assert.equal(vac.status, 200);
+
+    const vacAgain = await guest.guestInnVacate('quiet', claim.data.key);
+    assert.equal(vacAgain.status, 404);
+    assert.deepEqual(vacAgain.data, { error: 'claim_not_found' });
+
+    const reclaim = await guest.guestInnClaim('quiet', 1);
+    assert.equal(reclaim.status, 429);
+    assert.equal(reclaim.data.error, 'rate_limited');
+    assert.equal(reclaim.data.retry_after, 3600);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('inn_claims DB row exact shape and PRAGMA table_info schema', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'dbrow-guest', ...keys });
+
+    const claim = await guest.guestInnClaim('window', 2);
+    assert.equal(claim.status, 201);
+
+    const rows = ctx.db
+      .prepare('SELECT room, handle, claimed_at, nights, expires_at, key_code, pubkey FROM inn_claims')
+      .all()
+      .map((r) => ({ ...r }));
+    assert.deepEqual(rows, [
+      {
+        room: 'window',
+        handle: 'dbrow-guest',
+        claimed_at: claim.data.claimed_at,
+        nights: 2,
+        expires_at: claim.data.claimed_at + 2 * NIGHT_SEC,
+        key_code: claim.data.key,
+        pubkey: keys.pubkey,
+      },
+    ]);
+
+    const cols = ctx.db
+      .prepare("PRAGMA table_info('inn_claims')")
+      .all()
+      .map((r) => ({ ...r }));
+    assert.deepEqual(
+      cols.map((c) => c.name),
+      ['room', 'handle', 'claimed_at', 'nights', 'expires_at', 'key_code', 'pubkey']
+    );
+    assert.deepEqual(
+      cols.map((c) => c.type),
+      ['TEXT', 'TEXT', 'INTEGER', 'INTEGER', 'INTEGER', 'TEXT', 'TEXT']
+    );
+    assert.deepEqual(
+      cols.map((c) => c.pk),
+      [1, 0, 0, 0, 0, 0, 0]
+    );
+    assert.deepEqual(
+      cols.map((c) => c.notnull),
+      [0, 1, 1, 1, 1, 1, 0]
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('source pins: guest rate limits, Inn constants, bucket keys, state SELECT, and schema DDL', () => {
+  const dir = path.dirname(new URL(import.meta.url).pathname);
+  const serverSrc = fs.readFileSync(path.join(dir, 'server.mjs'), 'utf8');
+  const schemaSrc = fs.readFileSync(path.join(dir, 'schema.sql'), 'utf8');
+
+  assert.ok(serverSrc.includes('  guestCheckin: { max: 1, windowSec: 5 * 60 },'));
+  assert.ok(serverSrc.includes('  guestSay: { max: 2, windowSec: 10 * 60 },'));
+  assert.ok(serverSrc.includes('  guestInnClaim: { max: 2, windowSec: 60 * 60 },'));
+
+  assert.ok(serverSrc.includes("const INN_ROOMS = ['lantern', 'window', 'quiet'];"));
+  assert.ok(serverSrc.includes('const INN_MAX_NIGHTS = 7;'));
+  assert.ok(serverSrc.includes('const INN_DEFAULT_NIGHTS = 3;'));
+  assert.ok(serverSrc.includes('const INN_KEY_LEN = 12;'));
+
+  assert.ok(serverSrc.includes('`guest-checkin:${handle}`'));
+  assert.ok(serverSrc.includes('`guest-say:${handle}`'));
+  assert.ok(serverSrc.includes('`guest-inn-claim:${handle}`'));
+
+  assert.ok(serverSrc.includes('SELECT room, handle, nights, expires_at, pubkey FROM inn_claims WHERE expires_at > ?'));
+
+  const expectedDdl = [
+    'CREATE TABLE IF NOT EXISTS inn_claims (',
+    "    room            TEXT PRIMARY KEY CHECK (room IN ('lantern', 'window', 'quiet')),",
+    '    handle          TEXT NOT NULL,',
+    '    claimed_at      INTEGER NOT NULL,',
+    '    nights          INTEGER NOT NULL CHECK (nights >= 1 AND nights <= 7),',
+    '    expires_at      INTEGER NOT NULL,',
+    '    key_code        TEXT NOT NULL UNIQUE,',
+    '    pubkey          TEXT',
+    ');',
+  ].join('\n');
+  assert.ok(schemaSrc.includes(expectedDdl));
+});
+
+test('guest validation order: handle beats room, body, and status_text', async () => {
+  const ctx = await startTestServer();
+  try {
+    await createResident(ctx, 'order-res');
+
+    const k1 = generateKeypair();
+    const takenClaim = await signedPost(ctx, 'order-res', k1, '/api/town/inn/guest/claim', {
+      handle: 'order-res',
+      pubkey: k1.pubkey,
+      room: 'Bogus',
+    });
+    assert.equal(takenClaim.status, 409);
+    assert.deepEqual(takenClaim.data, { error: 'handle_taken' });
+
+    const k2 = generateKeypair();
+    const badClaim = await signedPost(ctx, 'BAD!', k2, '/api/town/inn/guest/claim', {
+      handle: 'BAD!',
+      pubkey: k2.pubkey,
+      room: 'Bogus',
+    });
+    assert.equal(badClaim.status, 400);
+    assert.deepEqual(badClaim.data, { error: 'invalid_handle' });
+
+    const k3 = generateKeypair();
+    const badCheckin = await signedPost(ctx, 'BAD!', k3, '/api/town/ghostlight/guest/checkin', {
+      handle: 'BAD!',
+      pubkey: k3.pubkey,
+      status_text: 'x'.repeat(121),
+    });
+    assert.equal(badCheckin.status, 400);
+    assert.deepEqual(badCheckin.data, { error: 'invalid_handle' });
+
+    const k4 = generateKeypair();
+    const takenSay = await signedPost(ctx, 'order-res', k4, '/api/town/ghostlight/guest/say', {
+      handle: 'order-res',
+      pubkey: k4.pubkey,
+      body: '',
+    });
+    assert.equal(takenSay.status, 409);
+    assert.deepEqual(takenSay.data, { error: 'handle_taken' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('file hygiene: 46 unique names, 7 imports, zero banned terms, pinned as-true counts', () => {
+  const dir = path.dirname(new URL(import.meta.url).pathname);
+  const src = fs.readFileSync(path.join(dir, 'test-guest.mjs'), 'utf8');
+  const lines = src.split('\n');
+
+  const names = lines
+    .map((l) => l.match(/^test\('([^']+)'/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  assert.equal(names.length, 46);
+  assert.equal(new Set(names).size, 46);
+
+  const importLines = lines.filter((l) => l.startsWith('import '));
+  assert.equal(importLines.length, 7);
+
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 3);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+});
