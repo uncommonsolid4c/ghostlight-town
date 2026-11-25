@@ -843,3 +843,226 @@ test('near-wrap continuity: night and elevation rejoin across the 0/1 seam', () 
   assert.ok(Math.abs(daylightAt(0.999).elev - 40) < 0.5);
   assert.ok(Math.abs(daylightAt(0.001).elev - 40) < 0.5);
 });
+
+test('mirror symmetry across cycle midpoint + exact values at f=0.1875', () => {
+  const hexKeys = ['sky', 'horizon', 'hemiSky', 'hemiGround', 'key', 'rim'];
+  const numKeys = ['hemi', 'keyI', 'rimI', 'elev', 'fog', 'night'];
+
+  for (const f of [0.0625, 0.1875, 0.3125, 0.4375]) {
+    const a = daylightAt(f);
+    const b = daylightAt(1 - f);
+    for (const k of hexKeys) {
+      assert.equal(a[k], b[k], `mirror hex ${k} at f=${f}`);
+    }
+    for (const k of numKeys) {
+      assert.ok(Math.abs(a[k] - b[k]) < 1e-12, `mirror num ${k} at f=${f}: ${a[k]} vs ${b[k]}`);
+    }
+  }
+
+  assert.equal(
+    JSON.stringify(daylightAt(0.1875)),
+    JSON.stringify({
+      sky: 0x849dc9,
+      horizon: 0xedbba9,
+      hemiSky: 0xd1d8f3,
+      hemiGround: 0x837d92,
+      hemi: 0.8012499999999999,
+      key: 0xf5ccc5,
+      keyI: 1.7625,
+      rim: 0x9babf7,
+      rimI: 0.7453125,
+      elev: 15.53125,
+      fog: 0.7921875,
+      night: 0.4515625,
+    })
+  );
+});
+
+test('exact interpolated values at f=0.4375 and f=0.3125', () => {
+  assert.equal(
+    JSON.stringify(daylightAt(0.4375)),
+    JSON.stringify({
+      sky: 0xafbccc,
+      horizon: 0xdfdadc,
+      hemiSky: 0xfafbff,
+      hemiGround: 0xa9aaaf,
+      hemi: 1.39375,
+      key: 0xf1edee,
+      keyI: 1.0218749999999999,
+      rim: 0xd5ddf1,
+      rimI: 0.5046875,
+      elev: 50.65625,
+      fog: 0.7324999999999999,
+      night: 0.0546875,
+    })
+  );
+
+  assert.equal(
+    JSON.stringify(daylightAt(0.3125)),
+    JSON.stringify({
+      sky: 0x96add6,
+      horizon: 0xf9ccbc,
+      hemiSky: 0xe4eaff,
+      hemiGround: 0x938ea0,
+      hemi: 0.92625,
+      key: 0xfcd3c3,
+      keyI: 1.778125,
+      rim: 0xafbdfc,
+      rimI: 0.7453125,
+      elev: 18.34375,
+      fog: 0.7875000000000001,
+      night: 0.2953125,
+    })
+  );
+});
+
+test('fractional-dt accumulation + ignored dt values + near-cycle wrap', () => {
+  const d1 = buildDaylightDrift({ night: 1 });
+  for (let i = 0; i < 18000; i++) d1.update(0.1);
+  assert.ok(Math.abs(d1.phase - 1) < 1e-9, `expected phase near 1, got ${d1.phase}`);
+
+  const d2 = buildDaylightDrift({ night: 1 });
+  for (let i = 0; i < 3600; i++) d2.update(0.5);
+  assert.equal(d2.phase, 0);
+
+  for (const badDt of [-0, Infinity, -Infinity]) {
+    const dBad = buildDaylightDrift({ night: 1 });
+    dBad.update(badDt);
+    assert.equal(dBad.phase, 0);
+  }
+
+  const d4 = buildDaylightDrift({ night: 1 });
+  d4.update(1799.999);
+  assert.ok(Math.abs(d4.phase - 1799.999 / 1800) < 1e-12);
+  const wrapped = d4.update(0.001);
+  assert.deepEqual(wrapped, daylightAt(0));
+});
+
+test('bare look gets elevation and night only + existing values are overwritten', () => {
+  const bare = {};
+  buildDaylightDrift(bare).update(450);
+  assert.equal(bare.elevation, 11);
+  assert.equal(bare.night, 0.35);
+  assert.deepEqual(Object.keys(bare).sort(), ['elevation', 'night']);
+
+  const preset = { elevation: 999, night: 0.5 };
+  buildDaylightDrift(preset).update(0);
+  assert.equal(preset.elevation, 40);
+  assert.equal(preset.night, 1);
+});
+
+test('far option defaults to 320 when omitted or undefined, and respects far: 0', () => {
+  const fogDefault = mkFog();
+  buildDaylightDrift(makeStubLook(), { fog: fogDefault }).update(0);
+  assert.equal(fogDefault.near, 96);
+  assert.equal(fogDefault.far, 264);
+
+  const fogZero = mkFog();
+  buildDaylightDrift(makeStubLook(), { fog: fogZero, far: 0 }).update(0);
+  assert.equal(fogZero.near, 0);
+  assert.equal(fogZero.far, 0);
+
+  const fogUndef = mkFog();
+  buildDaylightDrift(makeStubLook(), { fog: fogUndef, far: undefined }).update(0);
+  assert.equal(fogUndef.near, 96);
+  assert.equal(fogUndef.far, 264);
+});
+
+test('night-write counting from arbitrary initial night (0.5 -> 1 -> wrap -> 0)', () => {
+  let storedNight = 0.5;
+  let writes = 0;
+  const look = {};
+  Object.defineProperty(look, 'night', {
+    configurable: true,
+    get() {
+      return storedNight;
+    },
+    set(v) {
+      writes++;
+      storedNight = v;
+    },
+  });
+
+  const drift = buildDaylightDrift(look);
+  drift.update(0);
+  assert.equal(storedNight, 1);
+  assert.equal(writes, 1);
+
+  drift.update(1);
+  assert.equal(writes, 1);
+
+  drift.update(1799);
+  assert.equal(drift.phase, 0);
+  assert.equal(storedNight, 1);
+  assert.equal(writes, 1);
+
+  drift.update(900);
+  assert.equal(storedNight, 0);
+  assert.equal(writes, 2);
+});
+
+test('DAYLIGHT_DRIFT_CONFIG shape: exact top-level keys, 14 keyframe keys, endpoints match', () => {
+  assert.deepEqual(Object.keys(DAYLIGHT_DRIFT_CONFIG).sort(), ['cycleSeconds', 'keyframes']);
+  assert.equal(DAYLIGHT_DRIFT_CONFIG.cycleSeconds, 1800);
+  assert.equal(DAYLIGHT_DRIFT_CONFIG.keyframes.length, 5);
+
+  const expectedKfKeys = [
+    'at', 'elev', 'fog', 'hemi', 'hemiGround', 'hemiSky',
+    'horizon', 'key', 'keyI', 'name', 'night', 'rim', 'rimI', 'sky',
+  ];
+  for (const kf of DAYLIGHT_DRIFT_CONFIG.keyframes) {
+    assert.deepEqual(Object.keys(kf).sort(), expectedKfKeys);
+  }
+
+  const { at: at0, ...rest0 } = DAYLIGHT_DRIFT_CONFIG.keyframes[0];
+  const { at: at4, ...rest4 } = DAYLIGHT_DRIFT_CONFIG.keyframes[4];
+  assert.equal(at0, 0);
+  assert.equal(at4, 1);
+  assert.deepEqual(rest0, rest4);
+});
+
+test('staging.js drift wiring: exact occurrence counts and declaration-first ordering', async () => {
+  const src = await fs.promises.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.equal((src.match(/daylightDrift/g) || []).length, 2);
+  assert.equal((src.match(/daylightDrift\.update\(dt\)/g) || []).length, 1);
+  assert.equal((src.match(/const daylightDrift = buildDaylightDrift/g) || []).length, 1);
+
+  const firstLine = src.split(/\r?\n/).find((line) => line.includes('daylightDrift'));
+  assert.ok(firstLine && firstLine.trim().startsWith('const daylightDrift'));
+});
+
+test('update returns fresh, mutation-isolated params objects', () => {
+  const drift = buildDaylightDrift(makeStubLook());
+  const a = drift.update(0);
+  const b = drift.update(0);
+  assert.notEqual(a, b);
+  assert.equal(JSON.stringify(a), JSON.stringify(b));
+
+  a.night = 999;
+  a.sky = 0;
+
+  const c = drift.update(0);
+  assert.equal(c.night, 1);
+  assert.equal(c.sky, 0x070b1c);
+});
+
+test('daylight-drift.mjs source discipline (comments-only setTime, no wall-clock APIs) + exact export surface', async () => {
+  const src = await fs.promises.readFile(MODULE_PATH, 'utf8');
+  const setTimeLines = src.split(/\r?\n/).filter((line) => line.includes('setTime'));
+  assert.equal(setTimeLines.length, 2);
+  for (const line of setTimeLines) {
+    assert.ok(line.trim().startsWith('*'), `expected comment line for setTime, got: ${line}`);
+  }
+
+  assert.ok(!src.includes('look.setTime('), 'must not invoke look.setTime(');
+  assert.ok(!src.includes('Date.now'), 'must not use Date.now');
+  assert.ok(!src.includes('performance.now'), 'must not use performance.now');
+  assert.ok(!src.includes('setInterval'), 'must not use setInterval');
+  assert.ok(!src.includes('setTimeout'), 'must not use setTimeout');
+
+  const mod = await import('./daylight-drift.mjs');
+  assert.deepEqual(
+    Object.keys(mod).sort(),
+    ['DAYLIGHT_DRIFT_CONFIG', 'buildDaylightDrift', 'daylightAt']
+  );
+});
