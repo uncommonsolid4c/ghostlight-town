@@ -16,6 +16,7 @@ import { generateKeypair, GhostlightClient, signRequest } from '../town-api/ghos
 import { ensureKeypair } from './keygen.mjs';
 import { runAll } from './run-all.mjs';
 import { dailyGameHostForDate } from './daily-game.mjs';
+import { CHARACTERS } from './characters.mjs';
 
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ALL_SCRIPT = path.join(THIS_DIR, 'run-all.mjs');
@@ -665,18 +666,25 @@ test('single-NPC run never calls sleep, even with a large stagger', async () => 
   const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
   let stateDir = null;
   try {
-    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir, ['maren']);
-    stateDir = makeStateDirFromKeys(sharedKeysDir, ['maren']);
+    // Pick a non-host NPC dynamically: on the UTC date when an NPC is the
+    // daily-game host, its turn posts the game via the game bypass without
+    // calling the brain, so brainCalls would be 0.
+    const state = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(state.daily_game.date);
+    const npc = CHARACTERS.find((c) => c.handle !== host).handle;
+
+    await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir, [npc]);
+    stateDir = makeStateDirFromKeys(sharedKeysDir, [npc]);
     let brainCalls = 0;
     const sleepCalls = [];
     const res = await runAll({
       apiBase: ctx.baseUrl,
       stateDir,
-      npc: 'maren',
+      npc,
       staggerMs: 9999,
       brainImpl: async () => {
         brainCalls++;
-        return 'Lead sorts clink softly in the tray.';
+        return 'A quiet evening by the steps.';
       },
       logger: () => {},
       sleepImpl: async (ms) => sleepCalls.push(ms),
@@ -684,7 +692,7 @@ test('single-NPC run never calls sleep, even with a large stagger', async () => 
 
     assert.equal(res.ok, true);
     assert.equal(res.results.length, 1);
-    assert.equal(res.results[0].npc, 'maren');
+    assert.equal(res.results[0].npc, npc);
     assert.equal(res.results[0].posted, true);
     assert.deepEqual(sleepCalls, []);
     assert.equal(brainCalls, 1);
@@ -983,6 +991,13 @@ test('run_all summary npcs mirrors results on partial failure', async () => {
   const sharedKeysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-runall-keys-'));
   let stateDir = null;
   try {
+    // Pick a non-host victim dynamically: on the UTC date when an NPC is the
+    // daily-game host, its turn posts the game via the game bypass without
+    // calling the brain, so throwing in brainImpl would never trigger.
+    const state = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    const host = dailyGameHostForDate(state.daily_game.date);
+    const victim = CHARACTERS.find((c) => c.handle !== host);
+
     await preRegisterNpcs(ctx.baseUrl, ctx.operatorKeys, sharedKeysDir);
     stateDir = makeStateDirFromKeys(sharedKeysDir);
     const logs = [];
@@ -991,7 +1006,7 @@ test('run_all summary npcs mirrors results on partial failure', async () => {
       stateDir,
       staggerMs: 0,
       brainImpl: async (prompt) => {
-        if (prompt.includes('You are Maren')) {
+        if (prompt.includes(`You are ${victim.name}`)) {
           throw new Error('simulated brain failure');
         }
         return 'Quiet evening by the steps.';
@@ -1005,12 +1020,15 @@ test('run_all summary npcs mirrors results on partial failure', async () => {
     assert.equal(summary.action, 'run_all');
     assert.equal(summary.ok, false);
     assert.deepEqual(summary.npcs, res.results);
-    assert.deepEqual(summary.npcs[1], {
-      npc: 'maren',
-      action: 'error',
-      posted: false,
-      ok: false,
-    });
+    assert.deepEqual(
+      summary.npcs.find((r) => r.npc === victim.handle),
+      {
+        npc: victim.handle,
+        action: 'error',
+        posted: false,
+        ok: false,
+      }
+    );
   } finally {
     if (stateDir) fs.rmSync(stateDir, { recursive: true, force: true });
     fs.rmSync(sharedKeysDir, { recursive: true, force: true });
