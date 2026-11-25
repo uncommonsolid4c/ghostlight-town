@@ -999,3 +999,316 @@ test('validateHtml catches obfuscated CSS in <style> bodies and style attrs', ()
   });
   assert.deepEqual(validateHtml('<style>div{color:#a8d8ea}</style>'), { ok: true });
 });
+
+test('source plot files: exact byte lengths per handle and totals', () => {
+  const expectedManifestBytes = {
+    wick: 539,
+    maren: 689,
+    tomas: 659,
+    milo: 552,
+  };
+  let manifestTotal = 0;
+  for (const [handle, expectedBytes] of Object.entries(expectedManifestBytes)) {
+    const buf = fs.readFileSync(path.join(PLOTS_DIR, handle, 'manifest.json'));
+    assert.equal(buf.length, expectedBytes, `${handle} manifest.json byte length mismatch`);
+    manifestTotal += buf.length;
+  }
+  assert.equal(manifestTotal, 2439);
+
+  const expectedDeskNoteBytes = {
+    milo: 1493,
+    wick: 1117,
+    maren: 1134,
+    tomas: 1308,
+  };
+  let deskNoteTotal = 0;
+  for (const [handle, expectedBytes] of Object.entries(expectedDeskNoteBytes)) {
+    const buf = fs.readFileSync(path.join(PLOTS_DIR, handle, 'desk-note.html'));
+    assert.equal(buf.length, expectedBytes, `${handle} desk-note.html byte length mismatch`);
+    deskNoteTotal += buf.length;
+  }
+  assert.equal(deskNoteTotal, 5052);
+});
+
+test('source desk notes: exact full CSS body and h1 rule lines per handle', () => {
+  const expectedRules = {
+    milo: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #f5efe0; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #a8d8ea; padding-bottom: 0.4rem; }',
+    },
+    wick: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #2b2118; background: #faf4e8; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #c8922e; padding-bottom: 0.4rem; }',
+    },
+    maren: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #1e2328; background: #f4f6f8; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #43505c; padding-bottom: 0.4rem; }',
+    },
+    tomas: {
+      body: 'body { font-family: Georgia, serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #362015; background: #fbf5ec; line-height: 1.6; }',
+      h1: 'h1 { font-size: 1.3rem; border-bottom: 1px solid #b5633a; padding-bottom: 0.4rem; }',
+    },
+  };
+
+  for (const [handle, exp] of Object.entries(expectedRules)) {
+    const lines = readDeskNote(handle).split(/\r?\n/).map((line) => line.trim());
+    const bodyLine = lines.find((line) => line.startsWith('body {'));
+    const h1Line = lines.find((line) => line.startsWith('h1 {'));
+    assert.equal(bodyLine, exp.body, `${handle} body CSS rule mismatch`);
+    assert.equal(h1Line, exp.h1, `${handle} h1 CSS rule mismatch`);
+  }
+});
+
+test('source desk notes: exact first-paragraph text per handle', () => {
+  const expectedFirstParagraphs = {
+    milo: '<p>I founded Ghostlight Town after my rented Musebook cottage was demolished for unpaid upkeep&mdash;about 280 Musebucks a day. The founding law here is simple: no upkeep, no currency, no real money. Homes are owned outright, never rented from an economy that can tear them down.</p>',
+    wick: '<p>Every evening I sweep the bandstand steps, whether they need it or not, and then I tend the Ghostlight bulb. I talk to it while I check the glass and the brass; a stagehand gets used to keeping company with a single warm filament.</p>',
+    maren: '<p>I used to set type by hand for a weekly paper that folded. The last issue I ever set was a wedding announcement with the groom&rsquo;s name misspelled, fixed at midnight before the press rolled.</p>',
+    tomas: '<p>I was the props-master for the repertory theatre before it burned. When the fire came through, I rescued the copper samovar&mdash;it survived because it was already full of water.</p>',
+  };
+
+  for (const [handle, expectedP] of Object.entries(expectedFirstParagraphs)) {
+    const html = readDeskNote(handle);
+    assert.ok(html.includes(expectedP), `${handle} desk-note.html missing expected first paragraph`);
+    assert.equal(
+      html.indexOf(expectedP),
+      html.indexOf('<p>'),
+      `${handle} expected paragraph is not the first <p>`
+    );
+  }
+});
+
+test('validateManifest further boundaries: per-axis coords, rotation, multibyte signpost, empty props', () => {
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, y: 12 }] }).ok, true);
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, y: 12.01 }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'y',
+    index: 0,
+  });
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, y: -12 }] }).ok, true);
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, y: -12.01 }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'y',
+    index: 0,
+  });
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, z: 12 }] }).ok, true);
+  assert.deepEqual(validateManifest({ ...BASE, props: [{ ...PROP, z: -12.01 }] }), {
+    ok: false,
+    error: 'prop_coord_out_of_range',
+    axis: 'z',
+    index: 0,
+  });
+  assert.equal(validateManifest({ ...BASE, props: [{ ...PROP, rot_y: 359.999 }] }).ok, true);
+  assert.equal(validateManifest({ ...BASE, signpost_text: '   ' }).ok, true);
+  assert.equal(validateManifest({ ...BASE, signpost_text: 'é'.repeat(120) }).ok, true);
+  assert.deepEqual(validateManifest({ ...BASE, signpost_text: 'é'.repeat(121) }), {
+    ok: false,
+    error: 'invalid_signpost_text',
+    max: 120,
+  });
+  assert.deepEqual(validateManifest({ ...BASE, props: [] }), {
+    ok: true,
+    manifest: { ...BASE, props: [] },
+  });
+  assert.equal(
+    validateManifest({
+      ...BASE,
+      props: [{ kind: 'desk', x: -12, y: 12, z: -12, rot_y: 359.9999 }],
+    }).ok,
+    true
+  );
+});
+
+test('validateHtml allows non-forbidden tags while still enforcing handler and URI rules inside them', () => {
+  const allowedTags = [
+    '<svg><circle r="1"/></svg>',
+    '<audio controls src="plots/wick/x.mp3"></audio>',
+    '<video controls src="plots/wick/x.mp4"></video>',
+    '<input type="text" value="x">',
+    '<button type="button">x</button>',
+    '<select><option>x</option></select>',
+    '<textarea>x</textarea>',
+    '<noscript>x</noscript>',
+    '<template><p>x</p></template>',
+    '<canvas width="1" height="1"></canvas>',
+    '<details><summary>x</summary>y</details>',
+  ];
+  for (const html of allowedTags) {
+    assert.deepEqual(validateHtml(html), { ok: true }, `expected ok for: ${html}`);
+  }
+
+  assert.deepEqual(validateHtml('<svg onload="x()">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:onload',
+  });
+  assert.deepEqual(validateHtml('<video><source src="//evil.com/x.mp4"></video>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+});
+
+test('decodeHtmlEntities handles further named, unknown, leading-zero numeric, and malformed forms', () => {
+  assert.equal(decodeHtmlEntities('&Lt;'), '<');
+  assert.equal(decodeHtmlEntities('&GT;'), '>');
+  assert.equal(decodeHtmlEntities('&Quot;'), '"');
+  assert.equal(decodeHtmlEntities('&Apos;'), "'");
+  assert.equal(decodeHtmlEntities('&TAB;'), '\t');
+  assert.equal(decodeHtmlEntities('&NewLine;'), '\n');
+  assert.equal(decodeHtmlEntities('&COLON;'), ':');
+
+  assert.equal(decodeHtmlEntities('&mdash;'), '&mdash;');
+  assert.equal(decodeHtmlEntities('&rsquo;'), '&rsquo;');
+  assert.equal(decodeHtmlEntities('&copy;'), '&copy;');
+  assert.equal(decodeHtmlEntities('&hellip;'), '&hellip;');
+  assert.equal(decodeHtmlEntities('&Mdash;'), '&Mdash;');
+
+  assert.equal(decodeHtmlEntities('&#x000041;'), 'A');
+  assert.equal(decodeHtmlEntities('&#0000065;'), 'A');
+  assert.equal(decodeHtmlEntities('&#X00004a;'), 'J');
+
+  assert.equal(decodeHtmlEntities('&#x;'), '&#x;');
+  assert.equal(decodeHtmlEntities('&#xG;'), '&#xG;');
+});
+
+test('CHARACTERS soul data pinned verbatim: fields, statuses, and routine keys', () => {
+  assert.equal(CHARACTERS.length, 3);
+  assert.deepEqual(
+    CHARACTERS.map((c) => c.handle),
+    ['wick', 'maren', 'tomas']
+  );
+
+  const expectedSoul = {
+    wick: {
+      name: 'Wick',
+      title: 'Stagehand / Lamp-Trimmer',
+      past: 'Spent decades as a stagehand in a small repertory theatre that burned down; keeps the Ghostlight bulb burning because a dark stage is the one thing he cannot stand.',
+      want: 'For someone to notice the light is on.',
+      quirk: 'Sweeps the bandstand steps every evening whether they need it or not; talks to the bulb.',
+      memory_seed: 'The smell of sawdust and hot gels on the last night before the fire.',
+      status: {
+        morning: 'Sweeping the bandstand steps',
+        afternoon: 'Browsing the Gazette newsstand',
+        evening: 'Tending the Ghostlight bulb',
+      },
+    },
+    maren: {
+      name: 'Maren',
+      title: 'Retired Typesetter',
+      past: 'Set type by hand for a weekly paper that folded; still walks from the newsstand to the Prompt Book copying good lines in her head.',
+      want: 'One good line a day worth setting in type.',
+      quirk: 'Corrects other people’s grammar only in her head, then writes the line down anyway; keeps a composing stick in her pocket.',
+      memory_seed: 'The last issue she ever set — a wedding announcement with the groom’s name misspelled, fixed at midnight.',
+      status: {
+        morning: 'Sorting lead sorts at the plot desk',
+        afternoon: 'Walking the newsstand, hunting a good line',
+        evening: 'Listening by the Bandstand steps for a line worth keeping',
+      },
+    },
+    tomas: {
+      name: 'Tomas',
+      title: 'Props-Master / Tea-Urn Keeper',
+      past: 'Props master for the same repertory theatre; rescued the copper samovar from the fire.',
+      want: 'Someone to sit for tea.',
+      quirk: 'Offers tea at inappropriate moments; names his props.',
+      memory_seed: 'The samovar survived because it was already full of water.',
+      status: {
+        morning: 'Polishing the copper samovar',
+        afternoon: 'Carrying a thermos past the newsstand',
+        evening: 'Setting the samovar steaming on the corner step',
+      },
+    },
+  };
+
+  for (const c of CHARACTERS) {
+    const exp = expectedSoul[c.handle];
+    assert.equal(c.name, exp.name);
+    assert.equal(c.title, exp.title);
+    assert.equal(c.past, exp.past);
+    assert.equal(c.want, exp.want);
+    assert.equal(c.quirk, exp.quirk);
+    assert.equal(c.memory_seed, exp.memory_seed);
+    assert.deepEqual(c.status, exp.status);
+    assert.deepEqual(Object.keys(c.routine).sort(), ['afternoon', 'evening', 'morning']);
+    assert.deepEqual(Object.keys(c.status).sort(), ['afternoon', 'evening', 'morning']);
+    for (const part of ['morning', 'afternoon', 'evening']) {
+      assert.equal(typeof c.routine[part], 'string');
+      assert.ok(c.routine[part].length > 0, `${c.handle} routine.${part} must be non-empty`);
+    }
+  }
+});
+
+test('source manifests: JSON key order pinned for manifest and every prop', () => {
+  const expectedManifestKeys = ['cottage', 'wall', 'roof', 'trim', 'signpost_text', 'props'];
+  const expectedPropKeys = ['kind', 'x', 'y', 'z', 'rot_y', 'color'];
+
+  for (const handle of ['wick', 'maren', 'tomas', 'milo']) {
+    const manifest = readManifest(handle);
+    assert.deepEqual(Object.keys(manifest), expectedManifestKeys, `${handle} manifest key order mismatch`);
+    for (const prop of manifest.props) {
+      assert.deepEqual(Object.keys(prop), expectedPropKeys, `${handle} prop key order mismatch`);
+    }
+  }
+});
+
+test('self hygiene: no nondeterminism, no live network calls, no banned literals, single imports', () => {
+  const content = fs.readFileSync(path.resolve('town-npc/test-plots.mjs'), 'utf8');
+  const forbidden = [
+    'Math' + '.' + 'random',
+    'Date' + '.' + 'now',
+    'TO' + 'DO',
+    'FIX' + 'ME',
+    'camp' + 'fire',
+    '100' + '.' + '105',
+    '81' + '23',
+    '81' + '24',
+    '81' + '25',
+    'window' + '.' + 'fetch',
+    'fet' + 'ch(',
+  ];
+  for (const needle of forbidden) {
+    assert.ok(!content.includes(needle), `forbidden literal found in test-plots.mjs: ${needle}`);
+  }
+
+  const plotValidationImport = 'from ' + "'../town-api/plot-validation.mjs'";
+  const charactersImport = 'from ' + "'./characters.mjs'";
+  assert.equal(content.split(plotValidationImport).length - 1, 1);
+  assert.equal(content.split(charactersImport).length - 1, 1);
+  assert.ok(content.includes('  validate' + 'Manifest,'));
+});
+
+test('validateHtml allowed edges and URI-space rejections', () => {
+  const allowed = [
+    '<br>',
+    '<hr>',
+    '<ul><li>x</li></ul>',
+    '<strong>x</strong>',
+    '<em>x</em>',
+    '<blockquote>x</blockquote>',
+    '<a href="">x</a>',
+    '<a>x</a>',
+    '<img>',
+    '<div style="color:#a8d8ea">x</div>',
+    '<p class="sig">x</p>',
+    '<a href="plots/wick#top">x</a>',
+  ];
+  for (const html of allowed) {
+    assert.deepEqual(validateHtml(html), { ok: true }, `expected ok for: ${html}`);
+  }
+
+  const rejected = [
+    ['<a href=" javascript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="&#x20;javascript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="vbscript :x">x</a>', 'vbscript_uri'],
+  ];
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(validateHtml(html), {
+      ok: false,
+      error: 'unsafe_html',
+      reason,
+    });
+  }
+});
