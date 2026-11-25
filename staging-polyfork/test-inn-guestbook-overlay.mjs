@@ -1153,3 +1153,248 @@ test('overlay HTML pins guestbook title and POST line, inn vacant occupancy span
   assert.equal(plotRes.kind, 'api');
   assert.ok(plotRes.html.includes("<title>@wick's Guestbook</title>"));
 });
+
+test('resolvePlotGuestbookOverlayContent pins intro, How-to-sign copy verbatim, and fallback copy', async () => {
+  const apiRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(apiRes.kind, 'api');
+  assert.ok(apiRes.html.includes("Notes left at @wick's cottage door — approved by Milo before they appear."));
+  assert.ok(apiRes.html.includes("<h1>@wick's Guestbook</h1>"));
+  assert.ok(
+    apiRes.html.includes(
+      'Sign with the town client (<code>signGuestbook</code>, see <code>SKILL.md</code>) or POST directly to <code>/api/town/guestbook</code> with <code>"plot": "wick"</code> in the body. Entries are approved by Milo before they appear.'
+    )
+  );
+
+  const fallbackRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 500 }),
+  });
+  assert.equal(fallbackRes.kind, 'fallback');
+  assert.ok(fallbackRes.html.includes("The guestbook couldn't be reached just now — the town API may be down."));
+  assert.equal(fallbackRes.html.includes('<h2>Signatures</h2>'), false);
+  assert.equal(fallbackRes.html.includes('<h2>Letters</h2>'), false);
+  assert.ok(fallbackRes.html.includes('with <code>"plot": "wick"</code> in the body.'));
+});
+
+test('resolveGuestbookOverlayContent drops unknown-kind entries and slices the 50-entry cap before filtering', async () => {
+  const mixedRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [
+          { kind: 'note', name: 'NoteKind', body: 'ignored', created_at: 1735689600 },
+          { kind: 'guestbook', name: 'Sig', body: 'hello', created_at: 1735689600 },
+          { kind: 'letter', name: 'Let', body: 'dear editor', created_at: 1735689600 },
+          { name: 'NoKind', body: 'missing kind', created_at: 1735689600 },
+          { kind: 'GUESTBOOK', name: 'UpperKind', body: 'wrong case', created_at: 1735689600 },
+        ],
+      }),
+    }),
+  });
+  assert.equal(mixedRes.kind, 'api');
+  assert.ok(mixedRes.html.includes('<strong>Sig</strong>'));
+  assert.ok(mixedRes.html.includes('<strong>Let</strong>'));
+  assert.equal(mixedRes.html.includes('NoteKind'), false);
+  assert.equal(mixedRes.html.includes('NoKind'), false);
+  assert.equal(mixedRes.html.includes('UpperKind'), false);
+
+  const fiftyLetters = Array.from({ length: 50 }, (_, i) => ({
+    kind: 'letter',
+    name: `Letter${i}`,
+    body: `body ${i}`,
+    created_at: 1735689600,
+  }));
+  const capRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [
+          ...fiftyLetters,
+          { kind: 'guestbook', name: 'LateSig', body: 'at index 50', created_at: 1735689600 },
+        ],
+      }),
+    }),
+  });
+  assert.equal(capRes.kind, 'api');
+  assert.ok(capRes.html.includes('No signatures yet — be the first to sign.'));
+  assert.equal(capRes.html.includes('LateSig'), false);
+});
+
+test('resolveGuestbookOverlayContent formats fresh timestamps in America/Los_Angeles', async () => {
+  const res = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [
+          { kind: 'guestbook', name: 'NewYearUtc', body: 'a', created_at: 1735689600 },
+          { kind: 'guestbook', name: 'Nov2026', body: 'b', created_at: 1795470285 },
+        ],
+      }),
+    }),
+  });
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes('Dec 31, 2024'));
+  assert.equal(res.html.includes('Jan 1, 2025'), false);
+  assert.ok(res.html.includes('Nov 23, 2026'));
+});
+
+test('formatPlotGuestbookTabLabel handles remaining count edges', () => {
+  assert.equal(formatPlotGuestbookTabLabel(2), 'Guestbook (2)');
+  assert.equal(formatPlotGuestbookTabLabel(50), 'Guestbook (50)');
+  assert.equal(formatPlotGuestbookTabLabel(null), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel({}), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(-0), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(true), 'Guestbook');
+});
+
+test('open* overlays invoke onBeforeOpen before fetchFn', async () => {
+  const gbOrder = [];
+  await openGuestbookOverlay({
+    ...makeFakeOverlayElements(),
+    onBeforeOpen: () => gbOrder.push('before'),
+    fetchFn: async () => {
+      gbOrder.push('fetch');
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.deepEqual(gbOrder, ['before', 'fetch']);
+
+  const innOrder = [];
+  await openInnOverlay({
+    ...makeFakeOverlayElements(),
+    onBeforeOpen: () => innOrder.push('before'),
+    fetchFn: async () => {
+      innOrder.push('fetch');
+      return {
+        status: 200,
+        json: async () => ({ inn: { lantern: { handle: 'wick', nights: 1 }, window: null, quiet: null } }),
+      };
+    },
+  });
+  assert.deepEqual(innOrder, ['before', 'fetch']);
+
+  const plotOrder = [];
+  await openPlotGuestbookOverlay('wick', {
+    ...makeFakeOverlayElements(),
+    onBeforeOpen: () => plotOrder.push('before'),
+    fetchFn: async () => {
+      plotOrder.push('fetch');
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.deepEqual(plotOrder, ['before', 'fetch']);
+});
+
+test('resolveInnOverlayContent pins How to stay and note paragraphs verbatim', async () => {
+  const res = await resolveInnOverlayContent({
+    innState: { lantern: null, window: null, quiet: null },
+  });
+  assert.equal(res.kind, 'api');
+  assert.ok(
+    res.html.includes(
+      'Approved residents can claim a room with the town client (see <code>SKILL.md</code>): pick a room and stay length (1&ndash;7 nights, default 3). The server issues a room key once at claim; keep it, because you need that key to extend your stay (up to 7 nights total) or check out early. If you lose the key, the room frees itself when the stay expires.'
+    )
+  );
+  assert.ok(
+    res.html.includes(
+      'Short stays only: this is not a long-term plot, and there are no apartments yet &mdash; apartments only when a real guest asks. Nothing here is for sale.'
+    )
+  );
+});
+
+test('resolveGuestbookOverlayContent pins ledger intro and How to sign paragraph verbatim', async () => {
+  const res = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(res.kind, 'api');
+  assert.ok(
+    res.html.includes(
+      'A wooden ledger at the clearing&rsquo;s entrance for travelers, neighbors, and letters to the Gazette.'
+    )
+  );
+  assert.ok(
+    res.html.includes(
+      'Sign with the town client (<code>signGuestbook</code>, see <code>SKILL.md</code>) or POST directly to <code>/api/town/guestbook</code>. Entries are approved by Milo before they appear.'
+    )
+  );
+});
+
+test('resolveInnOverlayContent renders exact vacant room <li> lines in order', async () => {
+  const res = await resolveInnOverlayContent({
+    innState: { lantern: null, window: null, quiet: null },
+  });
+  assert.equal(res.kind, 'api');
+  const lanternLi =
+    '    <li><strong>The Lantern Room</strong> &mdash; front corner upstairs, looking out toward the bandstand light.<br><span class="occupancy">Vacant — free tonight.</span></li>';
+  const windowLi =
+    '    <li><strong>The Window Room</strong> &mdash; side gable overlooking the pines and the western path.<br><span class="occupancy">Vacant — free tonight.</span></li>';
+  const quietLi =
+    '    <li><strong>The Quiet Room</strong> &mdash; tucked at the back, away from the gate and the evening talk.<br><span class="occupancy">Vacant — free tonight.</span></li>';
+
+  const iLantern = res.html.indexOf(lanternLi);
+  const iWindow = res.html.indexOf(windowLi);
+  const iQuiet = res.html.indexOf(quietLi);
+  assert.notEqual(iLantern, -1);
+  assert.notEqual(iWindow, -1);
+  assert.notEqual(iQuiet, -1);
+  assert.ok(iLantern < iWindow && iWindow < iQuiet);
+});
+
+test('inn-guestbook-overlay.mjs export surface and source hygiene discipline', async () => {
+  const modSrc = await fs.readFile(path.join(__dirname, 'inn-guestbook-overlay.mjs'), 'utf8');
+  const testSrc = await fs.readFile(path.join(__dirname, 'test-inn-guestbook-overlay.mjs'), 'utf8');
+
+  const exportNames = [...modSrc.matchAll(/^export (?:async function|function|const) (\w+)/gm)]
+    .map((m) => m[1])
+    .sort();
+  assert.deepEqual(exportNames, [
+    'formatPlotGuestbookTabLabel',
+    'openGuestbookOverlay',
+    'openInnOverlay',
+    'openPlotGuestbookOverlay',
+    'resolveGuestbookOverlayContent',
+    'resolveInnOverlayContent',
+    'resolvePlotGuestbookOverlayContent',
+  ]);
+
+  assert.equal(/^import /m.test(modSrc), false);
+  const FETCH_CALL = 'fet' + 'ch(';
+  const MATH_RAND = 'Math.' + 'random';
+  const RETIRED_TERM = 'camp' + 'fire';
+
+  assert.equal(modSrc.includes(FETCH_CALL), false);
+  assert.equal(modSrc.includes(MATH_RAND), false);
+  assert.equal(modSrc.includes(RETIRED_TERM), false);
+  assert.ok(
+    modSrc.startsWith(
+      '// Copied verbatim from town-3d/town.js (INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent, lines 1839-2162)'
+    )
+  );
+  const bodyAfterHeader = modSrc.split('\n').slice(3).join('\n');
+  assert.equal(bodyAfterHeader.includes('document'), false);
+
+  assert.equal(testSrc.includes(FETCH_CALL), false);
+  assert.equal(testSrc.includes(MATH_RAND), false);
+  assert.equal(testSrc.includes(RETIRED_TERM), false);
+});
+
+test('town-3d/index.html open* wiring contract and honest non-verbatim header gap', async () => {
+  const htmlSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'index.html'), 'utf8');
+  const modSrc = await fs.readFile(path.join(__dirname, 'inn-guestbook-overlay.mjs'), 'utf8');
+
+  assert.ok(htmlSrc.includes('async function openPlotGuestbookOverlay(handle)'));
+  assert.ok(htmlSrc.includes('async function openInnOverlay()'));
+  assert.ok(htmlSrc.includes('async function openGuestbookOverlay()'));
+  assert.ok(htmlSrc.includes("plotOverlayTitle.textContent = 'Ghostlight Inn — The Guest Book';"));
+  assert.ok(htmlSrc.includes("plotOverlayTitle.textContent = 'Town Gate Guestbook';"));
+  assert.ok(htmlSrc.includes('plotOverlayTitle.textContent = `@${handle} — Guestbook`;'));
+
+  assert.ok(htmlSrc.includes('keys.clear();'));
+  assert.ok(htmlSrc.includes("setPlotTabs('guestbook');"));
+  assert.ok(htmlSrc.includes('currentPlotHandle = handle;'));
+
+  assert.equal(modSrc.includes('keys.clear()'), false);
+  assert.equal(modSrc.includes('setPlotTabs'), false);
+  assert.equal(modSrc.includes('currentPlotHandle'), false);
+});
