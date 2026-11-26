@@ -1450,8 +1450,8 @@ test('exact multi-step walk: straight and diagonal, arrival on the third call', 
 test('test-file hygiene: unique names, import list, needle counts as-true', () => {
   const src = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 44);
-  assert.equal(new Set(names).size, 44);
+  assert.equal(names.length, 54);
+  assert.equal(new Set(names).size, 54);
 
   const imports = [...src.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
   assert.deepEqual(imports, [
@@ -1471,4 +1471,287 @@ test('test-file hygiene: unique names, import list, needle counts as-true', () =
     assert.equal(src.includes(needle), false, `test-npc-wander.mjs must not contain ${needle}`);
   }
   assert.equal(new RegExp('camp' + 'fire', 'i').test(src), false);
+});
+
+test('Turn smoothing: exact-PI heading takes the negative short way, dt = 0.25 snaps to -PI', () => {
+  const group = makeFakeGroup(0, 0, 0, 0);
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: null },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: -2, rotY: 0, linger: 14, label: 'bandstand' },
+      { x: 2, y: 0, z: -2, linger: 12, label: 'newsstand' },
+    ],
+    targetIndex: 1,
+    state: 'walking',
+    lingerRemaining: 0,
+    yielded: false,
+  };
+
+  // Heading straight back is exactly PI; the seam branch keeps diff at -PI.
+  assert.equal(Math.atan2(0, -2), Math.PI);
+  updateStagingWander([fig], 0.1, new Map());
+  assert.ok(Math.abs(group.rotation.y - (-Math.PI * (1 - Math.exp(-1)))) < 1e-9);
+  assert.ok(Math.abs(group.rotation.y - (-1.9858653037988714)) < 1e-12);
+  assert.ok(Math.abs(group.position.z - (-0.05)) < 1e-9);
+  assert.equal(fig.state, 'walking');
+
+  updateStagingWander([fig], 0.25, new Map());
+  assert.ok(Math.abs(group.rotation.y - (-Math.PI)) < 1e-9);
+  assert.ok(Math.abs(group.position.z - (-0.175)) < 1e-9);
+  assert.equal(fig.state, 'walking');
+});
+
+test('Walk clip hips exact frame values: frame 0, frame 20, frame 40 closes the loop', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-walk.json');
+  const data = JSON.parse(fs.readFileSync(clipPath, 'utf8'));
+  assert.deepEqual(data.hips.slice(0, 3), [-0.0193, -0.0477, 0.0003]);
+  assert.deepEqual(data.hips.slice(60, 63), [0.0273, -0.0477, 0.0003]);
+  assert.deepEqual(data.hips.slice(120, 123), [-0.0193, -0.0477, 0.0003]);
+  assert.deepEqual(data.hips.slice(120, 123), data.hips.slice(0, 3));
+  assert.equal(data.hips[1], -0.0477);
+});
+
+test('Walk clip first-frame quaternions exact for Hips, LeftFoot, RightHand; LeftFoot loops', () => {
+  const clipPath = path.join(__dirname, 'anim', 'anim-walk.json');
+  const data = JSON.parse(fs.readFileSync(clipPath, 'utf8'));
+  assert.deepEqual(data.tracks.Hips.slice(0, 4), [-0.0004, 0.0174, -0.0211, 0.9996]);
+  assert.deepEqual(data.tracks.LeftFoot.slice(0, 4), [-0.0805, -0.0183, -0.0107, 0.9965]);
+  assert.deepEqual(data.tracks.RightHand.slice(0, 4), [0.013, 0.1607, 0.0103, 0.9869]);
+  assert.deepEqual(data.tracks.LeftFoot.slice(160, 164), data.tracks.LeftFoot.slice(0, 4));
+  assert.deepEqual(data.tracks.Hips.slice(160, 164), data.tracks.Hips.slice(0, 4));
+});
+
+test('getStagingNewsstandFrontPosition: cardinal directions and 3-4-5 triangle', () => {
+  assert.deepEqual(
+    getStagingNewsstandFrontPosition({ newsstand: { x: 0, z: 0 }, bandstand: { x: 0, z: 5 } }),
+    { x: 0, y: 0, z: 2 }
+  );
+  assert.deepEqual(
+    getStagingNewsstandFrontPosition({ newsstand: { x: 0, z: 0 }, bandstand: { x: 0, z: -5 } }),
+    { x: 0, y: 0, z: -2 }
+  );
+  assert.deepEqual(
+    getStagingNewsstandFrontPosition({ newsstand: { x: 0, z: 0 }, bandstand: { x: 5, z: 0 } }),
+    { x: 2, y: 0, z: 0 }
+  );
+  assert.deepEqual(
+    getStagingNewsstandFrontPosition({ newsstand: { x: 0, z: 0 }, bandstand: { x: -5, z: 0 } }),
+    { x: -2, y: 0, z: 0 }
+  );
+  assert.deepEqual(
+    getStagingNewsstandFrontPosition({ newsstand: { x: 0, z: 0 }, bandstand: { x: 3, z: 4 } }),
+    { x: 1.2, y: 0, z: 1.6 }
+  );
+  assert.deepEqual(
+    getStagingNewsstandFrontPosition({ newsstand: { x: -4, z: -3 }, bandstand: { x: -1, z: 1 } }),
+    { x: -2.8, y: 0, z: -1.4 }
+  );
+});
+
+test('buildStagingWanderFigures with flat ground: waypoint heights are 0.25 / 0.85 / 0.25', () => {
+  const flatAt = () => 0.25;
+  const bandstandSpots = makeFakeBandstandSpots();
+  const newsstandFront = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+  const standIns = new Map([
+    ['wick', { group: makeFakeGroup(4.16, 0, 4.99), home: { x: 4.16, z: 4.99 }, anim: null }],
+    ['maren', { group: makeFakeGroup(-3.53, 0, 5.46), home: { x: -3.53, z: 5.46 }, anim: null }],
+    ['tomas', { group: makeFakeGroup(0.76, 0, -6.46), home: { x: 0.76, z: -6.46 }, anim: null }],
+  ]);
+  const figures = buildStagingWanderFigures({
+    standIns,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY: 0.25,
+    newsstandFront,
+    groundAt: flatAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  assert.equal(figures.length, 3);
+  for (const fig of figures) {
+    assert.deepEqual(
+      fig.waypoints.map((w) => w.y),
+      [0.25, 0.85, 0.25]
+    );
+    assert.equal(fig.waypoints[1].y, 0.25 + 0.6);
+    assert.equal(fig.waypoints[0].y, flatAt());
+    assert.equal(fig.waypoints[2].y, flatAt());
+  }
+});
+
+test('Ghost drift loop: leg distances, travel time, and full cycle with lingers', () => {
+  const spots = makeFakeBandstandSpots();
+  const spot0 = spots[0];
+  assert.deepEqual({ x: spot0.x, z: spot0.z }, { x: 0, z: 3.8 });
+  const pts = [
+    { x: spot0.x, z: spot0.z },
+    ...GHOST_DRIFT_CONFIG.deckPoints,
+    { x: spot0.x, z: spot0.z },
+  ];
+  const legs = [];
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    legs.push(Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z));
+  }
+  const expectedLegs = [3.1112698372208092, 4.7707441767506253, 4.2485291572496005, 3.3241540277189325];
+  assert.equal(legs.length, 4);
+  for (let i = 0; i < legs.length; i += 1) {
+    assert.ok(Math.abs(legs[i] - expectedLegs[i]) < 1e-9, `leg ${i} must match ${expectedLegs[i]}`);
+  }
+  const totalDist = legs.reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(totalDist - 15.454697198939968) < 1e-9);
+  const travelTime = totalDist / GHOST_DRIFT_CONFIG.speed;
+  assert.ok(Math.abs(travelTime - 44.156277711257054) < 1e-9);
+  const lingerTotal = Object.values(GHOST_DRIFT_CONFIG.lingers).reduce((a, b) => a + b, 0);
+  assert.equal(lingerTotal, 51);
+  assert.ok(Math.abs(travelTime + lingerTotal - 95.156277711257047) < 1e-9);
+});
+
+test('Linger partial countdown: dt below remaining stays lingering with no movement or call', () => {
+  const locoCalls = [];
+  const group = makeFakeGroup(0, 0, 2, 0);
+  const fig = {
+    handle: 'wick',
+    standIn: { anim: { locomotion: (speed) => locoCalls.push(speed) } },
+    group,
+    speed: 0.5,
+    waypoints: [
+      { x: 0, y: 0, z: 0, rotY: 0, linger: 10, label: 'home' },
+      { x: 0, y: 0, z: 2, rotY: Math.PI, linger: 14, label: 'bandstand' },
+      { x: 2, y: 0, z: 2, linger: 12, label: 'newsstand' },
+    ],
+    targetIndex: 1,
+    state: 'lingering',
+    lingerRemaining: 5,
+    yielded: false,
+  };
+
+  updateStagingWander([fig], 2.0, new Map());
+  assert.equal(fig.state, 'lingering');
+  assert.equal(fig.lingerRemaining, 3);
+  assert.equal(fig.targetIndex, 1);
+  assert.equal(group.position.x, 0);
+  assert.equal(group.position.y, 0);
+  assert.equal(group.position.z, 2);
+  assert.deepEqual(locoCalls, []);
+});
+
+test('staging.js npcStandIns pins the three seed stand-ins: kit, look, place, and home', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  const needles = [
+    "['wick', {",
+    "figure: 'masculine', age: 'adult', expression: 'alert', build: 0.9,",
+    "tunic: '#7a6a55', apron: CEDAR, hair: '#5a4632',",
+    '}, 4.16, 4.99),',
+    'home: { x: 4.16, z: 4.99 },',
+    "['maren', {",
+    "figure: 'feminine', age: 'old', expression: 'warm', build: 0.9,",
+    "tunic: '#6a7a8a', apron: CREAM, hair: '#e8e8e8',",
+    '}, -3.53, 5.46),',
+    'home: { x: -3.53, z: 5.46 },',
+    "['tomas', {",
+    "figure: 'masculine', age: 'old', expression: 'warm', build: 1.0,",
+    "tunic: '#8a7a5a', apron: ROOF, hair: '#cfcfcf',",
+    '}, 0.76, -6.46),',
+    'home: { x: 0.76, z: -6.46 },',
+    'attachNpcAnimation(THREE, standIn.group, { animateFn: animate })',
+    'counts.npcs = npcStandIns.size;',
+  ];
+  for (const needle of needles) {
+    assert.ok(src.includes(needle), `staging.js must contain ${needle}`);
+  }
+  assert.equal((src.match(/\['(wick|maren|tomas)', \{/g) || []).length, 3);
+  assert.ok(src.indexOf("['wick', {") < src.indexOf("['maren', {"));
+  assert.ok(src.indexOf("['maren', {") < src.indexOf("['tomas', {"));
+});
+
+test('Per-NPC wander loop leg distances and travel times from real TOWN_LAYOUT waypoints', () => {
+  const groundAt = (x, z) => +(0.25 + x * 0.01 - z * 0.005).toFixed(4);
+  const bandstandSpots = makeFakeBandstandSpots();
+  const newsstandFront = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+  const standIns = new Map(
+    [['wick', 2], ['maren', 3], ['tomas', 4]].map(([handle, plotNum]) => {
+      const plot = TOWN_LAYOUT.plots.find((p) => p.plotNumber === plotNum);
+      const pos = getPlotTargetPosition(plot, 0);
+      return [handle, { group: makeFakeGroup(pos.x, groundAt(pos.x, pos.z), pos.z, pos.rotY), home: { x: pos.x, z: pos.z }, anim: null }];
+    })
+  );
+  const figures = buildStagingWanderFigures({
+    standIns,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY: groundAt(0, 0),
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  const expected = {
+    wick: { legs: [14.030187761395071, 9.582453360700482, 18.542004192373597], total: 42.15464531446915, travel: 84.3092906289383 },
+    maren: { legs: [13.62695469061228, 11.119699532361473, 23.34936108826107], total: 48.096015311234822, travel: 106.88003402496626 },
+    tomas: { legs: [13.234900919160673, 13.445209367280228, 26.595973723291277], total: 53.276084009732173, travel: 88.793473349553622 },
+  };
+  assert.equal(figures.length, 3);
+  for (const fig of figures) {
+    const [home, band, news] = fig.waypoints;
+    const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    const legs = [dist(home, band), dist(band, news), dist(news, home)];
+    const want = expected[fig.handle];
+    for (let i = 0; i < legs.length; i += 1) {
+      assert.ok(Math.abs(legs[i] - want.legs[i]) < 1e-9, `${fig.handle} leg ${i} must match ${want.legs[i]}`);
+    }
+    const total = legs.reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(total - want.total) < 1e-9, `${fig.handle} total loop must match ${want.total}`);
+    assert.ok(Math.abs(total / fig.speed - want.travel) < 1e-9, `${fig.handle} travel time must match ${want.travel}`);
+    assert.ok(legs[2] > legs[0] && legs[2] > legs[1], `${fig.handle} longest leg must be newsstand -> home`);
+  }
+});
+
+test('NPC yield restore sets rotation to the home waypoint rotY for all three seeds', () => {
+  const groundAt = (x, z) => +(0.25 + x * 0.01 - z * 0.005).toFixed(4);
+  const bandstandSpots = makeFakeBandstandSpots();
+  const newsstandFront = getStagingNewsstandFrontPosition(TOWN_LAYOUT);
+  const standIns = new Map(
+    [['wick', 2], ['maren', 3], ['tomas', 4]].map(([handle, plotNum]) => {
+      const plot = TOWN_LAYOUT.plots.find((p) => p.plotNumber === plotNum);
+      const pos = getPlotTargetPosition(plot, 0);
+      return [handle, { group: makeFakeGroup(pos.x, groundAt(pos.x, pos.z), pos.z, pos.rotY), home: { x: pos.x, z: pos.z }, anim: null }];
+    })
+  );
+  const figures = buildStagingWanderFigures({
+    standIns,
+    plots: TOWN_LAYOUT.plots,
+    bandstandSpots,
+    bandstandGroundY: groundAt(0, 0),
+    newsstandFront,
+    groundAt,
+    getPlotTargetPosition,
+    homePads: SEED_HOME_PADS,
+  });
+  const expectedRotY = { wick: -1.3015, maren: -0.7809, tomas: -0.2603 };
+  for (const fig of figures) {
+    const home = fig.waypoints[0];
+    fig.group.position.set(1, 1, 1);
+    fig.group.rotation.y = 2.5;
+    fig.state = 'lingering';
+    fig.lingerRemaining = 6;
+    fig.targetIndex = 1;
+    updateStagingWander([fig], 0.5, new Map([[fig.handle, {}]]));
+    assert.equal(fig.group.visible, false);
+    assert.equal(fig.yielded, true);
+    updateStagingWander([fig], 0.5, new Map());
+    assert.equal(fig.group.visible, true);
+    assert.equal(fig.yielded, false);
+    assert.equal(fig.group.rotation.y, expectedRotY[fig.handle]);
+    assert.equal(fig.group.rotation.y, home.rotY);
+    assert.equal(fig.group.position.x, home.x);
+    assert.equal(fig.group.position.y, home.y);
+    assert.equal(fig.group.position.z, home.z);
+    assert.equal(fig.state, 'walking');
+    assert.equal(fig.targetIndex, 1);
+    assert.equal(fig.lingerRemaining, 0);
+  }
 });
