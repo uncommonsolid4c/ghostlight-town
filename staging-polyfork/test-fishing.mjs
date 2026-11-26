@@ -840,3 +840,209 @@ test('buildFishingSpot falls back to default Groups for non-function factories',
   assert.ok(g2.getObjectByName('propped-fishing-rod') instanceof THREE.Group);
   assert.ok(g2.getObjectByName('tackle-box') instanceof THREE.Group);
 });
+
+test('Slice 440: findFishingSpot rejects non-finite groundAt returns and skips the guard for infinite groundY (G1)', () => {
+  for (const bad of ['2.0', null, undefined, true, {}]) {
+    assert.equal(findFishingSpot({ groundAt: () => bad, waterY: 0, groundY: -3 }), null);
+  }
+  for (const groundY of [Infinity, -Infinity]) {
+    const spot = findFishingSpot({ groundAt: coneIslandGroundAt, waterY: 0, groundY });
+    assert.ok(spot);
+    assert.equal(spot.r, 36.5);
+    assert.equal(spot.shoreR, 38.0);
+  }
+});
+
+test('Slice 440: findFishingSpot does not retry after a dry-feet failure at the first crossing (G2)', () => {
+  const noRetryGroundAt = (x, z) => {
+    const r = Math.hypot(x, z);
+    if (r < 30) return 2.0;
+    if (r < 37.9) return 0.2;
+    if (r < 45) return -1.0;
+    if (r < 50.5) return 2.0;
+    return -1.0;
+  };
+  assert.equal(findFishingSpot({ groundAt: noRetryGroundAt, waterY: 0, groundY: -3 }), null);
+
+  const passingFirst = (x, z) => {
+    const r = Math.hypot(x, z);
+    if (r < 30) return 2.0;
+    if (r < 37.9) return 2.0;
+    if (r < 45) return -1.0;
+    if (r < 50.5) return 2.0;
+    return -1.0;
+  };
+  const spot = findFishingSpot({ groundAt: passingFirst, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+  assert.equal(spot.r, 36.25);
+  assert.equal(spot.shoreR, 37.75);
+  assert.equal(spot.y, 2.0);
+});
+
+test('Slice 440: findFishingSpot exact spot values on a flat-shore stub (G3)', () => {
+  const flatGroundAt = (x, z) => (Math.hypot(x, z) < 40 ? 2.0 : -1.0);
+  const spot = findFishingSpot({ groundAt: flatGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+  assert.equal(spot.r, 38.25);
+  assert.equal(spot.shoreR, 39.75);
+  assert.equal(spot.y, 2.0);
+  assert.ok(Math.abs(spot.x - Math.sin(Math.PI / 4) * 38.25) < 1e-9);
+  assert.ok(Math.abs(spot.z - Math.cos(Math.PI / 4) * 38.25) < 1e-9);
+  assert.equal(spot.bearingRad, Math.PI / 4);
+});
+
+test('Slice 440: findFishingSpot groundAt call counts for all-land, all-water, and last-radius crossings (G4)', () => {
+  let calls = 0;
+  const allLand = () => { calls++; return 2.0; };
+  assert.equal(findFishingSpot({ groundAt: allLand, waterY: 0, groundY: -3 }), null);
+  assert.equal(calls, 201);
+
+  calls = 0;
+  const allWater = () => { calls++; return -1.0; };
+  assert.equal(findFishingSpot({ groundAt: allWater, waterY: 0, groundY: -3 }), null);
+  assert.equal(calls, 1);
+
+  calls = 0;
+  const lastRadius = (x, z) => { calls++; return Math.hypot(x, z) < 60 ? 2.0 : -1.0; };
+  assert.equal(findFishingSpot({ groundAt: lastRadius, waterY: 0, groundY: -3 }), null);
+  assert.equal(calls, 201);
+});
+
+test('Slice 440: buildFishingSpot throwing factories propagate and a Mesh factory is renamed and positioned (G5)', () => {
+  const THREE = makeFakeThree();
+  const spot = findFishingSpot({ groundAt: coneIslandGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+
+  assert.throws(
+    () => buildFishingSpot(THREE, spot, { waterY: 0, createRod: () => { throw new Error('rod boom'); } }),
+    /rod boom/
+  );
+  assert.throws(
+    () => buildFishingSpot(THREE, spot, { waterY: 0, createTackleBox: () => { throw new Error('box boom'); } }),
+    /box boom/
+  );
+
+  const meshRod = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 2, 3),
+    new THREE.MeshStandardMaterial({ color: '#ffffff' })
+  );
+  const group = buildFishingSpot(THREE, spot, { waterY: 0, createRod: () => meshRod });
+  const rod = group.getObjectByName('propped-fishing-rod');
+  assert.equal(rod, meshRod);
+  assert.ok(rod instanceof THREE.Mesh);
+  assert.equal(rod.name, 'propped-fishing-rod');
+  assert.deepEqual([rod.position.x, rod.position.y, rod.position.z], [0, 0, 0]);
+  assert.equal(group.children.length, 7);
+});
+
+test('Slice 440: buildFishingSpot aliases one shared object used for both factories (G6)', () => {
+  const THREE = makeFakeThree();
+  const spot = findFishingSpot({ groundAt: coneIslandGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+
+  const shared = new THREE.Group();
+  shared.name = 'shared';
+  const group = buildFishingSpot(THREE, spot, {
+    waterY: 0,
+    createRod: () => shared,
+    createTackleBox: () => shared,
+  });
+  assert.equal(group.children.length, 7);
+  assert.equal(group.children[0], shared);
+  assert.equal(group.children[1], shared);
+  assert.equal(group.getObjectByName('propped-fishing-rod'), null);
+  assert.equal(group.getObjectByName('tackle-box'), shared);
+  assert.equal(shared.name, 'tackle-box');
+  assert.deepEqual([shared.position.x, shared.position.y, shared.position.z], [-0.55, 0, -0.25]);
+});
+
+test('Slice 440: buildFishingSpot coerces non-number waterY values (G7)', () => {
+  const spot = {
+    x: 1, y: 0.4, z: 2, r: 36.5, shoreR: 38,
+    bearingRad: Math.PI / 4, dirX: Math.sin(Math.PI / 4), dirZ: Math.cos(Math.PI / 4),
+  };
+
+  const THREE = makeFakeThree();
+  const bad = buildFishingSpot(THREE, spot, { waterY: 'x' });
+  const badBobber = bad.getObjectByName('bobber');
+  assert.ok(Number.isNaN(badBobber.position.y));
+  assert.equal(badBobber.position.x, 0);
+  assert.equal(badBobber.position.z, 2.5);
+  const badLine = bad.getObjectByName('fishing-line');
+  assert.ok(Number.isNaN(badLine.geometry.args[2]));
+  assert.ok(Number.isNaN(badLine.rotation.x));
+  assert.ok(Number.isNaN(badLine.position.y));
+  assert.ok(Number.isNaN(bad.getObjectByName('ripple-0').position.y));
+
+  const nulled = buildFishingSpot(THREE, spot, { waterY: null });
+  const nullBobber = nulled.getObjectByName('bobber');
+  assert.ok(Math.abs(nullBobber.position.y - -0.35) < 1e-9);
+  const nullLine = nulled.getObjectByName('fishing-line');
+  assert.ok(Math.abs(nullLine.geometry.args[2] - Math.hypot(1.3, 1.75)) < 1e-9);
+  assert.ok(Math.abs(nullLine.rotation.x - Math.atan2(1.75, -1.3)) < 1e-9);
+  assert.ok(Math.abs(nullLine.position.y - 0.3) < 1e-9);
+  assert.equal(nullLine.position.z, 1.625);
+  assert.ok(Math.abs(nulled.getObjectByName('ripple-2').position.y - -0.38) < 1e-9);
+
+  const trued = buildFishingSpot(THREE, spot, { waterY: true });
+  const trueBobber = trued.getObjectByName('bobber');
+  assert.ok(Math.abs(trueBobber.position.y - 0.65) < 1e-9);
+  const trueLine = trued.getObjectByName('fishing-line');
+  assert.ok(Math.abs(trueLine.geometry.args[2] - Math.hypot(0.3, 1.75)) < 1e-9);
+  assert.ok(Math.abs(trueLine.rotation.x - Math.atan2(1.75, -0.3)) < 1e-9);
+  assert.ok(Math.abs(trueLine.position.y - 0.8) < 1e-9);
+
+  const zeroed = buildFishingSpot(THREE, spot, { waterY: '0' });
+  assert.ok(Math.abs(zeroed.getObjectByName('bobber').position.y - -0.35) < 1e-9);
+});
+
+test('Slice 440: buildFishingSpot with an empty or null spot (G8)', () => {
+  const THREE = makeFakeThree();
+  const group = buildFishingSpot(THREE, {}, { waterY: 0 });
+  assert.equal(group.name, 'fishing-spot');
+  assert.equal(group.position.x, undefined);
+  assert.equal(group.position.y, undefined);
+  assert.equal(group.position.z, undefined);
+  assert.equal(group.rotation.y, undefined);
+  assert.equal(group.children.length, 7);
+  assert.ok(Number.isNaN(group.getObjectByName('bobber').position.y));
+  assert.ok(Number.isNaN(group.getObjectByName('fishing-line').geometry.args[2]));
+
+  assert.throws(() => buildFishingSpot(THREE, null, { waterY: 0 }), TypeError);
+});
+
+test('Slice 440: buildFishingSpot creates fresh rod, box, and materials on every call (G9)', () => {
+  const THREE = makeFakeThree();
+  const spot = findFishingSpot({ groundAt: coneIslandGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+
+  const g1 = buildFishingSpot(THREE, spot, { waterY: 0 });
+  const g2 = buildFishingSpot(THREE, spot, { waterY: 0 });
+  assert.notEqual(g1.getObjectByName('propped-fishing-rod'), g2.getObjectByName('propped-fishing-rod'));
+  assert.notEqual(g1.getObjectByName('tackle-box'), g2.getObjectByName('tackle-box'));
+  assert.notEqual(g1.getObjectByName('bobber').material, g2.getObjectByName('bobber').material);
+  assert.notEqual(g1.getObjectByName('fishing-line').material, g2.getObjectByName('fishing-line').material);
+  assert.notEqual(g1.getObjectByName('bobber'), g2.getObjectByName('bobber'));
+  assert.equal(g1.getObjectByName('bobber').material.color, '#f5efe0');
+  assert.equal(g2.getObjectByName('bobber').material.color, '#f5efe0');
+});
+
+test('Slice 440: file hygiene - 51 unique test names, 6 import lines, and pinned literal counts (G10)', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-fishing.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 51);
+  assert.equal(new Set(names).size, 51);
+  for (const name of names) {
+    assert.equal(name.includes("'"), false, 'test names must contain no apostrophes');
+  }
+  const lines = src.split('\n');
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 6);
+  const countLines = (needle) => lines.filter((l) => l.includes(needle)).length;
+  assert.equal(countLines('fet' + 'ch('), 0);
+  assert.equal(countLines('Date' + '.now'), 0);
+  assert.equal(countLines('Math' + '.random'), 0);
+  assert.equal(countLines('TO' + 'DO'), 0);
+  assert.equal(countLines('FIX' + 'ME'), 0);
+  assert.equal(countLines('inner' + 'HTML'), 0);
+  assert.equal(lines.filter((l) => new RegExp('camp' + 'fire', 'i').test(l)).length, 0);
+});
