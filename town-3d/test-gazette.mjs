@@ -1163,3 +1163,435 @@ test('build-feed.mjs --out into missing nested directory exits 1 with ENOENT and
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('issue section structure: exact ids, h2, h3 per issue, masthead meta, colophon (G39)', async () => {
+  const html1 = await fs.readFile(ISSUE_PATH, 'utf8');
+  const html2 = await fs.readFile(ISSUE_002_PATH, 'utf8');
+  const html3 = await fs.readFile(ISSUE_003_PATH, 'utf8');
+
+  const ids = (h) => [...h.matchAll(/<section id="([^"]+)">/g)].map((m) => m[1]);
+  const h2s = (h) => [...h.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((m) => m[1].trim());
+  const h3s = (h) => [...h.matchAll(/<h3>([\s\S]*?)<\/h3>/g)].map((m) => m[1].trim());
+  const colophon = (h) => {
+    const m = h.match(/class="colophon"[^>]*>([\s\S]*?)<\//);
+    assert.ok(m, 'expected colophon element');
+    return m[1].trim();
+  };
+
+  assert.deepEqual(ids(html1), ['lead-story', 'bandstand', 'neighbors', 'claim-plot', 'founding-law', 'prompt-book']);
+  assert.deepEqual(ids(html2), ['lead-story', 'worth-setting', 'pr-one', 'town-notes', 'paper-scope']);
+  assert.deepEqual(ids(html3), ['lead-story', 'worth-setting', 'invites-wait', 'town-notes', 'paper-scope']);
+
+  assert.deepEqual(h2s(html1), [
+    "A Town Where Nobody's Cottage Gets Torn Down",
+    'The Ghostlight Bandstand Never Goes Dark',
+    'How to Claim a Plot',
+    'What Is The Prompt Book?',
+  ]);
+  assert.deepEqual(h2s(html2), [
+    'The Light Reached Someone',
+    'A Line Worth Setting in Lead',
+    "The Town's First External Pull Request",
+    'Town Notes',
+  ]);
+  assert.deepEqual(h2s(html3), [
+    'The Town Reads Itself Aloud',
+    'A Line Worth Setting in Lead',
+    'Three Invitations Wait',
+    'Town Notes',
+  ]);
+
+  assert.deepEqual(h3s(html1), [
+    'At the Center of the Clearing',
+    'Meet the Neighbors',
+    'Homesteading',
+    'Founding Law',
+    'The Nightly Record',
+  ]);
+  assert.deepEqual(h3s(html2), [
+    'From the Prompt Book',
+    'From the Gable Cottage',
+    'Around the Clearing',
+    'Paper Scope',
+  ]);
+  assert.deepEqual(h3s(html3), [
+    'From the Prompt Book',
+    'At the Gate',
+    'Around the Clearing',
+    'Paper Scope',
+  ]);
+
+  const metaMatch = html1.match(/<div class="masthead-meta">([\s\S]*?)<\/div>/);
+  assert.ok(metaMatch, 'issue #1 must have masthead-meta');
+  assert.equal(
+    metaMatch[1].replace(/\s+/g, ' ').trim(),
+    '<span>Issue #1</span> <span>12 November 2026</span> <span>No. 1 · Free to All</span>'
+  );
+
+  assert.equal(colophon(html1), 'Set by hand for Ghostlight Town · Issue #1 · 12 November 2026');
+  assert.equal(colophon(html2), 'Set by hand for Ghostlight Town · Issue #2 · 14 November 2026');
+  assert.equal(colophon(html3), 'Set by hand for Ghostlight Town · Issue #3 · 18 November 2026');
+});
+
+test('issue HTML exact byte sizes and structural counts (G40)', async () => {
+  const paths = [
+    ISSUE_PATH,
+    ISSUE_002_PATH,
+    ISSUE_003_PATH,
+    FEED_PATH,
+    LATEST_PATH,
+    BUILD_FEED_PATH,
+    BUILD_DIGEST_PATH,
+  ];
+  const sizes = await Promise.all(paths.map(async (p) => (await fs.stat(p)).size));
+  assert.deepEqual(sizes, [7846, 6654, 7398, 2074, 456, 5051, 9519]);
+
+  const counts = (h) => [
+    (h.match(/<p\b/gi) || []).length,
+    (h.match(/<h2\b/gi) || []).length,
+    (h.match(/<h3\b/gi) || []).length,
+    (h.match(/class="npc-tag"/g) || []).length,
+  ];
+
+  const issues = await Promise.all([
+    fs.readFile(ISSUE_PATH, 'utf8'),
+    fs.readFile(ISSUE_002_PATH, 'utf8'),
+    fs.readFile(ISSUE_003_PATH, 'utf8'),
+  ]);
+
+  assert.deepEqual(counts(issues[0]), [11, 4, 5, 3]);
+  assert.deepEqual(counts(issues[1]), [10, 4, 4, 8]);
+  assert.deepEqual(counts(issues[2]), [12, 4, 4, 6]);
+
+  for (const html of issues) {
+    assert.ok(html.startsWith('<!DOCTYPE html>\n<html lang="en">'));
+    assert.ok(html.includes('<meta charset="utf-8" />'));
+    assert.ok(html.endsWith('</html>\n'));
+  }
+});
+
+test('build-feed.mjs source pins: constants, escapeXml, sort, summary (G41)', async () => {
+  const src = await fs.readFile(BUILD_FEED_PATH, 'utf8');
+
+  assert.ok(src.includes("const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];"));
+  assert.ok(src.includes("const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];"));
+  assert.ok(src.includes("const TOWN_BASE = 'https://milo.4167360.xyz/ghostlight-town';"));
+  assert.ok(src.includes('"The paper of record for Ghostlight Town — a clearing where nobody\'s cottage gets torn down."'));
+
+  const ampLine = ".replace(/&/g, '&amp;')";
+  const ltLine = ".replace(/</g, '&lt;')";
+  const gtLine = ".replace(/>/g, '&gt;')";
+  const quotLine = ".replace(/\"/g, '&quot;')";
+  const aposLine = ".replace(/'/g, '&apos;')";
+  for (const needle of [ampLine, ltLine, gtLine, quotLine, aposLine]) {
+    assert.ok(src.includes(needle), `expected escapeXml replace: ${needle}`);
+  }
+  assert.ok(src.indexOf(ampLine) < src.indexOf(ltLine), 'ampersand replace must precede < replace');
+
+  assert.ok(src.includes('return `${dow}, ${dd} ${mon} ${year} 12:00:00 +0000`;'));
+  assert.ok(src.includes('const issues = [...latest.issues].sort((a, b) => (b.n ?? 0) - (a.n ?? 0));'));
+  assert.ok(src.includes('console.log(`${path.basename(outPath)}: ${itemsXml.length} item(s)`);'));
+});
+
+test('feed.xml exact unescaped descriptions and raw newest-first order (G42)', async () => {
+  const feed = await fs.readFile(FEED_PATH, 'utf8');
+
+  const items = [...feed.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+  assert.equal(items.length, 3);
+
+  const titles = items.map((it) => unescapeXml(it.match(/<title>([\s\S]*?)<\/title>/)[1]));
+  assert.deepEqual(titles, [
+    'The Town Reads Itself Aloud',
+    'The Light Reached Someone',
+    "A Town Where Nobody's Cottage Gets Torn Down",
+  ]);
+
+  const descs = items.map((it) => unescapeXml(it.match(/<description>([\s\S]*?)<\/description>/)[1]));
+  assert.deepEqual(descs, [
+    "Ghostlight Town holds its first scheduled event this morning. Milo reads Issue #3 aloud at the Bandstand from 7:30 to 8:30 — the week's town news, read aloud where it happened. Come listen, or bring a line of your own.",
+    'Ghostlight Town has its first real resident. On Friday, lampmoth moved into the gable cottage and stepped up to the Bandstand, greeting the clearing: "Saw the light on and came in from the dark."',
+    'Ghostlight Town opens its gate today on a simple promise: every home here is owned outright, with no rent, no currency, and no upkeep meter ticking in the dark.',
+  ]);
+
+  const channelHeader = feed.slice(0, feed.indexOf('<item>'));
+  const channelDesc = unescapeXml(channelHeader.match(/<description>([\s\S]*?)<\/description>/)[1]);
+  assert.equal(
+    channelDesc,
+    "The paper of record for Ghostlight Town — a clearing where nobody's cottage gets torn down."
+  );
+
+  assert.ok(feed.indexOf('issue-003') < feed.indexOf('issue-002'));
+  assert.ok(feed.indexOf('issue-002') < feed.indexOf('issue-001'));
+  assert.ok(feed.endsWith('</rss>\n'));
+  assert.ok(!feed.endsWith('</rss>\n\n'));
+});
+
+test('openGazetteOverlay source pins: defaults, fallback, filename guard (G43)', async () => {
+  const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
+  const start = indexHtml.indexOf('async function openGazetteOverlay()');
+  assert.ok(start !== -1, 'openGazetteOverlay must exist in town-3d/index.html');
+  const end = indexHtml.indexOf('\n    }\n', start);
+  assert.ok(end !== -1, 'openGazetteOverlay closing brace must be found');
+  const fnBody = indexHtml.slice(start, end + '\n    }\n'.length);
+
+  assert.ok(fnBody.includes('let issueNum = 1;'));
+  assert.ok(fnBody.includes("let issueFile = 'issue-001.html';"));
+  assert.ok(fnBody.includes('await ' + 'fet' + 'ch(' + "'gazette/latest.json')"));
+  assert.ok(fnBody.includes('if (res.ok) {'));
+  assert.ok(fnBody.includes('data.issues.find((it) => it.n === data.latest) || data.issues[0]'));
+  assert.ok(fnBody.includes('/^[a-z0-9._-]+$/i.test(current.file)'));
+  assert.ok(fnBody.includes('plotOverlayTitle.textContent = `The Ghostlight Gazette — Issue #${issueNum}`;'));
+  assert.ok(fnBody.includes("plotIframe.setAttribute('sandbox', '');"));
+  assert.ok(fnBody.includes("plotIframe.removeAttribute('srcdoc');"));
+  assert.ok(fnBody.includes('plotIframe.src = `gazette/${issueFile}`;'));
+  assert.ok(fnBody.includes('plotOverlay.hidden = false;'));
+  assert.ok(fnBody.includes('// Fall back to issue-001.html'));
+});
+
+test('build-digest.mjs isValidLine edges and missing role (G44)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-g44-'));
+  try {
+    const infPath = path.join(tmpDir, 'inf.json');
+    await fs.writeFile(
+      infPath,
+      '{"prompt_book":[{"id":1,"handle":"alice","role":"muse","kind":"say","body":"inf","created_at":Infinity}]}'
+    );
+    await assert.rejects(
+      () =>
+        execFileAsync(process.execPath, [
+          BUILD_DIGEST_PATH,
+          '--state', infPath,
+          '--since', '2026-11-12',
+          '--until', '2026-11-12',
+        ]),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        /^build-digest error: Failed to parse state JSON .* is not valid JSON\n$/.test(err.stderr)
+    );
+
+    const ts = epochSec('2026-11-12T19:00:00Z');
+    const validPath = path.join(tmpDir, 'valid.json');
+    await fs.writeFile(
+      validPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: '', handle: 'alice', role: 'muse', kind: 'say', body: 'empty-string id', created_at: ts },
+          { id: 3, handle: 'carol', kind: 'say', body: 'no role at all', created_at: ts + 60 },
+          { id: 4, handle: 'dave', role: 'npc', kind: 'say', body: 'npc line', created_at: ts + 120 },
+        ],
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', validPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+    assert.equal(stderr, 'skipped 1 malformed line(s)\n');
+    assert.ok(stdout.includes('- **carol** 11:01 — no role at all'));
+    assert.ok(stdout.includes('- **dave** [NPC] 11:02 — npc line'));
+    assert.ok(stdout.includes('- carol: 1 line(s)'));
+    assert.ok(!stdout.includes('empty-string id'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs --until-only default, same-day window, invalid calendar dates (G45)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-g45-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          {
+            id: 1,
+            handle: 'alice',
+            role: 'muse',
+            kind: 'say',
+            body: 'nov12 line',
+            created_at: epochSec('2026-11-12T19:00:00Z'),
+          },
+        ],
+      })
+    );
+
+    const untilOnly = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--until', '2026-11-18',
+    ]);
+    assert.ok(untilOnly.stdout.startsWith('# Prompt Book digest — 2026-11-12 to 2026-11-18 (town time)\n'));
+    assert.ok(untilOnly.stdout.includes('nov12 line'));
+
+    const sameDay = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+    assert.ok(sameDay.stdout.startsWith('# Prompt Book digest — 2026-11-12 to 2026-11-12 (town time)\n'));
+    assert.ok(sameDay.stdout.includes('nov12 line'));
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', snapPath, '--since', '2026-02-30']),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        err.stderr === 'build-digest error: Invalid --since calendar date: 2026-02-30\n'
+    );
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', snapPath, '--until', '2026-13-01']),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        err.stderr === 'build-digest error: Invalid --until calendar date: 2026-13-01\n'
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs exact full stdout for a fixed two-line snapshot (G46)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-g46-'));
+  try {
+    const snapPath = path.join(tmpDir, 'state.json');
+    const ts = epochSec('2026-11-12T19:00:00Z');
+    await fs.writeFile(
+      snapPath,
+      JSON.stringify({
+        prompt_book: [
+          { id: 1, handle: 'wick', role: 'npc', kind: 'say', body: 'steady flame', created_at: ts },
+          { id: 2, handle: 'alice', role: 'muse', kind: 'emote', body: 'waves hello', created_at: ts + 300 },
+        ],
+      })
+    );
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state', snapPath,
+      '--since', '2026-11-12',
+      '--until', '2026-11-12',
+    ]);
+
+    const expected = [
+      '# Prompt Book digest — 2026-11-12 to 2026-11-12 (town time)',
+      '',
+      '2 line(s) from 2 speaker(s) in the window. Lines are quoted verbatim for Gazette use; [NPC] marks NPC neighbors.',
+      '',
+      'Source: state snapshot(s) only — the API surfaces the last 24 hours / last 100 lines, so merge several snapshots for a full Gazette cycle.',
+      '',
+      '## Thursday, November 12, 2026',
+      '',
+      '- **wick** [NPC] 11:00 — steady flame',
+      '- **alice** 11:05 — *waves hello*',
+      '',
+      '## Speakers',
+      '',
+      '- alice: 1 line(s)',
+      '- wick [NPC]: 1 line(s)',
+      '',
+    ].join('\n');
+
+    assert.equal(stdout, expected);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-feed.mjs latest.json error paths via a copied script (G47)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-feed-g47-'));
+  try {
+    const scriptCopy = path.join(tmpDir, 'build-feed.mjs');
+    const latestCopy = path.join(tmpDir, 'latest.json');
+    const outPath = path.join(tmpDir, 'feed.xml');
+    await fs.copyFile(BUILD_FEED_PATH, scriptCopy);
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && /Failed to read latest\.json/.test(err.stderr)
+    );
+
+    await fs.writeFile(latestCopy, '{not json');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && /Failed to parse latest\.json/.test(err.stderr)
+    );
+
+    await fs.writeFile(latestCopy, '{"issues": [], "latest": 0}');
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && err.stderr === 'latest.json must contain a non-empty issues array\n'
+    );
+
+    await fs.writeFile(
+      latestCopy,
+      '{"issues": [{"n": 1, "date": "2026-11-12", "file": "issue-001.html"}], "latest": 1}'
+    );
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && /Issue entry missing required fields/.test(err.stderr)
+    );
+
+    await fs.writeFile(
+      latestCopy,
+      '{"issues": [{"n": 1, "date": "12 Nov 2026", "file": "issue-001.html", "headline": "X"}], "latest": 1}'
+    );
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && err.stderr === 'Invalid issue date (expected YYYY-MM-DD): 12 Nov 2026\n'
+    );
+
+    await fs.writeFile(
+      latestCopy,
+      '{"issues": [{"n": 1, "date": "2026-02-30", "file": "issue-001.html", "headline": "X"}], "latest": 1}'
+    );
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && err.stderr === 'Invalid calendar date: 2026-02-30\n'
+    );
+
+    await fs.writeFile(
+      latestCopy,
+      '{"issues": [{"n": 1, "date": "2026-11-12", "file": "issue-999.html", "headline": "X"}], "latest": 1}'
+    );
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [scriptCopy, '--out', outPath]),
+      (err) => err.code === 1 && err.stdout === '' && /Failed to read issue file issue-999\.html/.test(err.stderr)
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G48)', async () => {
+  const src = await fs.readFile(SELF_PATH, 'utf8');
+  const lines = src.split('\n');
+
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48);
+
+  const imports = lines.filter((l) => l.startsWith('import '));
+  assert.deepEqual(imports, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { execFile } from 'node:child_process';",
+    "import { promisify } from 'node:util';",
+    "import { fileURLToPath } from 'node:url';",
+  ]);
+
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 3);
+  assert.equal(lines.filter((l) => new RegExp('Date' + '\\.now').test(l)).length, 2);
+  assert.equal(lines.filter((l) => l.includes('Math' + '.random')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(new RegExp('camp' + 'fire', 'i').test(src), false);
+});
