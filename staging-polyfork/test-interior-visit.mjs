@@ -1750,3 +1750,332 @@ test('staging.js interior wiring contract and ?v=34 version pin', async () => {
   assert.equal(roomV34Count, 1);
   assert.equal(visitV34Count, 1);
 });
+
+test('interior room wall geometry: exact args and positions for all six segments', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = (n) => room.children.find((c) => c.name === n);
+  const posOf = (m) => ({ x: m.position.x, y: m.position.y, z: m.position.z });
+
+  assert.deepEqual(byName('interior_wall_back').geometry.args, [3.7, 2.6, 0.12]);
+  assert.deepEqual(posOf(byName('interior_wall_back')), { x: 0, y: 1.3, z: -1.44 });
+
+  assert.deepEqual(byName('interior_wall_left').geometry.args, [0.12, 2.6, 2.76]);
+  assert.deepEqual(posOf(byName('interior_wall_left')), { x: -1.79, y: 1.3, z: 0 });
+  assert.deepEqual(byName('interior_wall_right').geometry.args, [0.12, 2.6, 2.76]);
+  assert.deepEqual(posOf(byName('interior_wall_right')), { x: 1.79, y: 1.3, z: 0 });
+
+  assert.deepEqual(byName('interior_wall_front_left').geometry.args, [1.35, 2.6, 0.12]);
+  assert.deepEqual(posOf(byName('interior_wall_front_left')), { x: -1.175, y: 1.3, z: 1.44 });
+  assert.deepEqual(byName('interior_wall_front_right').geometry.args, [1.35, 2.6, 0.12]);
+  assert.deepEqual(posOf(byName('interior_wall_front_right')), { x: 1.175, y: 1.3, z: 1.44 });
+
+  // Lintel height is 2.6 - 2.0, which is 0.6000000000000001 in doubles;
+  // its y (2.0 + half that height) still lands exactly on 2.3.
+  assert.deepEqual(byName('interior_wall_front_lintel').geometry.args, [1.0, 0.6000000000000001, 0.12]);
+  assert.deepEqual(posOf(byName('interior_wall_front_lintel')), { x: 0, y: 2.3, z: 1.44 });
+});
+
+test('rafter, desk, rug, and glow-plane geometry by child index', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = (n) => room.children.find((c) => c.name === n);
+
+  for (const [n, z] of [[2, -0.35], [3, 0.35], [4, 1.05]]) {
+    const rafter = byName(`interior_rafter_${n}`);
+    assert.deepEqual(rafter.geometry.args, [3.46, 0.12, 0.14]);
+    assert.equal(rafter.position.x, 0);
+    assert.equal(rafter.position.y, 2.66);
+    assert.equal(rafter.position.z, z);
+  }
+
+  assert.deepEqual(byName('interior_desk').geometry.args, [1.1, 0.72, 0.6]);
+  assert.deepEqual(byName('interior_rug').geometry.args, [1.6, 0.04, 1.1]);
+
+  // Indices 7/8 are the glow planes per the structure-inventory name order.
+  for (const [i, x] of [[7, -1.72], [8, 1.72]]) {
+    const glow = room.children[i];
+    assert.deepEqual(glow.geometry.args, [0.02, 0.8, 0.9]);
+    assert.equal(glow.material.color, '#ffbe5c');
+    assert.equal(glow.material.emissive, '#ffbe5c');
+    assert.equal(glow.material.emissiveIntensity, 1.4);
+    assert.ok(Math.abs(glow.position.x - x) < 1e-9);
+    assert.equal(glow.position.y, 1.45);
+    assert.equal(glow.position.z, 0);
+  }
+});
+
+test('procedural dressing builders: oil lamp, typewriter, and teapot inventories', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = (n) => room.children.find((c) => c.name === n);
+  const posOf = (m) => ({ x: m.position.x, y: m.position.y, z: m.position.z });
+
+  // Desk-top slot is 0.08 + 0.72, which is 0.7999999999999999 in doubles.
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const group = byName(`interior_dressing_${handle}`);
+    assert.deepEqual(posOf(group), { x: -0.8, y: 0.7999999999999999, z: -0.85 });
+    assert.equal(group.visible, false);
+  }
+
+  const lamp = byName('interior_dressing_wick');
+  assert.equal(lamp.children.length, 3);
+  assert.deepEqual(lamp.children[0].geometry.args, [0.14, 0.18, 0.14, 8]);
+  assert.deepEqual(posOf(lamp.children[0]), { x: 0, y: 0.07, z: 0 });
+  assert.equal(lamp.children[0].material.color, '#9a7b3e');
+  assert.deepEqual(lamp.children[1].geometry.args, [0.09, 0.12, 0.24, 8]);
+  assert.deepEqual(posOf(lamp.children[1]), { x: 0, y: 0.26, z: 0 });
+  assert.equal(lamp.children[1].material.color, '#fff1c9');
+  assert.equal(lamp.children[1].material.emissive, '#ffcf70');
+  assert.equal(lamp.children[1].material.emissiveIntensity, 1.1);
+  assert.deepEqual(lamp.children[2].geometry.args, [0.04, 0.18, 0.04]);
+  assert.deepEqual(posOf(lamp.children[2]), { x: 0.13, y: 0.22, z: 0 });
+
+  const tw = byName('interior_dressing_maren');
+  assert.equal(tw.children.length, 3);
+  assert.deepEqual(tw.children[0].geometry.args, [0.7, 0.08, 0.55]);
+  assert.deepEqual(posOf(tw.children[0]), { x: 0, y: 0.04, z: 0 });
+  assert.equal(tw.children[0].material.color, '#6b492b');
+  assert.deepEqual(tw.children[1].geometry.args, [0.46, 0.18, 0.36]);
+  assert.deepEqual(posOf(tw.children[1]), { x: 0, y: 0.17, z: 0 });
+  assert.equal(tw.children[1].material.color, '#2b2f33');
+  assert.deepEqual(tw.children[2].geometry.args, [0.05, 0.05, 0.42, 8]);
+  assert.equal(tw.children[2].rotation.z, Math.PI / 2);
+  assert.deepEqual(posOf(tw.children[2]), { x: 0, y: 0.28, z: -0.1 });
+  assert.equal(tw.children[2].material.color, '#d8d2c5');
+
+  const tp = byName('interior_dressing_tomas');
+  assert.equal(tp.children.length, 3);
+  assert.deepEqual(tp.children[0].geometry.args, [0.16, 0.2, 0.28, 8]);
+  assert.deepEqual(posOf(tp.children[0]), { x: 0, y: 0.14, z: 0 });
+  assert.deepEqual(tp.children[1].geometry.args, [0.14, 0.05, 0.05]);
+  assert.deepEqual(posOf(tp.children[1]), { x: 0.2, y: 0.18, z: 0 });
+  assert.deepEqual(tp.children[2].geometry.args, [0.06, 0.12, 0.08, 8]);
+  assert.deepEqual(posOf(tp.children[2]), { x: 0, y: 0.32, z: 0 });
+  assert.equal(tp.children[0].material.color, '#8f6b47');
+  assert.equal(tp.children[1].material.color, '#8f6b47');
+  assert.equal(tp.children[2].material.color, '#8f6b47');
+
+  const miloDressing = byName('interior_dressing_milo');
+  const kettle = miloDressing.children.find((c) => c.name === 'interior_tea_kettle');
+  assert.deepEqual(kettle.geometry.args, [0.14, 0.18, 0.24, 8]);
+  assert.equal(kettle.material.color, '#b59449');
+  const cat = miloDressing.children.find((c) => c.name === 'interior_cat');
+  assert.deepEqual(cat.geometry.args, [0.16, 0.36, 6]);
+  assert.equal(cat.material.color, '#2b2b2b');
+});
+
+test('setInteriorPalette full handle table plus buildInteriorRoom palette opts', () => {
+  const THREE = makeFakeThree();
+  const backColor = (room) => room.children.find((c) => c.name === 'interior_wall_back').material.color;
+
+  for (const [handle, hex] of [['milo', '#a8d8ea'], ['wick', '#c8922e'], ['maren', '#43505c'], ['tomas', '#b5633a'], ['raul', '#f5efe0'], [null, '#f5efe0'], [undefined, '#f5efe0'], ['', '#f5efe0'], ['MILO', '#f5efe0'], [0, '#f5efe0']]) {
+    const room = buildInteriorRoom(THREE);
+    assert.equal(setInteriorPalette(room, handle), true);
+    assert.equal(backColor(room), hex);
+  }
+
+  assert.equal(backColor(buildInteriorRoom(THREE, { palette: 'wick' })), '#f5efe0');
+  assert.equal(backColor(buildInteriorRoom(THREE, { palette: null })), '#f5efe0');
+  assert.equal(backColor(buildInteriorRoom(THREE, {})), '#f5efe0');
+});
+
+test('enter with rotation 0 and pi places the eye and lookAt target at exact world coords', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  milo.rotation.y = 0;
+
+  assert.equal(visit.enter(milo), true);
+  assert.ok(Math.abs(camera.position.x - 17.92) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - 1.55) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - 5.5) < 1e-9);
+  assert.ok(Math.abs(controls.target.x - 17.92) < 1e-9);
+  assert.ok(Math.abs(controls.target.y - 1.15) < 1e-9);
+  assert.ok(Math.abs(controls.target.z - 3.3) < 1e-9);
+  assert.equal(camera.lookAtCalls.length, 1);
+  assert.ok(Math.abs(camera.lookAtCalls[0].x - 17.92) < 1e-9);
+  assert.ok(Math.abs(camera.lookAtCalls[0].z - 3.3) < 1e-9);
+  assert.equal(visit.exit(), true);
+
+  milo.rotation.y = Math.PI;
+  assert.equal(visit.enter(milo), true);
+  assert.ok(Math.abs(camera.position.x - 17.92) < 1e-9);
+  assert.ok(Math.abs(camera.position.y - 1.55) < 1e-9);
+  assert.ok(Math.abs(camera.position.z - 3.7) < 1e-9);
+  assert.ok(Math.abs(controls.target.x - 17.92) < 1e-9);
+  assert.ok(Math.abs(controls.target.y - 1.15) < 1e-9);
+  assert.ok(Math.abs(controls.target.z - 5.9) < 1e-9);
+  assert.equal(camera.lookAtCalls.length, 2);
+  assert.ok(Math.abs(camera.lookAtCalls[1].x - 17.92) < 1e-9);
+  assert.ok(Math.abs(camera.lookAtCalls[1].z - 5.9) < 1e-9);
+  assert.equal(visit.exit(), true);
+});
+
+test('lookBy full-circle yaw returns to start and degenerate drags poison the target', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const { camera, controls } = makeFakeCameraAndControls();
+  const visit = createInteriorVisit({
+    room,
+    camera,
+    controls,
+    setVisible: setInteriorVisible,
+    setPalette: setInteriorPalette,
+  });
+
+  const milo = new THREE.Group();
+  milo.userData = { handle: 'milo' };
+  milo.position.set(17.92, 0, 4.6);
+  assert.equal(visit.enter(milo), true);
+
+  assert.equal(visit.lookBy(2 * Math.PI / 0.005, 0), true);
+  let localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - 0) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - 1.15) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - -1.3) < 1e-6);
+
+  assert.equal(visit.lookBy(-2 * Math.PI / 0.005, 0), true);
+  localTarget = room.worldToLocal(controls.target.clone());
+  assert.ok(Math.abs(localTarget.x - 0) < 1e-6);
+  assert.ok(Math.abs(localTarget.y - 1.15) < 1e-6);
+  assert.ok(Math.abs(localTarget.z - -1.3) < 1e-6);
+
+  // Infinite yaw poisons x/z but leaves y at the start pitch.
+  assert.equal(visit.lookBy(Infinity, 0), true);
+  assert.equal(Number.isNaN(controls.target.x), true);
+  assert.equal(controls.target.y, 1.15);
+  assert.equal(Number.isNaN(controls.target.z), true);
+  assert.equal(visit.exit(), true);
+
+  assert.equal(visit.enter(milo), true);
+  assert.equal(visit.lookBy(0, NaN), true);
+  assert.equal(Number.isNaN(controls.target.x), true);
+  assert.equal(Number.isNaN(controls.target.y), true);
+  assert.equal(Number.isNaN(controls.target.z), true);
+  assert.equal(visit.exit(), true);
+});
+
+test('rayHitsInteriorDoor at positioned and rotated rooms', () => {
+  const THREE = makeFakeThree();
+
+  const room = buildInteriorRoom(THREE);
+  room.position.set(10, 0, 5);
+  room.rotation.y = Math.PI / 2;
+  assert.equal(rayHitsInteriorDoor(room, { x: 10.9, y: 1.55, z: 5 }, { x: 1, y: 0, z: 0 }), true);
+  assert.equal(rayHitsInteriorDoor(room, { x: 10.9, y: 1.55, z: 5 }, { x: 0, y: 0, z: 1 }), false);
+  assert.equal(rayHitsInteriorDoor(room, { x: 10.9, y: 1.55, z: 5 }, { x: -1, y: 0, z: 0 }), false);
+
+  const flat = buildInteriorRoom(THREE);
+  flat.position.set(10, 0, 5);
+  assert.equal(rayHitsInteriorDoor(flat, { x: 10, y: 1.55, z: 5.9 }, { x: 0, y: 0, z: 1 }), true);
+  assert.equal(rayHitsInteriorDoor(flat, { x: 10.6, y: 1.55, z: 5.9 }, { x: 0, y: 0, z: 1 }), false);
+
+  const flipped = buildInteriorRoom(THREE);
+  flipped.position.set(10, 0, 5);
+  flipped.rotation.y = Math.PI;
+  assert.equal(rayHitsInteriorDoor(flipped, { x: 10, y: 1.55, z: 5.9 }, { x: 0, y: 0, z: 1 }), false);
+
+  const diagonal = buildInteriorRoom(THREE);
+  diagonal.position.set(10, 0, 5);
+  diagonal.rotation.y = Math.PI / 4;
+  const origin = diagonal.localToWorld(makeVec3(0, 1.55, 0.9));
+  assert.equal(
+    rayHitsInteriorDoor(diagonal, { x: origin.x, y: origin.y, z: origin.z }, { x: Math.sin(Math.PI / 4), y: 0, z: Math.cos(Math.PI / 4) }),
+    true
+  );
+  assert.equal(
+    rayHitsInteriorDoor(diagonal, { x: origin.x, y: origin.y, z: origin.z }, { x: 0, y: 0, z: -1 }),
+    false
+  );
+});
+
+test('isDoorHit milo rect boundaries, float seams, and missing point fields', () => {
+  const miloStub = { userData: { handle: 'milo' } };
+  const hitObj = {};
+
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0.6, y: 1, z: 1.70 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: -0.6, y: 1, z: 1.70 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0.61, y: 1, z: 1.70 } }), false);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 0, z: 1.70 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 2.1, z: 1.70 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 2.11, z: 1.70 } }), false);
+
+  // Unlike kit (1.60 - 0.2 is 1.4000000000000001), milo's 1.70 - 0.2 is exactly 1.5.
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1, z: 1.50 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1, z: 1.70 - 0.2 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1, z: (1.70 - 0.2) - 1e-9 } }), false);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1, z: 1.49 } }), false);
+
+  assert.equal(isDoorHit({ userData: { handle: null } }, { object: hitObj, point: { x: 0, y: 1, z: 1.45 } }), true);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { y: 1, z: 1.70 } }), false);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, z: 1.70 } }), false);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: 0, y: 1 } }), false);
+  assert.equal(isDoorHit(miloStub, { object: hitObj, point: { x: NaN, y: 1, z: 1.70 } }), false);
+});
+
+test('staging.js interior enter/exit wrappers, Esc key, drag look, and door-ray exit', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+
+  assert.equal(stagingSrc.includes("const interiorExitEl = document.getElementById('interior-exit');"), true);
+  assert.equal(stagingSrc.includes('const interiorRoom = buildInteriorRoom(THREE);'), true);
+  assert.equal(stagingSrc.includes('scene.add(interiorRoom);'), true);
+  assert.equal(stagingSrc.includes('function enterCottageInterior(cottage) {'), true);
+  assert.equal(stagingSrc.includes('  if (!interiorVisit.enter(cottage)) return false;'), true);
+  assert.equal(stagingSrc.includes('  if (interiorExitEl) interiorExitEl.hidden = false;'), true);
+  assert.equal(stagingSrc.includes("  const handle = cottage.userData?.handle || 'resident';"), true);
+  assert.equal(
+    stagingSrc.includes("  status(`Inside ${handle}'s cottage — drag to look around, tap the door to step out (or Esc)`);"),
+    true
+  );
+  assert.equal(stagingSrc.includes('function exitCottageInterior() {'), true);
+  assert.equal(stagingSrc.includes('  if (!interiorVisit.exit()) return false;'), true);
+  assert.equal(stagingSrc.includes('  if (interiorExitEl) interiorExitEl.hidden = true;'), true);
+  assert.equal(stagingSrc.includes("  status('Stepped outside.');"), true);
+  assert.equal(stagingSrc.includes("interiorExitEl?.addEventListener('click', exitCottageInterior);"), true);
+  assert.equal(stagingSrc.includes('    if (interiorVisit.isInside()) return false;'), true);
+  assert.equal(stagingSrc.includes('  if ((plotOverlayEl && !plotOverlayEl.hidden) || interiorVisit.isInside()) return;'), true);
+  assert.equal(stagingSrc.includes('      interiorVisit.lookBy(e.clientX - interiorLook.x, e.clientY - interiorLook.y);'), true);
+  assert.equal(stagingSrc.includes('        interiorLook = { id: e.pointerId, x: e.clientX, y: e.clientY };'), true);
+  assert.equal(stagingSrc.includes("    if (e.code === 'Escape' || e.key === 'Escape') exitCottageInterior();"), true);
+  assert.equal(stagingSrc.includes('        exitCottageInterior();'), true);
+});
+
+test('file hygiene: 53 tests, unique names, imports, and banned-literal counts', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'test-interior-visit.mjs'), 'utf8');
+  const count = (needle) => src.split(needle).length - 1;
+
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 53);
+  assert.equal(new Set(names).size, 53);
+
+  assert.equal((src.match(/^import /gm) || []).length, 7);
+  assert.equal(count("from './interior-room." + "mjs';"), 1);
+  assert.equal(count("from './interior-visit." + "mjs';"), 1);
+
+  // Occurrence counts, via split-form needles so this test adds none of them:
+  // the pre-existing source-discipline test contributes 3/3/3/2/4 below,
+  // and the staging-wiring test contributes one more of the fourth.
+  assert.equal(count('camp' + 'fire'), 3);
+  assert.equal(count('fet' + 'ch('), 3);
+  assert.equal(count('Math.' + 'random'), 3);
+  assert.equal(count('docu' + 'ment'), 3);
+  assert.equal(count('win' + 'dow'), 4);
+  assert.equal(count('Date.' + 'now'), 0);
+  assert.equal(count('TO' + 'DO'), 0);
+  assert.equal(count('FIX' + 'ME'), 0);
+  assert.equal(count('local' + 'host'), 0);
+  assert.equal(count('127.0.0' + '.1'), 0);
+  assert.equal((src.match(/\bport\b/g) || []).length, 0);
+});
