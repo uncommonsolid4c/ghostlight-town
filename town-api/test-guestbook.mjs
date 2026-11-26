@@ -1712,3 +1712,527 @@ test('GET limit edges with 55 seeded rows: 51 clamps, 1 newest, 2.0 accepted, 50
     await ctx.close();
   }
 });
+
+test('POST plot validation runs after kind, name, body, and URL checks (G11)', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+
+    const badName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: '   ', body: 'hi', plot: 'nobody' },
+      { 'X-Forwarded-For': '203.0.113.111' }
+    );
+    assert.equal(badName.status, 400);
+    assert.equal(badName.data.error, 'invalid_name');
+
+    const urlBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'see http://x.co', plot: 'nobody' },
+      { 'X-Forwarded-For': '203.0.113.112' }
+    );
+    assert.equal(urlBody.status, 400);
+    assert.equal(urlBody.data.error, 'urls_not_allowed');
+
+    const letterUnknown = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'letter', name: 'Ada', body: 'hi', plot: 'nobody' },
+      { 'X-Forwarded-For': '203.0.113.113' }
+    );
+    assert.equal(letterUnknown.status, 400);
+    assert.equal(letterUnknown.data.error, 'unknown_plot');
+
+    const letterKnown = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'letter', name: 'Ada', body: 'hi', plot: 'wick' },
+      { 'X-Forwarded-For': '203.0.113.114' }
+    );
+    assert.equal(letterKnown.status, 400);
+    assert.equal(letterKnown.data.error, 'invalid_plot');
+
+    const numPlot = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'hi', plot: 42 },
+      { 'X-Forwarded-For': '203.0.113.115' }
+    );
+    assert.equal(numPlot.status, 400);
+    assert.equal(numPlot.data.error, 'invalid_plot');
+
+    const boolPlot = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'hi', plot: true },
+      { 'X-Forwarded-For': '203.0.113.116' }
+    );
+    assert.equal(boolPlot.status, 400);
+    assert.equal(boolPlot.data.error, 'invalid_plot');
+
+    const blankPlot = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'hi', plot: '   ' },
+      { 'X-Forwarded-For': '203.0.113.117' }
+    );
+    assert.equal(blankPlot.status, 400);
+    assert.equal(blankPlot.data.error, 'invalid_plot');
+
+    const paddedPlot = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'hi', plot: '  wick  ' },
+      { 'X-Forwarded-For': '203.0.113.118' }
+    );
+    assert.equal(paddedPlot.status, 201);
+    assert.equal(paddedPlot.data.status, 'pending');
+    const row = ctx.db.prepare('SELECT plot FROM guestbook WHERE id = ?').get(paddedPlot.data.id);
+    assert.equal(row.plot, 'wick');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET kind letter with plot returns empty and plot param edges (G12)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const unknownWick = await visitor.getGuestbook(undefined, 'wick');
+    assert.equal(unknownWick.status, 400);
+    assert.equal(unknownWick.data.error, 'unknown_plot');
+
+    const miloPlot = await visitor.getGuestbook(undefined, 'milo');
+    assert.equal(miloPlot.status, 200);
+    assert.deepEqual(miloPlot.data.entries, []);
+
+    await registerResident(ctx, 'wick');
+    const sign = await visitor.signGuestbook('guestbook', 'Ada', 'Hi Wick', 'wick');
+    assert.equal(sign.status, 201);
+    assert.equal((await admin.moderateGuestbook(sign.data.id, 'approve')).status, 200);
+
+    const letterWithPlot = await visitor.getGuestbook('letter', 'wick');
+    assert.equal(letterWithPlot.status, 200);
+    assert.deepEqual(letterWithPlot.data.entries, []);
+
+    const emptyPlotRes = await fetch(`${ctx.baseUrl}/api/town/guestbook?plot=`);
+    assert.equal(emptyPlotRes.status, 400);
+    assert.equal((await emptyPlotRes.json()).error, 'invalid_plot');
+
+    const paddedWick = await visitor.getGuestbook(undefined, '  wick  ');
+    assert.equal(paddedWick.status, 200);
+    assert.equal(paddedWick.data.entries.length, 1);
+    assert.equal(paddedWick.data.entries[0].id, sign.data.id);
+
+    const lettersOnly = await visitor.getGuestbook('letter');
+    assert.equal(lettersOnly.status, 200);
+    assert.deepEqual(lettersOnly.data.entries, []);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET limit rejects 0, negative, non-integer, and non-numeric values (G13)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const baseTime = ctx.nowSec() - 100;
+    const stmt = ctx.db.prepare(
+      "INSERT INTO guestbook (kind, name, body, status, plot, created_at) VALUES ('guestbook', ?, ?, 'approved', NULL, ?)"
+    );
+    for (let i = 1; i <= 12; i++) {
+      stmt.run(`Guest ${i}`, `Message ${i}`, baseTime + i);
+    }
+
+    for (const bad of ['0', '-1', 'abc', '1.5']) {
+      const res = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=${bad}`);
+      assert.equal(res.status, 400);
+      assert.equal((await res.json()).error, 'invalid_limit');
+    }
+
+    const r10 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=%2010%20`);
+    assert.equal(r10.status, 200);
+    const d10 = await r10.json();
+    assert.equal(d10.entries.length, 10);
+    assert.equal(d10.entries[0].id, 12);
+    assert.equal(d10.entries[9].id, 3);
+
+    const r50 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=50.0`);
+    assert.equal(r50.status, 200);
+    const d50 = await r50.json();
+    assert.equal(d50.entries.length, 12);
+    assert.equal(d50.entries[0].id, 12);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('moderation validates id before action and returns exact decision bodies (G14)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const seq0 = (await visitor.state()).data.state_seq;
+    const letter = await visitor.signGuestbook('letter', 'Reader', 'Dear Gazette, lovely.');
+    assert.equal(letter.status, 201);
+    const letterId = letter.data.id;
+
+    const zeroBadAction = await admin.moderateGuestbook(0, 'delete');
+    assert.equal(zeroBadAction.status, 400);
+    assert.equal(zeroBadAction.data.error, 'invalid_id');
+
+    const strId = await admin.moderateGuestbook('1', 'approve');
+    assert.equal(strId.status, 400);
+    assert.equal(strId.data.error, 'invalid_id');
+
+    const floatId = await admin.moderateGuestbook(1.5, 'approve');
+    assert.equal(floatId.status, 400);
+    assert.equal(floatId.data.error, 'invalid_id');
+
+    const missingId = await admin._signedPost('/api/town/admin/guestbook', { action: 'approve' });
+    assert.equal(missingId.status, 400);
+    assert.equal(missingId.data.error, 'invalid_id');
+
+    const badAction = await admin.moderateGuestbook(letterId, 'delete');
+    assert.equal(badAction.status, 400);
+    assert.equal(badAction.data.error, 'invalid_action');
+
+    const emptyAction = await admin.moderateGuestbook(letterId, '');
+    assert.equal(emptyAction.status, 400);
+    assert.equal(emptyAction.data.error, 'invalid_action');
+
+    const missingAction = await admin._signedPost('/api/town/admin/guestbook', { id: letterId });
+    assert.equal(missingAction.status, 400);
+    assert.equal(missingAction.data.error, 'invalid_action');
+
+    const notFound = await admin.moderateGuestbook(9999, 'approve');
+    assert.equal(notFound.status, 404);
+    assert.deepEqual(notFound.data, { error: 'guestbook_not_found' });
+
+    const approved = await admin.moderateGuestbook(letterId, 'approve');
+    assert.equal(approved.status, 200);
+    assert.deepEqual(approved.data, { id: letterId, status: 'approved' });
+
+    const s1 = await visitor.state();
+    assert.equal(s1.data.state_seq, seq0 + 1);
+    assert.equal(s1.data.guestbook.letters, 1);
+
+    const gate = await visitor.signGuestbook('guestbook', 'Fan', 'Nice gate.');
+    assert.equal(gate.status, 201);
+    const gateId = gate.data.id;
+
+    const rejected = await admin.moderateGuestbook(gateId, 'reject');
+    assert.equal(rejected.status, 200);
+    assert.deepEqual(rejected.data, { id: gateId, status: 'rejected' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guestbook DB row exact shape and table info (G15)', async () => {
+  const ctx = await startTestServer({ nowFn: () => 1700000000 });
+  try {
+    const cols = ctx.db.prepare('PRAGMA table_info(guestbook)').all().map((r) => ({ ...r }));
+    assert.deepEqual(
+      cols.map((c) => c.name),
+      ['id', 'kind', 'name', 'body', 'plot', 'status', 'created_at']
+    );
+    assert.deepEqual(
+      cols.map((c) => c.type),
+      ['INTEGER', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'INTEGER']
+    );
+    assert.deepEqual(
+      cols.map((c) => c.pk),
+      [1, 0, 0, 0, 0, 0, 0]
+    );
+    assert.deepEqual(
+      cols.map((c) => c.notnull),
+      [0, 1, 1, 1, 0, 1, 1]
+    );
+    assert.deepEqual(
+      cols.map((c) => c.dflt_value),
+      [null, null, null, null, null, "'pending'", null]
+    );
+
+    const idx = ctx.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_guestbook_created_at'")
+      .get();
+    assert.equal(idx.sql, 'CREATE INDEX idx_guestbook_created_at ON guestbook (created_at)');
+
+    const res = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: '  Ada  ', body: '  Hello town!  ' },
+      { 'X-Forwarded-For': '203.0.113.119' }
+    );
+    assert.equal(res.status, 201);
+
+    const row = { ...ctx.db.prepare('SELECT * FROM guestbook WHERE id = ?').get(res.data.id) };
+    assert.deepEqual(row, {
+      id: res.data.id,
+      kind: 'guestbook',
+      name: 'Ada',
+      body: 'Hello town!',
+      plot: null,
+      status: 'pending',
+      created_at: 1700000000,
+    });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('signing never bumps state_seq and approve drives state since (G16)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const seq0 = (await visitor.state()).data.state_seq;
+    const g1 = await visitor.signGuestbook('guestbook', 'One', 'First entry');
+    const g2 = await visitor.signGuestbook('guestbook', 'Two', 'Second entry');
+    assert.equal(g1.status, 201);
+    assert.equal(g2.status, 201);
+
+    assert.equal((await visitor.state()).data.state_seq, seq0);
+    const unchanged0 = await visitor.state(seq0);
+    assert.equal(unchanged0.status, 304);
+    assert.equal(unchanged0.data, null);
+
+    assert.equal((await admin.moderateGuestbook(g1.data.id, 'approve')).status, 200);
+    assert.equal((await visitor.state()).data.state_seq, seq0 + 1);
+
+    const changed = await visitor.state(seq0);
+    assert.equal(changed.status, 200);
+    assert.equal(changed.data.guestbook.signed, 1);
+    assert.equal(changed.data.guestbook_pending, 1);
+
+    assert.equal((await admin.moderateGuestbook(g2.data.id, 'reject')).status, 200);
+    assert.equal((await visitor.state()).data.state_seq, seq0 + 1);
+
+    const unchanged1 = await visitor.state(seq0 + 1);
+    assert.equal(unchanged1.status, 304);
+    assert.equal(unchanged1.data, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('state counts combine gate, letter, and plot approvals (G17)', async () => {
+  const ctx = await startTestServer();
+  try {
+    await registerResident(ctx, 'wick');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const gate = await visitor.signGuestbook('guestbook', 'A', 'Gate hello');
+    const letter = await visitor.signGuestbook('letter', 'B', 'Gazette hello');
+    const plot = await visitor.signGuestbook('guestbook', 'C', 'Wick hello', 'wick');
+    assert.equal(gate.status, 201);
+    assert.equal(letter.status, 201);
+    assert.equal(plot.status, 201);
+
+    assert.equal((await admin.moderateGuestbook(gate.data.id, 'approve')).status, 200);
+    assert.equal((await admin.moderateGuestbook(letter.data.id, 'approve')).status, 200);
+    assert.equal((await admin.moderateGuestbook(plot.data.id, 'approve')).status, 200);
+
+    const s = await visitor.state();
+    assert.deepEqual(s.data.guestbook, { signed: 1, letters: 1 });
+    assert.deepEqual(s.data.guestbook_by_plot, { wick: 1 });
+    assert.equal(s.data.guestbook_pending, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guestbook source pins: CAPS, rate limit, schema, town.json, SKILL.md (G18)', () => {
+  const apiDir = path.dirname(new URL(import.meta.url).pathname);
+  const repoRoot = path.resolve(apiDir, '..');
+
+  const serverSrc = fs.readFileSync(path.join(apiDir, 'server.mjs'), 'utf8');
+  assert.ok(serverSrc.includes('  guestbookName: 40,\n'));
+  assert.ok(serverSrc.includes('  guestbookBody: 500,\n'));
+  assert.ok(serverSrc.includes('  guestbook: { max: 3, windowSec: 60 * 60 },\n'));
+
+  const schemaSrc = fs.readFileSync(path.join(apiDir, 'schema.sql'), 'utf8');
+  assert.ok(
+    schemaSrc.includes(
+      [
+        'CREATE TABLE IF NOT EXISTS guestbook (',
+        "    id              INTEGER PRIMARY KEY AUTOINCREMENT,",
+        "    kind            TEXT NOT NULL CHECK (kind IN ('guestbook', 'letter')),",
+        '    name            TEXT NOT NULL,',
+        '    body            TEXT NOT NULL,',
+        '    plot            TEXT,',
+        "    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),",
+        '    created_at      INTEGER NOT NULL',
+        ');',
+      ].join('\n')
+    )
+  );
+
+  const townJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'town.json'), 'utf8'));
+  const postEp = townJson.endpoints.find((e) => e.method === 'POST' && e.path === '/api/town/guestbook');
+  assert.ok(postEp);
+  assert.equal(postEp.auth, 'public');
+  assert.equal(postEp.rate_limit, '3/hour per IP');
+  assert.equal(
+    postEp.summary,
+    'Submit an unsigned Town Gate Guestbook entry (kind=guestbook), per-plot guestbook entry (kind=guestbook with optional plot=<handle>), or Letter to the Editor (kind=letter, no plot); stays pending until approved (400 invalid_plot / unknown_plot on bad plot).'
+  );
+
+  const getEp = townJson.endpoints.find((e) => e.method === 'GET' && e.path === '/api/town/guestbook');
+  assert.ok(getEp);
+  assert.equal(getEp.auth, 'public');
+  assert.equal(getEp.rate_limit, null);
+  assert.equal(
+    getEp.summary,
+    'List approved Town Gate Guestbook entries, per-plot guestbook entries (optional ?plot=<handle>, else gate-only; 400 invalid_plot / unknown_plot on bad plot), or Letters to the Editor (optional ?kind=guestbook|letter and ?limit=1..50, default 50).'
+  );
+
+  const adminEp = townJson.endpoints.find((e) => e.method === 'POST' && e.path === '/api/town/admin/guestbook');
+  assert.ok(adminEp);
+  assert.equal(adminEp.auth, 'admin');
+  assert.equal(adminEp.rate_limit, null);
+  assert.equal(
+    adminEp.summary,
+    'Milo-only operator endpoint: approve or reject a pending Town Gate guestbook entry, per-plot guestbook entry, or letter by id (approve bumps state_seq).'
+  );
+
+  assert.equal(townJson.limits.guestbook_name_chars, 40);
+  assert.equal(townJson.limits.guestbook_body_chars, 500);
+
+  const skillSrc = fs.readFileSync(path.join(repoRoot, 'SKILL.md'), 'utf8');
+  assert.ok(skillSrc.includes('`?plot=<handle>&kind=letter` returns an empty list'));
+});
+
+test('trimming, exact limits, and unicode name handling (G19)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const exactName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'a'.repeat(40), body: 'ok' },
+      { 'X-Forwarded-For': '203.0.113.121' }
+    );
+    assert.equal(exactName.status, 201);
+
+    const exactBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'b'.repeat(500) },
+      { 'X-Forwarded-For': '203.0.113.122' }
+    );
+    assert.equal(exactBody.status, 201);
+
+    const paddedName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: '  ' + 'a'.repeat(40) + '  ', body: 'ok' },
+      { 'X-Forwarded-For': '203.0.113.123' }
+    );
+    assert.equal(paddedName.status, 201);
+    const paddedNameRow = ctx.db.prepare('SELECT name FROM guestbook WHERE id = ?').get(paddedName.data.id);
+    assert.equal(paddedNameRow.name, 'a'.repeat(40));
+
+    const paddedBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: '  ' + 'b'.repeat(500) + '  ' },
+      { 'X-Forwarded-For': '203.0.113.124' }
+    );
+    assert.equal(paddedBody.status, 201);
+    const paddedBodyRow = ctx.db.prepare('SELECT body FROM guestbook WHERE id = ?').get(paddedBody.data.id);
+    assert.equal(paddedBodyRow.body, 'b'.repeat(500));
+
+    const emojiName = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Milo 👻', body: 'ok' },
+      { 'X-Forwarded-For': '203.0.113.125' }
+    );
+    assert.equal(emojiName.status, 201);
+    const emojiRow = ctx.db.prepare('SELECT name FROM guestbook WHERE id = ?').get(emojiName.data.id);
+    assert.equal(emojiRow.name, 'Milo 👻');
+
+    const overflowEmoji = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'a'.repeat(39) + '👻', body: 'ok' },
+      { 'X-Forwarded-For': '203.0.113.126' }
+    );
+    assert.equal(overflowEmoji.status, 400);
+    assert.equal(overflowEmoji.data.error, 'invalid_name');
+
+    const multilineBody = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'Ada', body: 'line1\nline2' },
+      { 'X-Forwarded-For': '203.0.113.127' }
+    );
+    assert.equal(multilineBody.status, 201);
+    const multilineRow = ctx.db.prepare('SELECT body FROM guestbook WHERE id = ?').get(multilineBody.data.id);
+    assert.equal(multilineRow.body, 'line1\nline2');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G20)', () => {
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const lines = src.split('\n');
+
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48);
+
+  const imports = lines.filter((l) => l.startsWith('import '));
+  assert.deepEqual(imports, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { DatabaseSync } from 'node:sqlite';",
+    "import { createTownServer } from './server.mjs';",
+    "import { GhostlightClient, generateKeypair } from './ghostlight-client.mjs';",
+  ]);
+
+  const fetchNeedle = 'fet' + 'ch(';
+  assert.equal(lines.filter((l) => l.includes(fetchNeedle)).length, 23);
+
+  const dateNowRe = new RegExp('Date' + '.now');
+  assert.equal(lines.filter((l) => dateNowRe.test(l)).length, 2);
+
+  const randNeedle = 'Math' + '.random';
+  assert.equal(lines.filter((l) => l.includes(randNeedle)).length, 0);
+
+  const todoNeedle = 'TO' + 'DO';
+  assert.equal(lines.filter((l) => l.includes(todoNeedle)).length, 0);
+
+  const fixmeNeedle = 'FIX' + 'ME';
+  assert.equal(lines.filter((l) => l.includes(fixmeNeedle)).length, 0);
+
+  const bannedNeedle = 'camp' + 'fire';
+  assert.equal(src.toLowerCase().split(bannedNeedle).length - 1, 0);
+});
