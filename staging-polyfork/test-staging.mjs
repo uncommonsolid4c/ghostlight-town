@@ -1649,3 +1649,355 @@ test('faceCenter angles, seeded rnd sequence, and counts start at zero', async (
     'Expected counts initialized to zero in staging.js'
   );
 });
+
+test('G1: isInnOccupied rejects stair and non-object claim shapes while accepting plain objects', () => {
+  assert.equal(isInnOccupied({ stair: { handle: 'x' } }), false);
+  assert.equal(isInnOccupied({}), false);
+  assert.equal(isInnOccupied({ lantern: 'x' }), false);
+  assert.equal(isInnOccupied({ lantern: [] }), false);
+  assert.equal(isInnOccupied({ lantern: {} }), true);
+  assert.equal(isInnOccupied({ window: 0 }), false);
+  assert.equal(isInnOccupied({ quiet: true }), false);
+  assert.equal(isInnOccupied({ lantern: null, window: { handle: 'w' }, quiet: 'no' }), true);
+});
+
+test('G2: updateStagingInnOccupancy guards traverse and splits merged lit mesh once across occupancy changes', () => {
+  assert.equal(updateStagingInnOccupancy({}, { lantern: { handle: 'a' } }), null);
+  assert.equal(updateStagingInnOccupancy({ traverse: 'nope' }, { lantern: { handle: 'a' } }), null);
+
+  const { group, litMesh } = makeMergedLitTavernGroup(1.15);
+  assert.equal(litMesh.geometry.attributes.position.count, 72);
+  assert.equal(updateStagingInnOccupancy(group, { lantern: null, window: { handle: 'wick' }, quiet: null }), true);
+  assert.equal(litMesh.userData.innRoomSplitDone, true);
+  assert.equal(litMesh.userData.innZone, 'rest');
+  assert.equal(litMesh.children.length, 4);
+  assert.deepEqual(litMesh.children.map((c) => c.userData.innZone).sort(), ['lantern', 'quiet', 'stair', 'window']);
+  const byZone = Object.fromEntries(litMesh.children.map((c) => [c.userData.innZone, c]));
+  assert.equal(byZone.window.material.emissiveIntensity, 1.15);
+  assert.equal(byZone.lantern.material.emissiveIntensity, 0);
+  assert.equal(byZone.quiet.material.emissiveIntensity, 0);
+  assert.equal(byZone.stair.material.emissiveIntensity, 0);
+  assert.equal(byZone.window.name, 'tavern-shell:lit:window');
+  assert.equal(byZone.window.castShadow, false);
+  assert.equal(litMesh.geometry.attributes.position.count, 48);
+  assert.equal(litMesh.material.emissiveIntensity, 1.15);
+
+  assert.equal(updateStagingInnOccupancy(group, { lantern: null, window: null, quiet: null }), false);
+  assert.equal(litMesh.children.length, 4);
+  assert.equal(byZone.window.material.emissiveIntensity, 0);
+  assert.equal(litMesh.material.emissiveIntensity, 0);
+
+  assert.equal(updateStagingInnOccupancy(group, { lantern: { handle: 'a' }, window: null, quiet: null }), true);
+  assert.equal(byZone.lantern.material.emissiveIntensity, 1.15);
+  assert.equal(byZone.window.material.emissiveIntensity, 0);
+});
+
+test('G3: splitNightlyCallLines handles empty, exact-fit, hard-chunk, verbatim short, and greedy wrap edges', () => {
+  assert.deepEqual(splitNightlyCallLines(''), ['']);
+  assert.deepEqual(splitNightlyCallLines('x'.repeat(30)), ['x'.repeat(30)]);
+  assert.deepEqual(splitNightlyCallLines('x'.repeat(31)), ['x'.repeat(30), 'x']);
+  assert.deepEqual(splitNightlyCallLines('a  b'), ['a  b']);
+  assert.deepEqual(splitNightlyCallLines('  padded topic  ', 30), ['  padded topic  ']);
+  assert.deepEqual(splitNightlyCallLines('x'.repeat(30) + ' y'), ['x'.repeat(30), 'y']);
+  assert.deepEqual(splitNightlyCallLines('aa bb cc', 2), ['aa', 'bb', 'cc']);
+  assert.deepEqual(splitNightlyCallLines('aa bb', 5), ['aa bb']);
+  assert.deepEqual(splitNightlyCallLines('aa bb', 4), ['aa', 'bb']);
+  assert.deepEqual(splitNightlyCallLines('word '.repeat(8).trim(), 10), ['word word', 'word word', 'word word', 'word word']);
+});
+
+test('G4: TOWN_LAYOUT and SEED_HOME_PADS pin exact coordinates, radii, plots, and seed pad map', () => {
+  assert.equal(TOWN_LAYOUT.clearingRadius, 30);
+  assert.deepEqual(TOWN_LAYOUT.bandstand, { x: 0, y: 0, z: 0, radius: 4.5, height: 0.6 });
+  assert.deepEqual(TOWN_LAYOUT.gate, { x: 0, y: 0, z: 27 });
+  assert.deepEqual(TOWN_LAYOUT.newsstand, { x: 6, y: 0, z: 14 });
+  assert.deepEqual(TOWN_LAYOUT.noticeBoard, { x: -6, y: 0, z: 14 });
+  assert.deepEqual(TOWN_LAYOUT.inn, { x: -11, y: 0, z: 20 });
+  assert.equal(TOWN_LAYOUT.plotRadius, 18.5);
+  assert.deepEqual(TOWN_LAYOUT.plots, [
+    { plotNumber: 1, x: 17.919, y: 0, z: 4.601, rotY: -1.8221 },
+    { plotNumber: 2, x: 17.833, y: 0, z: -4.922, rotY: -1.3015 },
+    { plotNumber: 3, x: 13.023, y: 0, z: -13.14, rotY: -0.7809 },
+    { plotNumber: 4, x: 4.761, y: 0, z: -17.877, rotY: -0.2603 },
+    { plotNumber: 5, x: -4.761, y: 0, z: -17.877, rotY: 0.2603 },
+    { plotNumber: 6, x: -13.023, y: 0, z: -13.14, rotY: 0.7809 },
+    { plotNumber: 7, x: -17.833, y: 0, z: -4.922, rotY: 1.3015 },
+    { plotNumber: 8, x: -17.919, y: 0, z: 4.601, rotY: 1.8221 },
+  ]);
+  assert.deepEqual(SEED_HOME_PADS, { wick: 2, maren: 3, tomas: 4 });
+});
+
+test('G5: getPlotTargetPosition computes exact lateral offsets across plots and indices', () => {
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[0], 0), { x: 14.4321, y: 0, z: 3.7058, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[0], 1), { x: 14.2083, y: 0, z: 4.5775, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[0], 2), { x: 14.6559, y: 0, z: 2.8341, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[0], 3), { x: 13.9845, y: 0, z: 5.4493, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[0], 4), { x: 14.8797, y: 0, z: 1.9623, rotY: -1.8221 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[4], 0), { x: -3.8345, y: 0, z: -14.3983, rotY: 0.2603 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[4], 1), { x: -2.9648, y: 0, z: -14.6299, rotY: 0.2603 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[7], 2), { x: -14.2083, y: 0, z: 4.5775, rotY: 1.8221 });
+});
+
+test('G6: pickBandstandSpot honors preferred slot, falls back on taken/out-of-range, and spills to overflow ring', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({ x: i, y: 0, z: -i || 0, rotY: 0.1 * i }));
+  const used = new Set();
+
+  assert.deepEqual(pickBandstandSpot(spots, used, 3), { x: 3, y: 0, z: -3, rotY: 0.30000000000000004, slot: 3, nametagLift: 0.5 });
+  assert.deepEqual(pickBandstandSpot(spots, used, 3), { x: 0, y: 0, z: 0, rotY: 0, slot: 0, nametagLift: 0 });
+  assert.deepEqual(pickBandstandSpot(spots, used, 99), { x: 1, y: 0, z: -1, rotY: 0.1, slot: 1, nametagLift: 0.5 });
+  assert.deepEqual(pickBandstandSpot(spots, used, -1), { x: 2, y: 0, z: -2, rotY: 0.2, slot: 2, nametagLift: 0 });
+  for (let i = 4; i < 10; i++) pickBandstandSpot(spots, used);
+  assert.deepEqual([...used].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(pickBandstandSpot(spots, used), { x: 0.9863, y: 0, z: 6.5259, rotY: -2.9916, slot: 10, nametagLift: 0 });
+  assert.deepEqual(pickBandstandSpot(spots, used), { x: 4.6337, y: 0, z: 4.6998, rotY: -2.3633, slot: 11, nametagLift: 0.5 });
+});
+
+test('G7: createAvatarCapsule builds body, head, and nametag sprite for muse, npc, default, and unknown roles', () => {
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    const vec3 = (x = 0, y = 0, z = 0) => Object.defineProperty({ x, y, z }, 'set', {
+      value(nx, ny, nz) { this.x = nx; this.y = ny; this.z = nz; },
+      enumerable: false,
+    });
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.userData = {};
+        this.position = vec3();
+        this.rotation = { x: 0, y: 0, z: 0 };
+      }
+      add(c) { this.children.push(c); }
+    };
+    fakeTHREE.Mesh = class Mesh {
+      constructor(geometry, material) {
+        this.geometry = geometry;
+        this.material = material;
+        this.position = vec3();
+      }
+    };
+    fakeTHREE.CylinderGeometry = class CylinderGeometry {
+      constructor(...args) { this.args = args; }
+    };
+    fakeTHREE.SphereGeometry = class SphereGeometry {
+      constructor(...args) { this.args = args; }
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    };
+    fakeTHREE.SpriteMaterial = class SpriteMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    };
+    fakeTHREE.Sprite = class Sprite {
+      constructor(material) {
+        this.name = '';
+        this.material = material;
+        this.position = vec3();
+        this.scale = vec3(1, 1, 1);
+      }
+    };
+    fakeTHREE.CanvasTexture = class CanvasTexture {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.needsUpdate = false;
+      }
+    };
+
+    const muse = createAvatarCapsule(fakeTHREE, { handle: 'muse', role: 'muse' });
+    assert.equal(muse.name, 'avatar_muse');
+    assert.equal(muse.children.length, 3);
+    assert.equal(muse.userData.handle, 'muse');
+    assert.equal(muse.userData.role, 'muse');
+    assert.equal(muse.userData.nametagLift, 0);
+    assert.equal(muse.userData.nametagSprite, muse.children[2]);
+    assert.deepEqual(muse.children[0].geometry.args, [0.28, 0.32, 1.0, 8]);
+    assert.equal(muse.children[0].material.color, '#6cb4d8');
+    assert.equal(muse.children[0].material.roughness, 0.7);
+    assert.deepEqual(muse.children[0].position, { x: 0, y: 0.5, z: 0 });
+    assert.deepEqual(muse.children[1].geometry.args, [0.24, 8, 6]);
+    assert.equal(muse.children[1].material.color, '#f2dcc4');
+    assert.equal(muse.children[1].material.roughness, 0.75);
+    assert.deepEqual(muse.children[1].position, { x: 0, y: 1.2, z: 0 });
+    const sprite = muse.children[2];
+    assert.equal(sprite.name, 'nametag_sprite');
+    assert.deepEqual(sprite.position, { x: 0, y: 1.8, z: 0 });
+    assert.deepEqual(sprite.scale, { x: 1.5, y: 0.375, z: 1 });
+    assert.equal(sprite.material.transparent, true);
+    assert.equal(sprite.material.map.canvas.width, 384);
+    assert.equal(sprite.material.map.canvas.height, 96);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, '[MUSE] muse');
+    assert.equal(draws[0].x, 192);
+    assert.equal(draws[0].y, 48);
+    assert.equal(draws[0].font, 'bold 30px monospace');
+
+    draws.length = 0;
+    const npc = createAvatarCapsule(fakeTHREE, { handle: 'wick', role: 'npc', nametagLift: 0.5 });
+    assert.equal(npc.children[0].material.color, '#d49a45');
+    assert.equal(npc.children[2].position.y, 2.3);
+    assert.equal(npc.userData.role, 'npc');
+    assert.equal(draws[0].text, '[NPC] wick');
+
+    const def = createAvatarCapsule(fakeTHREE, {});
+    assert.equal(def.name, 'avatar_muse');
+    const weird = createAvatarCapsule(fakeTHREE, { handle: 'x', role: 'guest' });
+    assert.equal(weird.userData.role, 'muse');
+    assert.equal(weird.children[0].material.color, '#6cb4d8');
+  });
+});
+
+test('G8: setAvatarStatusText updates, deduplicates, truncates, clears, and guards missing targets', () => {
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    const vec3 = (x = 0, y = 0, z = 0) => Object.defineProperty({ x, y, z }, 'set', {
+      value(nx, ny, nz) { this.x = nx; this.y = ny; this.z = nz; },
+      enumerable: false,
+    });
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.userData = {};
+        this.position = vec3();
+        this.rotation = { x: 0, y: 0, z: 0 };
+      }
+      add(c) { this.children.push(c); }
+    };
+    fakeTHREE.Mesh = class Mesh {
+      constructor(geometry, material) {
+        this.geometry = geometry;
+        this.material = material;
+        this.position = vec3();
+      }
+    };
+    fakeTHREE.CylinderGeometry = class CylinderGeometry {
+      constructor(...args) { this.args = args; }
+    };
+    fakeTHREE.SphereGeometry = class SphereGeometry {
+      constructor(...args) { this.args = args; }
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    };
+    fakeTHREE.SpriteMaterial = class SpriteMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    };
+    fakeTHREE.Sprite = class Sprite {
+      constructor(material) {
+        this.name = '';
+        this.material = material;
+        this.position = vec3();
+        this.scale = vec3(1, 1, 1);
+      }
+    };
+    fakeTHREE.CanvasTexture = class CanvasTexture {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.needsUpdate = false;
+      }
+    };
+
+    const av = createAvatarCapsule(fakeTHREE, { handle: 'maren', role: 'npc' });
+    const sprite = av.userData.nametagSprite;
+    draws.length = 0;
+
+    const map0 = sprite.material.map;
+    setAvatarStatusText(fakeTHREE, av, 'trimming the lamps');
+    assert.equal(av.userData.statusText, 'trimming the lamps');
+    assert.equal(sprite.scale.y, 0.5625);
+    assert.equal(sprite.material.map.canvas.height, 144);
+    assert.notEqual(sprite.material.map, map0);
+    assert.equal(draws.length, 2);
+    assert.equal(draws[0].text, '[NPC] maren');
+    assert.equal(draws[0].y, 48);
+    assert.equal(draws[1].text, 'trimming the lamps');
+    assert.equal(draws[1].y, 96);
+    assert.equal(draws[1].font, 'bold 22px monospace');
+
+    const map1 = sprite.material.map;
+    setAvatarStatusText(fakeTHREE, av, 'trimming the lamps');
+    assert.equal(sprite.material.map, map1);
+
+    setAvatarStatusText(fakeTHREE, av, 'x'.repeat(24));
+    assert.equal(av.userData.statusText, 'x'.repeat(24));
+    setAvatarStatusText(fakeTHREE, av, 'x'.repeat(25));
+    assert.equal(av.userData.statusText, 'x'.repeat(23) + '…');
+    assert.equal(av.userData.statusText.length, 24);
+
+    draws.length = 0;
+    setAvatarStatusText(fakeTHREE, av, '   ');
+    assert.equal(av.userData.statusText, null);
+    assert.equal(sprite.scale.y, 0.375);
+    assert.equal(sprite.material.map.canvas.height, 96);
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, '[NPC] maren');
+
+    setAvatarStatusText(fakeTHREE, av, null);
+    assert.equal(av.userData.statusText, null);
+    setAvatarStatusText(fakeTHREE, {}, 'hello');
+    setAvatarStatusText(fakeTHREE, null, 'hello');
+
+    const museAv = createAvatarCapsule(fakeTHREE, { handle: 'muse', role: 'muse' });
+    setAvatarStatusText(fakeTHREE, museAv, 'hello');
+    assert.equal(museAv.userData.statusText, 'hello');
+  });
+});
+
+test('G9: updateStagingNightlyCallCard guards malformed args and updates via direct nightlyCallCard property', () => {
+  const calls = [];
+  const makeTextTexture = (THREE, lines, opts) => {
+    const tex = { THREE, lines, opts };
+    calls.push(tex);
+    return tex;
+  };
+  const fakeTHREE = { CanvasTexture: function FakeTex() {} };
+  const initialMap = { initial: true };
+  const card = {
+    name: 'nightly_call_card',
+    material: { map: initialMap, needsUpdate: false },
+  };
+  const liveStore = { nightlyCallTopic: null };
+  const base = {
+    THREE: fakeTHREE,
+    bandstandBuilt: { nightlyCallCard: card },
+    liveStore,
+    makeTextTexture,
+  };
+
+  assert.equal(updateStagingNightlyCallCard(base, []), false);
+  assert.equal(updateStagingNightlyCallCard(base, 'topic'), false);
+  assert.equal(updateStagingNightlyCallCard(base, { topic: 42 }), false);
+  assert.equal(updateStagingNightlyCallCard(base, { topic: null }), false);
+  assert.equal(updateStagingNightlyCallCard({ ...base, THREE: null }, { topic: 'Hello' }), false);
+  assert.equal(updateStagingNightlyCallCard({ ...base, liveStore: null }, { topic: 'Hello' }), false);
+  assert.equal(updateStagingNightlyCallCard({ ...base, makeTextTexture: null }, { topic: 'Hello' }), false);
+  assert.equal(updateStagingNightlyCallCard({ ...base, bandstandBuilt: {} }, { topic: 'Hello' }), false);
+  assert.equal(calls.length, 0);
+
+  assert.equal(updateStagingNightlyCallCard(base, { topic: 'Direct card path' }), true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].lines, ['THE NIGHTLY CALL', 'Direct card path']);
+  assert.equal(liveStore.nightlyCallTopic, 'Direct card path');
+  assert.equal(card.material.map, calls[0]);
+});
+
+test('G10: test-staging.mjs hygiene — 48 unique names, 8 imports, pinned as-true counts', async () => {
+  const self = await fs.readFile(SELF_PATH, 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48);
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'import {',
+    "import { lightFootlightSlot } from './concept-bandstand.js';",
+    'import {',
+  ]);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Math' + '.random')).length, 2);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+});
