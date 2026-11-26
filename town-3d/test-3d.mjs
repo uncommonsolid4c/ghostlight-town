@@ -9,6 +9,9 @@ import {
   MILO_REBUILD_MANIFEST,
   PROP_PLACEMENTS,
   SEED_HOME_PADS,
+  FOOTLIGHT_COLORS,
+  INN_ROOM_WINDOWS,
+  INN_WINDOW_COLORS,
   applyPlotManifest,
   applyState,
   buildTown,
@@ -21,14 +24,18 @@ import {
   buildProp,
   createCottage,
   createAvatarCapsule,
+  fitModelToTarget,
+  formatPlotGuestbookTabLabel,
   formatPromptBookEntries,
   getPlotTargetPosition,
   loadTownProps,
   pinchFov,
   renderPromptBook,
+  resolveGuestbookOverlayContent,
   setAvatarStatusText,
   stepGlide,
   updateTownAnimations,
+  updateNightlyCallCard,
 } from './town.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2137,8 +2144,8 @@ test('Slice 410 G9: setAvatarStatusText truncation, scale, trimming, and clearin
 test('Slice 410 G10: test-3d.mjs file hygiene and pinned needle counts', async () => {
   const src = await fs.readFile(path.join(__dirname, 'test-3d.mjs'), 'utf8');
   const testNames = [...src.matchAll(/^(?:await )?test\((['"])((?:\\.|(?!\1).)*)\1/gm)].map((m) => m[2]);
-  assert.equal(testNames.length, 45);
-  assert.equal(new Set(testNames).size, 45);
+  assert.equal(testNames.length, 55);
+  assert.equal(new Set(testNames).size, 55);
 
   const importLines = src.match(/^import /gm) || [];
   assert.equal(importLines.length, 6);
@@ -2150,4 +2157,246 @@ test('Slice 410 G10: test-3d.mjs file hygiene and pinned needle counts', async (
 
   assert.equal(src.split('camp' + 'fire').length - 1, 5);
   assert.equal(src.split('fet' + 'ch(').length - 1, 5);
+});
+
+test('Slice 472 G1: PROP_PLACEMENTS exact nine placements with coordinates, rotations, and sizes', () => {
+  assert.deepEqual(PROP_PLACEMENTS, [
+    { id: 'gate_lantern_left', kind: 'post-lantern', model: 'models/post-lantern.glb', parent: 'scene', x: -3.2, y: 0, z: 26.2, rotY: 0, targetSize: 2.2, scaleAxis: 'y' },
+    { id: 'gate_lantern_right', kind: 'post-lantern', model: 'models/post-lantern.glb', parent: 'scene', x: 3.2, y: 0, z: 26.2, rotY: 0, targetSize: 2.2, scaleAxis: 'y' },
+    { id: 'bandstand_bench', kind: 'bench', model: 'models/bench.glb', parent: 'scene', x: -6.2, y: 0, z: 5.5, rotY: 2.2964, targetSize: 1.8, scaleAxis: 'length' },
+    { id: 'newsstand_lantern', kind: 'lantern', model: 'models/lantern.glb', parent: 'newsstand', x: 0.65, y: 1.03, z: 0.78, rotY: 0, targetSize: 0.35, scaleAxis: 'y' },
+    { id: 'newsstand_street_light', kind: 'street-light', model: 'models/street-light.glb', parent: 'scene', x: 7.8, y: 0, z: 15.2, rotY: 0, targetSize: 3, scaleAxis: 'y' },
+    { id: 'newsstand_bookshelf', kind: 'bookshelf', model: 'models/bookshelf.glb', parent: 'scene', x: 4.6, y: 0, z: 15, rotY: -2.844, targetSize: 1.6, scaleAxis: 'y' },
+    { id: 'wick_oil_lamp', kind: 'oil-lamp', model: 'models/oil-lamp.glb', parent: 'scene', x: 14.41, y: 0, z: -6.05, rotY: -1.1733, targetSize: 0.9, scaleAxis: 'y' },
+    { id: 'tomas_teapot', kind: 'teapot', model: 'models/teapot.glb', parent: 'scene', x: 2.06, y: 0, z: -15.49, rotY: -0.1322, targetSize: 0.9, scaleAxis: 'y' },
+    { id: 'maren_typewriter', kind: 'typewriter', parent: 'scene', x: 9.49, y: 0, z: -12.42, rotY: -0.6525 },
+  ]);
+  assert.equal(PROP_PLACEMENTS.filter((p) => p.model).length, 8);
+  assert.deepEqual(PROP_PLACEMENTS.filter((p) => !p.model).map((p) => p.id), ['maren_typewriter']);
+  assert.equal(new Set(PROP_PLACEMENTS.map((p) => p.id)).size, 9);
+});
+
+test('Slice 472 G2: FOOTLIGHT_COLORS exact palettes and lit-intensity cap', () => {
+  assert.deepEqual(FOOTLIGHT_COLORS, {
+    muse: { color: '#bfeaff', emissive: '#9be0ff', emissiveIntensity: 0.9 },
+    npc: { color: '#ffbe55', emissive: '#ffaa33', emissiveIntensity: 1.0 },
+    unlit: { color: '#7a6230', emissive: '#000000', emissiveIntensity: 0 },
+  });
+  assert.ok(FOOTLIGHT_COLORS.muse.emissiveIntensity <= 1.0);
+  assert.ok(FOOTLIGHT_COLORS.npc.emissiveIntensity <= 1.0);
+  assert.equal(FOOTLIGHT_COLORS.unlit.emissiveIntensity, 0);
+  assert.equal(FOOTLIGHT_COLORS.muse.emissiveIntensity, 0.9);
+  assert.equal(FOOTLIGHT_COLORS.npc.emissiveIntensity, 1.0);
+});
+
+test('Slice 472 G3: INN_ROOM_WINDOWS and INN_WINDOW_COLORS exact room and palette constants', () => {
+  assert.deepEqual(INN_ROOM_WINDOWS, { lantern: 4, window: 5, quiet: 6 });
+  assert.deepEqual(INN_WINDOW_COLORS, {
+    claimed: { color: '#ffbe5c', emissive: '#ffbe5c', emissiveIntensity: 1.4 },
+    vacant: { color: '#3d2814', emissive: '#4a2e10', emissiveIntensity: 0.15 },
+  });
+  assert.deepEqual(Object.keys(INN_ROOM_WINDOWS).sort(), ['lantern', 'quiet', 'window']);
+});
+
+test('Slice 472 G4: MILO_REBUILD_MANIFEST exact rebuild cottage and props', () => {
+  assert.deepEqual(MILO_REBUILD_MANIFEST, {
+    cottage: 'gable',
+    wall: '#a8d8ea',
+    roof: '#5a4332',
+    trim: '#f5efe0',
+    signpost_text: 'Milo — Ghostlight Cottage (rebuilt)',
+    props: [
+      { kind: 'desk', x: -1.2, y: 0, z: 2.2, rot_y: 180, color: '#7a5230' },
+      { kind: 'tea_kettle', x: -1.0, y: 0.78, z: 2.2, rot_y: 45, color: '#b87333' },
+      { kind: 'cat', x: 1.3, y: 0, z: 2.1, rot_y: 210, color: '#2b2b2b' },
+    ],
+  });
+});
+
+test('Slice 472 G5: formatPlotGuestbookTabLabel exact labels for zero, counts, and bad input', () => {
+  assert.equal(formatPlotGuestbookTabLabel(0), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(1), 'Guestbook (1)');
+  assert.equal(formatPlotGuestbookTabLabel(2), 'Guestbook (2)');
+  assert.equal(formatPlotGuestbookTabLabel(12), 'Guestbook (12)');
+  assert.equal(formatPlotGuestbookTabLabel(undefined), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(NaN), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(-1), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel('7'), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(null), 'Guestbook');
+});
+
+test('Slice 472 G6: wander figures carry exact seed speeds, lingers, and Milo deck waypoints', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const figs = town._wander.figures;
+  assert.equal(figs.length, 4);
+  const byHandle = Object.fromEntries(figs.map((f) => [f.handle, f]));
+
+  for (const [handle, speed, lingers, slot] of [
+    ['wick', 0.5, [10, 14, 12], 1],
+    ['maren', 0.45, [12, 16, 10], 2],
+    ['tomas', 0.6, [9, 12, 15], 3],
+  ]) {
+    const f = byHandle[handle];
+    assert.equal(f.speed, speed);
+    assert.deepEqual(f.waypoints.map((w) => w.linger), lingers);
+    assert.deepEqual(f.waypoints.map((w) => w.label), ['home', 'bandstand', 'newsstand']);
+    assert.equal(f.targetIndex, 1);
+    assert.equal(f.state, 'walking');
+    assert.equal(f.yielded, false);
+    const spot = town.parts.avatarSpots[slot];
+    assert.equal(f.waypoints[1].x, spot.x);
+    assert.equal(f.waypoints[1].y, spot.y);
+    assert.equal(f.waypoints[1].z, spot.z);
+  }
+
+  const milo = byHandle.milo;
+  assert.equal(milo.speed, 0.35);
+  assert.deepEqual(milo.waypoints, [
+    { x: 0, y: 0.6, z: 4.5, linger: 25, label: 'spot0' },
+    { x: -2.2, y: 0.6, z: 1.6, linger: 8, label: 'deck1' },
+    { x: 0.4, y: 0.6, z: -2.4, linger: 10, label: 'deck2' },
+    { x: 2.3, y: 0.6, z: 1.4, linger: 8, label: 'deck3' },
+  ]);
+  assert.equal(milo.targetIndex, 1);
+  assert.equal(milo.state, 'walking');
+  assert.equal(milo.yielded, false);
+});
+
+test('Slice 472 G7: updateNightlyCallCard sets, dedupes, and ignores malformed topics', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE, { loadProps: false });
+  const card = town.parts.nightlyCallCard;
+  assert.ok(card && card.material);
+  const map0 = card.material.map;
+  assert.ok(map0 && map0.type === 'CanvasTexture');
+
+  const topic = 'What do you notice first when you step out at night?';
+  updateNightlyCallCard(town, { topic });
+  const map1 = card.material.map;
+  assert.ok(map1 && map1.type === 'CanvasTexture');
+  assert.notEqual(map1, map0);
+  assert.equal(card.material.needsUpdate, true);
+
+  updateNightlyCallCard(town, { topic });
+  assert.equal(card.material.map, map1);
+
+  const longTopic = 'What small sound tells you the town is awake before anyone else has stirred from their cottage door?';
+  assert.ok(longTopic.length > 60);
+  updateNightlyCallCard(town, { topic: longTopic });
+  const mapLong = card.material.map;
+  assert.notEqual(mapLong, map1);
+  assert.equal(mapLong.type, 'CanvasTexture');
+
+  for (const bad of [null, undefined, 'just a string', {}, { topic: 42 }, { topic: '   ' }, [], { topic: null }]) {
+    updateNightlyCallCard(town, bad);
+    assert.equal(card.material.map, mapLong);
+  }
+  assert.doesNotThrow(() => updateNightlyCallCard(null, { topic }));
+});
+
+test('Slice 472 G8: getPlotTargetPosition exact coordinates for plots 2..8 and plot 5 lateral offsets', () => {
+  const expected = {
+    2: { x: 14.3627, y: 0, z: -3.9642, rotY: -1.3015 },
+    3: { x: 10.4889, y: 0, z: -10.583, rotY: -0.7809 },
+    4: { x: 3.8345, y: 0, z: -14.3983, rotY: -0.2603 },
+    5: { x: -3.8345, y: 0, z: -14.3983, rotY: 0.2603 },
+    6: { x: -10.4889, y: 0, z: -10.583, rotY: 0.7809 },
+    7: { x: -14.3627, y: 0, z: -3.9642, rotY: 1.3015 },
+    8: { x: -14.4321, y: 0, z: 3.7058, rotY: 1.8221 },
+  };
+  for (let n = 2; n <= 8; n++) {
+    const layout = TOWN_LAYOUT.plots.find((pl) => pl.plotNumber === n);
+    assert.deepEqual(getPlotTargetPosition(layout, 0), expected[n]);
+  }
+  const p5 = TOWN_LAYOUT.plots.find((pl) => pl.plotNumber === 5);
+  assert.deepEqual(getPlotTargetPosition(p5, 1), { x: -2.9648, y: 0, z: -14.6299, rotY: 0.2603 });
+  assert.deepEqual(getPlotTargetPosition(p5, 2), { x: -4.7041, y: 0, z: -14.1666, rotY: 0.2603 });
+  assert.deepEqual(getPlotTargetPosition(p5, 3), { x: -2.0951, y: 0, z: -14.8615, rotY: 0.2603 });
+});
+
+test('Slice 472 G9: fitModelToTarget scales by axis, centers on the ground, and ignores zero-size models', () => {
+  const THREE = createThreeStub();
+  const stubModel = (min, max) => {
+    const m = new THREE.Group();
+    m.userData.stubBounds = { min, max };
+    return m;
+  };
+
+  const m1 = stubModel([-2, 1, -1], [2, 5, 1]);
+  assert.equal(fitModelToTarget(THREE, m1, 2, 'y'), m1);
+  assert.deepEqual({ x: m1.scale.x, y: m1.scale.y, z: m1.scale.z }, { x: 0.5, y: 0.5, z: 0.5 });
+  assert.ok(m1.position.x === 0 && m1.position.y === -0.5 && m1.position.z === 0);
+
+  const m2 = stubModel([-2, 1, -1], [2, 5, 1]);
+  fitModelToTarget(THREE, m2, 1, 'x');
+  assert.equal(m2.scale.x, 0.25);
+  assert.equal(m2.position.y, -0.25);
+
+  const m3 = stubModel([-2, 1, -1], [2, 5, 1]);
+  fitModelToTarget(THREE, m3, 2, 'length');
+  assert.equal(m3.scale.x, 0.5);
+
+  const m4 = stubModel([-1, 0, -2], [1, 1, 2]);
+  fitModelToTarget(THREE, m4, 3, 'max');
+  assert.equal(m4.scale.x, 0.75);
+
+  const m5 = stubModel([1, 2, 3], [1, 2, 3]);
+  const beforeScale = { x: m5.scale.x, y: m5.scale.y, z: m5.scale.z };
+  const beforePos = { x: m5.position.x, y: m5.position.y, z: m5.position.z };
+  assert.equal(fitModelToTarget(THREE, m5, 2, 'y'), m5);
+  assert.deepEqual({ x: m5.scale.x, y: m5.scale.y, z: m5.scale.z }, beforeScale);
+  assert.deepEqual({ x: m5.position.x, y: m5.position.y, z: m5.position.z }, beforePos);
+
+  const m6 = stubModel([-1, 0, -1], [1, 2, 1]);
+  fitModelToTarget(THREE, m6, 4);
+  assert.equal(m6.scale.x, 2);
+});
+
+test('Slice 472 G10: resolveGuestbookOverlayContent serves API entries and falls back to static', async () => {
+  let calledUrl = null;
+  const fakeFetch = async (url) => {
+    calledUrl = url;
+    return {
+      status: 200,
+      json: async () => ({ entries: [
+        { kind: 'guestbook', name: 'Ada <b>Bold</b>', body: 'Hello & welcome <script>', created_at: 1764028800 },
+        { kind: 'letter', name: 'Bo', body: 'A quiet note.', created_at: null },
+        { kind: 'other', name: 'Ignored', body: 'Not shown.' },
+      ] }),
+    };
+  };
+  const r1 = await resolveGuestbookOverlayContent({ fetchFn: fakeFetch, apiBase: 'https://x.test/' });
+  assert.equal(r1.kind, 'api');
+  assert.equal(calledUrl, 'https://x.test/api/town/guestbook?limit=50');
+  assert.ok(r1.html.includes('Ada &lt;b&gt;Bold&lt;/b&gt;'));
+  assert.ok(!r1.html.includes('Ada <b>Bold</b>'));
+  assert.ok(r1.html.includes('Hello &amp; welcome &lt;script&gt;'));
+  assert.ok(!r1.html.includes('<script>'));
+  assert.ok(r1.html.includes('A quiet note.'));
+  assert.ok(!r1.html.includes('Not shown.'));
+  assert.ok(r1.html.includes('Nov 24, 2025'));
+
+  const notFound = async () => ({ status: 404, json: async () => ({}) });
+  const r2 = await resolveGuestbookOverlayContent({ fetchFn: notFound, apiBase: '' });
+  assert.equal(r2.kind, 'static');
+  assert.equal(r2.url, 'guestbook/index.html');
+
+  const throwing = async () => { throw new Error('down'); };
+  const r3 = await resolveGuestbookOverlayContent({ fetchFn: throwing, apiBase: '' });
+  assert.equal(r3.kind, 'static');
+  assert.equal(r3.url, 'guestbook/index.html');
+
+  const nonArray = async () => ({ status: 200, json: async () => ({ entries: 'nope' }) });
+  const r4 = await resolveGuestbookOverlayContent({ fetchFn: nonArray, apiBase: '' });
+  assert.equal(r4.kind, 'static');
+
+  const r5 = await resolveGuestbookOverlayContent({});
+  assert.equal(r5.kind, 'static');
+  assert.equal(r5.url, 'guestbook/index.html');
+
+  const empty = async () => ({ status: 200, json: async () => ({ entries: [] }) });
+  const r6 = await resolveGuestbookOverlayContent({ fetchFn: empty, apiBase: '' });
+  assert.equal(r6.kind, 'api');
+  assert.ok(r6.html.includes('No signatures yet'));
 });
