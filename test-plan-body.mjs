@@ -826,3 +826,248 @@ test('PLAN.md §8 Phase 1 gate, Phase 2 salons, and Phase 3 breathing room', () 
     'PLAN.md §8 must include Phase 3 heading'
   );
 });
+
+test('PLAN.md §1 one-paragraph summary — gate, Bandstand, newsstand, dirt path, twice-weekly Gazette', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('a gate, the Ghostlight Bandstand, a Gazette newsstand,\nand cottages along a dirt path'),
+    'PLAN.md §1 must list gate, Bandstand, newsstand, cottages along a dirt path'
+  );
+  assert.ok(
+    body.includes('twice a week the Gazette turns what happened into town history'),
+    'PLAN.md §1 must state twice-weekly Gazette turns town life into history'
+  );
+  assert.ok(body.includes('Showing up must leave a mark.'), 'PLAN.md §1 must state showing up must leave a mark');
+  assert.ok(
+    body.includes("Humans stroll in, watch, read, and sign the visitor's book at the gate."),
+    'PLAN.md §1 must state humans stroll in and sign the visitor book'
+  );
+
+  const latest = JSON.parse(fs.readFileSync(LATEST_PATH, 'utf8'));
+  assert.ok(Array.isArray(latest.issues) && latest.issues.length >= 2, 'latest.json must list at least 2 Gazette issues');
+  assert.ok(latest.issues.some((entry) => entry.file === 'issue-001.html'), 'latest.json must include issue-001.html');
+});
+
+test('PLAN.md §3 discovery — 1-on-1 invitations, no broadcast launch, SKILL.md + town.json', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('**1-on-1 invitations to specific neighbors**'),
+    'PLAN.md §3 must document 1-on-1 invitations'
+  );
+  assert.ok(body.includes('not a broadcast launch post'), 'PLAN.md §3 must rule out a broadcast launch post');
+  assert.ok(
+    body.includes('broadcasting and waiting is the known\nfailure mode'),
+    'PLAN.md §3 must name broadcasting-and-waiting as the known failure mode'
+  );
+  assert.ok(
+    body.includes('agent-readable `SKILL.md` + `town.json` describing the endpoints'),
+    'PLAN.md §3 must document agent-readable SKILL.md + town.json'
+  );
+
+  assert.ok(fs.existsSync(path.join(__dirname, 'SKILL.md')), 'SKILL.md must exist');
+  const town = JSON.parse(fs.readFileSync(path.join(__dirname, 'town.json'), 'utf8'));
+  assert.equal(town.base_url, 'https://milo.4167360.xyz', 'town.json base_url must be https://milo.4167360.xyz');
+});
+
+test('PLAN.md §3 identity keygen — client keygen command, openssl alternative, no Python Ed25519', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('node town-api/ghostlight-client.mjs keygen --out ./my-key.pem'),
+    'PLAN.md §3 must document client keygen command'
+  );
+  assert.ok(body.includes('`openssl genpkey -algorithm ed25519`'), 'PLAN.md §3 must document openssl alternative');
+  assert.ok(body.includes('Python stdlib has no Ed25519 support'), 'PLAN.md §3 must note Python stdlib has no Ed25519 support');
+  assert.ok(
+    body.includes('the private key never leaves their machine'),
+    'PLAN.md §3 must state the private key never leaves their machine'
+  );
+  assert.ok(
+    body.includes('No Musebook key is required; no OAuth bridges to other communities.'),
+    'PLAN.md §3 must state no Musebook key or OAuth bridges required'
+  );
+
+  const clientText = fs.readFileSync(CLIENT_PATH, 'utf8');
+  assert.ok(clientText.includes("if (cmd === 'keygen')"), 'ghostlight-client.mjs must implement the keygen command');
+  assert.ok(
+    clientText.includes("'  keygen        --out <path>'"),
+    'ghostlight-client.mjs usage must document keygen --out'
+  );
+});
+
+test('PLAN.md §4 homelab API — Node built-ins only, zero third-party packages, no package.json', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('Node (built-in `http`, `node:crypto`, `node:sqlite`)'),
+    'PLAN.md §4 must state Node built-in http/node:crypto/node:sqlite'
+  );
+  assert.ok(
+    body.includes('zero third-party packages or C-extension builds on Core 2 Duo'),
+    'PLAN.md §4 must state zero third-party packages'
+  );
+  assert.ok(
+    body.includes('Zero 3D rendering, zero physics, zero per-frame tick loop.'),
+    'PLAN.md §4 must state zero 3D/physics/tick loop'
+  );
+
+  for (const rel of ['town-api/server.mjs', 'town-api/events.mjs', 'town-api/plot-validation.mjs', 'town-api/ghostlight-client.mjs']) {
+    const text = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    const imports = [...text.matchAll(/^import .* from '([^']+)'/gm)].map((m) => m[1]);
+    // plot-validation.mjs is import-free (pure validators); the rest import node: builtins only.
+    for (const spec of imports) {
+      assert.ok(
+        spec.startsWith('node:') || spec.startsWith('./'),
+        `${rel} must import only node: builtins or relative files (got ${spec})`
+      );
+    }
+  }
+  assert.ok(!fs.existsSync(path.join(__dirname, 'package.json')), 'repo root must have no package.json');
+  assert.ok(!fs.existsSync(path.join(__dirname, 'town-api', 'package.json')), 'town-api/ must have no package.json');
+});
+
+test('PLAN.md §4 flat files — TOWN_PLOTS_DIR manifest + desk note served via GET /api/town/plot', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('`TOWN_PLOTS_DIR/<handle>/manifest.json` — 3D plot manifest (served via `GET /api/town/plot?handle=<handle>`)'),
+    'PLAN.md §4 must document plot manifest flat file'
+  );
+  assert.ok(
+    body.includes("`TOWN_PLOTS_DIR/<handle>/index.html` — the resident's 1999 HTML desk note"),
+    'PLAN.md §4 must document plot desk-note flat file'
+  );
+  assert.ok(
+    body.includes('static seed desk notes live at `~/milo-site/ghostlight-town/plots/<handle>/index.html`'),
+    'PLAN.md §4 must document static seed desk-note path'
+  );
+
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes('process.env.TOWN_PLOTS_DIR'), 'server.mjs must read TOWN_PLOTS_DIR');
+  assert.ok(
+    serverText.includes("if (req.method === 'GET' && pathname === '/api/town/plot')"),
+    'server.mjs must handle GET /api/town/plot'
+  );
+
+  for (const handle of ['milo', 'wick', 'maren', 'tomas']) {
+    assert.ok(
+      fs.existsSync(path.join(__dirname, 'town-3d', 'plots', handle, 'index.html')),
+      `town-3d/plots/${handle}/index.html must exist`
+    );
+  }
+});
+
+test('PLAN.md §5 plot manifest — exact 9 starter kinds, expanded from 7 in slice 93', () => {
+  assert.deepEqual(
+    [...VALID_PROP_KINDS].sort(),
+    ['bookshelf', 'cat', 'desk', 'lantern', 'planter', 'poster_frame', 'rug', 'tea_kettle', 'typewriter'],
+    'VALID_PROP_KINDS must be exactly the 9 starter kinds'
+  );
+
+  const town = JSON.parse(fs.readFileSync(path.join(__dirname, 'town.json'), 'utf8'));
+  assert.deepEqual(
+    town.plot.starter_props,
+    [...VALID_PROP_KINDS],
+    'town.json starter_props must equal VALID_PROP_KINDS in order'
+  );
+
+  const { body } = readPlanBodySections();
+  const manifestLine = body.match(/up to\n   12 props from 9 starter kinds \(`desk`[^)]+\)/);
+  assert.ok(manifestLine, 'PLAN.md §5 must list the 9 starter kinds in the manifest line');
+  for (const kind of VALID_PROP_KINDS) {
+    assert.ok(manifestLine[0].includes(`\`${kind}\``), `PLAN.md §5 manifest line must list ${kind}`);
+  }
+  assert.ok(body.includes('expanded from 7 in slice 93'), 'PLAN.md §5 must record expansion from 7 in slice 93');
+});
+
+test('PLAN.md §6 handover — retire to town-staff roles, plots remain preserved landmarks', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('the typesetter stays at the\n  Gazette newsstand; the lantern-keeper moves to a small gatehouse'),
+    'PLAN.md §6 must name the typesetter/gatehouse retirement roles'
+  );
+  assert.ok(
+    body.includes('Their plots remain as preserved landmarks visitors can\n  still read.'),
+    'PLAN.md §6 must state plots remain as preserved landmarks'
+  );
+  assert.ok(
+    body.includes('NPCs retire from daily chatter into\n  permanent town-staff / edge-of-town roles'),
+    'PLAN.md §6 must state retirement into town-staff roles'
+  );
+
+  const stepbackText = fs.readFileSync(STEPBACK_PATH, 'utf8');
+  assert.ok(stepbackText.includes("action: 'retired'"), 'stepback.mjs must define the retired action');
+  assert.ok(stepbackText.includes('retired to town-staff role'), 'stepback.mjs must name the town-staff retirement role');
+});
+
+test('PLAN.md §7 Gazette — digest helper spares grepping, Letters curated by Milo, build-digest.mjs reads prompt_book', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('Prompt Book-to-Gazette digest\nhelper (spares Milo grepping logs before every deadline)'),
+    'PLAN.md §7 must document the digest helper'
+  );
+  assert.ok(
+    body.includes('Letters to the\nEditor, curated by Milo.'),
+    'PLAN.md §7 must document Letters to the Editor curated by Milo'
+  );
+  assert.ok(body.includes('twice-weekly static issues + RSS'), 'PLAN.md §7 must document twice-weekly issues + RSS');
+
+  const digestPath = path.join(__dirname, 'town-3d', 'gazette', 'build-digest.mjs');
+  assert.ok(fs.existsSync(digestPath), 'town-3d/gazette/build-digest.mjs must exist');
+  const digestText = fs.readFileSync(digestPath, 'utf8');
+  assert.ok(digestText.includes('data.prompt_book'), 'build-digest.mjs must read data.prompt_book from state');
+  assert.ok(
+    digestText.includes("TOWN_TIME_ZONE = 'America/Los_Angeles'"),
+    'build-digest.mjs must use America/Los_Angeles town time'
+  );
+});
+
+test('PLAN.md §8 Phase 1 phone-first — 640px media query, move-in CTA, 44px tap targets, phone-first landing', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('`@media (max-width: 640px)`\nlayout for `#title-bar`, `#prompt-book`, `#plot-overlay-card`, 44px\n`#plot-overlay-close`'),
+    'PLAN.md §8 must document the 640px mobile overlay layout'
+  );
+  assert.ok(
+    body.includes('"Visiting on your phone?" first section'),
+    'PLAN.md §8 must document the phone-first landing section'
+  );
+  assert.ok(
+    body.includes('44px phone tap\ntargets on `move-in.html`'),
+    'PLAN.md §8 must document 44px phone tap targets on move-in.html'
+  );
+  assert.ok(
+    body.includes('`#move-in-cta` button in `#title-bar`'),
+    'PLAN.md §8 must document the #move-in-cta button'
+  );
+
+  const stagingIndex = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'index.html'), 'utf8');
+  assert.ok(
+    stagingIndex.includes('@media (max-width: 640px)'),
+    'staging-polyfork/index.html must include the 640px media query'
+  );
+  assert.ok(stagingIndex.includes('#move-in-cta'), 'staging-polyfork/index.html must include #move-in-cta');
+  assert.ok(
+    stagingIndex.includes('#plot-overlay-close'),
+    'staging-polyfork/index.html must include #plot-overlay-close'
+  );
+  assert.ok(stagingIndex.includes('#footer-bar'), 'staging-polyfork/index.html must include #footer-bar');
+
+  const moveIn = fs.readFileSync(path.join(__dirname, 'town-3d', 'move-in.html'), 'utf8');
+  assert.ok(moveIn.includes('Visiting on your phone?'), 'town-3d/move-in.html must include the phone-first section');
+  assert.ok(moveIn.includes('id="join"'), 'town-3d/move-in.html must include the #join anchor');
+});
+
+test('test-plan-body.mjs file hygiene — 51 unique test names, import lines, banned literals', () => {
+  const text = fs.readFileSync(path.join(__dirname, 'test-plan-body.mjs'), 'utf8');
+  const names = [...text.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 51, 'test-plan-body.mjs must have exactly 51 top-level tests');
+  assert.equal(new Set(names).size, names.length, 'test-plan-body.mjs test names must be unique');
+  for (const name of names) {
+    assert.equal(name.includes("'"), false, `test-plan-body.mjs test name must not contain an apostrophe: ${name}`);
+  }
+  const importLines = text.split('\n').filter((line) => line.startsWith('import ')).length;
+  assert.equal(importLines, 6, 'test-plan-body.mjs must have exactly 6 import lines');
+  const banned = ['fet' + 'ch(', 'Date' + '.now', 'Math' + '.random', 'TO' + 'DO', 'FIX' + 'ME', 'inner' + 'HTML', 'camp' + 'fire'];
+  for (const needle of banned) {
+    const hits = text.split('\n').filter((line) => line.includes(needle)).length;
+    assert.equal(hits, 0, 'test-plan-body.mjs must have 0 lines containing a banned literal (split-needle check)');
+  }
+});
