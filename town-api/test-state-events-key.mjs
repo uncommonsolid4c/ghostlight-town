@@ -1582,3 +1582,580 @@ test('GET /api/town/state counts a plot-scoped pending letter in guestbook_pendi
     await ctx.close();
   }
 });
+
+test('GET /api/town/state host_handle accepts 2- and 32-char handles and rejects 1-char, 33-char, dash- and underscore-leading ones (G1)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const cases = [
+    ['ab', true],
+    ['a', false],
+    ['a'.repeat(32), true],
+    ['a'.repeat(33), false],
+    ['-ab', false],
+    ['1abc', true],
+    ['_ab', false],
+    ['a-b_c9', true],
+  ];
+  for (const [handle, valid] of cases) {
+    const ctx = await startStateServer({
+      baseNow,
+      eventsContent: {
+        events: [
+          {
+            title: 'Handle Case',
+            host_handle: handle,
+            start_at: isoAt(baseNow, -900),
+            duration_min: 60,
+            location: 'bandstand',
+            blurb: 'b',
+          },
+        ],
+      },
+    });
+    try {
+      const { body } = await ctx.getState();
+      if (valid) {
+        assert.equal(body.events.now?.title, 'Handle Case');
+        assert.equal(body.events.now.host_handle, handle);
+      } else {
+        assert.equal(body.events.now, null);
+      }
+    } finally {
+      await ctx.close();
+    }
+  }
+});
+
+test('GET /api/town/state trims blurb and location to empty, keeps a 500-char location and inner title spaces, rejects a whitespace-only title (G2)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const cases = [
+    [{ blurb: '' }, (n) => n.blurb === ''],
+    [{ blurb: '   ' }, (n) => n.blurb === ''],
+    [{ location: '' }, (n) => n.location === ''],
+    [{ location: 'L'.repeat(500) }, (n) => n.location === 'L'.repeat(500)],
+    [{ title: '  A  B  ' }, (n) => n.title === 'A  B'],
+  ];
+  for (const [over, pred] of cases) {
+    const ctx = await startStateServer({
+      baseNow,
+      eventsContent: {
+        events: [
+          {
+            title: over.title ?? 'T',
+            host_handle: 'milo',
+            start_at: isoAt(baseNow, -900),
+            duration_min: 60,
+            location: over.location ?? 'bandstand',
+            blurb: over.blurb ?? 'b',
+          },
+        ],
+      },
+    });
+    try {
+      const { body } = await ctx.getState();
+      assert.ok(body.events.now !== null && pred(body.events.now));
+    } finally {
+      await ctx.close();
+    }
+  }
+  const bad = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: '   ',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const { body } = await bad.getState();
+    assert.equal(body.events.now, null);
+  } finally {
+    await bad.close();
+  }
+});
+
+test('GET /api/town/state accepts a fractional 15.5-minute duration and rejects 240.5, boolean, and null durations (G3)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const cases = [
+    [15.5, true],
+    [240.5, false],
+    [true, false],
+    [null, false],
+  ];
+  for (const [duration, valid] of cases) {
+    const ctx = await startStateServer({
+      baseNow,
+      eventsContent: {
+        events: [
+          {
+            title: 'Duration Case',
+            host_handle: 'milo',
+            start_at: isoAt(baseNow, -900),
+            duration_min: duration,
+            location: 'bandstand',
+            blurb: 'b',
+          },
+        ],
+      },
+    });
+    try {
+      const { body } = await ctx.getState();
+      if (valid) {
+        assert.equal(body.events.now?.title, 'Duration Case');
+        assert.equal(body.events.now.duration_min, 15.5);
+      } else {
+        assert.equal(body.events.now, null);
+      }
+    } finally {
+      await ctx.close();
+    }
+  }
+});
+
+test('GET /api/town/state parses date-only and offset start_at verbatim, normalizes 2026-02-30 to Mar 2, and hands now to an event starting as the old one ends (G4)', async () => {
+  const midnight = Math.floor(Date.parse('2026-11-25T00:00:00Z') / 1000);
+  const dateOnly = await startStateServer({
+    baseNow: midnight + 900,
+    eventsContent: {
+      events: [
+        {
+          title: 'Date Only',
+          host_handle: 'milo',
+          start_at: '2026-11-25',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const { body } = await dateOnly.getState();
+    assert.equal(body.events.now?.title, 'Date Only');
+    assert.equal(body.events.now.start_at, '2026-11-25');
+  } finally {
+    await dateOnly.close();
+  }
+
+  const offsetBase = Math.floor(Date.parse('2026-11-25T10:15:00Z') / 1000);
+  const offset = await startStateServer({
+    baseNow: offsetBase,
+    eventsContent: {
+      events: [
+        {
+          title: 'Offset',
+          host_handle: 'milo',
+          start_at: '2026-11-25T12:00:00+02:00',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const { body } = await offset.getState();
+    assert.equal(body.events.now?.title, 'Offset');
+    assert.equal(body.events.now.start_at, '2026-11-25T12:00:00+02:00');
+  } finally {
+    await offset.close();
+  }
+
+  const febBase = Math.floor(Date.parse('2026-03-02T00:15:00Z') / 1000);
+  const feb = await startStateServer({
+    baseNow: febBase,
+    eventsContent: {
+      events: [
+        {
+          title: 'Feb Thirty',
+          host_handle: 'milo',
+          start_at: '2026-02-30',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const { body } = await feb.getState();
+    assert.equal(body.events.now?.title, 'Feb Thirty');
+    assert.equal(body.events.now.start_at, '2026-02-30');
+  } finally {
+    await feb.close();
+  }
+
+  const millisBase = Math.floor(Date.parse('2026-11-25T10:15:00Z') / 1000);
+  const millis = await startStateServer({
+    baseNow: millisBase,
+    eventsContent: {
+      events: [
+        {
+          title: 'Millis',
+          host_handle: 'milo',
+          start_at: '2026-11-25T10:00:00.500Z',
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const { body } = await millis.getState();
+    assert.equal(body.events.now?.title, 'Millis');
+  } finally {
+    await millis.close();
+  }
+
+  const baseNow = Math.floor(Date.now() / 1000);
+  const handoff = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Ending Now',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Starting Now',
+          host_handle: 'wick',
+          start_at: isoAt(baseNow, 0),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const { body } = await handoff.getState();
+    assert.equal(body.events.now?.title, 'Starting Now');
+  } finally {
+    await handoff.close();
+  }
+});
+
+test('GET /api/town/state does not bump state_seq on blurb, location, duration, or host edits, but does on a start_at edit (G5)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const startAt = isoAt(baseNow, -900);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Key Show',
+          host_handle: 'milo',
+          start_at: startAt,
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    const seq = first.body.state_seq;
+
+    fs.writeFileSync(
+      ctx.eventsPath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Key Show',
+            host_handle: 'wick',
+            start_at: startAt,
+            duration_min: 90,
+            location: 'gate',
+            blurb: 'changed',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const newer1 = new Date(Date.now() + 5000);
+    fs.utimesSync(ctx.eventsPath, newer1, newer1);
+
+    const untouched = await ctx.getState(seq);
+    assert.equal(untouched.status, 304);
+    assert.equal(untouched.body, null);
+
+    const plain = await ctx.getState();
+    assert.equal(plain.status, 200);
+    assert.equal(plain.body.state_seq, seq);
+    assert.equal(plain.body.events.now.blurb, 'changed');
+    assert.equal(plain.body.events.now.location, 'gate');
+    assert.equal(plain.body.events.now.duration_min, 90);
+    assert.equal(plain.body.events.now.host_handle, 'wick');
+
+    const startAt2 = isoAt(baseNow, -899);
+    fs.writeFileSync(
+      ctx.eventsPath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Key Show',
+            host_handle: 'wick',
+            start_at: startAt2,
+            duration_min: 90,
+            location: 'gate',
+            blurb: 'changed',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const newer2 = new Date(Date.now() + 10000);
+    fs.utimesSync(ctx.eventsPath, newer2, newer2);
+
+    const bumped = await ctx.getState(seq);
+    assert.equal(bumped.status, 200);
+    assert.ok(bumped.body.state_seq > seq);
+    assert.equal(bumped.body.events.now.start_at, startAt2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state lists guestbook_by_plot keys alphabetically and counts an approved entry for an unregistered plot (G6)', async () => {
+  const ctx = await startStateServer();
+  try {
+    await registerResident(ctx, 'wick');
+    await registerResident(ctx, 'maren');
+    await registerResident(ctx, 'tomas');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl });
+
+    ctx.advanceClock(-3601);
+    const w1 = await visitor.signGuestbook('guestbook', 'Guest A', 'wick one', 'wick');
+    const w2 = await visitor.signGuestbook('guestbook', 'Guest B', 'wick two', 'wick');
+    const t1 = await visitor.signGuestbook('guestbook', 'Guest C', 'tomas one', 'tomas');
+    ctx.advanceClock(3601);
+    const m1 = await visitor.signGuestbook('guestbook', 'Guest D', 'maren one', 'maren');
+    assert.equal(w1.status, 201);
+    assert.equal(w2.status, 201);
+    assert.equal(t1.status, 201);
+    assert.equal(m1.status, 201);
+
+    for (const id of [w1.data.id, w2.data.id, t1.data.id, m1.data.id]) {
+      const mod = await ctx.admin.moderateGuestbook(id, 'approve');
+      assert.equal(mod.status, 200);
+    }
+    ctx.db
+      .prepare("INSERT INTO guestbook (kind, name, body, plot, status, created_at) VALUES ('guestbook', 'Guest X', 'stranger note', 'stranger', 'approved', ?)")
+      .run(ctx.baseNow);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.deepEqual(body.guestbook_by_plot, { wick: 2, tomas: 1, maren: 1, stranger: 1 });
+    assert.deepEqual(Object.keys(body.guestbook_by_plot), ['maren', 'stranger', 'tomas', 'wick']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state advances state_seq by exactly one per approve and per events flip (G7)', async () => {
+  const ctx = await startStateServer();
+  try {
+    const s0 = await ctx.getState();
+    assert.equal(s0.status, 200);
+    assert.equal(s0.body.state_seq, 0);
+
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl });
+    const g1 = await visitor.signGuestbook('guestbook', 'Guest A', 'hello town');
+    assert.equal(g1.status, 201);
+    const s1 = await ctx.getState();
+    assert.equal(s1.body.state_seq, 0);
+
+    const mod1 = await ctx.admin.moderateGuestbook(g1.data.id, 'approve');
+    assert.equal(mod1.status, 200);
+    const s2 = await ctx.getState();
+    assert.equal(s2.body.state_seq, 1);
+
+    const g2 = await visitor.signGuestbook('guestbook', 'Guest B', 'hello again');
+    assert.equal(g2.status, 201);
+    const mod2 = await ctx.admin.moderateGuestbook(g2.data.id, 'approve');
+    assert.equal(mod2.status, 200);
+    const s3 = await ctx.getState();
+    assert.equal(s3.body.state_seq, 2);
+
+    const baseNow = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(
+      ctx.eventsPath,
+      JSON.stringify({
+        events: [
+          {
+            title: 'Flip',
+            host_handle: 'milo',
+            start_at: isoAt(baseNow, -900),
+            duration_min: 60,
+            location: 'bandstand',
+            blurb: 'b',
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const newer = new Date(Date.now() + 5000);
+    fs.utimesSync(ctx.eventsPath, newer, newer);
+
+    const s4 = await ctx.getState(2);
+    assert.equal(s4.status, 200);
+    assert.equal(s4.body.state_seq, 3);
+    assert.equal(s4.body.events.now.title, 'Flip');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state still annotates a muted or suspended now-event host footlight, and the suspended host cannot re-checkin (G8)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const muted = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Muted Show',
+          host_handle: 'host',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const host = await registerAndCheckin(muted, 'host', 'my own words', 0);
+    muted.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'host'").run();
+    const { body } = await muted.getState();
+    const row = body.footlights.find((r) => r.handle === 'host');
+    assert.ok(row);
+    assert.equal(row.status_text, 'Muted Show');
+    assert.equal(row.event, true);
+    muted.advanceClock(61);
+    const again = await host.checkin({ status_text: 'still here', slot: 0 });
+    assert.equal(again.status, 200);
+  } finally {
+    await muted.close();
+  }
+
+  const suspended = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Suspended Show',
+          host_handle: 'host',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    const host = await registerAndCheckin(suspended, 'host', 'my own words', 0);
+    suspended.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = 'host'").run();
+    const { body } = await suspended.getState();
+    const row = body.footlights.find((r) => r.handle === 'host');
+    assert.ok(row);
+    assert.equal(row.status_text, 'Suspended Show');
+    assert.equal(row.event, true);
+    suspended.advanceClock(61);
+    const again = await host.checkin({ status_text: 'still here', slot: 0 });
+    assert.equal(again.status, 403);
+    assert.equal(again.data.error, 'resident_not_active');
+  } finally {
+    await suspended.close();
+  }
+});
+
+test('GET /api/town/state leaves both future-event hosts unflagged when there is no now event (G9)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'First Next',
+          host_handle: 'hosta',
+          start_at: isoAt(baseNow, 1800),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Second Next',
+          host_handle: 'hostb',
+          start_at: isoAt(baseNow, 3600),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+  try {
+    await registerAndCheckin(ctx, 'hosta', 'aaa', 0);
+    await registerAndCheckin(ctx, 'hostb', 'bbb', 1);
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now, null);
+    assert.equal(body.events.next.title, 'First Next');
+    const rowA = body.footlights.find((r) => r.handle === 'hosta');
+    const rowB = body.footlights.find((r) => r.handle === 'hostb');
+    assert.ok(rowA);
+    assert.ok(rowB);
+    assert.equal(rowA.status_text, 'aaa');
+    assert.equal(rowA.event, undefined);
+    assert.equal(rowB.status_text, 'bbb');
+    assert.equal(rowB.event, undefined);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('file hygiene: 49 unique names, 7 imports, pinned literal counts (G10)', () => {
+  const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const lines = src.split('\n');
+  const names = [];
+  for (const line of lines) {
+    const m = line.match(/^test\('([^']+)'/);
+    if (m) names.push(m[1]);
+  }
+  assert.equal(names.length, 49);
+  assert.equal(new Set(names).size, 49);
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 7);
+  assert.deepEqual(
+    lines.filter((l) => l.startsWith('import ')),
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import fs from 'node:fs';",
+      "import os from 'node:os';",
+      "import path from 'node:path';",
+      "import { createTownServer } from './server.mjs';",
+      "import { GhostlightClient, generateKeypair } from './ghostlight-client.mjs';",
+    ],
+  );
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 45);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
+  assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+  assert.equal(lines.filter((l) => l.includes('camp' + 'fire')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 0);
+});
