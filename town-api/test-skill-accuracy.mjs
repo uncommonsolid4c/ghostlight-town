@@ -1824,3 +1824,452 @@ test('SKILL.md GET guestbook plot/letter doc and pending count-only lifecycle (G
     await ctx.close();
   }
 });
+
+test('SKILL.md §1 quickstart client round-trip guest to resident to plot (H1)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const manifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Desk & kettle inside.',
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+        { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+      ],
+    };
+    const html = '<!doctype html><html><body><h1>My Desk Note</h1><p>Open 24/7.</p></body></html>';
+    const { pubkey, privateKeyPem } = generateKeypair();
+    const client = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'quick', pubkey, privateKeyPem });
+    const gc = await client.guestCheckin({ status_text: 'just visiting the Bandstand' });
+    assert.equal(gc.status, 200);
+    assert.equal(gc.ok, true);
+    assert.deepEqual(Object.keys(gc.data).sort(), ['handle', 'state_seq', 'updated_at', 'zone']);
+    assert.equal(gc.data.zone, 'bandstand');
+    const gs = await client.guestSay('Hello, Bandstand. Passing through to say hi.');
+    assert.equal(gs.status, 201);
+    assert.equal(gs.data.kind, 'say');
+    assert.equal(gs.data.handle, 'quick');
+    const stGuest = await client.state();
+    const guestLine = stGuest.data.prompt_book.find((l) => l.body === 'Hello, Bandstand. Passing through to say hi.');
+    assert.ok(guestLine);
+    assert.equal(guestLine.role, 'guest');
+    const j = await client.join({ origin: 'colony', bio: 'Tinkering with small-web pages.' });
+    assert.equal(j.status, 201);
+    assert.equal(j.data.status, 'active');
+    assert.equal(j.data.origin, 'colony');
+    assert.deepEqual(Object.keys(j.data).sort(), ['handle', 'origin', 'state_seq', 'status']);
+    const c = await client.checkin({ status_text: 'brought tea, unpacking' });
+    assert.equal(c.status, 200);
+    assert.equal(c.data.status_text, 'brought tea, unpacking');
+    assert.deepEqual(Object.keys(c.data).sort(), ['expires_at', 'handle', 'lit_at', 'slot', 'state_seq', 'status_text']);
+    assert.ok(c.data.slot >= 0 && c.data.slot <= 9);
+    assert.equal(c.data.expires_at, c.data.lit_at + 2700);
+    const s = await client.say('Hello, Bandstand. Good to see the light on.');
+    assert.equal(s.status, 201);
+    assert.equal(s.data.kind, 'say');
+    assert.equal(s.data.body, 'Hello, Bandstand. Good to see the light on.');
+    const p = await client.plot(manifest, html);
+    assert.equal(p.status, 200);
+    assert.deepEqual(Object.keys(p.data).sort(), ['handle', 'plot_updated_at', 'state_seq']);
+    const gp = await client.getPlot('quick');
+    assert.equal(gp.status, 200);
+    assert.deepEqual(gp.data.manifest, manifest);
+    assert.equal(gp.data.html, html);
+    assert.deepEqual(Object.keys(gp.data).sort(), ['handle', 'html', 'manifest', 'plot_updated_at']);
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    assert.ok(st.data.footlights.some((f) => f.handle === 'quick'));
+    assert.ok(st.data.prompt_book.some((l) => l.body === 'Hello, Bandstand. Good to see the light on.' && l.role === 'muse'));
+    // Role resolves by handle at read time: the same guest line now reads muse.
+    assert.ok(st.data.prompt_book.some((l) => l.body === 'Hello, Bandstand. Passing through to say hi.' && l.role === 'muse'));
+    assert.equal(st.data.plots.quick, p.data.plot_updated_at);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 join live edges bio handle origin invite pubkey (H2)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const k1 = generateKeypair();
+    const bio501 = await signedPostAt(ctx, '/api/town/join', { handle: 'biobig', pubkey: k1.pubkey, origin: 'colony', bio: 'x'.repeat(501) }, 'biobig', k1.privateKeyPem);
+    assert.equal(bio501.status, 400);
+    assert.equal(bio501.data.error, 'bio_too_long');
+    assert.equal(bio501.data.max, 500);
+    const bio500 = await signedPostAt(ctx, '/api/town/join', { handle: 'biook', pubkey: k1.pubkey, origin: 'colony', bio: 'x'.repeat(500) }, 'biook', k1.privateKeyPem);
+    assert.equal(bio500.status, 201);
+    const k2 = generateKeypair();
+    const longHandle = await signedPostAt(ctx, '/api/town/join', { handle: 'a'.repeat(33), pubkey: k2.pubkey, origin: 'colony' }, 'a'.repeat(33), k2.privateKeyPem);
+    assert.equal(longHandle.status, 400);
+    assert.equal(longHandle.data.error, 'invalid_handle');
+    const dashHandle = await signedPostAt(ctx, '/api/town/join', { handle: '-abc', pubkey: k2.pubkey, origin: 'colony' }, '-abc', k2.privateKeyPem);
+    assert.equal(dashHandle.status, 400);
+    assert.equal(dashHandle.data.error, 'invalid_handle');
+    const badOrigin = await signedPostAt(ctx, '/api/town/join', { handle: 'orig', pubkey: k2.pubkey, origin: 'nowhere' }, 'orig', k2.privateKeyPem);
+    assert.equal(badOrigin.status, 400);
+    assert.equal(badOrigin.data.error, 'invalid_origin');
+  } finally {
+    await ctx.close();
+  }
+  // Second server: join is 5/hour per IP, so the invite/pubkey pins live apart.
+  const ctx2 = await startTestServer();
+  try {
+    const k3 = generateKeypair();
+    const direct = await signedPostAt(ctx2, '/api/town/join', { handle: 'direct1', pubkey: k3.pubkey, origin: 'direct' }, 'direct1', k3.privateKeyPem);
+    assert.equal(direct.status, 201);
+    assert.equal(direct.data.origin, 'direct');
+    // Duplicate pubkey must be signed with the ORIGINAL keypair (self-signed join).
+    const dupPub = await signedPostAt(ctx2, '/api/town/join', { handle: 'duppub', pubkey: k3.pubkey, origin: 'colony' }, 'duppub', k3.privateKeyPem);
+    assert.equal(dupPub.status, 409);
+    assert.equal(dupPub.data.error, 'pubkey_taken');
+    const k4 = generateKeypair();
+    const badInvite = await signedPostAt(ctx2, '/api/town/join', { handle: 'inv1', pubkey: k4.pubkey, origin: 'colony', invite_code: 'no-such-code' }, 'inv1', k4.privateKeyPem);
+    assert.equal(badInvite.status, 403);
+    assert.equal(badInvite.data.error, 'invalid_invite');
+    const numInvite = await signedPostAt(ctx2, '/api/town/join', { handle: 'inv2', pubkey: k4.pubkey, origin: 'colony', invite_code: 123 }, 'inv2', k4.privateKeyPem);
+    assert.equal(numInvite.status, 400);
+    assert.equal(numInvite.data.error, 'invalid_invite');
+  } finally {
+    await ctx2.close();
+  }
+});
+
+test('SKILL.md §3 guest inn lifecycle claim extend vacate live (H3)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const g1 = generateKeypair();
+    const c1 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn1', pubkey: g1.pubkey, privateKeyPem: g1.privateKeyPem });
+    const badRoom = await c1.guestInnClaim('attic', 2);
+    assert.equal(badRoom.status, 400);
+    assert.equal(badRoom.data.error, 'invalid_room');
+    const badNights = await c1.guestInnClaim('lantern', 0);
+    assert.equal(badNights.status, 400);
+    assert.equal(badNights.data.error, 'invalid_nights');
+    const claim = await c1.guestInnClaim('lantern');
+    assert.equal(claim.status, 201);
+    assert.equal(claim.data.nights, 3);
+    assert.equal(claim.data.room, 'lantern');
+    assert.equal(typeof claim.data.key, 'string');
+    assert.equal(claim.data.key.length, 12);
+    assert.deepEqual(Object.keys(claim.data).sort(), ['claimed_at', 'expires_at', 'handle', 'key', 'nights', 'room', 'state_seq']);
+    const g2 = generateKeypair();
+    const c2 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn2', pubkey: g2.pubkey, privateKeyPem: g2.privateKeyPem });
+    const taken = await c2.guestInnClaim('lantern', 2);
+    assert.equal(taken.status, 409);
+    assert.equal(taken.data.error, 'room_already_claimed');
+    // Fresh handles for the 403 pins: claim+extend share one 2/hour per-handle bucket.
+    const g3 = generateKeypair();
+    const c3 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn3', pubkey: g3.pubkey, privateKeyPem: g3.privateKeyPem });
+    const wrongPair = await c3.guestInnExtend('lantern', claim.data.key, 1);
+    assert.equal(wrongPair.status, 403);
+    assert.equal(wrongPair.data.error, 'pubkey_mismatch');
+    const g4 = generateKeypair();
+    const c4 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn4', pubkey: g4.pubkey, privateKeyPem: g4.privateKeyPem });
+    const wrongKey = await c4.guestInnExtend('lantern', 'WRONGKEYWRONG', 1);
+    assert.equal(wrongKey.status, 403);
+    assert.equal(wrongKey.data.error, 'invalid_key');
+    const ext = await c1.guestInnExtend('lantern', claim.data.key, 2);
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.nights, 5);
+    assert.deepEqual(Object.keys(ext.data).sort(), ['claimed_at', 'expires_at', 'handle', 'nights', 'room', 'state_seq']);
+    const vac = await c1.guestInnVacate('lantern', claim.data.key);
+    assert.equal(vac.status, 200);
+    assert.equal(vac.data.vacated, true);
+    assert.deepEqual(Object.keys(vac.data).sort(), ['handle', 'room', 'state_seq', 'vacated']);
+    const vacAgain = await c1.guestInnVacate('lantern', claim.data.key);
+    assert.equal(vacAgain.status, 404);
+    assert.equal(vacAgain.data.error, 'claim_not_found');
+    const g5 = generateKeypair();
+    const c5 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn5', pubkey: g5.pubkey, privateKeyPem: g5.privateKeyPem });
+    const reclaim = await c5.guestInnClaim('lantern', 1);
+    assert.equal(reclaim.status, 201);
+    assert.equal(reclaim.data.nights, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 resident inn max stay extend vacate live (H4)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const mk = async (handle) => {
+      const k = generateKeypair();
+      const c = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, pubkey: k.pubkey, privateKeyPem: k.privateKeyPem });
+      assert.equal((await c.join({ origin: 'colony' })).status, 201);
+      return c;
+    };
+    const a = await mk('inna');
+    const claim = await a.claimInnRoom('window', 3);
+    assert.equal(claim.status, 201);
+    assert.equal(claim.data.nights, 3);
+    assert.equal(claim.data.key.length, 12);
+    const over = await a.extendInnStay('window', claim.data.key, 5);
+    assert.equal(over.status, 400);
+    assert.equal(over.data.error, 'max_stay_exceeded');
+    const ok = await a.extendInnStay('window', claim.data.key, 4);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.data.nights, 7);
+    const over2 = await a.extendInnStay('window', claim.data.key, 1);
+    assert.equal(over2.status, 400);
+    assert.equal(over2.data.error, 'max_stay_exceeded');
+    const wrongKey = await a.extendInnStay('window', 'WRONGKEYWRONG', 1);
+    assert.equal(wrongKey.status, 403);
+    assert.equal(wrongKey.data.error, 'invalid_key');
+    const vac = await a.vacateInnRoom('window', claim.data.key);
+    assert.equal(vac.status, 200);
+    assert.equal(vac.data.vacated, true);
+    const b = await mk('innb');
+    const reclaim = await b.claimInnRoom('window', 1);
+    assert.equal(reclaim.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 key rotate live old key dies new key works (H5)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const oldK = generateKeypair();
+    const cOld = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'rotator', pubkey: oldK.pubkey, privateKeyPem: oldK.privateKeyPem });
+    assert.equal((await cOld.join({ origin: 'colony' })).status, 201);
+    const other = generateKeypair();
+    const cOther = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'other1', pubkey: other.pubkey, privateKeyPem: other.privateKeyPem });
+    assert.equal((await cOther.join({ origin: 'colony' })).status, 201);
+    const same = await cOld.rotateKey(oldK.pubkey);
+    assert.equal(same.status, 400);
+    assert.equal(same.data.error, 'same_pubkey');
+    const taken = await cOld.rotateKey(other.pubkey);
+    assert.equal(taken.status, 409);
+    assert.equal(taken.data.error, 'pubkey_taken');
+    const newK = generateKeypair();
+    const rot = await cOld.rotateKey(newK.pubkey);
+    assert.equal(rot.status, 200);
+    assert.equal(rot.data.rotated, true);
+    assert.deepEqual(Object.keys(rot.data).sort(), ['handle', 'rotated', 'state_seq']);
+    const oldCheckin = await cOld.checkin({ status_text: 'old key' });
+    assert.equal(oldCheckin.status, 401);
+    const cNew = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'rotator', pubkey: newK.pubkey, privateKeyPem: newK.privateKeyPem });
+    const newCheckin = await cNew.checkin({ status_text: 'new key' });
+    assert.equal(newCheckin.status, 200);
+    assert.equal(newCheckin.data.status_text, 'new key');
+    const oldSay = await cOld.say('from old key');
+    assert.equal(oldSay.status, 401);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 guestbook live 400s burn no quota and limit edges (H6)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const urlBody = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'V', body: 'see https://example.com/x' });
+    assert.equal(urlBody.status, 400);
+    assert.equal(urlBody.data.error, 'urls_not_allowed');
+    const longName = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'N'.repeat(41), body: 'hi' });
+    assert.equal(longName.status, 400);
+    assert.equal(longName.data.error, 'invalid_name');
+    const longBody = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'V', body: 'b'.repeat(501) });
+    assert.equal(longBody.status, 400);
+    assert.equal(longBody.data.error, 'invalid_body');
+    const badKind = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'postcard', name: 'V', body: 'hi' });
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data.error, 'invalid_kind');
+    // The four 400s above burned no quota: three valid posts still land.
+    for (let i = 1; i <= 3; i++) {
+      const ok = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'V', body: `valid-${i}` });
+      assert.equal(ok.status, 201);
+      assert.equal(ok.data.status, 'pending');
+    }
+    const fourth = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'V', body: 'valid-4' });
+    assert.equal(fourth.status, 429);
+    assert.equal(fourth.data.error, 'rate_limited');
+    const lim0 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=0`);
+    assert.equal(lim0.status, 400);
+    assert.equal((await lim0.json()).error, 'invalid_limit');
+    const limBad = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=abc`);
+    assert.equal(limBad.status, 400);
+    assert.equal((await limBad.json()).error, 'invalid_limit');
+    const limFrac = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=2.5`);
+    assert.equal(limFrac.status, 400);
+    assert.equal((await limFrac.json()).error, 'invalid_limit');
+    const lim51 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=51`);
+    assert.equal(lim51.status, 200);
+    assert.deepEqual(await lim51.json(), { entries: [] });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 guest fish live rate limit no-cast and missing pubkey (H7)', async () => {
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const g = generateKeypair();
+    const noCast = await signedPostAt(ctx, '/api/town/fish/guest/reel', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(noCast.status, 404);
+    assert.equal(noCast.data.error, 'no_active_cast');
+    const noPub = await signedPostAt(ctx, '/api/town/fish/guest/cast', { handle: 'gfish' }, 'gfish', g.privateKeyPem);
+    assert.equal(noPub.status, 400);
+    assert.equal(noPub.data.error, 'missing_pubkey');
+    const c1 = await signedPostAt(ctx, '/api/town/fish/guest/cast', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(c1.status, 201);
+    assert.equal(c1.data.reel_at, c1.data.cast_at + 300);
+    const dup = await signedPostAt(ctx, '/api/town/fish/guest/cast', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(dup.status, 409);
+    assert.equal(dup.data.error, 'already_cast');
+    now += 300;
+    const r1 = await signedPostAt(ctx, '/api/town/fish/guest/reel', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(r1.status, 200);
+    assert.equal(typeof r1.data.catch.kind, 'string');
+    const c2 = await signedPostAt(ctx, '/api/town/fish/guest/cast', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(c2.status, 201);
+    now += 300;
+    const r2 = await signedPostAt(ctx, '/api/town/fish/guest/reel', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(r2.status, 200);
+    const c3 = await signedPostAt(ctx, '/api/town/fish/guest/cast', { handle: 'gfish', pubkey: g.pubkey }, 'gfish', g.privateKeyPem);
+    assert.equal(c3.status, 429);
+    assert.equal(c3.data.error, 'rate_limited');
+    const log = await (await fetch(`${ctx.baseUrl}/api/town/fish/log?handle=gfish`)).json();
+    assert.equal(log.count, 2);
+    assert.equal(log.catches.length, 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 state live 304 seq monotonic latest-100 fallback (H8)', async () => {
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const k = generateKeypair();
+    const c = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'stater', pubkey: k.pubkey, privateKeyPem: k.privateKeyPem });
+    const s0 = (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+    const j = await c.join({ origin: 'direct' });
+    assert.ok(j.data.state_seq > s0);
+    const s1 = j.data.state_seq;
+    const ci = await c.checkin({ status_text: 'here' });
+    assert.ok(ci.data.state_seq > s1);
+    const s2 = ci.data.state_seq;
+    const say = await c.say('a line for the window test');
+    assert.ok(say.data.state_seq > s2);
+    const s3 = say.data.state_seq;
+    const st1 = await fetch(`${ctx.baseUrl}/api/town/state?since=${s3}`);
+    assert.equal(st1.status, 304);
+    assert.equal(await st1.text(), '');
+    const stFull = await (await fetch(`${ctx.baseUrl}/api/town/state?since=${s3 - 1}`)).json();
+    assert.equal(stFull.state_seq, s3);
+    assert.ok(stFull.prompt_book.some((l) => l.body === 'a line for the window test'));
+    const lv = await c.leave();
+    assert.ok(lv.data.state_seq > s3);
+    const s4 = lv.data.state_seq;
+    now += 25 * 3600;
+    const st2 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    // Doc: last ~24h PLUS the latest 100 lines — with few lines total the old
+    // line survives via the latest-100 fallback even 25h later.
+    assert.equal(st2.prompt_book.some((l) => l.body === 'a line for the window test'), true);
+    assert.equal(st2.state_seq, s4);
+    const say2 = await signedPostAt(ctx, '/api/town/ghostlight/say', { body: 'a fresh line after the window', kind: 'say' }, 'stater', k.privateKeyPem);
+    assert.equal(say2.status, 201);
+    const st3 = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.ok(st3.prompt_book.some((l) => l.body === 'a fresh line after the window'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §4 plot live size caps round-trip and overwrite (H9)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const manifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Desk & kettle inside.',
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+        { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+      ],
+    };
+    const html = '<!doctype html><html><body><h1>My Desk Note</h1><p>Open 24/7.</p></body></html>';
+    const k = generateKeypair();
+    const c = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'plotter9', pubkey: k.pubkey, privateKeyPem: k.privateKeyPem });
+    assert.equal((await c.join({ origin: 'colony' })).status, 201);
+    const gp404 = await c.getPlot('plotter9');
+    assert.equal(gp404.status, 404);
+    assert.equal(gp404.data.error, 'plot_not_found');
+    const bigManifest = { ...manifest, props: Array.from({ length: 500 }, () => ({ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 })) };
+    const bigM = await c.plot(bigManifest, html);
+    assert.equal(bigM.status, 400);
+    assert.equal(bigM.data.error, 'manifest_too_large');
+    assert.equal(bigM.data.max, 16384);
+    const manyProps = await c.plot({ ...manifest, props: Array.from({ length: 13 }, () => ({ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 })) }, html);
+    assert.equal(manyProps.status, 400);
+    assert.equal(manyProps.data.error, 'too_many_props');
+    assert.equal(manyProps.data.max, 12);
+    const bigHtml = await c.plot(manifest, '<p>' + 'x'.repeat(40000) + '</p>');
+    assert.equal(bigHtml.status, 400);
+    assert.equal(bigHtml.data.error, 'html_too_large');
+    assert.equal(bigHtml.data.max, 32768);
+    const p1 = await c.plot(manifest, html);
+    assert.equal(p1.status, 200);
+    const gp1 = await c.getPlot('plotter9');
+    assert.deepEqual(gp1.data.manifest, manifest);
+    assert.equal(gp1.data.html, html);
+    const m2 = { ...manifest, signpost_text: 'Second draft.' };
+    const p2 = await c.plot(m2, html);
+    assert.equal(p2.status, 200);
+    assert.ok(p2.data.plot_updated_at >= p1.data.plot_updated_at);
+    const gp2 = await c.getPlot('plotter9');
+    assert.equal(gp2.data.manifest.signpost_text, 'Second draft.');
+    // Missing-field PUTs need a raw signed PUT: the client always sends both fields.
+    const missM = await (async () => {
+      const { rawBody, headers } = signRequest({ method: 'PUT', path: '/api/town/plot', body: { html }, handle: 'plotter9', privateKeyPem: k.privateKeyPem });
+      const res = await fetch(`${ctx.baseUrl}/api/town/plot`, { method: 'PUT', headers, body: rawBody });
+      return { status: res.status, data: await res.json().catch(() => null) };
+    })();
+    assert.equal(missM.status, 400);
+    assert.equal(missM.data.error, 'missing_manifest');
+    const missH = await (async () => {
+      const { rawBody, headers } = signRequest({ method: 'PUT', path: '/api/town/plot', body: { manifest }, handle: 'plotter9', privateKeyPem: k.privateKeyPem });
+      const res = await fetch(`${ctx.baseUrl}/api/town/plot`, { method: 'PUT', headers, body: rawBody });
+      return { status: res.status, data: await res.json().catch(() => null) };
+    })();
+    assert.equal(missH.status, 400);
+    assert.equal(missH.data.error, 'missing_html');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md file hygiene 48 unique names imports verbatim pinned counts (H10)', () => {
+  const self = fs.readFileSync(path.join(__dirname, 'test-skill-accuracy.mjs'), 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^test\('([^']+)', /gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import crypto from 'node:crypto';",
+    "import { execFileSync } from 'node:child_process';",
+    "import { fileURLToPath } from 'node:url';",
+    "import { createTownServer } from './server.mjs';",
+    "import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';",
+    "import { getPartOfDay } from '../town-npc/run.mjs';",
+    "import { dailyGameHostForDate, buildDailyGameLine, FORMAT_LABELS } from '../town-npc/daily-game.mjs';",
+  ]); // no new top-level imports
+  // NOTE the self-reference trap, handled exactly as slice 436's G10 did: count
+  // needles with concatenated strings so the assertions themselves never contain
+  // the literal being counted — and keep this comment free of both needles too.
+  // New groups add 12 of the first needle (4 H6 + 1 H7 + 5 H8 + 2 H9) and 2 of
+  // the second (1 H7 + 1 H8). The one occurrence of the retired term is the
+  // pre-existing doesNotMatch guard test itself.
+  const occ = (needle) => self.split(needle).length - 1;
+  assert.equal(occ('fet' + 'ch('), 37, '25 pre-slice + 4 H6 + 1 H7 + 5 H8 + 2 H9');
+  assert.equal(occ('Date' + '.now'), 9, '7 pre-slice + 1 H7 + 1 H8');
+  assert.equal(occ('Math' + '.random'), 0);
+  assert.equal(occ('TO' + 'DO'), 0);
+  assert.equal(occ('FIX' + 'ME'), 0);
+  assert.equal(occ('camp' + 'fire'), 1, 'the pre-existing doesNotMatch guard test');
+  assert.equal(occ('inner' + 'HTML'), 0);
+});
