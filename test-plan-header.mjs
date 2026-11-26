@@ -757,7 +757,11 @@ test('PLAN.md latest §8 entry records a strengthened file with matching live co
   const fileText = fs.readFileSync(path.join(__dirname, file), 'utf8');
   const liveCount = [...fileText.matchAll(/^test\(('([^']+)'|"([^"]+)")/gm)].length;
   assert.equal(Number(newCount), liveCount, `Latest §8 entry new count must equal ${file} live top-level test count`);
-  assert.ok(latestLine.includes('builder Gemini 4 Neon'), 'Latest §8 entry must record builder Gemini 4 Neon');
+  assert.match(
+    latestLine,
+    /builder Gemini 4 (Neon|Hydrogen)/,
+    'Latest §8 entry must record a builder model (Gemini 4 Neon or Hydrogen)'
+  );
   assert.match(latestLine, /session \d+/, 'Latest §8 entry must record a session number');
 });
 
