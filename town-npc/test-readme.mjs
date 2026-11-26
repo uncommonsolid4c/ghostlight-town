@@ -1454,8 +1454,8 @@ test('town-npc/README.md stepback constants, 30-minute boundary, and localDateSt
 test('town-npc/test-readme.mjs file hygiene: 44 unique tests, 6 imports, and banned-needle counts', () => {
   const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
   const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 44);
-  assert.equal(new Set(names).size, 44);
+  assert.equal(names.length, 54);
+  assert.equal(new Set(names).size, 54);
 
   const importLines = selfSrc.split('\n').filter((line) => line.startsWith('import '));
   assert.equal(importLines.length, 6);
@@ -1470,4 +1470,170 @@ test('town-npc/test-readme.mjs file hygiene: 44 unique tests, 6 imports, and ban
 
   const fetchMatches = selfSrc.match(new RegExp(`fet${'ch'}\\(`, 'g')) || [];
   assert.equal(fetchMatches.length, 2);
+});
+
+test('town-npc/README.md daily-game Files-table row names real source artifacts', async () => {
+  const readme = readReadme();
+  const { dailyGameHostForDate, buildDailyGameLine, isDailyGamePosted } = await import('./daily-game.mjs');
+  assert.equal(typeof dailyGameHostForDate, 'function');
+  assert.equal(typeof buildDailyGameLine, 'function');
+  assert.equal(typeof isDailyGamePosted, 'function');
+
+  const src = fs.readFileSync(path.join(__dirname, 'daily-game.mjs'), 'utf8');
+  for (const fn of ['dailyGameHostForDate', 'buildDailyGameLine', 'isDailyGamePosted']) {
+    assert.ok(src.includes(`export function ${fn}`), `daily-game.mjs must export ${fn}`);
+  }
+
+  const row = readme.split('\n').find((line) => line.startsWith('| `daily-game.mjs` |'));
+  assert.ok(row, 'town-npc/README.md Files table must have a row for daily-game.mjs');
+  assert.equal(
+    row,
+    '| `daily-game.mjs` | Daily game host rotation (`dailyGameHostForDate`, `buildDailyGameLine`, `isDailyGamePosted`). |'
+  );
+});
+
+test('town-npc/README.md Running-it step 1 text matches register.mjs', () => {
+  const readme = readReadme();
+  const step1 =
+    "1. **Register once per API** (`register.mjs`): probes `/api/town/state`,\n" +
+    "   reuses or generates each NPC's keypair (never overwrites an existing one),\n" +
+    "   joins as resident, approves `role: 'npc'` using `--operator-key` (or\n" +
+    "   `TOWN_OPERATOR_KEY`), and PUTs `plots/<handle>/`.";
+  assert.ok(readme.includes(step1), 'town-npc/README.md Running-it step 1 must match verbatim');
+
+  const src = fs.readFileSync(path.join(__dirname, 'register.mjs'), 'utf8');
+  assert.ok(src.includes('/api/town/state'), 'register.mjs must probe /api/town/state');
+  assert.ok(
+    src.includes('ensureKeypair({ handle, stateDir, allowExisting: true })'),
+    'register.mjs must reuse an existing keypair instead of overwriting it'
+  );
+  assert.ok(src.includes("'/api/town/admin/approve'"), 'register.mjs must call /api/town/admin/approve');
+  assert.ok(src.includes('client.plot(manifest, html)'), 'register.mjs must PUT the plot via client.plot');
+  assert.ok(
+    src.includes("client.join({ origin: 'colony', bio: character.title })"),
+    'register.mjs must join with origin colony and the character title as bio'
+  );
+
+  const clientSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'ghostlight-client.mjs'), 'utf8');
+  assert.ok(
+    clientSrc.includes("this._signedPut('/api/town/plot'"),
+    'ghostlight-client.mjs plot() must PUT /api/town/plot'
+  );
+  assert.ok(
+    clientSrc.includes("this._signedPost('/api/town/join'"),
+    'ghostlight-client.mjs join() must POST /api/town/join'
+  );
+});
+
+test('town-npc/README.md Running-it step 2 text matches run-all.mjs', () => {
+  const readme = readReadme();
+  const step2 =
+    '2. **Scheduled turns** (`run-all.mjs`): runs `wick` → `maren` → `tomas`\n' +
+    '   sequentially in `CHARACTERS` order with a default 60 s stagger\n' +
+    '   (`--stagger-ms`). Probes `/api/town/state` first — if the API is down, it\n' +
+    '   logs one JSON error line, writes nothing, and exits 1. One NPC\'s failure\n' +
+    '   does not block the others.';
+  assert.ok(readme.includes(step2), 'town-npc/README.md Running-it step 2 must match verbatim');
+
+  const src = fs.readFileSync(path.join(__dirname, 'run-all.mjs'), 'utf8');
+  assert.ok(src.includes('async function probeTownApi'), 'run-all.mjs must define probeTownApi');
+  assert.ok(
+    src.indexOf('probeTownApi(base') < src.indexOf('runAll('),
+    'run-all.mjs must probe the API before running any turn'
+  );
+  assert.ok(src.includes('process.exit(1)'), 'run-all.mjs must exit 1 when the API probe fails');
+  assert.ok(src.includes('const DEFAULT_STAGGER_MS = 60_000;'), 'run-all.mjs stagger default must be 60_000 ms');
+  assert.ok(src.includes('try {'), 'run-all.mjs must wrap each NPC turn in try');
+  assert.ok(src.includes('} catch (err) {'), 'run-all.mjs must catch a single NPC failure');
+});
+
+test('town-npc/README.md live schedule paragraph matches verbatim', () => {
+  const readme = readReadme();
+  const para =
+    'Live schedule: the runtime-scheduler job `ghostlight-npc-run-all` runs\n' +
+    '`run-all.mjs` from the workspace copy every 3 hours. `PATH` must include\n' +
+    '`/home/hatch/.local/bin` because `agy` is not on the default non-login shell\n' +
+    '`PATH`.';
+  assert.ok(readme.includes(para), 'town-npc/README.md live schedule paragraph must match verbatim');
+});
+
+test('town-npc/README.md one-replier bullet text matches stepback.mjs', () => {
+  const readme = readReadme();
+  const bullet =
+    '- **One replier per line (`selectReplierForLine`):** at most one neighbor\n' +
+    '  answers any given Prompt Book line (addressed NPC, `plot:<handle>` presence,\n' +
+    '  or deterministic rotation — no `' + 'Math.' + 'random' + '`).';
+  assert.ok(readme.includes(bullet), 'town-npc/README.md one-replier bullet must match verbatim');
+
+  const src = fs.readFileSync(path.join(__dirname, 'stepback.mjs'), 'utf8');
+  assert.ok(src.includes('export function selectReplierForLine'), 'stepback.mjs must export selectReplierForLine');
+  assert.ok(src.includes('plot:'), 'stepback.mjs must handle plot:<handle> presence');
+  assert.ok(!src.includes('Math.' + 'random'), 'stepback.mjs must not use randomness for the replier pick');
+});
+
+test('town-npc/README.md keys and state bullet matches keygen.mjs', async () => {
+  const readme = readReadme();
+  const bullet =
+    '- **Keys & state (`npc_state/<handle>/`):** `key.pem` is written mode `0600`\n' +
+    '  alongside `pubkey.txt` (44-char base64), `memory.md`, and `state.json`.\n' +
+    '  Private keys are never committed or printed.';
+  assert.ok(readme.includes(bullet), 'town-npc/README.md keys and state bullet must match verbatim');
+
+  const { ensureKeypair } = await import('./keygen.mjs');
+  const tmp = fs.mkdtempSync('/tmp/slice471-keygen-');
+  try {
+    const keys = ensureKeypair({ handle: 'wick', stateDir: tmp, allowExisting: false });
+    const pub = fs.readFileSync(path.join(tmp, 'wick', 'pubkey.txt'), 'utf8');
+    assert.equal(pub.length, 44, 'pubkey.txt must hold a 44-char base64 public key');
+    assert.equal(keys.pubkey, pub, 'ensureKeypair pubkey must equal the written pubkey.txt');
+    const mode = fs.statSync(path.join(tmp, 'wick', 'key.pem')).mode & 0o777;
+    assert.equal(mode, 0o600, 'key.pem must be written mode 0600');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('town-npc/README.md town clock bullet matches verbatim', () => {
+  const readme = readReadme();
+  const bullet = '- **Town clock:** `America/Los_Angeles` (`getPartOfDay` via `Intl.DateTimeFormat`).';
+  assert.ok(readme.includes(bullet), 'town-npc/README.md town clock bullet must match verbatim');
+});
+
+test('town-npc/README.md opening paragraph matches verbatim', () => {
+  const readme = readReadme();
+  const para =
+    'Seed NPC runner for Ghostlight Town. Three Gemini-played residents keep the\n' +
+    "Bandstand from sitting empty when the town is quiet, wear an `[NPC]` badge\n" +
+    "assigned by the server (`role: 'npc'`, never self-announced), and step back\n" +
+    'into staff roles as real external muses arrive.';
+  assert.ok(readme.includes(para), 'town-npc/README.md opening paragraph must match verbatim');
+  assert.deepEqual(readme.split('\n').slice(2, 6).join('\n'), para);
+});
+
+test('town-npc/README.md brain paragraph matches run.mjs', () => {
+  const readme = readReadme();
+  const para =
+    'By default `run.mjs` invokes `agy --model gemini-4-hydrogen-medium -p`\n' +
+    '(Hydrogen) with a 120 s timeout (`BRAIN_TIMEOUT_MS = 120_000`). Set\n' +
+    '`NPC_BRAIN_CMD` to override the command (or inject a fake brain via `brainImpl`\n' +
+    'in tests).';
+  assert.ok(readme.includes(para), 'town-npc/README.md brain paragraph must match verbatim');
+
+  const src = fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8');
+  assert.ok(src.includes('brainImpl = defaultBrain'), 'run.mjs must accept a brainImpl injection');
+  assert.ok(src.includes('process.env.NPC_BRAIN_CMD'), 'run.mjs must read NPC_BRAIN_CMD');
+});
+
+test('town-npc/README.md honesty bullet matches server CAPS.say', () => {
+  const readme = readReadme();
+  const bullet =
+    '- **Honesty gate (`honesty.mjs`):** 500-char cap (`MAX_SAY_LEN = 500`, matching\n' +
+    '  `CAPS.say` in `town-api/server.mjs`), denylist phrases, and fabricated-attribution\n' +
+    '  checks; over-long or dishonest lines are dropped and never posted.';
+  assert.ok(readme.includes(bullet), 'town-npc/README.md honesty bullet must match verbatim');
+
+  const honestySrc = fs.readFileSync(path.join(__dirname, 'honesty.mjs'), 'utf8');
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(honestySrc.includes('export const MAX_SAY_LEN = 500;'), 'honesty.mjs must declare MAX_SAY_LEN = 500');
+  assert.match(serverSrc, /say:\s*500/, 'town-api/server.mjs CAPS.say must be 500');
 });
