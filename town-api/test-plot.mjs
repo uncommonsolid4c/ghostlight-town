@@ -1775,8 +1775,8 @@ test('decodeHtmlEntities further + data-URI spaces + test-plot self hygiene', ()
 
   const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 44);
-  assert.equal(new Set(names).size, 44);
+  assert.equal(names.length, 54);
+  assert.equal(new Set(names).size, 54);
   assert.equal(src.includes('Math' + '.' + 'random'), false);
   assert.equal(src.includes('Date' + '.' + 'now'), false);
   assert.equal(src.includes('TO' + 'DO'), false);
@@ -1791,3 +1791,435 @@ test('decodeHtmlEntities further + data-URI spaces + test-plot self hygiene', ()
     true
   );
 });
+
+test('validateManifest non-object inputs and non-array props shapes', () => {
+  assert.deepEqual(validateManifest(null), { ok: false, error: 'invalid_manifest' });
+  assert.deepEqual(validateManifest([]), { ok: false, error: 'invalid_manifest' });
+  assert.deepEqual(validateManifest('gable'), { ok: false, error: 'invalid_manifest' });
+  assert.deepEqual(validateManifest(42), { ok: false, error: 'invalid_manifest' });
+
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, props: null }), {
+    ok: false,
+    error: 'invalid_props',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, props: 42 }), {
+    ok: false,
+    error: 'invalid_props',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, props: {} }), {
+    ok: false,
+    error: 'invalid_props',
+  });
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: [42] }),
+    { ok: false, error: 'invalid_prop', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...VALID_MANIFEST, props: ['desk'] }),
+    { ok: false, error: 'invalid_prop', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 }, 'x'],
+    }),
+    { ok: false, error: 'invalid_prop', index: 1 }
+  );
+});
+
+test('validateManifest remaining coord and rotation boundaries', () => {
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: -12, y: 0, z: 0, rot_y: 0 }],
+    }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: -12.0001, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 12, z: 0, rot_y: 0 }],
+    }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: -12.0001, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'y', index: 0 }
+  );
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 12, rot_y: 0 }],
+    }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: -12.0001, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'z', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: '0', y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: null, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: -360 }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: null }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: true }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'DESK', x: 0, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: null, x: 0, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 42, x: 0, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+});
+
+test('validateManifest color edges and canonical key order', () => {
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, wall: '' }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, wall: '#aabbccdd' }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, wall: '#aabbcc ' }), {
+    ok: false,
+    error: 'invalid_color',
+    field: 'wall',
+  });
+  assert.equal(validateManifest({ ...VALID_MANIFEST, roof: '#AABBCC' }).ok, true);
+  assert.equal(validateManifest({ ...VALID_MANIFEST, roof: '#AABBCC' }).manifest.roof, '#AABBCC');
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: '#aabbccdd' }],
+    }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0, color: 42 }],
+    }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+
+  assert.deepEqual(
+    Object.keys(
+      validateManifest({
+        ...VALID_MANIFEST,
+        props: [{ color: '#ABCDEF', rot_y: 0, z: 0, y: 0, x: 0, kind: 'desk' }],
+      }).manifest.props[0]
+    ),
+    ['kind', 'x', 'y', 'z', 'rot_y', 'color']
+  );
+  assert.deepEqual(
+    Object.keys(
+      validateManifest({
+        props: [],
+        signpost_text: '',
+        trim: '#445566',
+        roof: '#112233',
+        wall: '#aabbcc',
+        cottage: 'cabin',
+      }).manifest
+    ),
+    ['cottage', 'wall', 'roof', 'trim', 'signpost_text', 'props']
+  );
+  assert.equal(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [
+        { kind: 'cat', x: 0, y: 0, z: 0, rot_y: 0 },
+        { kind: 'cat', x: 1, y: 0, z: 0, rot_y: 90 },
+      ],
+    }).ok,
+    true
+  );
+});
+
+test('validateHtml allows non-forbidden tags and data-onclick; contrasting rejects', () => {
+  for (const html of [
+    '<svg><circle r="5"/></svg>',
+    '<video src="clips/intro.mp4" controls></video>',
+    '<audio src="audio/theme.mp3"></audio>',
+    '<input type="text" value="hi">',
+    '<button type="button">x</button>',
+    '<select><option>a</option></select>',
+    '<textarea rows="3">hi</textarea>',
+    '<details><summary>s</summary>d</details>',
+    '<canvas width="10"></canvas>',
+    '<pre><code>x</code></pre>',
+    '<div data-onclick="x()">x</div>',
+    '<div x-on:click="x()">x</div>',
+    '<font color="red">x</font>',
+    '<marquee>hi</marquee>',
+  ]) {
+    assert.deepEqual(validateHtml(html), { ok: true }, `Expected ok for: ${html}`);
+  }
+
+  assert.deepEqual(validateHtml('<audio src="https://evil.example/x.mp3">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<video poster="data:text/html,hi">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+  assert.deepEqual(validateHtml('<input formaction="javascript:alert(1)">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<body onload="x()">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_attr:onload',
+  });
+  assert.deepEqual(validateHtml('<img src="data:text/html,<p>hi</p>">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+});
+
+test('validateHtml action URI attr, data-URI edges, percent-encoded scheme', () => {
+  assert.deepEqual(validateHtml('<a action="javascript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="data:image/png;base64,iVBORw0=">x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<a href="data:image/png">x</a>'), { ok: true });
+  assert.deepEqual(validateHtml('<img src="data:image/webp;base64,xxx">'), { ok: true });
+  assert.deepEqual(validateHtml('<a href="data:;base64,xxx">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="blob:https://example.com/x">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="about:blank">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<a href="file:///etc/passwd">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  // Percent-encoding is not decoded by the URI check, so the scheme never matches.
+  assert.deepEqual(validateHtml('<a href="java%0ascript:alert(1)">x</a>'), { ok: true });
+});
+
+test('decodeHtmlEntities remaining named and numeric edges', () => {
+  assert.equal(decodeHtmlEntities('&gt;'), '>');
+  assert.equal(decodeHtmlEntities('&amp;'), '&');
+  assert.equal(decodeHtmlEntities('&#9;'), '\t');
+  assert.equal(decodeHtmlEntities('&#x9;'), '\t');
+  assert.equal(decodeHtmlEntities('&#65;'), 'A');
+  assert.equal(decodeHtmlEntities('&#x41;'), 'A');
+  assert.equal(decodeHtmlEntities('&#X41;'), 'A');
+  assert.equal(decodeHtmlEntities('&123;'), '&123;');
+  assert.equal(decodeHtmlEntities('&#;'), '&#;');
+  assert.equal(decodeHtmlEntities('&#x;'), '&#x;');
+  assert.equal(decodeHtmlEntities('&nbsp'), ' ');
+  assert.equal(decodeHtmlEntities('&ampx;'), '&ampx;');
+  assert.equal(decodeHtmlEntities('&#xZZ;'), '&#xZZ;');
+  assert.equal(decodeHtmlEntities('&colon'), ':');
+  assert.equal(decodeHtmlEntities('&lt'), '<');
+  assert.equal(decodeHtmlEntities('a&#38;b'), 'a&b');
+});
+
+test('GET passthrough, milo handle, and server-level non-string plot bodies', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+
+    // Resident exists but has no plot yet: 404, not a handle error.
+    const noPlot = await client.getPlot('alice');
+    assert.equal(noPlot.status, 404);
+    assert.deepEqual(noPlot.data, { error: 'plot_not_found' });
+
+    // milo is not a resident: 404 plot_not_found, not invalid_handle.
+    const miloGet = await client.getPlot('milo');
+    assert.equal(miloGet.status, 404);
+    assert.deepEqual(miloGet.data, { error: 'plot_not_found' });
+
+    // Non-string html / non-object manifest reach the server checks verbatim.
+    const html42 = await client.plot(VALID_MANIFEST, 42);
+    assert.equal(html42.status, 400);
+    assert.deepEqual(html42.data, { error: 'missing_html' });
+    const htmlNull = await client.plot(VALID_MANIFEST, null);
+    assert.equal(htmlNull.status, 400);
+    assert.deepEqual(htmlNull.data, { error: 'missing_html' });
+    const manStr = await client.plot('x', VALID_HTML);
+    assert.equal(manStr.status, 400);
+    assert.deepEqual(manStr.data, { error: 'invalid_manifest' });
+    const manNum = await client.plot(42, VALID_HTML);
+    assert.equal(manNum.status, 400);
+    assert.deepEqual(manNum.data, { error: 'invalid_manifest' });
+
+    // Whitespace-only html is valid content.
+    const wsPut = await client.plot(VALID_MANIFEST, '   ');
+    assert.equal(wsPut.status, 200);
+
+    // GET returns the stored bytes with no re-validation: a hand-written
+    // partial manifest comes back verbatim.
+    fs.writeFileSync(path.join(ctx.plotsDir, 'alice', 'manifest.json'), '{"cottage":"gable"}', 'utf8');
+    const passGet = await client.getPlot('alice');
+    assert.equal(passGet.status, 200);
+    assert.deepEqual(passGet.data.manifest, { cottage: 'gable' });
+    assert.equal(passGet.data.html, '   ');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('multi-byte HTML byte boundary at the server and validator', async () => {
+  // 'é' is 2 bytes: 3 + 32760 + 1 + 4 = 32768 bytes exactly; one more byte over.
+  const exactHtml = '<p>' + 'é'.repeat(16380) + 'x' + '</p>';
+  assert.equal(Buffer.byteLength(exactHtml, 'utf8'), 32768);
+  assert.deepEqual(validateHtml(exactHtml), { ok: true });
+
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'alice');
+    const exactPut = await client.plot(VALID_MANIFEST, exactHtml);
+    assert.equal(exactPut.status, 200);
+
+    const overHtml = '<p>' + 'é'.repeat(16380) + 'xx' + '</p>';
+    assert.equal(Buffer.byteLength(overHtml, 'utf8'), 32769);
+    assert.deepEqual(validateHtml(overHtml), {
+      ok: false,
+      error: 'html_too_large',
+      max: 32768,
+    });
+    const overPut = await client.plot(VALID_MANIFEST, overHtml);
+    assert.equal(overPut.status, 400);
+    assert.deepEqual(overPut.data, { error: 'html_too_large', max: 32768 });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('validateHtml quote, comment, and attribute parsing edges', () => {
+  assert.deepEqual(validateHtml(`<div style="content:'</div>'">x</div>`), { ok: true });
+  assert.deepEqual(validateHtml("<a href='single'>x</a>"), { ok: true });
+  assert.deepEqual(validateHtml('<a href=relative>x</a>'), { ok: true });
+  assert.deepEqual(validateHtml(`<p a="1" b='2' c=3>x</p>`), { ok: true });
+  assert.deepEqual(validateHtml('<div data-x="1>2">x</div>'), { ok: true });
+  assert.deepEqual(validateHtml('<!-- a > b --><p>x</p>'), { ok: true });
+  assert.deepEqual(validateHtml('<div '), { ok: true });
+  assert.deepEqual(validateHtml('<div hidden>x</div>'), { ok: true });
+});
+
+test('validateHtml closing tags: safe ones pass, forbidden ones still reject', () => {
+  assert.deepEqual(validateHtml('</div>'), { ok: true });
+  assert.deepEqual(validateHtml('</p>'), { ok: true });
+  assert.deepEqual(validateHtml('</b>'), { ok: true });
+  assert.deepEqual(validateHtml('</meta>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:meta',
+  });
+  assert.deepEqual(validateHtml('</title>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:title',
+  });
+  assert.deepEqual(validateHtml('</form>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:form',
+  });
+  assert.deepEqual(validateHtml('</iframe>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:iframe',
+  });
+  assert.deepEqual(validateHtml('</link>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:link',
+  });
+  assert.deepEqual(validateHtml('</base>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:base',
+  });
+  assert.deepEqual(validateHtml('</object>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:object',
+  });
+  assert.deepEqual(validateHtml('</embed>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'forbidden_tag:embed',
+  });
+});
+
