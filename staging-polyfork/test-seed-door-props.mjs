@@ -1028,3 +1028,219 @@ test('single import and single call in staging.js, no town.js copy, and single i
   const modImports = modSrc.match(/^import /gm) || [];
   assert.equal(modImports.length, 1);
 });
+
+test('door-prop horizontal footprints: exact x/z extents per prop', () => {
+  const THREE = makeFakeThree();
+  function footprint(prop) {
+    let xMin = Infinity;
+    let xMax = -Infinity;
+    let zMin = Infinity;
+    let zMax = -Infinity;
+    for (const child of prop.children) {
+      let hx;
+      let hz;
+      if (child.geometry.type === 'CylinderGeometry') {
+        const [rt, rb, h] = child.geometry.args;
+        const r = Math.max(rt, rb);
+        if (Math.abs(child.rotation.z - Math.PI / 2) < 1e-6) {
+          hx = h / 2;
+          hz = r;
+        } else {
+          hx = r;
+          hz = r;
+        }
+      } else {
+        hx = child.geometry.args[0] / 2;
+        hz = child.geometry.args[2] / 2;
+      }
+      xMin = Math.min(xMin, child.position.x - hx);
+      xMax = Math.max(xMax, child.position.x + hx);
+      zMin = Math.min(zMin, child.position.z - hz);
+      zMax = Math.max(zMax, child.position.z + hz);
+    }
+    return { xMin, xMax, zMin, zMax };
+  }
+  assert.deepEqual(footprint(attachSeedDoorProp(THREE, new THREE.Group(), 'wick')), { xMin: -0.18, xMax: 0.18, zMin: -0.18, zMax: 0.18 });
+  assert.deepEqual(footprint(attachSeedDoorProp(THREE, new THREE.Group(), 'maren')), { xMin: -0.35, xMax: 0.35, zMin: -0.275, zMax: 0.275 });
+  assert.deepEqual(footprint(attachSeedDoorProp(THREE, new THREE.Group(), 'tomas')), { xMin: -0.2, xMax: 0.27, zMin: -0.2, zMax: 0.2 });
+});
+
+test('material color table: exact color per child across all nine children', () => {
+  const THREE = makeFakeThree();
+  const colors = {};
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    colors[handle] = attachSeedDoorProp(THREE, new THREE.Group(), handle).children.map((c) => c.material.color);
+  }
+  assert.deepEqual(colors.wick, ['#9a7b3e', '#fff1c9', '#9a7b3e']);
+  assert.deepEqual(colors.maren, ['#6b492b', '#2b2f33', '#d8d2c5']);
+  assert.deepEqual(colors.tomas, ['#8f6b47', '#8f6b47', '#8f6b47']);
+});
+
+test('rotY spacing: near-equal steps, span, and sum', () => {
+  const THREE = makeFakeThree();
+  const rotY = {};
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    rotY[handle] = attachSeedDoorProp(THREE, new THREE.Group(), handle).rotation.y;
+  }
+  assert.ok(Math.abs((rotY.wick - rotY.maren) - -0.5208) < 1e-9);
+  assert.ok(Math.abs((rotY.maren - rotY.tomas) - -0.5203) < 1e-9);
+  assert.ok(Math.abs((rotY.wick - rotY.tomas) - -1.0411) < 1e-9);
+  assert.ok(Math.abs((rotY.wick + rotY.maren + rotY.tomas) - -1.958) < 1e-9);
+});
+
+test('interior dressing reuses the same builders: hidden groups on the desk-top slot', async () => {
+  const { buildInteriorRoom } = await import('./interior-room.mjs');
+  const THREE = makeFakeThree();
+  THREE.ConeGeometry = class ConeGeometry {
+    constructor(r, h, seg) {
+      this.type = 'ConeGeometry';
+      this.args = [r, h, seg];
+    }
+  };
+  const room = buildInteriorRoom(THREE);
+  assert.equal(room.children.length, 19);
+  function serializeChildren(group) {
+    return group.children.map((child) => ({
+      type: child.geometry.type,
+      args: [...child.geometry.args],
+      color: child.material.color,
+      opts: { ...child.material.opts },
+      pos: [child.position.x, child.position.y, child.position.z],
+      rot: [child.rotation.x, child.rotation.y, child.rotation.z],
+    }));
+  }
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const dressing = room.children.find((c) => c && c.name === `interior_dressing_${handle}`);
+    assert.ok(dressing, `expected interior_dressing_${handle} in the room`);
+    assert.equal(dressing.visible, false);
+    assert.equal(dressing.position.x, -0.8);
+    assert.ok(Math.abs(dressing.position.y - 0.8) < 1e-9);
+    assert.equal(dressing.position.z, -0.85);
+    const door = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    assert.deepEqual(serializeChildren(dressing), serializeChildren(door));
+  }
+});
+
+test('geometry type table: exact type per child across all nine children', () => {
+  const THREE = makeFakeThree();
+  const types = {};
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    types[handle] = attachSeedDoorProp(THREE, new THREE.Group(), handle).children.map((c) => c.geometry.type);
+  }
+  assert.deepEqual(types.wick, ['CylinderGeometry', 'CylinderGeometry', 'BoxGeometry']);
+  assert.deepEqual(types.maren, ['BoxGeometry', 'BoxGeometry', 'CylinderGeometry']);
+  assert.deepEqual(types.tomas, ['CylinderGeometry', 'BoxGeometry', 'CylinderGeometry']);
+});
+
+test('material sharing matrix: wick shares brass, maren shares nothing, tomas shares all', () => {
+  const THREE = makeFakeThree();
+  const wick = attachSeedDoorProp(THREE, new THREE.Group(), 'wick');
+  assert.equal(wick.children[0].material, wick.children[2].material);
+  assert.notEqual(wick.children[0].material, wick.children[1].material);
+  assert.notEqual(wick.children[1].material, wick.children[2].material);
+  const maren = attachSeedDoorProp(THREE, new THREE.Group(), 'maren');
+  assert.notEqual(maren.children[0].material, maren.children[1].material);
+  assert.notEqual(maren.children[0].material, maren.children[2].material);
+  assert.notEqual(maren.children[1].material, maren.children[2].material);
+  const tomas = attachSeedDoorProp(THREE, new THREE.Group(), 'tomas');
+  assert.equal(tomas.children[0].material, tomas.children[1].material);
+  assert.equal(tomas.children[1].material, tomas.children[2].material);
+  assert.equal(tomas.children[0].material, tomas.children[2].material);
+});
+
+test('attachSeedDoorProp rejects whitespace, control-char, and lookalike string handles', () => {
+  const THREE = makeFakeThree();
+  for (const handle of ['\twick', 'wick\n', 'wick\u0000', 'WICK', 'Wick ', ' wick\t', 'wick/wick', 'wick.wick']) {
+    const cottage = new THREE.Group();
+    const res = attachSeedDoorProp(THREE, cottage, handle);
+    assert.equal(res, null, `expected null for handle ${JSON.stringify(handle)}`);
+    assert.equal(cottage.children.length, 0);
+  }
+});
+
+test('per-child vertical extents: exact bottom/top per child', () => {
+  const THREE = makeFakeThree();
+  function vExtent(child) {
+    let halfH;
+    if (child.geometry.type === 'CylinderGeometry') {
+      halfH = Math.abs(child.rotation.z - Math.PI / 2) < 1e-6
+        ? Math.max(child.geometry.args[0], child.geometry.args[1])
+        : child.geometry.args[2] / 2;
+    } else {
+      halfH = child.geometry.args[1] / 2;
+    }
+    return [child.position.y - halfH, child.position.y + halfH];
+  }
+  function assertExtents(actual, expected, label) {
+    assert.equal(actual.length, expected.length, `${label} child count`);
+    for (let i = 0; i < expected.length; i++) {
+      assert.ok(Math.abs(actual[i][0] - expected[i][0]) < 1e-9, `${label} child ${i} bottom ${actual[i][0]} expected ${expected[i][0]}`);
+      assert.ok(Math.abs(actual[i][1] - expected[i][1]) < 1e-9, `${label} child ${i} top ${actual[i][1]} expected ${expected[i][1]}`);
+    }
+  }
+  assertExtents(attachSeedDoorProp(THREE, new THREE.Group(), 'wick').children.map(vExtent), [[0, 0.14], [0.14, 0.38], [0.13, 0.31]], 'wick');
+  assertExtents(attachSeedDoorProp(THREE, new THREE.Group(), 'maren').children.map(vExtent), [[0, 0.08], [0.08, 0.26], [0.23, 0.33]], 'maren');
+  assertExtents(attachSeedDoorProp(THREE, new THREE.Group(), 'tomas').children.map(vExtent), [[0, 0.28], [0.155, 0.205], [0.28, 0.36]], 'tomas');
+});
+
+test('manifest prop kinds are exact per seed, and no manifest carries a door-prop kind', async () => {
+  const plotsDir = path.join(__dirname, '..', 'town-npc', 'plots');
+  const kinds = {};
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const raw = await fs.readFile(path.join(plotsDir, handle, 'manifest.json'), 'utf8');
+    kinds[handle] = JSON.parse(raw).props.map((p) => p.kind);
+  }
+  assert.deepEqual(kinds.wick, ['desk', 'rug', 'poster_frame']);
+  assert.deepEqual(kinds.maren, ['desk', 'typewriter', 'bookshelf', 'poster_frame']);
+  assert.deepEqual(kinds.tomas, ['rug', 'bookshelf', 'tea_kettle', 'cat']);
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    assert.ok(!kinds[handle].includes('oil_lamp'), `${handle} manifest must not carry oil_lamp`);
+    assert.ok(!kinds[handle].includes('teapot'), `${handle} manifest must not carry teapot`);
+  }
+});
+
+test('file hygiene: 53 tests, 8 imports, no banned literals', async () => {
+  const [modSrc, selfSrc] = await Promise.all([
+    fs.readFile(MODULE_PATH, 'utf8'),
+    fs.readFile(SELF_PATH, 'utf8'),
+  ]);
+  const names = [...selfSrc.matchAll(/^test\(['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+  assert.equal(names.length, 53);
+  assert.equal(new Set(names).size, 53);
+  const importLines = [...selfSrc.matchAll(/^import .*$/gm)].map((m) => m[0]);
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "import { attachSeedDoorProp } from './seed-door-props.mjs';",
+    "import { CHARACTERS } from '../town-npc/characters.mjs';",
+    "import { TOWN_LAYOUT, SEED_HOME_PADS } from './avatar.mjs';",
+  ]);
+  function count(src, lit) {
+    return src.split(lit).length - 1;
+  }
+  const banned = 'camp' + '[f]ire';
+  assert.equal((modSrc.match(new RegExp(banned, 'g')) || []).length, 0);
+  assert.equal((selfSrc.match(new RegExp(banned, 'g')) || []).length, 0);
+  const fetchLit = 'fet' + 'ch(';
+  assert.equal(count(modSrc, fetchLit), 0);
+  assert.equal(count(selfSrc, fetchLit), 2);
+  const randomLit = 'Math.rand' + 'om';
+  assert.equal(count(modSrc, randomLit), 0);
+  assert.equal(count(selfSrc, randomLit), 0);
+  const nowLit = 'Date.' + 'now';
+  assert.equal(count(modSrc, nowLit), 0);
+  assert.equal(count(selfSrc, nowLit), 0);
+  const todoLit = 'TO' + 'DO';
+  assert.equal(count(modSrc, todoLit), 0);
+  assert.equal(count(selfSrc, todoLit), 0);
+  const fixmeLit = 'FIX' + 'ME';
+  assert.equal(count(modSrc, fixmeLit), 0);
+  assert.equal(count(selfSrc, fixmeLit), 0);
+  for (const lit of ['100.10' + '5', '81' + '23', '81' + '24', '81' + '25']) {
+    assert.equal(count(modSrc, lit), 0, `module must not contain ${lit}`);
+    assert.equal(count(selfSrc, lit), 0, `test file must not contain ${lit}`);
+  }
+});
