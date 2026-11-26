@@ -761,3 +761,217 @@ test('buildNoticeBoardOverlayHtml has exactly one em-dash in each of the three <
     );
   }
 });
+
+test('staging.js NOTICE_BOARD_PAPERS third copy matches the overlay and town.js copies', async () => {
+  const [stagingSrc, overlaySrc, townSrc] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'notice-board-overlay.mjs'), 'utf8'),
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+  ]);
+  const re = /const NOTICE_BOARD_PAPERS = \[([\s\S]*?)\];/;
+  const stagingBlock = stagingSrc.match(re);
+  const overlayBlock = overlaySrc.match(re);
+  const townBlock = townSrc.match(re);
+  assert.ok(stagingBlock, 'staging.js must define NOTICE_BOARD_PAPERS');
+  assert.ok(overlayBlock, 'notice-board-overlay.mjs must define NOTICE_BOARD_PAPERS');
+  assert.ok(townBlock, 'town-3d/town.js must define NOTICE_BOARD_PAPERS');
+  assert.equal(stagingBlock[0], overlayBlock[0]);
+  assert.equal(stagingBlock[0], townBlock[0]);
+});
+
+test('notice-board-overlay.mjs escapeHtml source stays verbatim with five ordered replaces', async () => {
+  const overlaySrc = await fs.readFile(path.join(__dirname, 'notice-board-overlay.mjs'), 'utf8');
+  const match = overlaySrc.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(match, 'notice-board-overlay.mjs must define escapeHtml');
+  assert.deepEqual(
+    match[0],
+    [
+      'function escapeHtml(value) {',
+      "  return String(value ?? '')",
+      "    .replace(/&/g, '&amp;')",
+      "    .replace(/</g, '&lt;')",
+      "    .replace(/>/g, '&gt;')",
+      '    .replace(/"/g, \'&quot;\')',
+      "    .replace(/'/g, '&#39;');",
+      '}',
+    ].join('\n'),
+  );
+  assert.ok(overlaySrc.includes("const title = escapeHtml(lines[0] ?? '');"));
+  assert.ok(overlaySrc.includes("const body = escapeHtml(lines.slice(1).join(' '));"));
+});
+
+test('staging.js buildNoticeBoard pins posts, panel, papers, and noticeBoard layout', async () => {
+  const [stagingSrc, townSrc] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+  ]);
+  const needles = [
+    '  const { x, z } = TOWN_LAYOUT.noticeBoard;',
+    "  group.name = 'town_notice_board';",
+    '  group.rotation.y = Math.atan2(-x, -z);',
+    "  group.userData = { clickable: true, kind: 'notice_board', label: 'Notice Board' };",
+    "  const woodMat = new THREE.MeshStandardMaterial({ color: '#6b492b', roughness: 0.88 });",
+    '  const postGeo = new THREE.BoxGeometry(0.12, 2.2, 0.12);',
+    '  for (const postX of [-0.95, 0.95]) {',
+    '    post.position.set(postX, 1.1, 0);',
+    "  const panelTex = makeBandstandTextTexture(THREE, ['NOTICE BOARD'], {",
+    '    titleSize: 44,',
+    '  const panel = new THREE.Mesh(',
+    '    new THREE.BoxGeometry(2.2, 1.3, 0.08),',
+    '  panel.position.set(0, 1.35, 0);',
+    '  const paperGeo = new THREE.BoxGeometry(0.5, 0.7, 0.02);',
+    '    paper.position.set(paperX, 1.35, 0.06);',
+  ];
+  for (const needle of needles) {
+    assert.ok(stagingSrc.includes(needle), `staging.js must include line: ${needle}`);
+  }
+  const layoutMatch = townSrc.match(
+    /noticeBoard: \{\n    x: (-?[\d.]+),\n    y: (-?[\d.]+),\n    z: (-?[\d.]+),\n  \}/,
+  );
+  assert.ok(layoutMatch, 'town-3d/town.js must define TOWN_LAYOUT.noticeBoard');
+  assert.deepEqual(
+    [Number(layoutMatch[1]), Number(layoutMatch[2]), Number(layoutMatch[3])],
+    [-6, 0, 14],
+  );
+});
+
+test('staging.js notice_board click branch opens the overlay with plot elements and returns true', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const expectedBlock = [
+    "        if (kind === 'notice_board') {",
+    '          if (infoStripEl) infoStripEl.hidden = true;',
+    '          currentPlotHandle = null;',
+    '          setPlotTabs(null);',
+    '          openNoticeBoardOverlay({',
+    '            overlayEl: plotOverlayEl,',
+    '            titleEl: plotOverlayTitleEl,',
+    '            iframeEl: plotIframeEl,',
+    '            onBeforeOpen: onBeforeOverlayOpen,',
+    '          });',
+    '          return true;',
+    '        }',
+  ].join('\n');
+  assert.ok(stagingSrc.includes(expectedBlock), 'staging.js must include the exact notice_board click branch');
+});
+
+test('staging.js notice-board-overlay import is unversioned with exactly one call site', async () => {
+  const [stagingSrc, indexHtml] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8'),
+  ]);
+  const lines = stagingSrc.split('\n');
+  assert.deepEqual(
+    lines[60],
+    "import { openNoticeBoardOverlay } from './notice-board-overlay.mjs';",
+  );
+  assert.equal((stagingSrc.match(/openNoticeBoardOverlay\(/g) || []).length, 1);
+  assert.equal(stagingSrc.includes('notice-board-overlay.mjs?v='), false);
+  assert.equal(indexHtml.includes('notice-board-overlay'), false);
+});
+
+test('buildNoticeBoardOverlayHtml has exact byte length, line count, and shell line positions', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  const lines = html.split('\n');
+  assert.equal(Buffer.byteLength(html, 'utf8'), 978);
+  assert.equal(html.length, 972);
+  assert.equal(lines.length, 29);
+  assert.equal(lines[0], '<!doctype html>');
+  assert.equal(lines[1], '<html lang="en">');
+  assert.equal(lines[2], '<head>');
+  assert.equal(lines[3], '  <meta charset="utf-8">');
+  assert.equal(lines[14], '  <h1>Notice Board</h1>');
+  assert.equal(lines[28], '</html>');
+});
+
+test('openNoticeBoardOverlay opens normally for non-function truthy and falsy onBeforeOpen values', () => {
+  const expectedHtml = buildNoticeBoardOverlayHtml();
+  for (const onBeforeOpen of [42, {}, [], 0, '']) {
+    const els = makeFakeOverlayElements();
+    const html = openNoticeBoardOverlay({ ...els, onBeforeOpen });
+    assert.equal(html, expectedHtml);
+    assert.equal(els.overlayEl.hidden, false);
+    assert.equal(els.iframeEl.srcdoc, html);
+  }
+});
+
+test('openNoticeBoardOverlay accepts plain-object elements but throws for a plain iframe object', () => {
+  const expectedHtml = buildNoticeBoardOverlayHtml();
+
+  const els1 = makeFakeOverlayElements();
+  const html1 = openNoticeBoardOverlay({ overlayEl: {}, titleEl: {}, iframeEl: els1.iframeEl });
+  assert.equal(html1, expectedHtml);
+
+  const els2 = makeFakeOverlayElements();
+  const html2 = openNoticeBoardOverlay({
+    overlayEl: els2.overlayEl,
+    titleEl: {},
+    iframeEl: els2.iframeEl,
+  });
+  assert.equal(html2, expectedHtml);
+
+  const els3 = makeFakeOverlayElements();
+  assert.throws(
+    () => openNoticeBoardOverlay({ overlayEl: els3.overlayEl, titleEl: els3.titleEl, iframeEl: {} }),
+    TypeError,
+  );
+});
+
+test('notice paper x-order matches the overlay h2 order left to right', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const papersMatch = stagingSrc.match(/const NOTICE_BOARD_PAPERS = \[([\s\S]*?)\];/);
+  assert.ok(papersMatch, 'staging.js must define NOTICE_BOARD_PAPERS');
+
+  const entryRe = /\['(notice_board_paper_\w+)',\s*(-?[\d.]+),\s*\[((?:'[^']*',?\s*)+)\]\]/g;
+  const entries = [...papersMatch[1].matchAll(entryRe)].map((m) => ({
+    x: Number(m[2]),
+    lines: [...m[3].matchAll(/'([^']*)'/g)].map((lm) => lm[1]),
+  }));
+  entries.sort((a, b) => a.x - b.x);
+  const orderedTitles = entries.map((e) => e.lines[0]);
+
+  const html = buildNoticeBoardOverlayHtml();
+  const h2Titles = [...html.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((m) => m[1]);
+  assert.deepEqual(orderedTitles, h2Titles);
+  assert.deepEqual(h2Titles, ['GAZETTE #2', 'THE INN', 'SOCIAL GATE']);
+});
+
+test('file hygiene: 47 unique names, 6 imports, pinned as-true counts', async () => {
+  const src = await fs.readFile(new URL(import.meta.url), 'utf8');
+  const lines = src.split('\n');
+
+  const singleQuoted = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  const doubleQuoted = [...src.matchAll(/^test\("([^"]+)",/gm)].map((m) => m[1]);
+  assert.equal(singleQuoted.length, 46);
+  assert.equal(doubleQuoted.length, 1);
+  assert.equal(new Set([...singleQuoted, ...doubleQuoted]).size, 47);
+
+  const importLines = lines.filter((line) => line.startsWith('import '));
+  assert.equal(importLines.length, 6);
+  assert.deepEqual(lines.slice(0, 5), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+  ]);
+  assert.deepEqual(lines.slice(6, 10), [
+    'import {',
+    '  buildNoticeBoardOverlayHtml,',
+    '  openNoticeBoardOverlay,',
+    "} from './notice-board-overlay.mjs';",
+  ]);
+
+  const bannedTerm = 'camp' + 'fire';
+  const todoNeedle = 'TO' + 'DO';
+  const fixmeNeedle = 'FIX' + 'ME';
+  const dateNowRe = new RegExp('Date' + '.now');
+  const mathRandomRe = new RegExp('Math' + '.random');
+  const fetchNeedle = 'fet' + 'ch(';
+
+  assert.equal(lines.filter((l) => l.toLowerCase().includes(bannedTerm)).length, 0);
+  assert.equal(lines.filter((l) => l.includes(todoNeedle)).length, 0);
+  assert.equal(lines.filter((l) => l.includes(fixmeNeedle)).length, 0);
+  assert.equal(lines.filter((l) => dateNowRe.test(l)).length, 0);
+  assert.equal(lines.filter((l) => mathRandomRe.test(l)).length, 0);
+  assert.equal(lines.filter((l) => l.includes(fetchNeedle)).length, 0);
+});
