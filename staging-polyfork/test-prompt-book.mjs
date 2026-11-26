@@ -896,3 +896,173 @@ test('prompt-book.mjs has no fetch, Math.random, innerHTML, or imports, exports 
   );
   assert.equal(src.includes('Copied verbatim from town-3d/town.js'), true);
 });
+
+test('renderPromptBook doc.created accounting for empty and mixed three-role renders', () => {
+  // Empty render creates exactly the one <p>.
+  const doc0 = createFakeDoc();
+  const c0 = doc0.makeContainer();
+  renderPromptBook(c0, [], doc0);
+  assert.equal(doc0.created.length, 1);
+  assert.equal(doc0.created[0].tagName, 'p');
+  assert.equal(c0.children.length, 1);
+
+  // Mixed 3-entry render: NPC say (4) + guest emote with reply (5) + muse system with reply (4) = 13.
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  renderPromptBook(container, [
+    { id: 10, handle: 'wick', kind: 'say', body: 'lanterns lit', role: 'npc' },
+    { id: 11, handle: 'vis', kind: 'emote', body: 'waves', role: 'guest', reply_to: 10 },
+    { id: 12, handle: 'bell', kind: 'system', body: 'chimes', role: 'muse', reply_to: 10 },
+  ], doc);
+  assert.equal(doc.created.length, 13);
+  assert.deepEqual(doc.created.map((e) => e.tagName), ['div', 'span', 'span', 'span', 'div', 'span', 'span', 'span', 'span', 'div', 'span', 'span', 'span']);
+  assert.equal(container.children.length, 3);
+  assert.equal(doc.created.filter((e) => e.tagName === 'div').length, 3);
+  assert.equal(doc.created.filter((e) => e.className === 'pb-npc-pill').length, 1);
+  assert.equal(doc.created.filter((e) => e.className === 'pb-guest-pill').length, 1);
+  assert.equal(doc.created.filter((e) => e.className === 'pb-reply-to').length, 2);
+});
+
+test('staging.js applyStagingState wires renderPromptBook with scroll-to-bottom', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const stagingLines = stagingSrc.split('\n');
+  assert.equal(stagingLines[25], "import { renderPromptBook } from './prompt-book.mjs';");
+  assert.equal(stagingLines[770], 'function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null, tavernGroup = null, eventBannerEl = null) {');
+  assert.equal(stagingLines[853], '  if (promptBookLinesEl) {');
+  assert.equal(stagingLines[854], '    renderPromptBook(promptBookLinesEl, state?.prompt_book, document);');
+  assert.equal(stagingLines[855], '    promptBookLinesEl.scrollTop = promptBookLinesEl.scrollHeight;');
+  assert.equal(stagingLines[856], '  }');
+  assert.equal(stagingLines.filter((l) => l.includes('renderPromptBook(')).length, 1); // only the applyStagingState call
+});
+
+test('staging.js setPromptBookVisible toggles hidden, aria-expanded, and button label', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const stagingLines = stagingSrc.split('\n');
+  assert.equal(stagingLines[1216], "  const promptBookEl = document.getElementById('prompt-book');");
+  assert.equal(stagingLines[1217], "  const promptBookToggleEl = document.getElementById('prompt-book-toggle');");
+  assert.equal(stagingLines[1218], "  const promptBookLinesEl = document.getElementById('prompt-book-lines');");
+  assert.equal(stagingLines[1219], "  const eventBannerEl = document.getElementById('prompt-book-event');");
+  assert.equal(stagingLines[1220], '  function setPromptBookVisible(visible) {');
+  assert.equal(stagingLines[1221], '    if (!promptBookEl || !promptBookToggleEl) return;');
+  assert.equal(stagingLines[1222], '    promptBookEl.hidden = !visible;');
+  assert.equal(stagingLines[1223], "    promptBookToggleEl.setAttribute('aria-expanded', String(visible));");
+  assert.equal(stagingLines[1224], "    promptBookToggleEl.textContent = visible ? 'Hide Prompt Book' : 'Prompt Book';");
+  assert.equal(stagingLines[1225], '  }');
+  assert.equal(stagingLines[1226], '  setPromptBookVisible(window.innerWidth >= 640);');
+  assert.equal(stagingLines[1227], "  promptBookToggleEl?.addEventListener('click', () => {");
+  assert.equal(stagingLines[1228], '    setPromptBookVisible(Boolean(promptBookEl?.hidden));');
+  assert.equal(stagingLines[1229], '  });');
+});
+
+test('prompt-book.mjs header line range matches town.js definitions and call site', async () => {
+  const pbSrc = await fs.readFile(PROMPT_BOOK_PATH, 'utf8');
+  assert.equal(pbSrc.split('\n')[0], '// Copied verbatim from town-3d/town.js (formatPromptBookEntries + renderPromptBook, lines 1813-1889).');
+  const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
+  const townLines = townSrc.split('\n');
+  assert.equal(townLines[1812], 'export function formatPromptBookEntries(promptBook) {');
+  assert.equal(townLines[1829], 'export function renderPromptBook(containerEl, promptBook, doc = globalThis.document) {');
+  assert.equal(townLines[1888], '}');
+  assert.equal(townLines[1889], '');
+  assert.ok(townLines[1890].startsWith('export const SEED_HOME_PADS'));
+  assert.equal(townLines[2648], '  live.promptBook = formatPromptBookEntries(state?.prompt_book);');
+});
+
+test('formatPromptBookEntries returns new objects and never mutates its input array', () => {
+  const input = [{ id: 1, handle: 'a', kind: 'say', body: 'x', role: 'muse' }];
+  const snapshot = JSON.stringify(input);
+  const f = formatPromptBookEntries(input);
+  assert.notEqual(f, input);
+  assert.notEqual(f[0], input[0]);
+  assert.equal(JSON.stringify(input), snapshot);
+  f[0].body = 'mutated';
+  assert.equal(input[0].body, 'x');
+
+  const input101 = Array.from({ length: 101 }, (_, i) => ({ id: i + 1, handle: `m${i + 1}`, kind: 'say', body: `n${i + 1}`, role: 'muse' }));
+  const f101 = formatPromptBookEntries(input101);
+  assert.equal(f101.length, 100);
+  assert.equal(input101.length, 101);
+  assert.equal(input101[0].id, 1);
+  assert.equal(f101[0].id, 2);
+});
+
+test('renderPromptBook preserves unicode handles and long or multiline bodies verbatim', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  const long = 'x'.repeat(500);
+  renderPromptBook(container, [{ id: 1, handle: '👻-ghost', kind: 'say', body: long, role: 'npc' }], doc);
+  assert.equal(container.children[0].textContent, `[NPC]👻-ghost: ${long}`);
+  assert.equal(container.children[0].children.find((e) => e.className === 'pb-handle').textContent, '👻-ghost');
+
+  const doc2 = createFakeDoc();
+  const c2 = doc2.makeContainer();
+  renderPromptBook(c2, [{ id: 2, handle: 'a b', kind: 'say', body: 'hi\nthere\t!', role: 'muse' }], doc2);
+  assert.equal(c2.children[0].textContent, 'a b: hi\nthere\t!');
+  assert.equal(c2.children[0].children.find((e) => e.className === 'pb-body').textContent, ': hi\nthere\t!');
+});
+
+test('renderPromptBook resolves reply chains entry by entry and leaves unknown targets bare', () => {
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  renderPromptBook(container, [
+    { id: 1, handle: 'a', kind: 'say', body: 'first', role: 'muse' },
+    { id: 2, handle: 'b', kind: 'say', body: 'second', role: 'muse', reply_to: 1 },
+    { id: 3, handle: 'c', kind: 'say', body: 'third', role: 'muse', reply_to: 2 },
+    { id: 4, handle: 'd', kind: 'say', body: 'orphan', role: 'muse', reply_to: 99 },
+  ], doc);
+  assert.equal(container.children[1].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #1 @a');
+  assert.equal(container.children[2].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #2 @b');
+  assert.equal(container.children[3].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #99');
+  assert.equal(container.children[2].textContent, '\u21a9 #2 @bc: third');
+});
+
+test('renderPromptBook is a no-op for undefined or false doc and undefined container', () => {
+  const doc = createFakeDoc();
+  const c1 = doc.makeContainer();
+  assert.equal(renderPromptBook(c1, [{ id: 1, handle: 'a', body: 'hi' }]), undefined); // no doc arg: globalThis.document is undefined in Node
+  assert.equal(c1.children.length, 0);
+
+  assert.equal(renderPromptBook(undefined, [{ id: 1, handle: 'a', body: 'hi' }], doc), undefined);
+
+  const c3 = doc.makeContainer();
+  c3.appendChild(doc.createElement('p'));
+  assert.equal(renderPromptBook(c3, [{ id: 1, handle: 'a', body: 'hi' }], false), undefined);
+  assert.equal(c3.children.length, 1); // stale child untouched: no doc means no clearing either
+});
+
+test('prompt-book.mjs source pins header, JSDoc, clearing loop, and no scroll handling', async () => {
+  const src = await fs.readFile(PROMPT_BOOK_PATH, 'utf8');
+  const lines = src.split('\n');
+  assert.equal(lines[1], '// Keep in step with town-3d/town.js; no THREE dependency, no top-level document access.');
+  assert.equal(lines[3], '/**');
+  assert.equal(lines[4], ' * Format and cap Prompt Book entries to the most recent 100 lines,');
+  assert.equal(lines[5], ' * preserving chronological order (newest at the bottom).');
+  assert.equal(lines[6], ' */');
+  assert.equal(src.includes('Render Prompt Book lines into containerEl using textContent only (never inner' + 'HTML).'), true);
+  assert.equal(src.includes('  while (containerEl.firstChild) {\n    containerEl.removeChild(containerEl.firstChild);\n  }'), true);
+  assert.equal(src.includes('scrollTop'), false); // scrolling is staging.js's job, not this module's
+  assert.equal(lines.filter((l) => l.includes('document')).length, 2); // header comment + default parameter
+  assert.equal(lines.filter((l) => l.includes('globalThis.document')).length, 1);
+});
+
+test('test-prompt-book.mjs hygiene pins 48 unique tests, 6 imports, and clean literals', async () => {
+  const self = await fs.readFile(path.join(__dirname, 'test-prompt-book.mjs'), 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "import { formatPromptBookEntries, renderPromptBook } from './prompt-book.mjs';",
+  ]); // no new top-level imports
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Math' + '.random')).length, 1); // line 887 test name only (regex /Math\.random/ has no literal)
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 4); // lines 125, 128, 887, 891
+});
