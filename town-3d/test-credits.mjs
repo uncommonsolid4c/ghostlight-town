@@ -1428,8 +1428,8 @@ test('test-credits.mjs file hygiene and CREDITS.md Poly Pizza URL exclusivity ar
   ]);
 
   const testNames = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(testNames.length, 44, 'test-credits.mjs must have exactly 44 top-level tests');
-  assert.equal(new Set(testNames).size, 44, 'all 44 top-level test names must be unique');
+  assert.equal(testNames.length, 54, 'test-credits.mjs must have exactly 54 top-level tests');
+  assert.equal(new Set(testNames).size, 54, 'all 54 top-level test names must be unique');
 
   const importLines = selfSrc.match(/^import /gm) ?? [];
   assert.equal(importLines.length, 6, 'test-credits.mjs must have exactly 6 top-level import lines');
@@ -1450,4 +1450,253 @@ test('test-credits.mjs file hygiene and CREDITS.md Poly Pizza URL exclusivity ar
   assert.equal(polyPizzaUrls.length, 7, 'CREDITS.md must contain exactly 7 https://poly.pizza/m/ URLs');
   const allHttp = creditsMd.match(/http/gi) ?? [];
   assert.equal(allHttp.length, 7, 'CREDITS.md must contain no http substring outside the 7 Poly Pizza URLs');
+});
+
+test('credited GLB accessor min and max vectors are pinned exactly', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [[null,null],[[-0.0020823935046792,-6.55670864824209e-11,-0.00216403021477163],[0.00215450138784945,0.0329999998211861,0.0134999984875321]],[null,null],[null,null],[null,null],[[-0.00320010050199926,-0.0130857536569238,-0.00320008024573326],[0.00320010050199926,0.00100000493694097,0.00320012075826526]],[null,null],[null,null]]],
+    ["lantern.glb", [[null,null],[[-0.00320010050199926,-3.9415190555836e-10,-0.00320010096766055],[0.00320010050199926,0.00925191678106785,0.00320010026916862]],[null,null],[null,null]]],
+    ["bench.glb", [[null,null],[[-0.0020000000949949,-9.69331073741309e-11,-0.000750000472180545],[0.0020000000949949,0.00100000039674342,0.000750000181142241]],[null,null],[null,null]]],
+    ["street-light.glb", [[null,null],[[-0.00356861995533109,-0.0321329906582832,-0.000136919203214347],[0.00356861646287143,0.00346586992964149,0.0962077379226685]],[null,null],[null,null],[[-0.00228774710558355,-0.0307274665683508,0.0895240753889084],[0.00228774733841419,-0.0182720646262169,0.0937066599726677]],[null,null]]],
+    ["bookshelf.glb", [[null,null],[[-0.00292035890743136,-2.97847267682894e-11,-0.000771486957091838],[0.0028209644369781,0.0132017778232694,0.000763820891734213]],[null,null],[null,null]]],
+    ["oil-lamp.glb", [[null,null],[[-0.00156644126400352,-0.001647041994147,0.00431230757385492],[0.00156644126400352,0.00164706574287266,0.00751049676910043]],[null,null],[null,null],[[-0.00153906107880175,-0.0015390490880236,0],[0.00153906061314046,0.00153907260391861,0.00756699172779918]],[null,null]]],
+    ["teapot.glb", [[[-1.0370800495147705,0.9144729971885681,-1.0370839834213257],[1.0370800495147705,1.897515058517456,1.0370759963989258]],[[-1,-1,-1],[1,1,1]],[[0.00457700015977025,0.41162899136543274],[0.020648999139666557,0.41162899136543274]],[[0],[103]],[[2.656141996383667,0.30347201228141785,-0.3783020079135895],[3.6701819896698,1.3341890573501587,0.3782939910888672]],[[-0.9378238320350647,-0.9378172159194946,-1],[0.9378238320350647,0.9378172159194946,1]],[[0.00457700015977025,0.41162899136543274],[0.0065449997782707214,0.4955970048904419]],[[0],[95]],[[-2.3452889919281006,-2.25803804397583,-2.3452889919281006],[3.0984630584716797,4.0816779136657715,2.3452889919281006]],[[-0.9977326393127441,-0.9991175532341003,-1],[0.9977326393127441,1,1]],[[0.007201000116765499,0.41162899136543274],[0.020648999139666557,0.663532018661499]],[[0],[295]]]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.accessors.map((a) => [a.min ?? null, a.max ?? null]),
+      expected.get(file),
+      `${file} accessor min/max vectors`
+    );
+  }
+});
+
+test('credited GLB accessor counts are pinned exactly per file', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [288,175,175,175,1416,520,520,520]],
+    ["lantern.glb", [792,338,338,338]],
+    ["bench.glb", [132,80,80,80]],
+    ["street-light.glb", [876,225,225,96,40,40]],
+    ["bookshelf.glb", [708,454,454,454]],
+    ["oil-lamp.glb", [240,80,80,588,160,160]],
+    ["teapot.glb", [104,104,104,324,96,96,96,276,296,296,296,1254]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  let totalAccessors = 0;
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.accessors.map((a) => a.count),
+      expected.get(file),
+      `${file} accessor counts`
+    );
+    totalAccessors += gltf.accessors.length;
+  }
+  assert.equal(totalAccessors, 44, 'total credited GLB accessors');
+});
+
+test('credited GLB bufferView byteOffset, byteLength, and target are pinned exactly', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [[0,0,15093,null],[0,15096,576,34963],[0,15672,2100,34962],[0,17772,2100,34962],[0,19872,1400,34962],[0,21272,2832,34963],[0,24104,6240,34962],[0,30344,6240,34962],[0,36584,4160,34962]]],
+    ["lantern.glb", [[0,0,15093,null],[0,15096,1584,34963],[0,16680,4056,34962],[0,20736,4056,34962],[0,24792,2704,34962]]],
+    ["bench.glb", [[0,0,19885,null],[0,19888,264,34963],[0,20152,960,34962],[0,21112,960,34962],[0,22072,640,34962]]],
+    ["street-light.glb", [[0,0,1752,34963],[0,1752,2700,34962],[0,4452,2700,34962],[0,7152,192,34963],[0,7344,480,34962],[0,7824,480,34962]]],
+    ["bookshelf.glb", [[0,0,6727,null],[0,6728,1416,34963],[0,8144,5448,34962],[0,13592,5448,34962],[0,19040,3632,34962]]],
+    ["oil-lamp.glb", [[0,0,480,34963],[0,480,960,34962],[0,1440,960,34962],[0,2400,1176,34963],[0,3576,1920,34962],[0,5496,1920,34962]]],
+    ["teapot.glb", [[0,0,5952,34962],[0,5952,5952,34962],[0,11904,3968,34962],[0,15872,3708,34963],[0,19580,755,null]]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  let totalBufferViews = 0;
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.bufferViews.map((b) => [b.buffer, b.byteOffset ?? 0, b.byteLength, b.target ?? null]),
+      expected.get(file),
+      `${file} bufferView vectors`
+    );
+    totalBufferViews += gltf.bufferViews.length;
+  }
+  assert.equal(totalBufferViews, 41, 'total credited GLB bufferViews');
+});
+
+test('credited GLB primitive attribute, indices, and material wiring is pinned exactly', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [[[{"NORMAL":2,"POSITION":1,"TEXCOORD_0":3},0,0]],[[{"NORMAL":6,"POSITION":5,"TEXCOORD_0":7},4,0]]]],
+    ["lantern.glb", [[[{"NORMAL":2,"POSITION":1,"TEXCOORD_0":3},0,0]]]],
+    ["bench.glb", [[[{"NORMAL":2,"POSITION":1,"TEXCOORD_0":3},0,0]]]],
+    ["street-light.glb", [[[{"NORMAL":2,"POSITION":1},0,0],[{"NORMAL":5,"POSITION":4},3,1]]]],
+    ["bookshelf.glb", [[[{"NORMAL":2,"POSITION":1,"TEXCOORD_0":3},0,0]]]],
+    ["oil-lamp.glb", [[[{"NORMAL":2,"POSITION":1},0,0],[{"NORMAL":5,"POSITION":4},3,1]]]],
+    ["teapot.glb", [[[{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},3,0]],[[{"POSITION":4,"NORMAL":5,"TEXCOORD_0":6},7,0]],[[{"POSITION":8,"NORMAL":9,"TEXCOORD_0":10},11,0]]]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  let totalPrimitives = 0;
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.meshes.map((m) => m.primitives.map((p) => [p.attributes, p.indices, p.material ?? null])),
+      expected.get(file),
+      `${file} primitive wiring`
+    );
+    totalPrimitives += gltf.meshes.reduce((sum, m) => sum + m.primitives.length, 0);
+  }
+  assert.equal(totalPrimitives, 12, 'total credited GLB primitives');
+});
+
+test('credited GLB mesh names are pinned exactly', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", ["post_lantern","post_lantern_lantern"]],
+    ["lantern.glb", ["lantern_standing"]],
+    ["bench.glb", ["bench"]],
+    ["street-light.glb", ["StreetLight"]],
+    ["bookshelf.glb", ["Bookshelf"]],
+    ["oil-lamp.glb", ["Light_Floor2"]],
+    ["teapot.glb", ["misc_kettle_cover_Cylinder.018-Mesh","misc_kettle_nozzle_Cylinder.019-Mesh","misc_kettle_Cylinder.017-Mesh"]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  let totalMeshes = 0;
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.meshes.map((m) => m.name),
+      expected.get(file),
+      `${file} mesh names`
+    );
+    totalMeshes += gltf.meshes.length;
+  }
+  assert.equal(totalMeshes, 10, 'total credited GLB meshes');
+});
+
+test('credited GLB node name, mesh, and children triples are pinned exactly', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [["RootNode",null,[1]],["post_lantern",0,[2]],["post_lantern_lantern",1,null]]],
+    ["lantern.glb", [["RootNode",null,[1]],["lantern_standing",0,null]]],
+    ["bench.glb", [["RootNode",null,[1]],["bench",0,null]]],
+    ["street-light.glb", [["RootNode",null,[1]],["StreetLight",0,null]]],
+    ["bookshelf.glb", [["RootNode",null,[1]],["Bookshelf",0,null]]],
+    ["oil-lamp.glb", [["RootNode",null,[1]],["Light_Floor2",0,null]]],
+    ["teapot.glb", [["misc_kettle_cover_Cylinder.018",0,null],["misc_kettle_nozzle_Cylinder.019",1,null],["misc_kettle_Cylinder.017",2,null]]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  let totalNodes = 0;
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.nodes.map((n) => [n.name, n.mesh ?? null, n.children ?? null]),
+      expected.get(file),
+      `${file} node triples`
+    );
+    totalNodes += gltf.nodes.length;
+  }
+  assert.equal(totalNodes, 16, 'total credited GLB nodes');
+});
+
+test('credited GLB texture objects are pinned exactly for textured models', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [{"name":"base_color_texture","sampler":0,"source":0}]],
+    ["lantern.glb", [{"name":"base_color_texture","sampler":0,"source":0}]],
+    ["bench.glb", [{"name":"base_color_texture","sampler":0,"source":0}]],
+    ["bookshelf.glb", [{"name":"base_color_texture","sampler":0,"source":0}]],
+    ["teapot.glb", [{"name":"misc_kettle","sampler":0,"source":0}]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, 7);
+  let totalTextures = 0;
+  for (const { file, gltf } of glbs) {
+    if (expected.has(file)) {
+      assert.deepEqual(gltf.textures, expected.get(file), `${file} textures`);
+      totalTextures += gltf.textures.length;
+    }
+  }
+  assert.equal(totalTextures, 5, 'total credited GLB textures');
+});
+
+test('credited GLB accessor bufferView and byteOffset mapping is pinned exactly', async () => {
+  const expected = new Map([
+    ["post-lantern.glb", [[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0]]],
+    ["lantern.glb", [[1,0],[2,0],[3,0],[4,0]]],
+    ["bench.glb", [[1,0],[2,0],[3,0],[4,0]]],
+    ["street-light.glb", [[0,0],[1,0],[2,0],[3,0],[4,0],[5,0]]],
+    ["bookshelf.glb", [[1,0],[2,0],[3,0],[4,0]]],
+    ["oil-lamp.glb", [[0,0],[1,0],[2,0],[3,0],[4,0],[5,0]]],
+    ["teapot.glb", [[0,0],[1,0],[2,0],[3,0],[0,1248],[1,1248],[2,832],[3,648],[0,2400],[1,2400],[2,1600],[3,1200]]],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  let sharedBufferViews = 0;
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(
+      gltf.accessors.map((a) => [a.bufferView, a.byteOffset ?? 0]),
+      expected.get(file),
+      `${file} accessor bufferView mapping`
+    );
+    const seen = new Set(gltf.accessors.map((a) => a.bufferView));
+    sharedBufferViews += gltf.accessors.length - seen.size;
+  }
+  assert.equal(sharedBufferViews, 8, 'accessors sharing a bufferView with another accessor (teapot only)');
+});
+
+test('pine.glb stays local-only with pinned identity and no COLOR_0 in credited models', async () => {
+  const pineBuf = await fs.readFile(path.join(MODELS_DIR, 'pine.glb'));
+  assert.equal(pineBuf.length, 2221932, 'pine.glb exact byte size');
+  assert.equal(pineBuf.subarray(0, 4).toString('ascii'), 'glTF', 'pine.glb must start with glTF magic bytes');
+  assert.equal(pineBuf.readUInt32LE(4), 2, 'pine.glb must be glTF version 2');
+  assert.equal(pineBuf.readUInt32LE(8), pineBuf.length, 'pine.glb GLB header length must match file size');
+  const jsonLen = pineBuf.readUInt32LE(12);
+  const pineGltf = JSON.parse(pineBuf.subarray(20, 20 + jsonLen).toString('utf8'));
+  assert.equal(pineGltf.asset?.generator, "FBX2glTF v0.9.7", 'pine.glb generator');
+  assert.equal(pineGltf.asset?.version, '2.0', 'pine.glb glTF asset.version must be 2.0');
+  assert.deepEqual(
+    pineGltf.meshes.map((m) => m.name),
+    ["Pine_4"],
+    'pine.glb mesh names'
+  );
+  assert.deepEqual(
+    pineGltf.materials.map((m) => m.name),
+    ["Bark_NormalTree","Leaves_Pine"],
+    'pine.glb material names'
+  );
+  assert.equal(pineGltf.images?.length, 3, 'pine.glb must have 3 images');
+  assert.equal(pineGltf.textures?.length, 3, 'pine.glb must have 3 textures');
+  for (const mesh of pineGltf.meshes) {
+    for (const prim of mesh.primitives) {
+      assert.equal(typeof prim.attributes?.COLOR_0, 'number', 'pine.glb primitive must have COLOR_0');
+    }
+  }
+
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const creditedFiles = parseCreditedModels(creditsMd);
+  assert.equal(creditedFiles.includes('pine.glb'), false, 'pine.glb must not be credited in CREDITS.md');
+  const placedModels = new Set(
+    PROP_PLACEMENTS.map((p) => p.model).filter((m) => typeof m === 'string' && m.length > 0)
+  );
+  assert.equal(placedModels.has('models/pine.glb'), false, 'pine.glb must not appear in PROP_PLACEMENTS');
+
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        assert.equal('COLOR_0' in (prim.attributes ?? {}), false, `${file} primitive must not have COLOR_0`);
+      }
+    }
+  }
+});
+
+test('CREDITS.md and town-3d README.md FNV-1a checksums are pinned', async () => {
+  const fnv1aHex = (buf) => {
+    let hash = 0x811c9dc5;
+    for (const byte of buf) {
+      hash ^= byte;
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  };
+  const [creditsBuf, readmeBuf] = await Promise.all([
+    fs.readFile(CREDITS_PATH),
+    fs.readFile(README_PATH),
+  ]);
+  assert.equal(fnv1aHex(creditsBuf), "c5545889", 'CREDITS.md FNV-1a checksum');
+  assert.equal(fnv1aHex(readmeBuf), "d4d53ad8", 'town-3d/README.md FNV-1a checksum');
 });
