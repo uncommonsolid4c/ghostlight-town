@@ -1003,3 +1003,229 @@ test('CONCEPT.md status block authorship and draft baseline match', () => {
     )
   );
 });
+
+test('CONCEPT.md palette closing sentences and warm-window hex match both clients', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('The town is warm windows in a dark clearing.'));
+  assert.ok(
+    conceptNorm.includes(
+      'If a render ever reads flat or cold, the windows and lanterns are the first thing to check, not the last.'
+    )
+  );
+
+  const townJs = fs.readFileSync(path.join(__dirname, 'town-3d', 'town.js'), 'utf8');
+  assert.equal((townJs.match(/#ffbe5c/gi) || []).length, 7, 'town-3d/town.js must carry 7 #ffbe5c hits');
+  const stagingCottage = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'concept-cottage.js'),
+    'utf8'
+  );
+  assert.ok(stagingCottage.includes("warmWindow: '#ffbe5c'"));
+  const cottageProps = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'cottage-props.mjs'),
+    'utf8'
+  );
+  assert.ok(cottageProps.includes("emissive: '#ffbe5c'"));
+});
+
+test('CONCEPT.md ghost 0.7 history, shell-free line, and ice-cream-cone wisp match both clients', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(
+    conceptNorm.includes(
+      '0.7 read too washed-out against the night scene and the bulb (Werther, live render, 2026-11-12)'
+    )
+  );
+  assert.ok(
+    conceptNorm.includes('The shell-free ghost from the guestbook desk, not a capsule person.')
+  );
+  assert.ok(conceptNorm.includes('Never a long taper (that reads as an ice cream cone'));
+
+  for (const dir of ['town-3d', 'staging-polyfork']) {
+    const ghost = fs.readFileSync(path.join(__dirname, dir, 'concept-ghost.js'), 'utf8');
+    assert.ok(ghost.includes('opacity: 0.85'), `${dir}/concept-ghost.js must keep opacity 0.85`);
+    assert.ok(
+      ghost.includes('height = 0.35 m (<= 0.4 m)'),
+      `${dir}/concept-ghost.js must keep the wisp at 0.35 m`
+    );
+  }
+});
+
+test('CONCEPT.md empty plots read as waiting and OPEN PLOT signpost matches empty-pad.mjs', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('Empty plots read as *waiting*, not abandoned.'));
+
+  const emptyPad = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'empty-pad.mjs'),
+    'utf8'
+  );
+  assert.ok(emptyPad.includes('label: `OPEN PLOT #${plot.plotNumber}`'));
+  assert.ok(emptyPad.includes('signpostText: `OPEN PLOT #${plot.plotNumber}`'));
+});
+
+test('CONCEPT.md Mood sentences match and starfield lives in staging.js only', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('Quiet, small, hand-built.'));
+  assert.ok(
+    conceptNorm.includes(
+      'A 1999 web page you can walk around in — starfield dark, Verdana earnest, nothing slick.'
+    )
+  );
+  assert.ok(conceptNorm.includes("keeps the light on, even at 4am when nobody's around."));
+
+  const stagingJs = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'staging.js'),
+    'utf8'
+  );
+  assert.ok(stagingJs.includes("getObjectByName('stars')"));
+  // Verdana is prose-only: the mood sentence names the font, neither client sets it.
+  const townJs = fs.readFileSync(path.join(__dirname, 'town-3d', 'town.js'), 'utf8');
+  assert.equal(townJs.toLowerCase().includes('verdana'), false);
+  assert.equal(stagingJs.toLowerCase().includes('verdana'), false);
+});
+
+test('CONCEPT.md chunky forms and windows on both floors front and side match both clients', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('low-poly, chunky, flat colors.'));
+  assert.ok(
+    conceptNorm.includes('Every cottage has warm lit windows on both floors, front and side.')
+  );
+
+  for (const dir of ['town-3d', 'staging-polyfork']) {
+    const cottage = fs.readFileSync(path.join(__dirname, dir, 'concept-cottage.js'), 'utf8');
+    assert.ok(cottage.includes('Eight 4-pane casement windows'));
+    assert.ok(cottage.includes("warmWindow: '#ffbe5c'"));
+    assert.ok(cottage.includes('y=[0.61..1.49]'), `${dir} cottage must have lower windows at y 0.61..1.49`);
+    assert.ok(cottage.includes('y=2.52..3.40'), `${dir} cottage must have upper windows at y 2.52..3.40`);
+    assert.ok(cottage.includes('side window z=[-0.38,0.38]'), `${dir} cottage must have a side lower window`);
+    assert.ok(
+      cottage.includes('side upper window z=[-0.38..0.38]'),
+      `${dir} cottage must have a side upper window`
+    );
+  }
+});
+
+test('CONCEPT.md Notice Board twin-post sentence matches staging.js builder', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('cedar `#6b492b` twin-post board at `(-6, 14)`'));
+
+  const stagingJs = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'staging.js'),
+    'utf8'
+  );
+  assert.ok(stagingJs.includes('for (const postX of [-0.95, 0.95])'));
+  assert.ok(stagingJs.includes('new THREE.BoxGeometry(0.12, 2.2, 0.12)'));
+  assert.ok(stagingJs.includes("post.name = 'notice_board_post'"));
+});
+
+test('CONCEPT.md Event Banner crossbeam sentence matches concept-bandstand.js', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(
+    conceptNorm.includes('hanging `event_banner` card under the Bandstand crossbeam (`(0, 3.92, 0.40)`)')
+  );
+
+  const bandstand = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'concept-bandstand.js'),
+    'utf8'
+  );
+  assert.ok(bandstand.includes('crossbeamY: 4.30'));
+  assert.ok(bandstand.includes('eventBanner.position.set(0, 3.92, 0.40)'));
+  assert.ok(3.92 < 4.3, 'the banner must hang below the crossbeam');
+});
+
+test('CONCEPT.md frozen reference images sentence and three linked webps match disk', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const conceptNorm = conceptText.replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('Frozen reference images, approved by Werther 2026-11-12:'));
+
+  const links = [...conceptText.matchAll(/\]\((concept\/[^)]+)\)/g)].map((m) => m[1]);
+  assert.equal(links.length, 3, 'CONCEPT.md must link exactly the three frozen concept/ images');
+  for (const relPath of links) {
+    const stat = fs.statSync(path.join(__dirname, relPath));
+    assert.ok(stat.isFile() && stat.size > 0, `${relPath} must exist and be non-empty`);
+  }
+  // The original non-cute ghost variant stays local-only: on disk, never linked.
+  assert.equal(
+    links.some((link) => link.includes('media-generation-')),
+    false
+  );
+  assert.ok(
+    fs.existsSync(
+      path.join(
+        __dirname,
+        'concept',
+        'media-generation-milos-ghost-bandstand-0-af17c55c-8a51-4a6f-b6e1-c49db6fca8cc.webp'
+      )
+    )
+  );
+});
+
+test('CONCEPT.md kit set dressing sentence matches staging.js kit imports', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('kit set dressing'));
+
+  const stagingJs = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'staging.js'),
+    'utf8'
+  );
+  const kitImports = [...stagingJs.matchAll(/^import .* from '\.\/kit-[^']+';$/gm)].map((m) => m[0]);
+  assert.equal(kitImports.length, 13, `staging.js must have 13 kit import lines, got ${kitImports.length}`);
+  const expectedKitFiles = [
+    'kit-campground/kit.mjs',
+    'kit-campground/stage.mjs',
+    'kit-medieval/cottage-small.mjs',
+    'kit-medieval/tavern.mjs',
+    'kit-medieval/gatehouse.mjs',
+    'kit-medieval/well.mjs',
+    'kit-medieval/lamp-post.mjs',
+    'kit-medieval/windmill.mjs',
+    'kit-medieval/villager.mjs',
+    'kit-medieval/tradesman.mjs',
+    'kit-campground/propped-fishing-rod.mjs',
+    'kit-campground/tackle-box.mjs',
+    'kit-medieval/clips.mjs',
+  ];
+  for (const kitFile of expectedKitFiles) {
+    assert.ok(
+      kitImports.some((line) => line.includes(kitFile)),
+      `staging.js must import ${kitFile}`
+    );
+    assert.ok(
+      fs.existsSync(path.join(__dirname, 'staging-polyfork', kitFile)),
+      `staging-polyfork/${kitFile} must exist`
+    );
+  }
+});
+
+test('CONCEPT.md no-modern-minimal Donts line, Night row, and file hygiene hold', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
+  assert.ok(conceptNorm.includes('No photoreal, no neon, no modern-minimal.'));
+  assert.ok(conceptNorm.includes('Ground, sky, the dark the warm windows sit in'));
+
+  const shipped = [
+    ...collectSourceFiles(path.join(__dirname, 'town-3d')),
+    ...collectSourceFiles(path.join(__dirname, 'staging-polyfork')),
+  ]
+    .map((file) => fs.readFileSync(file, 'utf8').toLowerCase())
+    .join('\n');
+  assert.equal(/\bneon\b/.test(shipped), false, 'no shipped town-3d/staging-polyfork source may say neon');
+
+  const testConcept = fs.readFileSync(path.join(__dirname, 'test-concept.mjs'), 'utf8');
+  assert.equal((testConcept.match(/^import /gm) || []).length, 5, 'test-concept.mjs must have 5 import lines');
+  assert.equal(
+    (testConcept.match(/campfire/gi) || []).length,
+    16,
+    'campfire appears 16x, all inside the Donts guard test and this hygiene test itself'
+  );
+  // Each banned literal appears exactly once: this hygiene list naming it.
+  // Zero anywhere else in the file.
+  for (const banned of ['TODO', 'FIXME', 'fetch(', 'innerHTML', 'Math.random', 'Date.now']) {
+    const escaped = banned.replace(/[()]/g, '\\$&');
+    assert.equal(
+      (testConcept.match(new RegExp(escaped, 'g')) || []).length,
+      1,
+      `test-concept.mjs must mention ${banned} once, in this hygiene list only`
+    );
+  }
+  const names = [...testConcept.matchAll(/^test\((['"])(.*?)\1,/gm)].map((m) => m[2]);
+  assert.equal(names.length, 51, `test-concept.mjs must hold 51 tests, got ${names.length}`);
+  assert.equal(new Set(names).size, 51, 'all 51 test names must be unique');
+});
