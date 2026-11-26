@@ -1492,3 +1492,393 @@ test('garbage operator key file fails cleanly and the keypair was already create
     await ctx.close();
   }
 });
+test('full run output rows have exact key order and no key material on stdout or stderr', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(res.stderr, '', 'successful run prints nothing on stderr');
+
+    const lines = res.stdout.trim().split('\n');
+    assert.equal(lines.length, 3);
+    const rows = lines.map((l) => JSON.parse(l));
+    assert.deepEqual(
+      rows.map((r) => r.handle),
+      ['wick', 'maren', 'tomas']
+    );
+    for (const row of rows) {
+      assert.deepEqual(Object.keys(row), ['handle', 'joined', 'approved', 'plot', 'pubkey']);
+      assert.equal(row.joined, 'created');
+      assert.equal(row.approved, 'created');
+      assert.equal(row.plot, 'ok');
+      assert.equal(row.pubkey.length, 44);
+    }
+
+    assert.equal(res.stdout.includes('BEGIN'), false);
+    assert.equal(res.stdout.includes('PRIVATE'), false);
+    assert.equal(res.stdout.includes('key.pem'), false);
+    assert.equal(res.stderr.includes('BEGIN'), false);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('state dir layout is exactly key.pem plus pubkey.txt per NPC', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    assert.deepEqual(fs.readdirSync(stateDir).sort(), ['maren', 'tomas', 'wick']);
+    for (const handle of ['wick', 'maren', 'tomas']) {
+      const dir = path.join(stateDir, handle);
+      assert.deepEqual(fs.readdirSync(dir).sort(), ['key.pem', 'pubkey.txt']);
+
+      const pem = fs.readFileSync(path.join(dir, 'key.pem'), 'utf8');
+      assert.equal(pem.startsWith('-----BEGIN PRIVATE KEY-----'), true);
+      assert.equal(pem.trimEnd().endsWith('-----END PRIVATE KEY-----'), true);
+      assert.equal(fs.statSync(path.join(dir, 'key.pem')).mode & 0o777, 0o600);
+
+      const pubRaw = fs.readFileSync(path.join(dir, 'pubkey.txt'), 'utf8');
+      assert.equal(pubRaw.length, 44);
+      assert.equal(pubRaw.endsWith('\n'), false);
+      // keygen requests 0644; the runtime umask (007) strips it to 0640.
+      const pubMode = fs.statSync(path.join(dir, 'pubkey.txt')).mode & 0o777;
+      assert.equal(pubMode === 0o640 || pubMode === 0o644, true, `pubkey.txt mode is ${pubMode.toString(8)}`);
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('single-NPC run advances state_seq by exactly 3', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const readSeq = async () => (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+    assert.equal(await readSeq(), 0);
+
+    const first = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(await readSeq(), 3, 'join + approve + plot is exactly 3 state_seq bumps');
+
+    const second = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'maren',
+    ]);
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(await readSeq(), 6);
+
+    const state = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.deepEqual(Object.keys(state.plots).sort(), ['maren', 'wick']);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('second full run adds no key_history rows and advances state_seq by 6', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const cliArgs = [
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ];
+    const readSeq = async () => (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+    const readHistory = () => {
+      const db = new DatabaseSync(ctx.dbPath, { readOnly: true });
+      try {
+        // DatabaseSync returns null-prototype rows; normalize before deepEqual.
+        return db
+          .prepare('SELECT handle, action, note FROM key_history ORDER BY handle')
+          .all()
+          .map((r) => ({ handle: r.handle, action: r.action, note: r.note }));
+      } finally {
+        db.close();
+      }
+    };
+
+    const first = await runRegisterCli(cliArgs);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(await readSeq(), 9);
+    assert.deepEqual(readHistory(), [
+      { handle: 'maren', action: 'register', note: 'joined' },
+      { handle: 'tomas', action: 'register', note: 'joined' },
+      { handle: 'wick', action: 'register', note: 'joined' },
+    ]);
+
+    const second = await runRegisterCli(cliArgs);
+    assert.equal(second.code, 0, second.stderr);
+    const rows = second.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      assert.equal(row.joined, 'existing');
+      assert.equal(row.approved, 'existing');
+      assert.equal(row.plot, 'ok');
+    }
+    // Re-approving an already-approved NPC still bumps state_seq (approve + plot per NPC).
+    assert.equal(await readSeq(), 15);
+    assert.deepEqual(readHistory(), [
+      { handle: 'maren', action: 'register', note: 'joined' },
+      { handle: 'tomas', action: 'register', note: 'joined' },
+      { handle: 'wick', action: 'register', note: 'joined' },
+    ]);
+    assert.equal(readResidents(ctx.dbPath).length, 3);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('deleted server plot is repaired by a single-NPC re-run', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const cliArgs = [
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ];
+    const first = await runRegisterCli(cliArgs);
+    assert.equal(first.code, 0, first.stderr);
+
+    fs.rmSync(path.join(ctx.plotsDir, 'wick'), { recursive: true, force: true });
+    assert.equal(fs.existsSync(path.join(ctx.plotsDir, 'wick')), false);
+
+    // The plots map in state is DB-driven, so wick stays listed even with files gone.
+    const midState = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal('wick' in midState.plots, true);
+    const missing = await fetch(`${ctx.baseUrl}/api/town/plot?handle=wick`);
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), { error: 'plot_not_found' });
+
+    const rerun = await runRegisterCli([...cliArgs, '--npc', 'wick']);
+    assert.equal(rerun.code, 0, rerun.stderr);
+    const row = JSON.parse(rerun.stdout.trim());
+    assert.equal(row.handle, 'wick');
+    assert.equal(row.joined, 'existing');
+    assert.equal(row.approved, 'existing');
+    assert.equal(row.plot, 'ok');
+
+    const serverManifest = JSON.parse(fs.readFileSync(path.join(ctx.plotsDir, 'wick', 'manifest.json'), 'utf8'));
+    const repoManifest = JSON.parse(fs.readFileSync(path.join(REPO_PLOTS_DIR, 'wick', 'manifest.json'), 'utf8'));
+    assert.deepEqual(serverManifest, repoManifest);
+    const serverHtml = fs.readFileSync(path.join(ctx.plotsDir, 'wick', 'index.html'), 'utf8');
+    const repoHtml = fs.readFileSync(path.join(REPO_PLOTS_DIR, 'wick', 'desk-note.html'), 'utf8');
+    assert.equal(serverHtml, repoHtml);
+
+    const afterState = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.equal('wick' in afterState.plots, true);
+    const restored = await fetch(`${ctx.baseUrl}/api/town/plot?handle=wick`);
+    assert.equal(restored.status, 200);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('missing required arguments print the exact two-line error', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-missing-'));
+  const operatorKeys = generateKeypair();
+  const operatorKeyPath = path.join(tmpDir, 'operator.pem');
+  fs.writeFileSync(operatorKeyPath, operatorKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(tmpDir, 'npc_state');
+  const usageLine =
+    'Usage: node town-npc/register.mjs --api-base <url> [--state-dir ./npc_state] --operator-key <path-to-operator-key.pem> [--npc wick|maren|tomas]';
+
+  try {
+    const noBase = await runRegisterCli(['--state-dir', stateDir, '--operator-key', operatorKeyPath]);
+    assert.equal(noBase.code, 1);
+    assert.equal(noBase.stderr, `Error: Missing --api-base (or TOWN_API_BASE)\n${usageLine}\n`);
+    assert.equal(fs.existsSync(stateDir), false);
+
+    const noKey = await runRegisterCli(['--api-base', 'http://127.0.0.1:1', '--state-dir', stateDir]);
+    assert.equal(noKey.code, 1);
+    assert.equal(noKey.stderr, `Error: Missing --operator-key (or TOWN_OPERATOR_KEY)\n${usageLine}\n`);
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('probe HTTP 500 fails cleanly with JSON error and creates no state dir', async () => {
+  const http = await import('node:http');
+  const stub = http.createServer((_req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'boom' }));
+  });
+  await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
+  const stubBase = `http://127.0.0.1:${stub.address().port}`;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-500-'));
+  const operatorKeys = generateKeypair();
+  const operatorKeyPath = path.join(tmpDir, 'operator.pem');
+  fs.writeFileSync(operatorKeyPath, operatorKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(tmpDir, 'npc_state');
+
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      stubBase,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      operatorKeyPath,
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+    assert.deepEqual(JSON.parse(res.stderr.trim()), {
+      ok: false,
+      error: 'API probe failed with HTTP 500',
+      status: 500,
+      api_base: stubBase,
+    });
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    await new Promise((resolve) => stub.close(resolve));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('full run pins the literal character-title bios for all three NPCs', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 0, res.stderr);
+
+    const db = new DatabaseSync(ctx.dbPath, { readOnly: true });
+    let residents;
+    try {
+      // DatabaseSync returns null-prototype rows; normalize before deepEqual.
+      residents = db
+        .prepare('SELECT handle, origin, bio FROM residents ORDER BY handle')
+        .all()
+        .map((r) => ({ handle: r.handle, origin: r.origin, bio: r.bio }));
+    } finally {
+      db.close();
+    }
+    // Literal strings (not via getCharacter): guards against characters.mjs drift.
+    assert.deepEqual(residents, [
+      { handle: 'maren', origin: 'colony', bio: 'Retired Typesetter' },
+      { handle: 'tomas', origin: 'colony', bio: 'Props-Master / Tea-Urn Keeper' },
+      { handle: 'wick', origin: 'colony', bio: 'Stagehand / Lamp-Trimmer' },
+    ]);
+    for (const r of residents) {
+      assert.equal(getCharacter(r.handle).title, r.bio);
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('relative --state-dir resolves under the current working directory', async () => {
+  const ctx = await startTestServer();
+  const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-cwd-'));
+  try {
+    const res = await runRegisterCli(
+      [
+        '--api-base',
+        ctx.baseUrl,
+        '--state-dir',
+        'my-npc-state',
+        '--operator-key',
+        ctx.operatorKeyPath,
+        '--npc',
+        'wick',
+      ],
+      cwdDir
+    );
+    assert.equal(res.code, 0, res.stderr);
+
+    assert.equal(fs.existsSync(path.join(cwdDir, 'my-npc-state', 'wick', 'key.pem')), true);
+    assert.equal(fs.existsSync(path.join(cwdDir, 'my-npc-state', 'wick', 'pubkey.txt')), true);
+    assert.equal(fs.existsSync(path.join(cwdDir, 'npc_state')), false);
+    assert.equal(fs.existsSync(path.join(os.tmpdir(), 'my-npc-state')), false);
+  } finally {
+    await ctx.close();
+    fs.rmSync(cwdDir, { recursive: true, force: true });
+  }
+});
+
+test('wrong Ed25519 operator key fails with exact 401 JSON and the keypair was already created', async () => {
+  const ctx = await startTestServer();
+  const wrongKeys = generateKeypair();
+  const wrongKeyPath = path.join(ctx.tmpDir, 'wrong-operator.pem');
+  fs.writeFileSync(wrongKeyPath, wrongKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      wrongKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+    assert.deepEqual(JSON.parse(res.stderr.trim()), {
+      ok: false,
+      error: 'invalid_signature',
+      status: 401,
+      handle: 'wick',
+    });
+    assert.equal(res.stderr.includes('BEGIN'), false);
+    assert.equal(res.stderr.includes('PRIVATE'), false);
+    assert.equal(fs.existsSync(path.join(stateDir, 'wick', 'key.pem')), true);
+    assert.deepEqual(readResidents(ctx.dbPath), []);
+  } finally {
+    await ctx.close();
+  }
+});
