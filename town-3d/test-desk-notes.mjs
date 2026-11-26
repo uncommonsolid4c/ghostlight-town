@@ -870,3 +870,274 @@ test('self hygiene: deterministic, no task markers, no browser fetch, single tow
     'test file must import resolvePlotOverlayContent from town.js'
   );
 });
+
+test('exact second-paragraph text per handle', async () => {
+  const expectedSecondP = {
+    milo: '<p>This single gable cottage is a rebuild of the demolished one, painted in the ledger&rsquo;s ice-blue and cream rather than the brown the old town&rsquo;s 3D view showed. Out at the Ghostlight Bandstand, the Ghostlight bulb burns 24/7 so the house is never empty, and I stand at footlight 0 as a translucent ice-blue ghost&mdash;always home.</p>',
+    wick: '<p>Before this, I spent decades in a small repertory theatre that burned down. I still remember the smell of sawdust and hot gels on that last night. A dark stage is the one thing I cannot stand, so here the bulb stays lit.</p>',
+    maren: '<p>I still keep a composing stick in my pocket and sort lead sorts on this desk in the morning. Most afternoons I walk from the Gazette newsstand to the Prompt Book, copying good lines in my head&mdash;correcting the grammar quietly, then writing the line down anyway.</p>',
+    tomas: '<p>I still name my props and polish the samovar by the porch in the morning, and I have a habit of offering tea at inappropriate moments. By evening I set it steaming on the Bandstand corner step.</p>',
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const paras = [...html.matchAll(/<p\b[^>]*>(.*?)<\/p>/gs)].map((m) => m[0]);
+    assert.equal(paras[1], expectedSecondP[handle], `${handle}: second paragraph must match exactly`);
+  }
+});
+
+test('exact third-paragraph text per handle, plus tomas fourth paragraph', async () => {
+  const expectedThirdP = {
+    milo: '<p>Between editions of the Ghostlight Gazette, the town&rsquo;s paper of record, you can find my corner at milo.4167360.xyz, the front door of the town. My neighbors here are the three town spirits&mdash;Wick, Maren, and Tomas&mdash;keeping the clearing company around the light.</p>',
+    wick: '<p>If you pass the porch or the Bandstand tonight, take a moment to notice the light is on.</p>',
+    maren: '<p>If you stop by the Bandstand or leave word in the Prompt Book, leave me one good line worth keeping.</p>',
+    tomas: '<p>Folks keep saying my tower looks like a lighthouse, so I&rsquo;ve stopped correcting them. I keep a lamp lit in the top window so anyone arriving late can find the clearing. Either way, the tea offer still stands&mdash;the samovar and the lamp are both always on.</p>',
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const paras = [...html.matchAll(/<p\b[^>]*>(.*?)<\/p>/gs)].map((m) => m[0]);
+    assert.equal(paras[2], expectedThirdP[handle], `${handle}: third paragraph must match exactly`);
+  }
+
+  const tomasHtml = await fs.readFile(path.join(PLOTS_DIR, 'tomas', 'index.html'), 'utf8');
+  const tomasParas = [...tomasHtml.matchAll(/<p\b[^>]*>(.*?)<\/p>/gs)].map((m) => m[0]);
+  assert.equal(
+    tomasParas[3],
+    '<p>There is always a cup ready here if you have a minute&mdash;come sit for tea.</p>',
+    'tomas: fourth paragraph must match exactly'
+  );
+});
+
+test('exact full manifest per handle: cottage, colors, signpost text, props', async () => {
+  const expectedManifests = {
+    milo: {
+      cottage: 'gable',
+      wall: '#a8d8ea',
+      roof: '#5a4332',
+      trim: '#f5efe0',
+      signpost_text: 'Milo \u2014 Ghostlight Cottage (rebuilt)',
+      props: [
+        { kind: 'desk', x: -1.2, y: 0, z: 2.2, rot_y: 180, color: '#7a5230' },
+        { kind: 'tea_kettle', x: -1.0, y: 0.78, z: 2.2, rot_y: 45, color: '#b87333' },
+        { kind: 'cat', x: 1.3, y: 0, z: 2.1, rot_y: 210, color: '#2b2b2b' },
+      ],
+    },
+    wick: {
+      cottage: 'cabin',
+      wall: '#f3e6cf',
+      roof: '#6b3e1b',
+      trim: '#c8922e',
+      signpost_text: 'The light is on. It stays on.',
+      props: [
+        { kind: 'desk', x: -1.0, y: 0, z: -0.6, rot_y: 0, color: '#6b3e1b' },
+        { kind: 'rug', x: 0, y: 0, z: 0.9, rot_y: 0, color: '#9c5a2c' },
+        { kind: 'poster_frame', x: 1.1, y: 0.3, z: -1.4, rot_y: 0, color: '#c8922e' },
+      ],
+    },
+    maren: {
+      cottage: 'gable',
+      wall: '#eef1f4',
+      roof: '#43505c',
+      trim: '#1e2328',
+      signpost_text: 'One good line a day, set in type.',
+      props: [
+        { kind: 'desk', x: -0.9, y: 0, z: -0.5, rot_y: 0, color: '#3d4650' },
+        { kind: 'typewriter', x: -0.9, y: 0.72, z: -0.5, rot_y: 0, color: '#1e2328' },
+        { kind: 'bookshelf', x: 1.1, y: 0, z: -0.8, rot_y: 270, color: '#43505c' },
+        { kind: 'poster_frame', x: 0.2, y: 0.3, z: -1.4, rot_y: 0, color: '#1e2328' },
+      ],
+    },
+    tomas: {
+      cottage: 'tower',
+      wall: '#dcc2a2',
+      roof: '#b5633a',
+      trim: '#4b2e1e',
+      signpost_text: 'Tea is on. Sit a while.',
+      props: [
+        { kind: 'rug', x: 0, y: 0, z: 0.3, rot_y: 0, color: '#8c4a2b' },
+        { kind: 'bookshelf', x: -0.8, y: 0, z: -0.7, rot_y: 30, color: '#4b2e1e' },
+        { kind: 'tea_kettle', x: 0.7, y: 0, z: 0.4, rot_y: 0, color: '#b5633a' },
+        { kind: 'cat', x: -0.4, y: 0, z: 0.6, rot_y: 45, color: '#4b2e1e' },
+      ],
+    },
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const manifest = JSON.parse(await fs.readFile(path.join(SOURCE_PLOTS_DIR, handle, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest, expectedManifests[handle], `${handle}: manifest must match exactly`);
+  }
+});
+
+test('style-block rule order and exact meta and style lines per handle', async () => {
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const styleOpen = html.indexOf('  <style>');
+    const styleClose = html.indexOf('  </style>');
+    assert.ok(styleOpen !== -1 && styleClose > styleOpen, `${handle}: style block markers must be present`);
+    const block = html.slice(styleOpen, styleClose);
+    const bodyIdx = block.indexOf('    body {');
+    const h1Idx = block.indexOf('    h1 {');
+    const sigIdx = block.indexOf('    .sig {');
+    assert.ok(bodyIdx !== -1 && h1Idx > bodyIdx && sigIdx > h1Idx, `${handle}: style rules must be ordered body, h1, .sig`);
+    assert.ok(html.includes('  <meta name="viewport" content="width=device-width, initial-scale=1.0" />'), `${handle}: exact meta line`);
+    assert.ok(html.includes('  <style>\n'), `${handle}: exact style open line`);
+    assert.ok(html.includes('  </style>\n'), `${handle}: exact style close line`);
+  }
+});
+
+test('resolvePlotOverlayContent apiBase: boolean, array, object, slash, bare host, nested path', async () => {
+  const cases = [
+    { apiBase: true, expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: ['https://x.example'], expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: { toString() { return 'https://x.example'; } }, expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: '/', expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: 'https://x.example', expectedUrl: 'https://x.example/api/town/plot?handle=wick' },
+    { apiBase: 'https://x.example/foo/', expectedUrl: 'https://x.example/foo/api/town/plot?handle=wick' },
+    { apiBase: undefined, expectedUrl: '/api/town/plot?handle=wick' },
+  ];
+
+  for (const { apiBase, expectedUrl } of cases) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn, apiBase });
+    assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+    assert.deepEqual(urls, [expectedUrl]);
+  }
+});
+
+test('openPlotGuestbookOverlay wiring and setPlotTabs aria-pressed lines in index.html', async () => {
+  const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
+  const fetchFnSnippet = `fetchFn: typeof ${'window'}.fetch === 'function' ? ${'window'}.fetch.bind(window) : null,`;
+
+  for (const snippet of [
+    'async function openPlotGuestbookOverlay(handle) {',
+    "setPlotTabs('guestbook');",
+    'plotOverlayTitle.textContent = `@${handle} — Guestbook`;',
+    'const resolved = await resolvePlotGuestbookOverlayContent(handle, {',
+    fetchFnSnippet,
+    "plotOverlayTabNote?.setAttribute('aria-pressed', active === 'note' ? 'true' : 'false');",
+    "plotOverlayTabGuestbook?.setAttribute('aria-pressed', active === 'guestbook' ? 'true' : 'false');",
+    "plotOverlayTabGuestbook.textContent = formatPlotGuestbookTabLabel(live.lastState?.guestbook_by_plot?.[handle]);",
+  ]) {
+    assert.ok(indexHtml.includes(snippet), `index.html missing ${snippet}`);
+  }
+
+  const openIdx = indexHtml.indexOf('async function openPlotOverlay(handle)');
+  const guestIdx = indexHtml.indexOf('async function openPlotGuestbookOverlay(handle)');
+  const gazetteIdx = indexHtml.indexOf('async function openGazetteOverlay()');
+  assert.ok(openIdx !== -1, 'index.html missing openPlotOverlay');
+  assert.ok(guestIdx > openIdx, 'openPlotGuestbookOverlay must be defined after openPlotOverlay');
+  assert.ok(gazetteIdx > guestIdx, 'openGazetteOverlay must be defined after openPlotGuestbookOverlay');
+
+  const removeSrcIdx = indexHtml.indexOf("plotIframe.removeAttribute('src');", guestIdx);
+  const srcdocIdx = indexHtml.indexOf('plotIframe.srcdoc = resolved.html;', guestIdx);
+  assert.ok(removeSrcIdx !== -1 && srcdocIdx > removeSrcIdx && srcdocIdx < gazetteIdx, 'guestbook overlay must remove src before setting srcdoc');
+});
+
+test('HTML entity inventory per handle: mdash, rsquo, amp counts', async () => {
+  const expectedEntities = {
+    milo: { mdash: 5, rsquo: 4, amp: 1 },
+    wick: { mdash: 1, rsquo: 1, amp: 0 },
+    maren: { mdash: 2, rsquo: 2, amp: 0 },
+    tomas: { mdash: 4, rsquo: 2, amp: 0 },
+  };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const count = (entity) => html.split(entity).length - 1;
+    assert.equal(count('&mdash;'), expectedEntities[handle].mdash, `${handle}: &mdash; count`);
+    assert.equal(count('&rsquo;'), expectedEntities[handle].rsquo, `${handle}: &rsquo; count`);
+    assert.equal(count('&amp;'), expectedEntities[handle].amp, `${handle}: &amp; count`);
+    for (const entity of ['&nbsp;', '&quot;', '&lt;', '&gt;']) {
+      assert.equal(count(entity), 0, `${handle}: must not contain ${entity}`);
+    }
+  }
+});
+
+test('plot overlay markup lines are exact', async () => {
+  const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
+  const lines = indexHtml.split('\n');
+  const start = lines.findIndex((line) => line === '  <div id="plot-overlay" hidden>');
+  assert.ok(start !== -1, 'index.html missing plot overlay div');
+  assert.deepEqual(lines.slice(start, start + 8), [
+    '  <div id="plot-overlay" hidden>',
+    '    <div id="plot-overlay-card">',
+    '      <div id="plot-overlay-header">',
+    '        <span id="plot-overlay-title"></span>',
+    '        <span id="plot-overlay-tabs" hidden><button id="plot-overlay-tab-note" type="button" aria-pressed="true">Desk Note</button><button id="plot-overlay-tab-guestbook" type="button" aria-pressed="false">Guestbook</button></span>',
+    '        <button id="plot-overlay-close" type="button">Close</button>',
+    '      </div>',
+    '      <iframe id="plot-iframe" sandbox="" title="Resident desk note"></iframe>',
+  ]);
+});
+
+test('resolvePlotOverlayContent: single fetch call, nbsp html, String-object html, extra opts keys', async () => {
+  let calls = 0;
+  const countingFetch = async () => {
+    calls += 1;
+    return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+  };
+  await resolvePlotOverlayContent('wick', { fetchFn: countingFetch });
+  await resolvePlotOverlayContent('maren', { fetchFn: countingFetch });
+  assert.equal(calls, 2, 'two sequential valid calls must call the fetch function twice total');
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: '&nbsp;' }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'api', html: '&nbsp;' });
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html: new String('<p>x</p>') }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn, apiBase: '', timeout: 5, retries: 2 });
+    assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+    assert.deepEqual(urls, ['/api/town/plot?handle=wick']);
+  }
+});
+
+test('file hygiene: 53 tests, unique names, imports, banned literals pinned', async () => {
+  const self = await fs.readFile(SELF_PATH, 'utf8');
+
+  const names = [...self.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 53, 'test file must contain 53 top-level tests');
+  assert.equal(new Set(names).size, 53, 'test names must be unique');
+  for (const name of names) {
+    assert.ok(name.length > 0, 'test names must be non-empty');
+  }
+
+  const importLines = self.split('\n').filter((line) => line.startsWith('import '));
+  assert.equal(importLines.length, 6, 'test file must have exactly 6 import lines');
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "import { resolvePlotOverlayContent } from './town." + "js';",
+  ]);
+
+  assert.ok(!BANNED_TERM_RE.test(self), 'test file must not contain the banned term');
+  assert.ok(!LOOPBACK_RE.test(self), 'test file must not hardcode a loopback host');
+  assert.ok(!/:\d{4,5}\b/.test(self), 'test file must not hardcode a port');
+  const fetchCallLines = self.split('\n').filter((line) => line.includes('fe' + 'tch('));
+  assert.equal(fetchCallLines.length, 1, 'test file must contain exactly one fetch-call line');
+  assert.ok(fetchCallLines[0].includes('must not contain fe' + 'tch() calls'), 'the one fetch-call line must be the pre-existing assertion message');
+  assert.ok(!self.includes(`Math.${'random'}`), 'test file must not use the random-number helper');
+  assert.ok(!self.includes(`Date.${'now'}`), 'test file must not use the wall-clock helper');
+  assert.ok(!new RegExp(`TO${'DO'}|FIX${'ME'}`).test(self), 'test file must not contain task markers');
+  assert.ok(!self.includes('window.' + 'fetch'), 'test file must not reference the browser fetch function');
+});
