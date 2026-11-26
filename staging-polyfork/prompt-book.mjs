@@ -1,4 +1,4 @@
-// Copied verbatim from town-3d/town.js (formatPromptBookEntries + renderPromptBook, lines 1599-1674).
+// Copied verbatim from town-3d/town.js (formatPromptBookEntries + renderPromptBook, lines 1813-1889).
 // Keep in step with town-3d/town.js; no THREE dependency, no top-level document access.
 
 /**
