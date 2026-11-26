@@ -689,3 +689,128 @@ test('PLAN.md §8 last 30 entries each carry the core record fields', () => {
     }
   }
 });
+
+test('PLAN.md header block shape — nine lines, seven non-empty, title first, Status punctuation', () => {
+  const { headerLines, statusLine } = readPlanHeader();
+  assert.equal(headerLines.length, 9, 'PLAN.md header block must be exactly 9 lines (title, blank, Status, Reviewed, gathering, Planned-with x2, Owner, blank)');
+  assert.equal(headerLines.filter((line) => line.trim() !== '').length, 7, 'PLAN.md header block must have exactly 7 non-empty lines');
+  assert.equal(headerLines[0], '# Ghostlight Town — Plan', 'PLAN.md header must start with the title line');
+  assert.equal((statusLine.match(/;/g) || []).length, 7, 'PLAN.md **Status:** must contain exactly 7 semicolons');
+  assert.equal((statusLine.match(/—/g) || []).length, 3, 'PLAN.md **Status:** must contain exactly 3 em-dashes');
+  assert.ok(statusLine.endsWith('Musebook invites still blocked).'), 'PLAN.md **Status:** must end with "Musebook invites still blocked)."');
+});
+
+test('PLAN.md header Status clauses appear in fixed order', () => {
+  const { statusLine } = readPlanHeader();
+  const markers = ['built through slice', 'live Polyfork town at', 'town API live since', 'Phase 2 code complete', 'Social Gate to'];
+  const idxs = markers.map((marker) => statusLine.indexOf(marker));
+  for (let i = 0; i < markers.length; i++) {
+    assert.ok(idxs[i] !== -1, `PLAN.md **Status:** must include clause "${markers[i]}"`);
+    if (i > 0) assert.ok(idxs[i] > idxs[i - 1], `PLAN.md **Status:** clause "${markers[i]}" must follow "${markers[i - 1]}"`);
+  }
+});
+
+test('README.md 3D clearing bullet bundle agrees with the PLAN.md header bundle', () => {
+  const { statusLine } = readPlanHeader();
+  const readmeStatus = readReadmeStatusSection();
+  const readmeBundle = readmeStatus.match(/The `\?v=(\d+)` \/ (\d+)-file bundle deployed (\d{4}-\d{2}-\d{2})/);
+  assert.ok(readmeBundle, 'README.md ## Status 3D clearing bullet must state The `?v=<N>` / <M>-file bundle deployed <YYYY-MM-DD>');
+  const headerBundle = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed (\d{4}-\d{2}-\d{2})/);
+  assert.ok(headerBundle, 'PLAN.md **Status:** must state `?v=<N>` bundle / <M> files deployed <YYYY-MM-DD>');
+  assert.equal(readmeBundle[1], headerBundle[1], 'README.md bundle ?v= must match PLAN.md header bundle ?v=');
+  assert.equal(readmeBundle[2], headerBundle[2], 'README.md bundle file count must match PLAN.md header bundle file count');
+  assert.equal(readmeBundle[3], headerBundle[3], 'README.md bundle deploy date must match PLAN.md header bundle deploy date');
+  const serving = readmeStatus.match(/serving `staging\.js\?v=(\d+)`/);
+  assert.ok(serving, 'README.md ## Status must state serving `staging.js?v=<N>`');
+  assert.equal(serving[1], readmeBundle[1], 'README.md serving ?v= must equal its bundle ?v=');
+});
+
+test('PLAN.md header live URL equals town.json base_url plus /ghostlight-town/', () => {
+  const { statusLine } = readPlanHeader();
+  const urlMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=\d+`\s*\(`(https:\/\/[^`]+)`/);
+  assert.ok(urlMatch, 'PLAN.md **Status:** must include live URL in backticks');
+  const town = JSON.parse(fs.readFileSync(TOWN_JSON_PATH, 'utf8'));
+  assert.equal(urlMatch[1], `${town.base_url}/ghostlight-town/`, 'PLAN.md header live URL must equal town.json base_url + /ghostlight-town/');
+});
+
+test('PLAN.md §12.6 watch re-check record pins the 2026-11-15 state', () => {
+  const { planText } = readPlanHeader();
+  const idx126 = planText.indexOf('### 12.6');
+  assert.ok(idx126 !== -1, 'PLAN.md must contain ### 12.6');
+  const endIdx = planText.indexOf('### 12.7', idx126);
+  const sec126 = endIdx === -1 ? planText.slice(idx126) : planText.slice(idx126, endIdx);
+  for (const token of ['2026-11-15', 'Colony story post still 4 comments', 'rStation 0', 'notifications / 0 comments', 'does NOT reduce yet']) {
+    assert.ok(sec126.includes(token), `PLAN.md §12.6 must include "${token}"`);
+  }
+  const seq83 = (sec126.match(/`state_seq` `83`/g) || []).length;
+  assert.equal(seq83, 1, 'PLAN.md §12.6 must record `state_seq` `83` exactly once');
+});
+
+test('PLAN.md latest §8 entry records this slice file 41 -> 51 top-level tests', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  const m = latestLine.match(/`([a-z0-9\-/]+\.mjs)` (\d+) → (\d+) top-level tests/);
+  assert.ok(m, 'Latest §8 entry must record `<file>.mjs <old> → <new> top-level tests`');
+  assert.equal(m[1], 'test-plan-header.mjs', 'Latest §8 entry must record test-plan-header.mjs');
+  assert.equal(m[2], '41', 'Latest §8 entry must record the old count 41');
+  assert.equal(m[3], '51', 'Latest §8 entry must record the new count 51');
+  assert.ok(latestLine.includes('builder Gemini 4 Neon'), 'Latest §8 entry must record builder Gemini 4 Neon');
+  assert.match(latestLine, /session \d+/, 'Latest §8 entry must record a session number');
+});
+
+test('PLAN.md latest §8 entry records the doc-suite results for this file', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.ok(latestLine.includes('`node test-plan-header.mjs` 51/51'), 'Latest §8 entry must record `node test-plan-header.mjs` 51/51');
+  assert.ok(latestLine.includes('`node test-readme-accuracy.mjs` 41/41'), 'Latest §8 entry must record `node test-readme-accuracy.mjs` 41/41');
+});
+
+test('README.md named-list pins are 62 unique existing files with equal counts, TOTAL after the last pin', () => {
+  const readmeStatus = readReadmeStatusSection();
+  const pins = [...readmeStatus.matchAll(/`([^`]+\.mjs)` (\d+)\/(\d+)/g)];
+  assert.equal(pins.length, 62, 'README.md ## Status must contain exactly 62 per-file test-count pins');
+  const files = pins.map((p) => p[1]);
+  assert.equal(new Set(files).size, files.length, 'README.md ## Status pins must name each file once');
+  for (const file of files) {
+    assert.ok(fs.existsSync(path.join(__dirname, file)), `README.md ## Status pin ${file} must exist on disk`);
+  }
+  for (const p of pins) {
+    assert.equal(p[2], p[3], `README.md ## Status pin ${p[1]} must be an equal count (${p[2]}/${p[3]})`);
+  }
+  const lastPinEnd = pins[pins.length - 1].index + pins[pins.length - 1][0].length;
+  const totalIdx = readmeStatus.indexOf('`run-tests.mjs` TOTAL pass=');
+  assert.ok(totalIdx > lastPinEnd, 'README.md ## Status TOTAL record must follow the last per-file pin');
+});
+
+test('PLAN.md §8 entries from slice 400 are contiguous and all record Scratch verification', () => {
+  const { planText } = readPlanHeader();
+  const sec8 = readSection8(planText);
+  const entries = [...sec8.matchAll(/^\*Slice (\d+)([a-z]?)\b[^\n]*/gm)];
+  const subset = entries.filter((m) => Number(m[1]) >= 400);
+  assert.ok(subset.length > 0, 'PLAN.md §8 must have slice entries >= 400');
+  const nums = subset.map((m) => Number(m[1]));
+  assert.equal(nums[0], 400, 'PLAN.md §8 entries >= 400 must start at slice 400');
+  for (let i = 1; i < nums.length; i++) {
+    assert.equal(nums[i], nums[i - 1] + 1, `PLAN.md §8 entries >= 400 must be contiguous (${nums[i]} after ${nums[i - 1]})`);
+  }
+  for (const m of subset) {
+    assert.ok(m[0].includes('Scratch verification:'), `PLAN.md §8 Slice ${m[1]} entry must record Scratch verification:`);
+  }
+});
+
+test('file hygiene — 51 unique test names, 6 import lines, 0 banned-literal lines', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-plan-header.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 51, 'test-plan-header.mjs must have exactly 51 top-level tests');
+  assert.equal(new Set(names).size, names.length, 'test-plan-header.mjs test names must be unique');
+  for (const name of names) {
+    assert.equal(name.includes("'"), false, `test-plan-header.mjs test name must not contain an apostrophe: ${name}`);
+  }
+  const importLines = src.split('\n').filter((line) => line.startsWith('import ')).length;
+  assert.equal(importLines, 6, 'test-plan-header.mjs must have exactly 6 import lines');
+  const banned = ['fet' + 'ch(', 'Date' + '.now', 'Math' + '.random', 'TO' + 'DO', 'FIX' + 'ME', 'inner' + 'HTML', RETIRED_TERM];
+  for (const needle of banned) {
+    const hits = src.split('\n').filter((line) => line.includes(needle)).length;
+    assert.equal(hits, 0, 'test-plan-header.mjs must have 0 lines containing a banned literal (split-needle check)');
+  }
+});
