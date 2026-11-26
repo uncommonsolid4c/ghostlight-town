@@ -1128,3 +1128,163 @@ test('town-api/README.md Honest limits and intro accuracy trace to disk and cons
   const runAll = fs.readFileSync(path.join(ROOT_DIR, 'town-npc/run-all.mjs'), 'utf8');
   assert.ok(runAll.includes('/api/town/state'));
 });
+
+test('town-api/README.md Test suites section has exact ordered file lists per group', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Test suites\s+([\s\S]*?)\n## /)[1];
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)];
+  assert.equal(bullets.length, 5, 'Test suites section must have 5 group bullets');
+  assert.deepEqual(
+    bullets.map((b) => b[1]),
+    [
+      'Core & onboarding',
+      'Plots, Inn, Guestbook, Fishing & Garden',
+      'Events & contracts',
+      'CLI, backups & docs',
+      'Live proxy (env-gated)',
+    ]
+  );
+  const groupFiles = bullets.map((b) =>
+    [...b[2].matchAll(/`([a-z0-9-]+\.mjs)`/g)].map((m) => m[1])
+  );
+  assert.deepEqual(groupFiles, [
+    ['test.mjs', 'test-onboarding.mjs', 'test-guest.mjs', 'test-say-reply.mjs', 'test-key-rotate.mjs', 'test-key-collision.mjs'],
+    ['test-plot.mjs', 'test-inn.mjs', 'test-guestbook.mjs', 'test-fish.mjs', 'test-garden.mjs'],
+    ['test-events.mjs', 'test-daily-game.mjs', 'test-state-events-key.mjs', 'test-town-json.mjs', 'test-skill-accuracy.mjs', 'test-build-gate.mjs'],
+    ['test-ghostlight-client-cli.mjs', 'test-backup.mjs', 'test-backup-plots.mjs', 'test-readme.mjs'],
+    ['test-live-proxy.mjs', 'test-live-proxy-inn.mjs'],
+  ]);
+});
+
+test('town-api/README.md Test suites parenthetical phrases match group scope', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Test suites\s+([\s\S]*?)\n## /)[1];
+  const byTitle = new Map(
+    [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)].map((b) => [b[1], b[2]])
+  );
+  assert.ok(byTitle.get('Core & onboarding').includes('impersonation guard'), 'Core bullet must name the impersonation guard');
+  assert.ok(byTitle.get('Core & onboarding').includes('`reply_to` threading'), 'Core bullet must name reply_to threading');
+  assert.ok(
+    byTitle.get('Plots, Inn, Guestbook, Fishing & Garden').includes('guest limits, no `state_seq` bump'),
+    'Plots bullet must state fish has no state_seq bump'
+  );
+  assert.ok(
+    byTitle.get('Plots, Inn, Guestbook, Fishing & Garden').includes('guest limits, `state_seq` bump'),
+    'Plots bullet must state garden bumps state_seq'
+  );
+  assert.ok(byTitle.get('Events & contracts').includes('event loading/selection + banner parity'), 'Events bullet must name banner parity');
+  assert.ok(byTitle.get('Events & contracts').includes('end-to-end Build Gate flow'), 'Events bullet must name the Build Gate flow');
+  assert.equal(byTitle.get('CLI, backups & docs').includes('('), false, 'CLI bullet must list files with no parentheticals');
+  assert.ok(byTitle.get('Live proxy (env-gated)').includes('skip unless `GHOSTLIGHT_LIVE_BASE`'), 'Live proxy bullet must state the skip condition');
+});
+
+test('town-api/README.md plot size constants match plot-validation.mjs values', () => {
+  const readme = readReadme();
+  const plotValSrc = fs.readFileSync(path.join(__dirname, 'plot-validation.mjs'), 'utf8');
+  assert.equal(MAX_MANIFEST_BYTES, 16384, 'MAX_MANIFEST_BYTES must be 16 KiB');
+  assert.equal(MAX_HTML_BYTES, 32768, 'MAX_HTML_BYTES must be 32 KiB');
+  assert.equal(MAX_PROPS, 12, 'MAX_PROPS must be 12');
+  assert.ok(plotValSrc.includes('export const MAX_MANIFEST_BYTES = 16 * 1024;'));
+  assert.ok(plotValSrc.includes('export const MAX_HTML_BYTES = 32 * 1024;'));
+  assert.ok(plotValSrc.includes('export const MAX_PROPS = 12;'));
+  assert.ok(readme.includes('plot manifest `16 KB` (`12` props max)'));
+  assert.ok(readme.includes('plot HTML `32 KB`'));
+});
+
+test('town-api/README.md Backups intro and bullet order match backup CLIs', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Backups\s+([\s\S]*?)\n## /)[1];
+  assert.ok(sec.includes('Run both before any deploy or rsync:'), 'Backups section must open with the run-both line');
+  const bullets = [...sec.matchAll(/^- `node town-api\/([a-z-]+\.mjs)/gm)].map((m) => m[1]);
+  assert.deepEqual(bullets, ['backup.mjs', 'backup-plots.mjs'], 'Backups bullets must be backup.mjs then backup-plots.mjs');
+});
+
+test('town-api/README.md operator pubkey env row matches server.mjs 32-byte check', () => {
+  const readme = readReadme();
+  const envSec = readme.match(/## Environment variables & ports\s+([\s\S]*?)\n\nLive production/)[1];
+  const opRow = [...envSec.matchAll(/^\|\s*`TOWN_OPERATOR_PUBKEY`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/gm)][0];
+  assert.ok(opRow, 'Env-vars table must have a TOWN_OPERATOR_PUBKEY row');
+  assert.equal(opRow[1].trim(), '`server.mjs`', 'TOWN_OPERATOR_PUBKEY must be used by server.mjs only');
+  assert.equal(
+    opRow[2].trim(),
+    'Raw 32-byte base64 Ed25519 operator public key; if unset, `/api/town/admin/*` returns `503`.',
+    'TOWN_OPERATOR_PUBKEY purpose must state raw 32-byte base64 and the 503'
+  );
+  const serverSrc = fs.readFileSync(path.join(__dirname, 'server.mjs'), 'utf8');
+  assert.ok(serverSrc.includes("process.env.TOWN_OPERATOR_PUBKEY || ''"), 'server.mjs must read TOWN_OPERATOR_PUBKEY');
+  assert.ok(serverSrc.includes("Buffer.from(base64Pubkey, 'base64')"), 'server.mjs must base64-decode pubkeys');
+  assert.ok(serverSrc.includes('if (raw.length !== 32) {'), 'server.mjs must require a 32-byte raw pubkey');
+  assert.ok(serverSrc.includes('TOWN_OPERATOR_PUBKEY is not set; admin endpoints are disabled.'), 'server.mjs must carry the operator-not-configured 503 message');
+});
+
+test('town-api/README.md live production paragraph matches town.json base_url', () => {
+  const readme = readReadme();
+  const townJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'town.json'), 'utf8'));
+  const liveMatch = readme.match(/Live production runs on[\s\S]*?\/api\/town\/\*`\.?/);
+  assert.ok(liveMatch, 'Live production paragraph must exist');
+  assert.equal(
+    liveMatch[0].replace(/\s+/g, ' '),
+    'Live production runs on `127.0.0.1:8125` on the homelab behind the same-origin proxy at `https://milo.4167360.xyz/api/town/*`.'
+  );
+  assert.equal(townJson.base_url, 'https://milo.4167360.xyz', 'town.json base_url must be the live origin');
+});
+
+test('town-api/README.md intro paragraph is verbatim', () => {
+  const readme = readReadme();
+  const intro = readme
+    .slice(0, readme.indexOf('\n## Shipped files'))
+    .replace(/\s+/g, ' ')
+    .trim();
+  assert.equal(
+    intro,
+    '# Town API (`town-api/`) Signed, zero-dependency SQLite-backed state server for Ghostlight Town. Every browser client, the 3D town, and the seed NPC runner poll or write against this HTTP API (Node built-ins + `node:sqlite` only; requires Node >= 22.5).'
+  );
+});
+
+test('town-api/README.md Honest limits bullets are verbatim', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Honest limits\s+([\s\S]*?)$/)[1];
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)].map((b) => `**${b[1]}:** ${b[2].replace(/\s+/g, ' ')}`);
+  assert.deepEqual(bullets, [
+    '**Live state keys:** the live homelab API serves the `events` and `guestbook_by_plot` keys in `/api/town/state`; deploying the updated `town-api/` bundle is a foreground turn and not part of docs slices.',
+    '**No pinned live counters:** `state_seq` and Prompt Book counts move with every mutation, so live counter values are never pinned in this README.',
+  ]);
+});
+
+test('town-api/README.md Safety rails Ed25519 and keys bullets are verbatim', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Safety rails\s+([\s\S]*?)\n## /)[1];
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)].map((b) => `**${b[1]}:** ${b[2].replace(/\s+/g, ' ')}`);
+  assert.equal(
+    bullets[0],
+    '**Ed25519 auth:** requests carry `X-Muse-Handle`, `X-Muse-Timestamp`, `X-Muse-Nonce`, and `X-Muse-Signature` over `{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}`, with 120 s timestamp skew and 600 s in-memory nonce replay protection. Public keys are raw 32-byte base64 (12-byte DER SPKI prefix `302a300506032b6570032100`). `join` ignores any `role` in the body.'
+  );
+  assert.equal(
+    bullets[1],
+    '**Keys by file path only:** `--key <path>` (and `TOWN_OPERATOR_KEY_PATH` in live tests) accepts filesystem paths only and rejects raw PEM strings; `keygen` writes mode `0600` and refuses to overwrite. Never print or log raw private keys.'
+  );
+});
+
+test('town-api/test-readme.mjs file hygiene: 52 tests, 52 unique names, 6 imports, retired term once, no banned literals', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 52, `Expected 52 top-level tests, found ${names.length}`);
+  assert.equal(new Set(names).size, 52, 'Test names must be unique');
+  assert.ok(!names.some((n) => n.includes("'")), 'Test names must contain no apostrophes');
+  const importLines = src.split(/\r?\n/).filter((line) => line.startsWith('import '));
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'import {',
+  ]);
+  const retiredRe = new RegExp('camp' + 'fire', 'g');
+  assert.equal([...src.matchAll(retiredRe)].length, 1, 'Retired term must appear exactly once (the pre-existing guard regex)');
+  assert.equal([...src.matchAll(/fetch\(/g)].length, 0, 'fetch' + '(' + ' must not appear literally');
+  assert.equal([...src.matchAll(/Math\.random/g)].length, 0, 'Math.' + 'random' + ' must not appear literally');
+  assert.equal([...src.matchAll(/Date\.now/g)].length, 0, 'Date.' + 'now' + ' must not appear literally');
+  assert.equal([...src.matchAll(new RegExp('TO' + 'DO', 'g'))].length, 0, 'TO' + 'DO' + ' must not appear literally');
+  assert.equal([...src.matchAll(new RegExp('FIX' + 'ME', 'g'))].length, 0, 'FIX' + 'ME' + ' must not appear literally');
+});
