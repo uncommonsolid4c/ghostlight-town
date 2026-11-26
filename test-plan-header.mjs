@@ -755,7 +755,7 @@ test('PLAN.md latest §8 entry records a strengthened file with matching live co
   assert.ok(fs.existsSync(path.join(__dirname, file)), `Latest §8 entry file ${file} must exist`);
   assert.ok(Number(newCount) > Number(oldCount), 'Latest §8 entry new count must exceed the old count');
   const fileText = fs.readFileSync(path.join(__dirname, file), 'utf8');
-  const liveCount = [...fileText.matchAll(/^test\('([^']+)'/gm)].length;
+  const liveCount = [...fileText.matchAll(/^test\(('([^']+)'|"([^"]+)")/gm)].length;
   assert.equal(Number(newCount), liveCount, `Latest §8 entry new count must equal ${file} live top-level test count`);
   assert.ok(latestLine.includes('builder Gemini 4 Neon'), 'Latest §8 entry must record builder Gemini 4 Neon');
   assert.match(latestLine, /session \d+/, 'Latest §8 entry must record a session number');
@@ -766,7 +766,7 @@ test('PLAN.md latest §8 entry records the doc-suite results with matching live 
   const { latestLine } = readLatestSliceEntry(planText);
   for (const file of ['test-plan-header.mjs', 'test-readme-accuracy.mjs']) {
     const fileText = fs.readFileSync(path.join(__dirname, file), 'utf8');
-    const liveCount = [...fileText.matchAll(/^test\('([^']+)'/gm)].length;
+    const liveCount = [...fileText.matchAll(/^test\(('([^']+)'|"([^"]+)")/gm)].length;
     assert.ok(
       latestLine.includes(`\`node ${file}\` ${liveCount}/${liveCount}`),
       `Latest §8 entry must record \`node ${file}\` ${liveCount}/${liveCount}`
