@@ -999,3 +999,174 @@ test('selectCurrentEvent prefers now over next regardless of order and tie-break
   const tie2 = { ...VALID_EVENT, title: 'TieTwo', start_at: '2026-11-15T20:00:00Z', duration_min: 60 };
   assert.equal(selectCurrentEvent([tie2, tie1], t)?.event.title, 'TieTwo');
 });
+
+test('loadEvents rejects json primitives, accepts truthy ok, and preserves mixed valid/invalid order', async () => {
+  const load = (events) =>
+    loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return { events };
+      },
+    }));
+  assert.deepEqual(await load('x'), { events: [] });
+  assert.deepEqual(await load(42), { events: [] });
+  assert.deepEqual(await load(true), { events: [] });
+  assert.deepEqual(
+    await loadEvents(async () => ({ ok: 1, async json() { return { events: [VALID_EVENT] }; } })),
+    { events: [VALID_EVENT] }
+  );
+  const v2 = { ...VALID_EVENT, title: 'Second' };
+  const v3 = { ...VALID_EVENT, title: 'Third' };
+  const mixed = await load([VALID_EVENT, { ...VALID_EVENT, title: '' }, v2, { ...VALID_EVENT, duration_min: 10 }, v3]);
+  assert.deepEqual(mixed.events, [VALID_EVENT, v2, v3]);
+});
+
+test('selectCurrentEvent handles 1ms boundary edges, skips invalid earliest start, and accepts 15-min duration', () => {
+  const ev = { ...VALID_EVENT, start_at: '2026-11-15T20:00:00Z', duration_min: 60 };
+  const startMs = Date.parse('2026-11-15T20:00:00Z');
+  assert.equal(selectCurrentEvent([ev], startMs - 1)?.status, 'next');
+  assert.equal(selectCurrentEvent([ev], startMs + 3600000 - 1)?.status, 'now');
+  assert.equal(selectCurrentEvent([ev], startMs + 3600000), null);
+  const invalidEarly = { ...VALID_EVENT, title: '', start_at: '2026-11-15T19:00:00Z' };
+  const later = { ...VALID_EVENT, title: 'Later', start_at: '2026-11-16T18:00:00Z', duration_min: 30 };
+  const r = selectCurrentEvent([invalidEarly, later], Date.parse('2026-11-15T20:30:00Z'));
+  assert.equal(r?.status, 'next');
+  assert.equal(r?.event.title, 'Later');
+  const min15 = { ...VALID_EVENT, start_at: '2026-11-15T20:00:00Z', duration_min: 15 };
+  assert.equal(selectCurrentEvent([min15], startMs)?.status, 'now');
+});
+
+test('eventBannerLines falls through on non-now status, hard-splits 31-char token, and wraps greedily', () => {
+  assert.deepEqual(eventBannerLines(VALID_EVENT, ''), ['NEXT EVENT', 'Midnight Reading on the', 'Bandstand']);
+  assert.equal(eventBannerLines(VALID_EVENT, 'NOW')[0], 'NEXT EVENT');
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'x'.repeat(31) }, 'now'),
+    ['EVENTS', 'x'.repeat(30), 'x']
+  );
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp' }, 'now'),
+    ['EVENTS', 'aa bb cc dd ee ff gg hh ii jj', 'kk ll mm nn oo pp']
+  );
+});
+
+test('updateEventBanner forwards THREE and lines, replaces map, and leaves needsUpdate false on cache hit', () => {
+  let gotThree = null;
+  let gotLines = null;
+  let calls = 0;
+  const THREE = { marker: 1 };
+  const oldMap = { old: true };
+  const card = { name: 'event_banner', visible: false, material: { map: oldMap, needsUpdate: false } };
+  const liveStore = { eventBannerKey: null };
+  const makeTextTexture = (t, lines, opts) => {
+    calls += 1;
+    gotThree = t;
+    gotLines = lines;
+    return { lines, opts };
+  };
+  const ctx = { THREE, bandstandBuilt: { eventBanner: card }, liveStore, makeTextTexture };
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), true);
+  assert.equal(gotThree, THREE);
+  assert.deepEqual(gotLines, eventBannerLines(VALID_EVENT, 'next'));
+  assert.notEqual(card.material.map, oldMap);
+  assert.equal(card.material.needsUpdate, true);
+  card.material.needsUpdate = false;
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), false);
+  assert.equal(card.material.needsUpdate, false);
+  assert.equal(card.visible, true);
+  assert.equal(calls, 1);
+});
+
+test('renderEventBannerHeader formats epoch next, dash/underscore host, verbatim punctuation, and stays visible', () => {
+  const el = { hidden: true, textContent: '' };
+  assert.equal(renderEventBannerHeader(el, { ...VALID_EVENT, start_at: '1970-01-01T00:00:00Z' }, 'next'), true);
+  assert.equal(el.textContent, 'Next: Midnight Reading on the Bandstand — Dec 31, 4:00 PM · hosted by @milo');
+  const el2 = { hidden: true, textContent: '' };
+  assert.equal(renderEventBannerHeader(el2, { ...VALID_EVENT, host_handle: 'wick-2_x', title: 'A — B · C' }, 'now'), true);
+  assert.equal(el2.textContent, 'Now: A — B · C — hosted by @wick-2_x');
+  const el3 = { hidden: false, textContent: 'old' };
+  assert.equal(renderEventBannerHeader(el3, VALID_EVENT, 'now'), true);
+  assert.equal(el3.hidden, false);
+});
+
+test('formatEventWhen matches exact Pacific Time pins across midday, midnight, and pre-epoch timestamps', () => {
+  assert.equal(formatEventWhen(Date.parse('2026-11-15T21:00:00Z')), 'Nov 15, 1:00 PM');
+  assert.equal(formatEventWhen(Date.parse('2026-11-15T00:30:00Z')), 'Nov 14, 4:30 PM');
+  assert.equal(formatEventWhen(Date.parse('2026-11-05T20:00:00Z')), 'Nov 5, 12:00 PM');
+  assert.equal(formatEventWhen(Date.parse('2027-01-01T08:00:00Z')), 'Jan 1, 12:00 AM');
+  assert.equal(formatEventWhen(-86400000), 'Dec 30, 4:00 PM');
+});
+
+test('loadEvents accepts offset start_at, date-only start_at, unicode title, and trims tab whitespace', async () => {
+  const load = (events) =>
+    loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return { events };
+      },
+    }));
+  const off = { ...VALID_EVENT, start_at: '2026-11-15T20:00:00+02:00' };
+  assert.deepEqual((await load([off])).events, [off]);
+  const dateOnly = { ...VALID_EVENT, start_at: '2026-11-15' };
+  assert.deepEqual((await load([dateOnly])).events, [dateOnly]);
+  const uni = { ...VALID_EVENT, title: '🎃 Lantern Night — lueur' };
+  assert.deepEqual((await load([uni])).events, [uni]);
+  const tab = { ...VALID_EVENT, title: '\tTabbed Title\t' };
+  assert.deepEqual((await load([tab])).events, [{ ...VALID_EVENT, title: 'Tabbed Title' }]);
+});
+
+test('event-banner.mjs source pins header, single import, validation constants, and no three import', async () => {
+  const src = await fs.readFile(path.join(HERE, 'event-banner.mjs'), 'utf8');
+  const lines = src.split('\n');
+  assert.equal(lines[0], '// Staging-local Bandstand event banner + Prompt Book event header.');
+  assert.equal(lines[1], '// No THREE import; no top-level document access.');
+  assert.equal(lines[3], "import { splitNightlyCallLines } from './inn-nightly-call.mjs';");
+  assert.equal(lines[5], 'const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;');
+  assert.equal(lines[6], 'const MIN_DURATION_MIN = 15;');
+  assert.equal(lines[7], 'const MAX_DURATION_MIN = 240;');
+  assert.equal(lines[8], 'const MAX_TITLE_LEN = 80;');
+  assert.equal(lines[9], 'const MAX_BLURB_LEN = 200;');
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 1);
+  assert.equal(lines.filter((l) => l.includes("from 'three'")).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 0);
+});
+
+test('staging.js event-banner wiring pins import, store key, applyStagingState, and loadEvents calls', async () => {
+  const stagingSrc = await fs.readFile(path.join(HERE, 'staging.js'), 'utf8');
+  const sl = stagingSrc.split('\n');
+  assert.equal(sl[36], '  loadEvents,');
+  assert.equal(sl[536], '    eventBannerKey: null,');
+  assert.equal(sl[836], '  const selectedEvent = selectCurrentEvent(liveStore.events, ' + 'Date' + '.now());');
+  assert.equal(sl[837], '  updateEventBanner(');
+  assert.equal(sl[847], '  renderEventBannerHeader(');
+  assert.equal(sl[1231], '  loadEvents()');
+  assert.equal(sl[1235], '        const selectedEvent = selectCurrentEvent(liveStore.events, ' + 'Date' + '.now());');
+  assert.equal(sl.filter((l) => l.includes('selectCurrentEvent(')).length, 2);
+  assert.equal(sl.filter((l) => l.includes('updateEventBanner(')).length, 2);
+  assert.equal(sl.filter((l) => l.includes('renderEventBannerHeader(')).length, 2);
+  assert.equal(sl.filter((l) => l.includes('loadEvents()')).length, 1);
+});
+
+test('test-event-banner.mjs file hygiene pins 48 unique names, 7 imports, and forbidden-literal counts', async () => {
+  const self = await fs.readFile(path.join(HERE, 'test-event-banner.mjs'), 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'import {',
+    "import { collectSourceFiles } from '../scripts/stage-deploy.mjs';",
+  ]); // no new top-level imports
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('Math' + '.random')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 0);
+});
