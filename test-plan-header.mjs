@@ -746,23 +746,32 @@ test('PLAN.md §12.6 watch re-check record pins the 2026-11-15 state', () => {
   assert.equal(seq83, 1, 'PLAN.md §12.6 must record `state_seq` `83` exactly once');
 });
 
-test('PLAN.md latest §8 entry records this slice file 41 -> 51 top-level tests', () => {
+test('PLAN.md latest §8 entry records a strengthened file with matching live counts', () => {
   const { planText } = readPlanHeader();
   const { latestLine } = readLatestSliceEntry(planText);
   const m = latestLine.match(/`([a-z0-9\-/]+\.mjs)` (\d+) → (\d+) top-level tests/);
   assert.ok(m, 'Latest §8 entry must record `<file>.mjs <old> → <new> top-level tests`');
-  assert.equal(m[1], 'test-plan-header.mjs', 'Latest §8 entry must record test-plan-header.mjs');
-  assert.equal(m[2], '41', 'Latest §8 entry must record the old count 41');
-  assert.equal(m[3], '51', 'Latest §8 entry must record the new count 51');
+  const [, file, oldCount, newCount] = m;
+  assert.ok(fs.existsSync(path.join(__dirname, file)), `Latest §8 entry file ${file} must exist`);
+  assert.ok(Number(newCount) > Number(oldCount), 'Latest §8 entry new count must exceed the old count');
+  const fileText = fs.readFileSync(path.join(__dirname, file), 'utf8');
+  const liveCount = [...fileText.matchAll(/^test\('([^']+)'/gm)].length;
+  assert.equal(Number(newCount), liveCount, `Latest §8 entry new count must equal ${file} live top-level test count`);
   assert.ok(latestLine.includes('builder Gemini 4 Neon'), 'Latest §8 entry must record builder Gemini 4 Neon');
   assert.match(latestLine, /session \d+/, 'Latest §8 entry must record a session number');
 });
 
-test('PLAN.md latest §8 entry records the doc-suite results for this file', () => {
+test('PLAN.md latest §8 entry records the doc-suite results with matching live counts', () => {
   const { planText } = readPlanHeader();
   const { latestLine } = readLatestSliceEntry(planText);
-  assert.ok(latestLine.includes('`node test-plan-header.mjs` 51/51'), 'Latest §8 entry must record `node test-plan-header.mjs` 51/51');
-  assert.ok(latestLine.includes('`node test-readme-accuracy.mjs` 41/41'), 'Latest §8 entry must record `node test-readme-accuracy.mjs` 41/41');
+  for (const file of ['test-plan-header.mjs', 'test-readme-accuracy.mjs']) {
+    const fileText = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    const liveCount = [...fileText.matchAll(/^test\('([^']+)'/gm)].length;
+    assert.ok(
+      latestLine.includes(`\`node ${file}\` ${liveCount}/${liveCount}`),
+      `Latest §8 entry must record \`node ${file}\` ${liveCount}/${liveCount}`
+    );
+  }
 });
 
 test('README.md named-list pins are 62 unique existing files with equal counts, TOTAL after the last pin', () => {
