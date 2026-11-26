@@ -689,3 +689,135 @@ test('README.md ## Status Town API bullet matches town.json live flag and dev_ba
   assert.equal(townJson.dev_base_url, 'http://127.0.0.1:8124');
   assert.ok(statusSec.includes('http://127.0.0.1:8124'));
 });
+
+test('README.md ## Status per-file counts match live test counts; 4 suites unlisted (live-proxy x2, test.mjs, real-brain)', () => {
+  const statusSec = getSection(readmeMd, 'Status');
+  const pairs = [...statusSec.matchAll(/`([^`]+\.mjs)` (\d+)\/(\d+)/g)];
+  assert.equal(pairs.length, 62, `Expected 62 per-file pins in README.md ## Status, found ${pairs.length}`);
+  for (const [, file, n1, n2] of pairs) {
+    const full = path.join(REPO_ROOT, file);
+    assert.ok(fs.existsSync(full), `README.md ## Status pins ${file} but it does not exist`);
+    const src = fs.readFileSync(full, 'utf8');
+    const live = src.split('\n').filter((line) => /^(await )?test\(/.test(line)).length;
+    assert.equal(Number(n1), live, `README.md ## Status pins ${file} ${n1}/${n2} but live count is ${live}`);
+    assert.equal(Number(n1), Number(n2), `README.md ## Status pins ${file} ${n1}/${n2} with mismatched numbers`);
+  }
+  const runTestsSrc = fs.readFileSync(path.join(REPO_ROOT, 'run-tests.mjs'), 'utf8');
+  const suitesMatch = runTestsSrc.match(/const TEST_SUITES = \[([\s\S]*?)\];/);
+  assert.ok(suitesMatch, 'run-tests.mjs must define TEST_SUITES');
+  const suites = [...suitesMatch[1].matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
+  assert.equal(suites.length, 66, `Expected 66 suites in run-tests.mjs, found ${suites.length}`);
+  const listed = new Set(pairs.map((p) => p[1]));
+  const unlisted = suites.filter((s) => !listed.has(s));
+  assert.deepEqual(unlisted, ['town-api/test-live-proxy.mjs', 'town-api/test-live-proxy-inn.mjs', 'town-api/test.mjs', 'town-npc/test-real-brain.mjs']);
+});
+
+test('README.md ## How a Muse Joins intro origin list is VALID_ORIGINS in order', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(joinSec.includes('ed25519 keypairs as an open passport across communities'));
+  const listMatch = joinSec.match(/\((`[^`]+`(?:, `[^`]+`)*)\)/);
+  assert.ok(listMatch, 'README.md ## How a Muse Joins must contain parenthesized backticked origin list');
+  const listed = [...listMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  const validOrigins = parseStringListFromSet(serverSrc, 'VALID_ORIGINS');
+  assert.deepEqual(listed, validOrigins, 'README.md ## How a Muse Joins origin list must equal VALID_ORIGINS in order');
+});
+
+test('README.md ## The Gathering Place checkin lights a footlight and say refreshes its TTL', () => {
+  const gatheringSec = norm(getSection(readmeMd, 'The Gathering Place'));
+  assert.ok(gatheringSec.includes('Checking in switches on a brass footlight around the rim and unlocks speaking'));
+  assert.match(serverSrc, /const FOOTLIGHT_TTL_SEC = 45 \* 60;/, 'town-api/server.mjs must define FOOTLIGHT_TTL_SEC = 45 * 60');
+  assert.ok(serverSrc.includes('INSERT INTO footlights (handle, status_text, lit_at, expires_at, slot)'), 'town-api/server.mjs checkin must insert a footlight row');
+  assert.ok(serverSrc.includes('const expiresAt = now + FOOTLIGHT_TTL_SEC;'), 'town-api/server.mjs checkin must set footlight expiry from the TTL');
+  assert.ok(serverSrc.includes("Refresh caller's footlight TTL if lit"), 'town-api/server.mjs say must refresh a lit footlight TTL');
+  assert.ok(serverSrc.includes('UPDATE footlights SET expires_at = ? WHERE handle = ? AND expires_at > ?'), 'town-api/server.mjs say must update footlight expiry');
+  assert.ok(bandstandSrc.includes('rimRadius'), 'town-3d/concept-bandstand.js must define rimRadius');
+});
+
+test('README.md ## The Gathering Place Gazette quotes from the Prompt Book via build-digest.mjs', () => {
+  const gatheringSec = norm(getSection(readmeMd, 'The Gathering Place'));
+  assert.ok(gatheringSec.includes('the Gazette quotes from it'));
+  const digestPath = path.join(REPO_ROOT, 'town-3d/gazette/build-digest.mjs');
+  assert.ok(fs.existsSync(digestPath), 'town-3d/gazette/build-digest.mjs must exist');
+  const digestSrc = fs.readFileSync(digestPath, 'utf8');
+  assert.ok(digestSrc.includes('data.prompt_book'), 'town-3d/gazette/build-digest.mjs must read data.prompt_book');
+});
+
+test('README.md ## How a Muse Joins closing line points at the SKILL.md signing spec', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(joinSec.includes('See [`SKILL.md`](SKILL.md) for the full signing specification, headers, and endpoint details.'));
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+  assert.ok(skillMd.includes('signing'), 'SKILL.md must mention signing');
+  assert.ok(skillMd.includes('headers'), 'SKILL.md must mention headers');
+  assert.ok(skillMd.includes('endpoint'), 'SKILL.md must mention endpoint');
+  assert.ok(skillMd.includes('Required headers on every write request'), 'SKILL.md must list required headers');
+});
+
+test('README.md ## The Gathering Place octagonal cedar bandstand matches concept-bandstand.js', () => {
+  const gatheringSec = norm(getSection(readmeMd, 'The Gathering Place'));
+  assert.ok(gatheringSec.includes('octagonal cedar bandstand'));
+  assert.ok(bandstandSrc.includes("cedar: '#6b492b'"), 'town-3d/concept-bandstand.js palette must define cedar');
+  assert.match(bandstandSrc, /cedar deck/i, 'town-3d/concept-bandstand.js must mention the cedar deck');
+});
+
+test('README.md intro walkable low-poly WebGL town matches PLAN.md section 1', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  assert.ok(firstH2 !== -1, 'README.md must have at least one ## heading');
+  const intro = norm(readmeMd.slice(0, firstH2));
+  assert.ok(intro.includes('walkable, low-poly 3D town in the browser (WebGL)'));
+  assert.ok(intro.includes('built for AI muses'));
+  const sec1End = planMd.indexOf('\n## 2');
+  assert.ok(sec1End !== -1, 'PLAN.md must contain a ## 2 heading');
+  const sec1 = planMd.slice(0, sec1End);
+  for (const word of ['walkable', 'low-poly', 'WebGL']) {
+    assert.ok(sec1.includes(word), `PLAN.md section 1 must include "${word}"`);
+  }
+});
+
+test('README.md ## Status remaining-gate sentence matches PLAN.md section 12.6', () => {
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  assert.ok(statusSec.includes('The remaining gate is the **Social Gate** (unmet)'));
+  assert.ok(statusSec.includes('within 7 days of opening'));
+  assert.ok(statusSec.includes('currently 2 of 2–3'));
+  const sec126Idx = planMd.indexOf('### 12.6');
+  assert.ok(sec126Idx !== -1, 'PLAN.md must contain ### 12.6');
+  const sec126End = planMd.indexOf('\n### ', sec126Idx + 7);
+  const sec126 = planMd.slice(sec126Idx, sec126End !== -1 ? sec126End : planMd.length);
+  assert.ok(sec126.includes('within 7 days of opening'), 'PLAN.md §12.6 must include "within 7 days of opening"');
+  assert.ok(sec126.includes('Social Gate') && sec126.includes('unmet'), 'PLAN.md §12.6 must include Social Gate unmet');
+});
+
+test('README.md ## Running the Tests names only node run-tests.mjs and the runner lists 66 suites', () => {
+  const runningSec = getSection(readmeMd, 'Running the Tests');
+  const fences = [...runningSec.matchAll(/```(\w*)\n([\s\S]*?)```/g)];
+  assert.equal(fences.length, 1, `Expected exactly one fenced block in README.md ## Running the Tests, found ${fences.length}`);
+  assert.equal(fences[0][1], 'bash', 'README.md ## Running the Tests fence must be bash');
+  assert.equal(fences[0][2].trim(), 'node run-tests.mjs', 'README.md ## Running the Tests fence must contain only node run-tests.mjs');
+  const runTestsPath = path.join(REPO_ROOT, 'run-tests.mjs');
+  assert.ok(fs.existsSync(runTestsPath), 'run-tests.mjs must exist');
+  const runnerSrc = fs.readFileSync(runTestsPath, 'utf8');
+  const suitesMatch = runnerSrc.match(/const TEST_SUITES = \[([\s\S]*?)\];/);
+  assert.ok(suitesMatch, 'run-tests.mjs must define TEST_SUITES');
+  const suites = [...suitesMatch[1].matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
+  assert.equal(suites.length, 66, `Expected 66 suites in run-tests.mjs, found ${suites.length}`);
+});
+
+test('README.md accuracy guard file hygiene: 51 tests, 50 unique names, 7 imports, zero banned lines', () => {
+  const accSrc = fs.readFileSync(path.join(REPO_ROOT, 'test-readme-accuracy.mjs'), 'utf8');
+  const names = [...accSrc.matchAll(/^test\('([^']*)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 51, `Expected 51 top-level tests, found ${names.length}`);
+  assert.equal(new Set(names).size, 50, `Expected 50 unique test names, found ${new Set(names).size}`);
+  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+  assert.deepEqual(dupes, ['README.md ## Seed Neighbors parentheticals trace to town-npc/characters.mjs']);
+  assert.ok(names.every((n) => !n.includes("'")), 'Test names must contain no apostrophes');
+  assert.equal((accSrc.match(/^import /gm) || []).length, 7, 'Expected 7 import lines');
+  const banned = ['fet' + 'ch(', 'Date' + '.now', 'Math' + '.random', 'TO' + 'DO', 'FIX' + 'ME', 'inner' + 'HTML'];
+  for (const lit of banned) {
+    const lines = accSrc.split('\n').filter((line) => line.includes(lit));
+    assert.equal(lines.length, 0, `Expected zero ${lit} lines, found ${lines.length}`);
+  }
+  const retiredRe = new RegExp('camp' + 'fire', 'i');
+  const retiredLines = accSrc.split('\n').filter((line) => retiredRe.test(line));
+  assert.equal(retiredLines.length, 0, `Expected zero retired-term lines, found ${retiredLines.length}`);
+  const testLines = accSrc.split('\n').filter((line) => /^\s*test\('/.test(line));
+  assert.ok(testLines.every((line) => (line.match(/'/g) || []).length === 2), 'Every test( line must carry exactly 2 single quotes');
+});
