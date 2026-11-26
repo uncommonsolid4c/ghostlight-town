@@ -1160,3 +1160,258 @@ test('interior-room header vendored line ranges match town.js and child count is
   assert.equal(Number(countMatch[1]), room.children.length);
   assert.equal(room.children.length, 19);
 });
+
+test('milo dressing group has exact world bounds', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const milo = room.children.find((c) => c.name === 'interior_dressing_milo');
+  const b = computeGroupBounds(milo);
+  assertNear(b.minX, -0.98, 'milo dressing minX');
+  assertNear(b.maxX, 1.51, 'milo dressing maxX');
+  assertNear(b.minY, 0.08, 'milo dressing minY');
+  assertNear(b.maxY, 1.04, 'milo dressing maxY');
+  assertNear(b.minZ, -1.06, 'milo dressing minZ');
+  assertNear(b.maxZ, -0.67, 'milo dressing maxZ');
+  assertNear(b.sizeX, 2.49, 'milo dressing sizeX');
+  assertNear(b.sizeY, 0.96, 'milo dressing sizeY');
+  assertNear(b.sizeZ, 0.39, 'milo dressing sizeZ');
+});
+
+test('window glow emissive material is exact and shared', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+  const leftGlow = byName.get('interior_window_glow_left');
+  const rightGlow = byName.get('interior_window_glow_right');
+  assert.equal(leftGlow.material, rightGlow.material, 'window glows must share glowMat');
+  assert.equal(leftGlow.material.emissive, '#ffbe5c');
+  assert.equal(leftGlow.material.emissiveIntensity, 1.4);
+  assert.equal(leftGlow.material.opts.emissive, '#ffbe5c');
+  assert.equal(leftGlow.material.opts.emissiveIntensity, 1.4);
+  assert.equal(leftGlow.material.color, '#ffbe5c');
+  assert.notEqual(leftGlow.material, byName.get('interior_rug').material, 'glowMat distinct from rug');
+  const kettle = byName
+    .get('interior_dressing_milo')
+    .children.find((m) => m.name === 'interior_tea_kettle');
+  assert.notEqual(leftGlow.material, kettle.material, 'glowMat distinct from kettle');
+});
+
+test('staging.js and interior-visit wire the interior functions', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const visitSrc = await fs.readFile(path.join(__dirname, 'interior-visit.mjs'), 'utf8');
+  const countIn = (src, needle) => src.split(needle).length - 1;
+  assert.ok(stagingSrc.includes('const interiorRoom = buildInteriorRoom(THREE);'));
+  assert.ok(stagingSrc.includes('scene.add(interiorRoom);'));
+  assert.ok(stagingSrc.includes('const interiorVisit = createInteriorVisit({'));
+  assert.ok(stagingSrc.includes('room: interiorRoom,'));
+  assert.ok(stagingSrc.includes('setVisible: setInteriorVisible,'));
+  assert.ok(stagingSrc.includes('setPalette: setInteriorPalette,'));
+  assert.ok(stagingSrc.includes('setDressing: setInteriorDressing,'));
+  assert.equal(countIn(stagingSrc, 'buildInteriorRoom('), 1, 'one call site; the import line has no paren');
+  assert.equal(countIn(stagingSrc, 'setInteriorVisible'), 2, 'import + wiring');
+  assert.equal(countIn(stagingSrc, 'setInteriorPalette'), 2, 'import + wiring');
+  assert.equal(countIn(stagingSrc, 'setInteriorDressing'), 2, 'import + wiring');
+  assert.equal(countIn(stagingSrc, 'interiorVisit.enter(cottage)'), 1);
+  assert.equal(countIn(stagingSrc, 'interiorVisit.exit()'), 1);
+  assert.equal(countIn(stagingSrc, 'rayHitsInteriorDoor(interiorRoom,'), 1);
+  assert.ok(stagingSrc.includes("status(`Inside ${handle}'s cottage"));
+  const enterBody = visitSrc.slice(visitSrc.indexOf('function enter(cottage)'), visitSrc.indexOf('function exit()'));
+  assert.ok(enterBody.indexOf('setPalette(room, handle)') < enterBody.indexOf('setDressing(room, handle)'), 'palette before dressing');
+  assert.ok(enterBody.indexOf('setDressing(room, handle)') < enterBody.indexOf('setVisible(room, true)'), 'dressing before visible');
+  assert.equal(countIn(enterBody, 'setPalette(room, handle)'), 1);
+  assert.equal(countIn(enterBody, 'setDressing(room, handle)'), 1);
+  assert.equal(countIn(enterBody, 'setVisible(room, true)'), 1);
+  assert.ok(visitSrc.includes('setVisible(room, false)'), 'exit hides the room');
+  assert.ok(visitSrc.includes('if (inside || !cottage || !room || !camera || !controls) return false;'), 'enter guard');
+  assert.ok(visitSrc.includes('if (!inside) return false;'), 'exit guard');
+});
+
+test('interior-room source pins palette constants and dressing tables', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8');
+  for (const line of [
+    "wood: '#6b492b',",
+    "plaster: '#f5efe0',",
+    "miloAccent: '#a8d8ea',",
+    "wickAccent: '#c8922e',",
+    "marenAccent: '#43505c',",
+    "tomasAccent: '#b5633a',",
+    "windowGlow: '#ffbe5c',",
+    "rug: '#5a4332',",
+    "kettle: '#b59449',",
+    "cat: '#2b2b2b',",
+    'const ROOM_WIDTH = 3.7;',
+    'const ROOM_DEPTH = 3.0;',
+    'const WALL_HEIGHT = 2.6;',
+    'const WALL_THICKNESS = 0.12;',
+    'const FLOOR_THICKNESS = 0.08;',
+    'const DOOR_WIDTH = 1.0;',
+    'const DOOR_HEIGHT = 2.0;',
+    "const DRESSING_HANDLES = ['milo', 'wick', 'maren', 'tomas'];",
+    'const rafterZPositions = [-1.05, -0.35, 0.35, 1.05];',
+    'const glowOffsetX = halfW - WALL_THICKNESS - 0.01;',
+    'const deskTopY = FLOOR_THICKNESS + deskHeight;',
+    'const lintelHeight = WALL_HEIGHT - DOOR_HEIGHT;',
+    'const sideSpanZ = ROOM_DEPTH - WALL_THICKNESS * 2;',
+  ]) {
+    assert.ok(src.includes(line), `Missing source line: ${line}`);
+  }
+  assert.ok(src.includes('milo: PALETTE.miloAccent,'));
+  assert.ok(src.includes('wick: PALETTE.wickAccent,'));
+  assert.ok(src.includes('maren: PALETTE.marenAccent,'));
+  assert.ok(src.includes('tomas: PALETTE.tomasAccent,'));
+});
+
+test('setInteriorDressing fallback handles with whitespace unknown and case', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const groups = Object.fromEntries(
+    ['milo', 'wick', 'maren', 'tomas'].map((h) => [
+      h,
+      room.children.find((c) => c.name === `interior_dressing_${h}`),
+    ])
+  );
+  for (const badHandle of [' wick', 'wick ', 'lampmoth', 'Wick', ' ', '42']) {
+    assert.equal(setInteriorDressing(room, 'wick'), true, `preset wick before ${JSON.stringify(badHandle)}`);
+    assert.equal(setInteriorDressing(room, badHandle), true, `${JSON.stringify(badHandle)} returns true`);
+    assert.equal(groups.milo.visible, true, `${JSON.stringify(badHandle)} falls back to milo`);
+    assert.equal(groups.wick.visible, false, `${JSON.stringify(badHandle)} hides wick`);
+    assert.equal(groups.maren.visible, false, `${JSON.stringify(badHandle)} hides maren`);
+    assert.equal(groups.tomas.visible, false, `${JSON.stringify(badHandle)} hides tomas`);
+  }
+});
+
+test('build-time milo palette is the positive case and rooms stay independent', () => {
+  const THREE = makeFakeThree();
+  const roomMilo = buildInteriorRoom(THREE, { palette: 'milo' });
+  const back = roomMilo.children.find((c) => c.name === 'interior_wall_back');
+  const left = roomMilo.children.find((c) => c.name === 'interior_wall_left');
+  const floor = roomMilo.children.find((c) => c.name === 'interior_floor');
+  assert.equal(back.material.color, '#a8d8ea', 'milo build back wall is ice-blue');
+  assert.equal(left.material.color, '#f5efe0', 'milo build left wall stays plaster');
+  assert.equal(floor.material.color, '#6b492b', 'milo build floor stays wood');
+  assert.equal(setInteriorPalette(roomMilo, 'wick'), true);
+  assert.equal(back.material.color, '#c8922e', 'recolor after milo build still works');
+  const roomMilo2 = buildInteriorRoom(THREE, { palette: 'milo', extra: 1 });
+  assert.equal(
+    roomMilo2.children.find((c) => c.name === 'interior_wall_back').material.color,
+    '#a8d8ea',
+    'extra opts are ignored'
+  );
+  assert.notEqual(
+    roomMilo2.children.find((c) => c.name === 'interior_wall_back').material,
+    back.material,
+    'two milo rooms have independent accent materials'
+  );
+  assert.equal(back.material.color, '#c8922e', 'first room still wick after second build');
+});
+
+test('dressing builders share materials within a group except typewriter', () => {
+  const THREE = makeFakeThree();
+  const lamp = buildProceduralOilLamp(THREE);
+  assert.equal(lamp.children[0].material, lamp.children[2].material, 'lamp base and handle share brass');
+  assert.notEqual(lamp.children[1].material, lamp.children[0].material, 'lamp globe distinct from brass');
+  const teapot = buildProceduralTeapot(THREE);
+  assert.equal(teapot.children[0].material, teapot.children[1].material, 'teapot body and spout share metal');
+  assert.equal(teapot.children[0].material, teapot.children[2].material, 'teapot body and lid share metal');
+  const typewriter = buildProceduralTypewriter(THREE);
+  assert.notEqual(typewriter.children[0].material, typewriter.children[1].material, 'typewriter stand distinct from body');
+  assert.notEqual(typewriter.children[1].material, typewriter.children[2].material, 'typewriter body distinct from roller');
+  assert.notEqual(typewriter.children[0].material, typewriter.children[2].material, 'typewriter stand distinct from roller');
+});
+
+test('wick maren tomas dressing groups have exact world bounds', () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+  const wick = computeGroupBounds(byName.get('interior_dressing_wick'));
+  assertNear(wick.minX, -0.98, 'wick minX');
+  assertNear(wick.maxX, -0.62, 'wick maxX');
+  assertNear(wick.minY, 0.8, 'wick minY');
+  assertNear(wick.maxY, 1.18, 'wick maxY');
+  assertNear(wick.minZ, -1.03, 'wick minZ');
+  assertNear(wick.maxZ, -0.67, 'wick maxZ');
+  const maren = computeGroupBounds(byName.get('interior_dressing_maren'));
+  assertNear(maren.minX, -1.15, 'maren minX');
+  assertNear(maren.maxX, -0.45, 'maren maxX');
+  assertNear(maren.minY, 0.8, 'maren minY');
+  // NOTE: the roller is rotated z 90 deg but meshBounds ignores rotation, so its
+  // y-span is h/2 = 0.21 around 0.28 — the helper reports maxY 1.29. The true
+  // geometric (radius-based) top 1.13 is already pinned in the existing test.
+  assertNear(maren.maxY, 1.29, 'maren maxY');
+  assertNear(maren.minZ, -1.125, 'maren minZ');
+  assertNear(maren.maxZ, -0.575, 'maren maxZ');
+  const tomas = computeGroupBounds(byName.get('interior_dressing_tomas'));
+  assertNear(tomas.minX, -1.0, 'tomas minX');
+  assertNear(tomas.maxX, -0.53, 'tomas maxX');
+  assertNear(tomas.minY, 0.8, 'tomas minY');
+  assertNear(tomas.maxY, 1.16, 'tomas maxY');
+  assertNear(tomas.minZ, -1.05, 'tomas minZ');
+  assertNear(tomas.maxZ, -0.65, 'tomas maxZ');
+});
+
+test('header dressing bullets agree with the built room', async () => {
+  const THREE = makeFakeThree();
+  const room = buildInteriorRoom(THREE);
+  const byName = new Map(room.children.map((c) => [c.name, c]));
+  const src = await fs.readFile(path.join(__dirname, 'interior-room.mjs'), 'utf8');
+  assert.ok(src.includes('(-0.8, 0.8, -0.85)'), 'header desk-top slot');
+  assert.ok(src.includes('(1.35, 0.26, -0.9)'), 'header cat position');
+  assert.ok(src.includes('milo:  tea kettle + floor cat'), 'header milo bullet');
+  assert.ok(src.includes('wick:  oil lamp'), 'header wick bullet');
+  assert.ok(src.includes('maren: typewriter'), 'header maren bullet');
+  assert.ok(src.includes('tomas: teapot'), 'header tomas bullet');
+  assert.ok(src.includes('all four dressing groups hidden at build'), 'header hidden-at-build line');
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const group = byName.get(`interior_dressing_${handle}`);
+    assertNear(group.position.x, -0.8, `${handle} group x`);
+    assertNear(group.position.y, 0.8, `${handle} group y`);
+    assertNear(group.position.z, -0.85, `${handle} group z`);
+  }
+  const cat = byName
+    .get('interior_dressing_milo')
+    .children.find((m) => m.name === 'interior_cat');
+  assertNear(cat.position.x, 1.35, 'cat x');
+  assertNear(cat.position.y, 0.26, 'cat y');
+  assertNear(cat.position.z, -0.9, 'cat z');
+  for (const handle of ['milo', 'wick', 'maren', 'tomas']) {
+    assert.equal(byName.get(`interior_dressing_${handle}`).visible, false, `${handle} hidden at build`);
+  }
+});
+
+test('file hygiene 48 unique names 6 imports pinned counts', async () => {
+  const self = await fs.readFile(path.join(__dirname, 'test-interior-room.mjs'), 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^test\((['"])(.*?)\1, /gm)].map((m) => m[2]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.ok(names.includes("every dressing group's world bounds fit the room"), 'apostrophe name extracts whole');
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'import {',
+  ]); // no new top-level imports
+  const importEnd = self.indexOf("from './interior-room.mjs'");
+  const importBlock = self.slice(self.indexOf('import {', Math.max(0, importEnd - 400)), importEnd);
+  for (const name of [
+    'buildInteriorRoom',
+    'setInteriorVisible',
+    'setInteriorPalette',
+    'setInteriorDressing',
+    'buildProceduralOilLamp',
+    'buildProceduralTypewriter',
+    'buildProceduralTeapot',
+  ]) {
+    assert.equal(importBlock.split(name).length - 1, 1, `import block names ${name} exactly once`);
+  }
+  const occ = (needle) => self.split(needle).length - 1;
+  assert.equal(occ('fet' + 'ch('), 3);
+  assert.equal(occ('Date' + '.now'), 0);
+  assert.equal(occ('Math' + '.random'), 3);
+  assert.equal(occ('TO' + 'DO'), 0);
+  assert.equal(occ('FIX' + 'ME'), 0);
+  assert.equal(occ('camp' + 'fire'), 3);
+  assert.equal(occ('inner' + 'HTML'), 0);
+});
