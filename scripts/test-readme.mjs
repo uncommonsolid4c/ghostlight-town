@@ -1220,3 +1220,293 @@ test('scripts/README.md and test-readme.mjs hygiene guards hold', () => {
   }
   assert.doesNotMatch(readme, BANNED_TERM_RE);
 });
+
+test('scripts/README.md --verify success JSON exact keys and values for town-3d', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-verify-ok-'));
+  const stagedDir = path.join(tmpDir, 'ghostlight-town');
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.file_count, 25);
+
+    const verifyOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--verify', stagedDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const result = JSON.parse(verifyOut.trim());
+    assert.deepEqual(Object.keys(result), [
+      'status',
+      'bundle',
+      'checked',
+      'ok',
+      'mismatch',
+      'missing',
+      'extra',
+      'town_js_v',
+      'staging_js_v',
+    ]);
+    assert.equal(result.status, 'ok');
+    assert.equal(result.bundle, 'town-3d');
+    assert.equal(result.checked, 25);
+    assert.equal(result.ok, 25);
+    assert.deepEqual(result.mismatch, []);
+    assert.deepEqual(result.missing, []);
+    assert.deepEqual(result.extra, []);
+    assert.equal(result.town_js_v, '16');
+    assert.equal(result.staging_js_v, null);
+    assert.equal('staged_town_js_v' in result, false, 'clean verify must not carry staged_town_js_v');
+    assert.equal('staged_staging_js_v' in result, false, 'clean verify must not carry staged_staging_js_v');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md town-3d MANIFEST.json exact keys, source, and totals match a real dry run', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-town3d-manifest-'));
+  try {
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.bundle, 'town-3d');
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.deepEqual(Object.keys(manifest), [
+      'staged_at',
+      'source',
+      'bundle',
+      'town_js_v',
+      'staging_js_v',
+      'files',
+      'total_bytes',
+      'file_count',
+      'not_staged',
+      'excluded',
+    ]);
+    assert.equal(manifest.source, 'ghostlight-town repo tree');
+    assert.equal(manifest.bundle, 'town-3d');
+    assert.equal(manifest.town_js_v, '16');
+    assert.equal(manifest.staging_js_v, null);
+    assert.equal(manifest.file_count, 25);
+    assert.equal(manifest.files.length, 25);
+    assert.deepEqual(manifest.not_staged, [
+      'town-api/ (server-side, separate deploy)',
+      'town-npc/ (server-side, separate deploy)',
+    ]);
+    assert.match(manifest.staged_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.equal(Number.isNaN(Date.parse(manifest.staged_at)), false, 'staged_at must parse as a date');
+    assert.equal(
+      manifest.total_bytes,
+      manifest.files.reduce((sum, entry) => sum + entry.bytes, 0),
+      'manifest total_bytes must equal the sum of file bytes'
+    );
+    assert.equal(manifest.total_bytes, summary.total_bytes);
+    const paths = manifest.files.map((entry) => entry.path);
+    assert.deepEqual(paths, [...paths].sort(), 'manifest files must be sorted by path');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('scripts/README.md stage-deploy refuses to stage into town-api/ and staging-polyfork/', () => {
+  const readme = readReadme();
+  assert.ok(readme.includes('refuses to stage\n  into or verify `<root>` itself or inside `town-3d/`'));
+
+  for (const forbidden of ['town-api', 'staging-polyfork']) {
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', path.join(ROOT_DIR, forbidden)],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        const parsed = JSON.parse(String(err.stderr || '').trim());
+        assert.equal(parsed.ok, false);
+        assert.equal(
+          parsed.error,
+          `Refusing to stage into inside ${forbidden}/: ${path.join(ROOT_DIR, forbidden)}`
+        );
+        return true;
+      }
+    );
+  }
+});
+
+test('scripts/README.md stage-deploy parseArgs edge errors match source', () => {
+  const runExpectFail = (args) => {
+    try {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), ...args],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      assert.fail(`expected stage-deploy.mjs ${args.join(' ')} to fail`);
+    } catch (err) {
+      assert.equal(err.status, 1);
+      return JSON.parse(String(err.stderr || '').trim());
+    }
+    return null;
+  };
+
+  const noBundle = runExpectFail(['--bundle']);
+  assert.equal(noBundle.ok, false);
+  assert.equal(noBundle.error, '--bundle requires a bundle name argument');
+
+  const conflict = runExpectFail(['--verify', '/tmp/ghostlight-448-x', '--out', '/tmp/ghostlight-448-y']);
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.error, '--verify cannot be combined with --out');
+
+  const bogus = runExpectFail(['--bogus']);
+  assert.equal(bogus.ok, false);
+  assert.equal(bogus.error, 'Unknown argument: --bogus');
+});
+
+test('scripts/README.md check-live BUNDLE_CONFIG marker arrays stay pinned exactly', () => {
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+  const parseMarkers = (bundleName) => {
+    const m = checkLiveSrc.match(
+      new RegExp(`'${bundleName}':[\\s\\S]*?markers:\\s*\\[([\\s\\S]*?)\\]`)
+    );
+    assert.ok(m, `Missing BUNDLE_CONFIG[${bundleName}].markers in check-live.mjs`);
+    return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  };
+
+  assert.deepEqual(parseMarkers('town-3d'), [
+    'PROP_PLACEMENTS',
+    'buildConceptBandstand',
+    'SEED_WANDER_CONFIG',
+    'newsstand_papers_shelf',
+  ]);
+  assert.deepEqual(parseMarkers('staging-polyfork'), [
+    'applyStagingState',
+    'liveStore',
+    'buildConceptBandstand',
+    'concept-bandstand.js',
+  ]);
+});
+
+test('scripts/README.md staging-polyfork expected files carry all 12 shared town-3d files', async () => {
+  const { getExpectedFiles } = await import('./check-live.mjs');
+
+  const sharedTown3dFiles = [
+    'gazette/feed.xml',
+    'gazette/issue-001.html',
+    'gazette/issue-002.html',
+    'gazette/issue-003.html',
+    'gazette/latest.json',
+    'plots/milo/index.html',
+    'plots/wick/index.html',
+    'plots/maren/index.html',
+    'plots/tomas/index.html',
+    'inn/index.html',
+    'guestbook/index.html',
+    'move-in.html',
+  ];
+
+  const stagingExpected = await getExpectedFiles(ROOT_DIR, 'staging-polyfork');
+  assert.equal(stagingExpected.length, 195);
+  for (const shared of sharedTown3dFiles) {
+    assert.ok(stagingExpected.includes(shared), `staging-polyfork expected files must include shared ${shared}`);
+  }
+  assert.equal(stagingExpected[0], 'anim/anim-idle.json');
+  assert.equal(stagingExpected[stagingExpected.length - 1], 'tap-glide.mjs');
+  assert.deepEqual(stagingExpected, [...stagingExpected].sort(), 'staging-polyfork expected files must be sorted');
+
+  const town3dExpected = await getExpectedFiles(ROOT_DIR, 'town-3d');
+  assert.equal(town3dExpected.length, 25);
+  assert.equal(town3dExpected[0], 'CREDITS.md');
+  assert.equal(town3dExpected[town3dExpected.length - 1], 'town.js');
+  assert.deepEqual(town3dExpected, [...town3dExpected].sort(), 'town-3d expected files must be sorted');
+});
+
+test('scripts/README.md staging facts sentence and test-suites line stay verbatim', () => {
+  const readme = readReadme();
+  const norm = readme.replace(/\s+/g, ' ');
+  assert.ok(
+    norm.includes(
+      'staging bundle `staging-polyfork` stages **195 files** with `staging_js_v` **41** (verified with `--bundle staging-polyfork` and `--verify`).'
+    )
+  );
+  assert.ok(
+    readme.includes(
+      'Test suites (3, all registered in [`../run-tests.mjs`](../run-tests.mjs)):\n`test-check-live.mjs`, `test-stage-deploy.mjs`, `test-readme.mjs`.'
+    )
+  );
+});
+
+test('scripts/README.md relative cross-links exact ordered set', () => {
+  const readme = readReadme();
+  const hrefs = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
+    .map((m) => m[1])
+    .filter((href) => !/^https?:\/\//.test(href));
+  assert.deepEqual(hrefs, [
+    '../run-tests.mjs',
+    '../town-3d/README.md',
+    '../staging-polyfork/README.md',
+    '../PLAN.md',
+  ]);
+});
+
+test('scripts/README.md check-live imports and getExpectedFiles unknown-bundle rejection', async () => {
+  const checkLiveSrc = fs.readFileSync(path.join(__dirname, 'check-live.mjs'), 'utf8');
+  const imports = [...checkLiveSrc.matchAll(/^import .+ from '([^']+)';$/gm)].map((m) => m[1]);
+  assert.deepEqual(imports, ['node:fs/promises', 'node:path', 'node:url', './stage-deploy.mjs']);
+
+  const { getExpectedFiles } = await import('./check-live.mjs');
+  await assert.rejects(
+    () => getExpectedFiles(ROOT_DIR, 'bogus'),
+    (err) => {
+      assert.equal(err.message, 'Unknown bundle: bogus (expected one of: town-3d, staging-polyfork)');
+      return true;
+    }
+  );
+});
+
+test('scripts/README.md and test-readme.mjs hygiene counts hold at 52 tests', () => {
+  const testSrc = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
+  const readme = readReadme();
+
+  const testNames = [...testSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(testNames.length, 52, 'test file must hold 52 top-level tests');
+  assert.equal(new Set(testNames).size, 52, 'test names must be unique');
+
+  const importLines = [...testSrc.matchAll(/^import .+$/gm)].map((m) => m[0]);
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { execFileSync } from 'node:child_process';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+  ]);
+
+  const retiredCount = (testSrc.match(new RegExp(BANNED_TERM_RE.source, 'gi')) || []).length;
+  assert.equal(retiredCount, 0, 'retired term must not appear in the test file');
+  assert.doesNotMatch(readme, BANNED_TERM_RE);
+
+  const fetchCallCount = (testSrc.match(/fetch\(/g) || []).length;
+  assert.equal(fetchCallCount, 0, 'test file must not contain the literal ' + 'fetch' + '(' + ' call');
+  const randomCount = (testSrc.match(/Math\.random/g) || []).length;
+  assert.equal(randomCount, 0, 'test file must not contain ' + 'Math.' + 'random');
+  const dateNowCount = (testSrc.match(/Date\.now/g) || []).length;
+  assert.equal(dateNowCount, 0, 'test file must not contain ' + 'Date.' + 'now');
+  const todoCount = (testSrc.match(new RegExp('TO' + 'DO', 'g')) || []).length;
+  assert.equal(todoCount, 0, 'test file must not contain ' + 'TO' + 'DO');
+  const fixmeCount = (testSrc.match(new RegExp('FIX' + 'ME', 'g')) || []).length;
+  assert.equal(fixmeCount, 0, 'test file must not contain ' + 'FIX' + 'ME');
+});
