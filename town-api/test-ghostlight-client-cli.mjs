@@ -1962,3 +1962,530 @@ test('GhostlightClient guestCheckin / guestSay', async () => {
     await ctx.close();
   }
 });
+
+test('CLI guest-checkin and guest-say round-trip at CLI level', async () => {
+  // Guest presence rows carry NO status_text: guest-checkin --status-text is
+  // accepted by the CLI but dropped by the server — pin that as-true.
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'guest1.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+
+    const checked = await runCli([
+      'guest-checkin', '--api-base', ctx.baseUrl, '--handle', 'guestone', '--key', keyPath,
+      '--status-text', 'just visiting',
+    ]);
+    assert.equal(checked.code, 0, checked.stderr);
+    const checkedOut = JSON.parse(checked.stdout.trim());
+    assert.equal(checkedOut.ok, true);
+    assert.equal(checkedOut.status, 200);
+    assert.deepEqual(Object.keys(checkedOut.data).sort(), ['handle', 'state_seq', 'updated_at', 'zone']);
+    assert.equal(checkedOut.data.zone, 'bandstand');
+    assert.equal(checkedOut.data.handle, 'guestone');
+    assert.equal(typeof checkedOut.data.updated_at, 'number');
+
+    const st1 = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const pres = st1.presence.find((p) => p.handle === 'guestone');
+    assert.ok(pres);
+    assert.equal(pres.zone, 'bandstand');
+    assert.deepEqual(Object.keys(pres).sort(), ['handle', 'role', 'updated_at', 'zone']);
+    assert.equal(pres.role, 'guest');
+    assert.equal(st1.footlights.some((f) => f.handle === 'guestone'), false);
+
+    const said = await runCli([
+      'guest-say', '--api-base', ctx.baseUrl, '--handle', 'guestone', '--key', keyPath,
+      '--body', 'Hello from the gate.',
+    ]);
+    assert.equal(said.code, 0, said.stderr);
+    const saidOut = JSON.parse(said.stdout.trim());
+    assert.equal(saidOut.ok, true);
+    assert.equal(saidOut.status, 201);
+    assert.equal(saidOut.data.kind, 'say');
+    const st2 = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const line = st2.prompt_book.find((l) => l.id === saidOut.data.id);
+    assert.ok(line);
+    assert.equal(line.role, 'guest');
+    assert.equal(line.body, 'Hello from the gate.');
+
+    const emoted = await runCli([
+      'guest-say', '--api-base', ctx.baseUrl, '--handle', 'guestone', '--key', keyPath,
+      '--body', 'waves', '--kind', 'emote',
+    ]);
+    assert.equal(JSON.parse(emoted.stdout.trim()).status, 201);
+    assert.equal(JSON.parse(emoted.stdout.trim()).data.kind, 'emote');
+
+    const missingBody = await runCli([
+      'guest-say', '--api-base', ctx.baseUrl, '--handle', 'guestone', '--key', keyPath,
+    ]);
+    assert.equal(missingBody.code, 2);
+    assert.ok(missingBody.stderr.includes('Missing --body'));
+
+    const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const rsaPath = path.join(ctx.tmpDir, 'rsa.pem');
+    fs.writeFileSync(rsaPath, privateKey.export({ format: 'pem', type: 'pkcs8' }));
+    const badKey = await runCli([
+      'guest-checkin', '--api-base', ctx.baseUrl, '--handle', 'guestrsa', '--key', rsaPath,
+    ]);
+    assert.equal(badKey.code, 1);
+    const badKeyErr = JSON.parse(badKey.stderr.trim());
+    assert.equal(badKeyErr.ok, false);
+    assert.ok(badKeyErr.error.includes('Invalid private key'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('signRequest canonical exactness fixed ts nonce verifies defaults sane', () => {
+  const { pubkey, privateKeyPem } = generateKeypair();
+  const nonce = '0123456789abcdef0123456789abcdef';
+  const { rawBody, headers } = signRequest({
+    method: 'post',
+    path: '/api/town/join',
+    body: { handle: 'x' },
+    handle: 'x',
+    privateKeyPem,
+    timestamp: 1700000000,
+    nonce,
+  });
+  assert.equal(rawBody, JSON.stringify({ handle: 'x' }));
+  const bodyHash = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
+  const canonical = `POST\n/api/town/join\n1700000000\n${nonce}\n${bodyHash}`;
+  const pubDer = Buffer.concat([
+    Buffer.from('302a300506032b6570032100', 'hex'),
+    Buffer.from(pubkey, 'base64'),
+  ]);
+  const pub = crypto.createPublicKey({ key: pubDer, format: 'der', type: 'spki' });
+  assert.equal(
+    crypto.verify(null, Buffer.from(canonical, 'utf8'), pub, Buffer.from(headers['X-Muse-Signature'], 'base64')),
+    true,
+  );
+  assert.equal(headers['X-Muse-Timestamp'], '1700000000');
+  assert.equal(headers['X-Muse-Nonce'], nonce);
+  assert.equal(headers['X-Muse-Handle'], 'x');
+  assert.equal(headers['Content-Type'], 'application/json');
+  // String body is used verbatim; an absent body hashes as '{}'.
+  const strBody = signRequest({
+    method: 'GET', path: '/api/town/state', body: 'hello', handle: 'x', privateKeyPem, timestamp: 1700000000, nonce,
+  });
+  assert.equal(strBody.rawBody, 'hello');
+  const emptyBody = signRequest({
+    method: 'POST', path: '/p', handle: 'x', privateKeyPem, timestamp: 1700000000, nonce,
+  });
+  assert.equal(emptyBody.rawBody, '{}');
+  assert.equal(
+    crypto.createHash('sha256').update('{}', 'utf8').digest('hex'),
+    crypto.createHash('sha256').update(emptyBody.rawBody, 'utf8').digest('hex'),
+  );
+  // Defaults: timestamp within 5 s of now, nonce 32 lowercase hex chars.
+  const def = signRequest({ method: 'POST', path: '/p', body: {}, handle: 'x', privateKeyPem });
+  const ts = Number(def.headers['X-Muse-Timestamp']);
+  assert.ok(Math.abs(ts - Math.floor(Date.now() / 1000)) <= 5, `ts ${ts} vs now`);
+  assert.match(def.headers['X-Muse-Nonce'], /^[0-9a-f]{32}$/);
+});
+
+test('generateKeypair exactness 44-char pubkey PEM shape round-trip', () => {
+  const k1 = generateKeypair();
+  const k2 = generateKeypair();
+  assert.equal(k1.pubkey.length, 44);
+  assert.equal(Buffer.from(k1.pubkey, 'base64').length, 32);
+  assert.ok(k1.privateKeyPem.startsWith('-----BEGIN PRIVATE KEY-----\n'));
+  assert.ok(k1.privateKeyPem.trimEnd().endsWith('-----END PRIVATE KEY-----'));
+  assert.notEqual(k1.pubkey, k2.pubkey);
+  assert.notEqual(k1.privateKeyPem, k2.privateKeyPem);
+  const derived = crypto.createPublicKey(k1.privateKeyPem);
+  const der = derived.export({ format: 'der', type: 'spki' });
+  assert.equal(der.length, 44);
+  assert.equal(der.subarray(0, 12).toString('hex'), '302a300506032b6570032100');
+  assert.equal(der.subarray(12).toString('base64'), k1.pubkey);
+});
+
+test('duplicate flags last-wins and flag equals forms', async () => {
+  const ctx = await startTestServer();
+  try {
+    const key1 = path.join(ctx.tmpDir, 'dupflag.pem');
+    assert.equal((await runCli(['keygen', '--out', key1])).code, 0);
+    const joined = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'dupflag', '--key', key1, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joined.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'dupflag' })).status,
+      200,
+    );
+    const slotted = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'dupflag', '--key', key1, '--slot=3',
+    ]);
+    const slottedOut = JSON.parse(slotted.stdout.trim());
+    assert.equal(slottedOut.status, 200);
+    assert.equal(slottedOut.data.slot, 3);
+
+    // Fresh resident: status_text lives on the FOOTLIGHT, not the presence row.
+    const key2 = path.join(ctx.tmpDir, 'dupflag2.pem');
+    assert.equal((await runCli(['keygen', '--out', key2])).code, 0);
+    const joined2 = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'dupflag2', '--key', key2, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joined2.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'dupflag2' })).status,
+      200,
+    );
+    const dupStatus = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'dupflag2', '--key', key2,
+      '--status-text', 'first', '--status-text', 'second',
+    ]);
+    const dupStatusOut = JSON.parse(dupStatus.stdout.trim());
+    assert.equal(dupStatusOut.status, 200);
+    assert.equal(dupStatusOut.data.status_text, 'second');
+    const st = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const fl = st.footlights.find((f) => f.handle === 'dupflag2');
+    assert.ok(fl);
+    assert.equal(fl.status_text, 'second');
+    assert.equal(fl.slot, 0);
+
+    // Duplicate --api-base: bad first URL, real second — last wins, 200.
+    const dupBase = await runCli(['state', '--api-base', 'http://127.0.0.1:1', '--api-base', ctx.baseUrl]);
+    assert.equal(dupBase.code, 0, dupBase.stderr);
+    assert.equal(JSON.parse(dupBase.stdout.trim()).status, 200);
+
+    // --key=<path> equals form works for join.
+    const key3 = path.join(ctx.tmpDir, 'dup3.pem');
+    assert.equal((await runCli(['keygen', '--out', key3])).code, 0);
+    const eqKey = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'dupjoin', `--key=${key3}`, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(eqKey.stdout.trim()).status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say reply-to parsing edges trim 1e2 and exit-2 set', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'replier.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    const joined = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'replier', '--key', keyPath, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joined.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'replier' })).status,
+      200,
+    );
+    const base = ['say', '--api-base', ctx.baseUrl, '--handle', 'replier', '--key', keyPath];
+    const s1 = await runCli([...base, '--body', 'first line']);
+    assert.equal(JSON.parse(s1.stdout.trim()).data.id, 1);
+    const s2 = await runCli([...base, '--body', 'second line']);
+    assert.equal(JSON.parse(s2.stdout.trim()).data.id, 2);
+    const trimmed = await runCli([...base, '--body', 'reply here', '--reply-to', ' 2 ']);
+    const trimmedOut = JSON.parse(trimmed.stdout.trim());
+    assert.equal(trimmedOut.status, 201);
+    assert.equal(trimmedOut.data.reply_to, 2);
+    // '1e2' parses to integer 100, so the CLI accepts it and the server 400s.
+    const sci = await runCli([...base, '--body', 'x', '--reply-to', '1e2']);
+    assert.equal(sci.code, 0, sci.stderr);
+    const sciOut = JSON.parse(sci.stdout.trim());
+    assert.equal(sciOut.ok, false);
+    assert.equal(sciOut.status, 400);
+    assert.equal(sciOut.data.error, 'invalid_reply_to');
+    for (const val of ['0', '-1', '2.5']) {
+      const bad = await runCli([...base, '--body', 'x', '--reply-to', val]);
+      assert.equal(bad.code, 2);
+      assert.ok(bad.stderr.includes(`Invalid --reply-to "${val}"`));
+    }
+    const empty = await runCli([...base, '--body', 'x', '--reply-to=']);
+    assert.equal(empty.code, 2);
+    assert.ok(empty.stderr.includes('Invalid --reply-to'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('checkin slot parsing edges trim hex whitespace-only 429 precedence', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyA = path.join(ctx.tmpDir, 'slotter.pem');
+    assert.equal((await runCli(['keygen', '--out', keyA])).code, 0);
+    const joinedA = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'slotter', '--key', keyA, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joinedA.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'slotter' })).status,
+      200,
+    );
+    const baseA = ['checkin', '--api-base', ctx.baseUrl, '--handle', 'slotter', '--key', keyA];
+    const trimmed = await runCli([...baseA, '--slot', ' 3 ']);
+    const trimmedOut = JSON.parse(trimmed.stdout.trim());
+    assert.equal(trimmedOut.status, 200);
+    assert.equal(trimmedOut.data.slot, 3);
+    const frac = await runCli([...baseA, '--slot', '3.5']);
+    assert.equal(frac.code, 2);
+    assert.ok(frac.stderr.includes('Invalid --slot "3.5"'));
+
+    // Fresh residents for the 400 pins: a re-checkin within 1 minute hits the
+    // 429 rate limit BEFORE slot validation (pinned separately below).
+    for (const [handle, slot] of [['slotten', '10'], ['slotneg', '-1']]) {
+      const kp = path.join(ctx.tmpDir, `${handle}.pem`);
+      assert.equal((await runCli(['keygen', '--out', kp])).code, 0);
+      const j = await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', handle, '--key', kp, '--origin', 'colony',
+      ]);
+      assert.equal(JSON.parse(j.stdout.trim()).status, 201);
+      assert.equal(
+        (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle })).status,
+        200,
+      );
+      const r = await runCli([
+        'checkin', '--api-base', ctx.baseUrl, '--handle', handle, '--key', kp, '--slot', slot,
+      ]);
+      assert.equal(r.code, 0, r.stderr);
+      const out = JSON.parse(r.stdout.trim());
+      assert.equal(out.ok, false);
+      assert.equal(out.status, 400);
+    }
+    // Re-checkin within 1 min with a bad slot -> 429 rate limit first, not 400.
+    const rateFirst = await runCli([...baseA, '--slot', '10']);
+    const rateFirstOut = JSON.parse(rateFirst.stdout.trim());
+    assert.equal(rateFirstOut.ok, false);
+    assert.equal(rateFirstOut.status, 429);
+  } finally {
+    await ctx.close();
+  }
+  // Fresh server for the hex/whitespace pins: slot 3 is occupied on the first.
+  const ctx2 = await startTestServer();
+  try {
+    const keyB = path.join(ctx2.tmpDir, 'hexslot.pem');
+    assert.equal((await runCli(['keygen', '--out', keyB])).code, 0);
+    const joinedB = await runCli([
+      'join', '--api-base', ctx2.baseUrl, '--handle', 'hexslot', '--key', keyB, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joinedB.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx2.baseUrl, ctx2.operatorKeys, '/api/town/admin/approve', { handle: 'hexslot' })).status,
+      200,
+    );
+    // '0x3' parses via Number() to integer 3 — the CLI accepts it, slot 3 lights.
+    const hexed = await runCli([
+      'checkin', '--api-base', ctx2.baseUrl, '--handle', 'hexslot', '--key', keyB, '--slot', '0x3',
+    ]);
+    const hexedOut = JSON.parse(hexed.stdout.trim());
+    assert.equal(hexedOut.status, 200);
+    assert.equal(hexedOut.data.slot, 3);
+
+    const keyC = path.join(ctx2.tmpDir, 'spaceslot.pem');
+    assert.equal((await runCli(['keygen', '--out', keyC])).code, 0);
+    const joinedC = await runCli([
+      'join', '--api-base', ctx2.baseUrl, '--handle', 'spaceslot', '--key', keyC, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joinedC.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx2.baseUrl, ctx2.operatorKeys, '/api/town/admin/approve', { handle: 'spaceslot' })).status,
+      200,
+    );
+    // Whitespace-only parses via Number() to 0 — the CLI accepts it, slot 0 lights.
+    const spaced = await runCli([
+      'checkin', '--api-base', ctx2.baseUrl, '--handle', 'spaceslot', '--key', keyC, '--slot', ' ',
+    ]);
+    const spacedOut = JSON.parse(spaced.stdout.trim());
+    assert.equal(spacedOut.status, 200);
+    assert.equal(spacedOut.data.slot, 0);
+  } finally {
+    await ctx2.close();
+  }
+});
+
+test('plot file edges directory manifest html array manifest BOM', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'plotter.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    const joined = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'plotter', '--key', keyPath, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joined.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'plotter' })).status,
+      200,
+    );
+    const validManifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Plotter Desk', props: [],
+    };
+    const manifestPath = path.join(ctx.tmpDir, 'manifest.json');
+    const htmlPath = path.join(ctx.tmpDir, 'note.html');
+    fs.writeFileSync(manifestPath, JSON.stringify(validManifest));
+    fs.writeFileSync(htmlPath, '<!doctype html><html><body><p>hi</p></body></html>');
+    const manifestDir = path.join(ctx.tmpDir, 'manifest-dir');
+    fs.mkdirSync(manifestDir);
+    const htmlDir = path.join(ctx.tmpDir, 'html-dir');
+    fs.mkdirSync(htmlDir);
+    const base = ['plot', '--api-base', ctx.baseUrl, '--handle', 'plotter', '--key', keyPath];
+
+    const dirManifest = await runCli([...base, '--manifest', manifestDir, '--html', htmlPath]);
+    assert.equal(dirManifest.code, 1);
+    const dirManifestErr = JSON.parse(dirManifest.stderr.trim());
+    assert.equal(dirManifestErr.ok, false);
+    assert.ok(dirManifestErr.error.startsWith('Invalid manifest JSON'), dirManifestErr.error);
+    assert.ok(dirManifestErr.error.includes(manifestDir), dirManifestErr.error);
+    assert.ok(dirManifestErr.error.includes('EISDIR: illegal operation on a directory, read'));
+
+    // The --html read is NOT wrapped: a directory surfaces the bare EISDIR message.
+    const dirHtml = await runCli([...base, '--manifest', manifestPath, '--html', htmlDir]);
+    assert.equal(dirHtml.code, 1);
+    const dirHtmlErr = JSON.parse(dirHtml.stderr.trim());
+    assert.equal(dirHtmlErr.ok, false);
+    assert.equal(dirHtmlErr.error, 'EISDIR: illegal operation on a directory, read');
+
+    const arrPath = path.join(ctx.tmpDir, 'arr.json');
+    fs.writeFileSync(arrPath, '[]');
+    const arrManifest = await runCli([...base, '--manifest', arrPath, '--html', htmlPath]);
+    assert.equal(arrManifest.code, 0, arrManifest.stderr);
+    const arrOut = JSON.parse(arrManifest.stdout.trim());
+    assert.equal(arrOut.ok, false);
+    assert.equal(arrOut.status, 400);
+    assert.equal(arrOut.data.error, 'invalid_manifest');
+
+    const bomPath = path.join(ctx.tmpDir, 'bom.json');
+    fs.writeFileSync(bomPath, '\uFEFF' + JSON.stringify(validManifest));
+    const bomManifest = await runCli([...base, '--manifest', bomPath, '--html', htmlPath]);
+    assert.equal(bomManifest.code, 1);
+    const bomErr = JSON.parse(bomManifest.stderr.trim());
+    assert.equal(bomErr.ok, false);
+    assert.ok(bomErr.error.startsWith('Invalid manifest JSON'), bomErr.error);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('usage text exactness and unexposed commands', async () => {
+  const helped = await runCli(['--help']);
+  assert.equal(helped.code, 0);
+  assert.equal(helped.stdout, '');
+  assert.ok(
+    helped.stderr.startsWith('Usage: node town-api/ghostlight-client.mjs <command> [options]'),
+    helped.stderr.slice(0, 80),
+  );
+  const cmds = [...helped.stderr.matchAll(/^  ([a-z-]+)\s+--/gm)].map((m) => m[1]);
+  assert.deepEqual(cmds, [
+    'keygen', 'guest-checkin', 'guest-say', 'join', 'checkin', 'say', 'leave',
+    'presence', 'plot', 'getplot', 'state',
+  ]);
+  assert.ok(helped.stderr.includes('--api-base <url>  Defaults to TOWN_API_BASE environment variable'));
+  assert.ok(helped.stderr.includes('--key <path>      Filesystem path to Ed25519 private key PEM (never a raw key)'));
+  // Fish, garden, Inn, guestbook, and key rotation exist on GhostlightClient but
+  // have NO CLI command — the CLI is join/checkin/say/presence/plot/state only.
+  for (const cmd of ['fish', 'guest-inn', 'rotate-key', 'garden']) {
+    const unknown = await runCli([cmd]);
+    assert.equal(unknown.code, 2);
+    assert.ok(unknown.stderr.includes(`Unknown command: ${cmd}`));
+  }
+  const noArgs = await runCli([]);
+  assert.equal(noArgs.code, 2);
+  assert.ok(noArgs.stderr.includes('Missing command'));
+});
+
+test('join invite-code empty string and join 201 data shape', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'invitee.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    // An empty --invite-code is ignored: the join lands active (201), no invite needed.
+    const emptyCode = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'invempty', '--key', keyPath,
+      '--origin', 'colony', '--invite-code', '',
+    ]);
+    assert.equal(emptyCode.code, 0, emptyCode.stderr);
+    const emptyOut = JSON.parse(emptyCode.stdout.trim());
+    assert.equal(emptyOut.ok, true);
+    assert.equal(emptyOut.status, 201);
+    assert.equal(emptyOut.data.status, 'active');
+    assert.equal(emptyOut.data.origin, 'colony');
+    assert.deepEqual(Object.keys(emptyOut.data).sort(), ['handle', 'origin', 'state_seq', 'status']);
+
+    const key2 = path.join(ctx.tmpDir, 'nobio.pem');
+    assert.equal((await runCli(['keygen', '--out', key2])).code, 0);
+    const noBio = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'nobio', '--key', key2, '--origin', 'colony',
+    ]);
+    const noBioOut = JSON.parse(noBio.stdout.trim());
+    assert.equal(noBioOut.ok, true);
+    assert.equal(noBioOut.status, 201);
+    assert.deepEqual(Object.keys(noBioOut.data).sort(), ['handle', 'origin', 'state_seq', 'status']);
+    assert.equal(noBioOut.data.status, 'active');
+    assert.equal(noBioOut.data.handle, 'nobio');
+    assert.equal(typeof noBioOut.data.state_seq, 'number');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('leave round-trip and file hygiene', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'leaver.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    const joined = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'leaver', '--key', keyPath, '--origin', 'colony',
+    ]);
+    assert.equal(JSON.parse(joined.stdout.trim()).status, 201);
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'leaver' })).status,
+      200,
+    );
+    const checked = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'leaver', '--key', keyPath, '--status-text', 'here',
+    ]);
+    assert.equal(JSON.parse(checked.stdout.trim()).status, 200);
+    const before = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    assert.equal(before.footlights.some((f) => f.handle === 'leaver'), true);
+
+    const left = await runCli(['leave', '--api-base', ctx.baseUrl, '--handle', 'leaver', '--key', keyPath]);
+    assert.equal(left.code, 0, left.stderr);
+    const leftOut = JSON.parse(left.stdout.trim());
+    assert.deepEqual(Object.keys(leftOut).sort(), ['data', 'ok', 'status']);
+    assert.equal(leftOut.ok, true);
+    assert.equal(leftOut.status, 200);
+    const after = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    assert.equal(after.footlights.some((f) => f.handle === 'leaver'), false);
+
+    const leftAgain = await runCli(['leave', '--api-base', ctx.baseUrl, '--handle', 'leaver', '--key', keyPath]);
+    const leftAgainOut = JSON.parse(leftAgain.stdout.trim());
+    assert.equal(leftAgainOut.ok, true);
+    assert.equal(leftAgainOut.status, 200);
+  } finally {
+    await ctx.close();
+  }
+  // File hygiene: 48 unique names, 11 imports verbatim, pinned as-true counts.
+  // NOTE the self-reference trap, handled exactly as slice 435 did: count
+  // needles with concatenated strings so the assertions themselves never contain
+  // the literal being counted. The G2d defaults check adds one line, so the count
+  // below is 9, not the pre-slice 8.
+  const self = fs.readFileSync(path.join(__dirname, 'test-ghostlight-client-cli.mjs'), 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^test\('([^']+)', /gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { execFile } from 'node:child_process';",
+    "import crypto from 'node:crypto';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "import { promisify } from 'node:util';",
+    "import { createTownServer } from './server.mjs';",
+    "import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';",
+  ]); // no new top-level imports
+  const occ = (needle) => self.split(needle).length - 1;
+  assert.equal(occ('fet' + 'ch('), 1, 'adminPost helper is the only fetch call');
+  assert.equal(occ('Date' + '.now'), 9, '8 pre-slice + 1 in G2d defaults check');
+  assert.equal(occ('Math' + '.random'), 0);
+  assert.equal(occ('TO' + 'DO'), 0);
+  assert.equal(occ('FIX' + 'ME'), 0);
+  assert.equal(occ('camp' + 'fire'), 0);
+  assert.equal(occ('inner' + 'HTML'), 0);
+});
