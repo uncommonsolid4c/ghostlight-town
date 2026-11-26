@@ -1585,3 +1585,418 @@ test('G10: all 10 bandstand avatarSpots are distinct and non-origin, and slot 9 
     await ctx.close();
   }
 });
+
+async function signedJoinRaw(ctx, handle, keys, extraBody = {}) {
+  const { rawBody, headers } = signRequest({
+    method: 'POST',
+    path: '/api/town/join',
+    body: { handle, pubkey: keys.pubkey, origin: 'musebook', bio: '', ...extraBody },
+    handle,
+    privateKeyPem: keys.privateKeyPem,
+  });
+  const res = await fetch(`${ctx.baseUrl}/api/town/join`, {
+    method: 'POST',
+    headers,
+    body: rawBody,
+  });
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
+
+test('G11: admin approve with role npc flows through footlight presence and Prompt Book', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'npc-one',
+      ...keys,
+    });
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+
+    const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'npc-one',
+      role: 'npc',
+    });
+    assert.equal(approveRes.status, 200);
+    assert.deepEqual(Object.keys(approveRes.data).sort(), ['handle', 'role', 'state_seq', 'status']);
+    assert.equal(approveRes.data.role, 'npc');
+    assert.equal(approveRes.data.status, 'active');
+
+    const checkinRes = await client.checkin({ status_text: 'npc watch' });
+    assert.equal(checkinRes.status, 200);
+
+    const sayRes = await client.say('npc line');
+    assert.equal(sayRes.status, 201);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+
+    const fl = s.data.footlights.find((f) => f.handle === 'npc-one');
+    assert.ok(fl);
+    assert.equal(fl.role, 'npc');
+
+    const pr = s.data.presence.find((p) => p.handle === 'npc-one');
+    assert.ok(pr);
+    assert.equal(pr.role, 'npc');
+    assert.equal(pr.zone, 'bandstand');
+
+    const pb = s.data.prompt_book.find((e) => e.handle === 'npc-one');
+    assert.ok(pb);
+    assert.equal(pb.role, 'npc');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G12: Prompt Book keeps last 100 lines past 24h and prunes rows older than 7 days', async () => {
+  const ctx = await startClockTestServer();
+  try {
+    const insert = ctx.db.prepare(
+      "INSERT INTO residents (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'active', 'muse', '', NULL, ?)"
+    );
+    const now = ctx.nowSec();
+    const clients = [];
+    for (let i = 0; i < 17; i += 1) {
+      const handle = `chatter${i}`;
+      const keys = generateKeypair();
+      insert.run(handle, keys.pubkey, now);
+      clients.push(new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys }));
+    }
+
+    let lineNum = 0;
+    for (const client of clients) {
+      for (let j = 0; j < 6; j += 1) {
+        const r = await signedSayAtServerTime(ctx, client.handle, client.privateKeyPem, `line ${lineNum}`);
+        assert.equal(r.status, 201);
+        lineNum += 1;
+      }
+    }
+
+    const sBefore = await clients[0].state();
+    assert.equal(sBefore.status, 200);
+    assert.equal(sBefore.data.prompt_book.length, 102);
+    assert.equal(sBefore.data.prompt_book[0].id, 1);
+
+    ctx.advanceClock(25 * 3600);
+
+    const sAfter = await clients[0].state();
+    assert.equal(sAfter.status, 200);
+    assert.equal(sAfter.data.prompt_book.length, 100);
+    assert.equal(sAfter.data.prompt_book[0].id, 3);
+    assert.equal(sAfter.data.prompt_book[0].body, 'line 2');
+    assert.equal(sAfter.data.prompt_book[99].body, 'line 101');
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) AS c FROM prompt_book').get().c, 102);
+  } finally {
+    await ctx.close();
+  }
+
+  const ctx2 = await startClockTestServer();
+  try {
+    const client = await createApprovedClient(ctx2, 'gatekeeper');
+    const r = await signedSayAtServerTime(ctx2, 'gatekeeper', client.privateKeyPem, 'old line');
+    assert.equal(r.status, 201);
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    assert.equal(s1.data.prompt_book.length, 1);
+
+    ctx2.advanceClock(8 * 86400 + 1);
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.prompt_book.length, 0);
+    assert.equal(ctx2.db.prepare('SELECT COUNT(*) AS c FROM prompt_book').get().c, 0);
+  } finally {
+    await ctx2.close();
+  }
+});
+
+test('G13: checkin status_text of exactly 120 chars succeeds and echoes verbatim', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+    const text120 = 'x'.repeat(120);
+
+    const c = await client.checkin({ status_text: text120 });
+    assert.equal(c.status, 200);
+    assert.equal(c.data.status_text.length, 120);
+    assert.equal(c.data.status_text, text120);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const fl = s.data.footlights.find((f) => f.handle === 'gatekeeper');
+    assert.ok(fl);
+    assert.equal(fl.status_text.length, 120);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G14: cross-resident reply_to links and non-integer reply_to is rejected', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createApprovedClient(ctx, 'alice');
+    const bob = await createApprovedClient(ctx, 'bob');
+
+    const r1 = await alice.say('first line');
+    assert.equal(r1.status, 201);
+    const firstId = r1.data.id;
+    assert.ok(Number.isInteger(firstId));
+
+    const r2 = await bob.say('replying across', 'say', firstId);
+    assert.equal(r2.status, 201);
+    assert.equal(r2.data.reply_to, firstId);
+
+    const s = await alice.state();
+    assert.equal(s.status, 200);
+    const entry = s.data.prompt_book.find((e) => e.id === r2.data.id);
+    assert.ok(entry);
+    assert.equal(entry.reply_to, firstId);
+    assert.equal(entry.handle, 'bob');
+
+    const badStr = await bob.say('string reply', 'say', '1');
+    assert.equal(badStr.status, 400);
+    assert.equal(badStr.data.error, 'invalid_reply_to');
+
+    const badFloat = await bob.say('float reply', 'say', 1.5);
+    assert.equal(badFloat.status, 400);
+    assert.equal(badFloat.data.error, 'invalid_reply_to');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G15: plot PUT returns named validation errors for manifest and HTML', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const badCottage = await client.plot({ ...VALID_MANIFEST, cottage: 'igloo' }, DESK_NOTE_HTML);
+    assert.equal(badCottage.status, 400);
+    assert.equal(badCottage.data.error, 'invalid_cottage');
+
+    const badColor = await client.plot({ ...VALID_MANIFEST, wall: '#zzz' }, DESK_NOTE_HTML);
+    assert.equal(badColor.status, 400);
+    assert.equal(badColor.data.error, 'invalid_color');
+    assert.equal(badColor.data.field, 'wall');
+
+    const tooManyProps = await client.plot(
+      {
+        ...VALID_MANIFEST,
+        props: Array.from({ length: 13 }, (_, i) => ({ kind: 'cat', x: 0, y: 0, z: 0, rot_y: i })),
+      },
+      DESK_NOTE_HTML
+    );
+    assert.equal(tooManyProps.status, 400);
+    assert.equal(tooManyProps.data.error, 'too_many_props');
+    assert.equal(tooManyProps.data.max, 12);
+
+    const longSignpost = await client.plot(
+      { ...VALID_MANIFEST, signpost_text: 's'.repeat(121) },
+      DESK_NOTE_HTML
+    );
+    assert.equal(longSignpost.status, 400);
+    assert.equal(longSignpost.data.error, 'invalid_signpost_text');
+    assert.equal(longSignpost.data.max, 120);
+
+    const badPropKind = await client.plot(
+      { ...VALID_MANIFEST, props: [{ kind: 'rocket', x: 0, y: 0, z: 0, rot_y: 0 }] },
+      DESK_NOTE_HTML
+    );
+    assert.equal(badPropKind.status, 400);
+    assert.equal(badPropKind.data.error, 'invalid_prop_kind');
+    assert.equal(badPropKind.data.index, 0);
+
+    const scriptHtml = await client.plot(
+      VALID_MANIFEST,
+      DESK_NOTE_HTML.replace('</body>', '<script>alert(1)</script></body>')
+    );
+    assert.equal(scriptHtml.status, 400);
+    assert.equal(scriptHtml.data.error, 'unsafe_html');
+    assert.equal(scriptHtml.data.reason, 'forbidden_tag:script');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G16: state since edges return 304 only on exact seq match', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...generateKeypair(),
+    });
+
+    const s0 = await client.state();
+    assert.equal(s0.status, 200);
+    assert.equal(s0.data.state_seq, 0);
+
+    const s0Match = await client.state(0);
+    assert.equal(s0Match.status, 304);
+    assert.equal(s0Match.data, null);
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+    assert.equal(joinRes.data.state_seq, 1);
+
+    const sBehind = await client.state(0);
+    assert.equal(sBehind.status, 200);
+    assert.equal(sBehind.data.state_seq, 1);
+
+    const sFuture = await client.state(1001);
+    assert.equal(sFuture.status, 200);
+    assert.equal(sFuture.data.state_seq, 1);
+
+    const s1Match = await client.state(1);
+    assert.equal(s1Match.status, 304);
+    assert.equal(s1Match.data, null);
+
+    const approveRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(approveRes.status, 200);
+    assert.equal(approveRes.data.state_seq, 2);
+
+    const sAfterApprove = await client.state(1);
+    assert.equal(sAfterApprove.status, 200);
+    assert.equal(sAfterApprove.data.state_seq, 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G17: Prompt Book lines order by id across two residents', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createApprovedClient(ctx, 'alice');
+    const bob = await createApprovedClient(ctx, 'bob');
+
+    assert.equal((await alice.say('one')).status, 201);
+    assert.equal((await bob.say('two')).status, 201);
+    assert.equal((await alice.say('three')).status, 201);
+
+    const s = await alice.state();
+    assert.equal(s.status, 200);
+    assert.deepEqual(s.data.prompt_book.map((e) => e.body), ['one', 'two', 'three']);
+    assert.deepEqual(s.data.prompt_book.map((e) => e.handle), ['alice', 'bob', 'alice']);
+    const ids = s.data.prompt_book.map((e) => e.id);
+    assert.ok(ids[0] < ids[1] && ids[1] < ids[2]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G18: presence upserts to one row and updated_at advances with the clock', async () => {
+  const ctx = await startClockTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const p1 = await client.presence('gate');
+    assert.equal(p1.status, 200);
+    assert.deepEqual(Object.keys(p1.data).sort(), ['handle', 'state_seq', 'updated_at', 'zone']);
+    assert.equal(p1.data.zone, 'gate');
+
+    const p2 = await client.presence('plot:wick');
+    assert.equal(p2.status, 200);
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    const rows1 = s1.data.presence.filter((p) => p.handle === 'gatekeeper');
+    assert.equal(rows1.length, 1);
+    assert.equal(rows1[0].zone, 'plot:wick');
+    const t1 = rows1[0].updated_at;
+
+    ctx.advanceClock(60);
+
+    const p3 = await client.presence('bandstand');
+    assert.equal(p3.status, 200);
+    assert.equal(p3.data.updated_at, ctx.nowSec());
+
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    const rows2 = s2.data.presence.filter((p) => p.handle === 'gatekeeper');
+    assert.equal(rows2.length, 1);
+    assert.equal(rows2[0].zone, 'bandstand');
+    assert.ok(rows2[0].updated_at > t1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G19: join ignores role in body and approve role edges', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const joinRes = await signedJoinRaw(ctx, 'role-tester', keys, { role: 'npc' });
+    assert.equal(joinRes.status, 201);
+    assert.deepEqual(Object.keys(joinRes.data).sort(), ['handle', 'origin', 'state_seq', 'status']);
+
+    const badApprove = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'role-tester',
+      role: 'admin',
+    });
+    assert.equal(badApprove.status, 400);
+    assert.equal(badApprove.data.error, 'invalid_role');
+
+    const defaultApprove = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'role-tester',
+    });
+    assert.equal(defaultApprove.status, 200);
+    assert.deepEqual(Object.keys(defaultApprove.data).sort(), ['handle', 'role', 'state_seq', 'status']);
+    assert.equal(defaultApprove.data.role, 'muse');
+
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'role-tester',
+      ...keys,
+    });
+    const checkinRes = await client.checkin({ status_text: 'role check' });
+    assert.equal(checkinRes.status, 200);
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    const fl = s.data.footlights.find((f) => f.handle === 'role-tester');
+    assert.ok(fl);
+    assert.equal(fl.role, 'muse');
+
+    const museApprove = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'role-tester',
+      role: 'muse',
+    });
+    assert.equal(museApprove.status, 200);
+    assert.equal(museApprove.data.role, 'muse');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('G20: file hygiene 48 unique names 8 imports pinned as-true counts', () => {
+  const src = fs.readFileSync(new URL(import.meta.url).pathname, 'utf8');
+  const lines = src.split('\n');
+
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48);
+
+  const imports = lines.filter((l) => l.startsWith('import '));
+  assert.deepEqual(imports, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { createTownServer } from './server.mjs';",
+    "import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';",
+    "import { buildTown, applyState } from '../town-3d/town.js';",
+  ]);
+
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 4);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 2);
+  assert.equal(lines.filter((l) => l.includes('Math' + '.random')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
+  assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
+  assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+});
