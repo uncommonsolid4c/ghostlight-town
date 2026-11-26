@@ -1427,3 +1427,239 @@ test('staging-polyfork/README.md lamp posts emissive-only matches lamp-post.mjs,
     'concept-bandstand.js must hold the one ghostlight_point_light'
   );
 });
+
+test('staging-polyfork/README.md Buildings table Milos Cottage row matches staging.js and concept-cottage.js', () => {
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  for (const expected of [
+    '(17.92, 4.60)',
+    '8 lit windows',
+    'Milo — Ghostlight Cottage (rebuilt)',
+    'replacing the (17, 12) thatched cottage',
+    'createConceptMilosCottage',
+  ]) {
+    assert.ok(buildingsSec.includes(expected), `## Buildings Milos Cottage row must include "${expected}"`);
+  }
+
+  assert.match(stagingJs, /const\s+MILO_PLOT\s*=\s*\{\s*x:\s*17\.92,\s*z:\s*4\.60\s*\};/);
+  assert.ok(stagingJs.includes("label: 'Milo — Ghostlight Cottage (rebuilt)'"));
+  assert.ok(stagingJs.includes("buildStagingSignpost('Milo — Ghostlight Cottage (rebuilt)')"));
+  assert.ok(!stagingJs.includes('17, 12'), 'staging.js must not place anything at (17, 12)');
+
+  const cottageSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'concept-cottage.js'), 'utf8');
+  assert.ok(cottageSrc.includes('// 8 warm lit 4-pane casement windows'));
+  const windowEntries = cottageSrc.match(/\{\s*x:\s*-?[\d.]+,\s*y:\s*[\d.]+,\s*z:\s*-?[\d.]+,\s*rotY:\s*[^,]+,\s*w:\s*0\.\d+,\s*h:\s*0\.88\s*\}/g);
+  assert.equal(windowEntries?.length, 8, 'concept-cottage.js windows array must hold exactly 8 entries');
+});
+
+test('staging-polyfork/README.md Buildings table Windmill row matches staging.js and windmill.mjs', () => {
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  for (const expected of [
+    '(−22, −20)',
+    'tallness 1.18',
+    'stone #f5efe0',
+    'sails turn slowly',
+    'interior #ffb14a',
+  ]) {
+    assert.ok(buildingsSec.includes(expected), `## Buildings Windmill row must include "${expected}"`);
+  }
+
+  assert.match(stagingJs, /const\s+CREAM\s*=\s*'#f5efe0'/);
+  assert.match(stagingJs, /sails\.rotation\.z\s*-=\s*dt\s*\*\s*0\.12/);
+
+  const windmillSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'kit-medieval/windmill.mjs'), 'utf8');
+  const interiorMatch = windmillSrc.match(/interior:\s*\{\s*color:\s*'([^']+)',\s*intensity:\s*([\d.]+)/);
+  assert.ok(interiorMatch, 'windmill.mjs night export must carry interior color + intensity');
+  assert.equal(interiorMatch[1], '#ffb14a');
+  assert.equal(Number(interiorMatch[2]), 0.6);
+});
+
+test('staging-polyfork/README.md Terrain scatter skip and keep lists match staging.js', () => {
+  const skippedRing = 'stone-ring-camp' + 'fire';
+  const skipMatch = stagingJs.match(/skip:\s*\[([^\]]+)\]/);
+  assert.ok(skipMatch, 'Could not parse buildKit skip list in staging.js');
+  const skipItems = [...skipMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(skipItems, [skippedRing, 'lakeside-swing-tree']);
+
+  const keepMatch = stagingJs.match(/keep:\s*\[([^\]]+)\]/);
+  assert.ok(keepMatch, 'Could not parse buildKit keep list in staging.js');
+  const keepItems = [...keepMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(keepItems, ['reed-bed', 'exposed-tree-roots', 'lily-pads', 'lake-pebbles']);
+
+  const floaterMatch = stagingJs.match(/const FLOATER_KEYS = \[([^\]]+)\];/);
+  assert.ok(floaterMatch, 'Could not parse FLOATER_KEYS in staging.js');
+  assert.deepEqual(
+    [...floaterMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]),
+    keepItems,
+    'FLOATER_KEYS must equal the buildKit keep list'
+  );
+
+  const terrainSec = getSection(readmeMd, 'Terrain (as built — no fallbacks needed)').replace(/\s+/g, ' ');
+  assert.ok(terrainSec.includes('`' + skippedRing + '`'), '## Terrain skip note must name the ring scatter part');
+  assert.ok(terrainSec.includes('`lakeside-swing-tree`'), '## Terrain skip note must name lakeside-swing-tree');
+  assert.ok(
+    terrainSec.includes('exposed tree roots and reed beds only'),
+    '## Terrain must state remaining scatter is exposed tree roots and reed beds only'
+  );
+});
+
+test('staging-polyfork/README.md Buildings Pines keep-clear list and gate path match staging.js', () => {
+  const keepClearMatch = stagingJs.match(/const keepClear = \[([\s\S]*?)\];/);
+  assert.ok(keepClearMatch, 'Could not parse keepClear in staging.js');
+  const keepClearSrc = keepClearMatch[1];
+  for (const entry of ['[-11, 20, 10]', '[17.92, 4.60, 9]', '[0, 27, 8]', '[6, 8, 7]', '[-6, 14, 5]', '[-22, -20, 11]']) {
+    assert.ok(keepClearSrc.includes(entry), `keepClear must include ${entry}`);
+  }
+  assert.ok(
+    keepClearSrc.includes('...TOWN_LAYOUT.plots.slice(1).map((p) => [p.x, p.z, 9])'),
+    'keepClear must include resident plot entries'
+  );
+  assert.ok(
+    keepClearSrc.includes('[TOWN_LAYOUT.newsstand.x, TOWN_LAYOUT.newsstand.z, 5]'),
+    'keepClear must include the newsstand entry'
+  );
+  assert.match(
+    stagingJs,
+    /if\s*\(Math\.abs\(x\)\s*<\s*5\s*&&\s*z\s*>\s*24\)\s*continue;\s*\/\/ keep the gate path clear/
+  );
+
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  assert.ok(
+    buildingsSec.includes("gate path and building footprints kept clear (including Milo's cottage at `[17.92, 4.60, 9]`)"),
+    '## Buildings Pines line must state gate path and building footprints kept clear incl. Milos cottage [17.92, 4.60, 9]'
+  );
+});
+
+test('staging-polyfork/README.md Controls copy matches index.html controls hint', () => {
+  const controlsSec = getSection(readmeMd, 'Controls').replace(/\s+/g, ' ');
+  assert.ok(
+    controlsSec.includes('Drag to orbit, scroll/pinch to zoom, WASD or arrow keys to pan the orbit target across the ground, touch-tap empty ground to glide the orbit target (clamped to the island), and tap/click a cottage, newsstand, Inn, or gatehouse to inspect.'),
+    '## Controls must state the orbit/zoom/pan/glide/inspect copy'
+  );
+  assert.ok(
+    controlsSec.includes('Multi-pointer pinches cancel any in-flight glide and suppress click/glide on `pointerup`.'),
+    '## Controls must state multi-pointer pinch cancellation'
+  );
+
+  assert.ok(
+    indexHtml.includes('<span id="controls-hint">Drag: orbit &middot; Scroll / Pinch: zoom &middot; WASD / Arrows: pan &middot; Tap ground: glide &middot; Click: inspect</span>'),
+    'index.html must carry the default #controls-hint copy'
+  );
+  const coarseIdx = indexHtml.indexOf("window.matchMedia('(pointer: coarse)')");
+  assert.ok(coarseIdx !== -1, 'index.html must contain the (pointer: coarse) swap');
+  const coarseBlock = indexHtml.slice(coarseIdx, coarseIdx + 400);
+  for (const phrase of ['Tap ground: walk', 'Drag: look', 'Pinch: zoom', 'Tap: inspect']) {
+    assert.ok(coarseBlock.includes(phrase), `coarse-pointer hint copy must include "${phrase}"`);
+  }
+});
+
+test('staging-polyfork/README.md test-staging.mjs bullet matches test-staging.mjs assertions', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`test-staging.mjs`'));
+  assert.ok(bullet, '## Contents must have a `test-staging.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  const noRandom = 'no `Math.' + 'random`';
+  for (const phrase of [
+    noRandom,
+    'scoped `/api/town/state` + `/api/town/plot?handle=` fetches only',
+    'no `TownLive`',
+    '`?v=41` cache bust',
+    '`#plot-overlay` markup + click wiring for cottages/newsstand/Inn/gatehouse',
+  ]) {
+    assert.ok(norm.includes(phrase), `test-staging.mjs bullet must include "${phrase}"`);
+  }
+
+  const testStagingSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'test-staging.mjs'), 'utf8');
+  assert.ok(
+    testStagingSrc.includes("test('staging.html references staging.js?v=41"),
+    'test-staging.mjs must have the ?v=41 HTML test'
+  );
+  assert.match(
+    testStagingSrc,
+    /\/\\bMath\\.random\\b\/\.test\(codeOnly\)/,
+    'test-staging.mjs must assert the random-number ban via codeOnly'
+  );
+  assert.match(
+    testStagingSrc,
+    /\/\\bTownLive\\b\/\.test\(codeOnly\)/,
+    'test-staging.mjs must assert no TownLive via codeOnly'
+  );
+});
+
+test('staging-polyfork/README.md staging.js bullet names match staging.js definitions', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`staging.js`'));
+  assert.ok(bullet, '## Contents must have a `staging.js` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  for (const name of ['`StagingLive`', '`applyStagingState`', '`applyStagingPresence`', '`syncStagingPlotsFromState`']) {
+    assert.ok(norm.includes(name), `staging.js bullet must name ${name}`);
+  }
+
+  assert.match(stagingJs, /class StagingLive \{/);
+  assert.match(stagingJs, /function applyStagingState\(/);
+  assert.match(stagingJs, /function applyStagingPresence\(/);
+  assert.match(stagingJs, /async function syncStagingPlotsFromState\(/);
+  assert.ok(
+    stagingJs.includes("} from './inn-nightly-call.mjs?v=39';"),
+    'staging.js must import Inn/Nightly Call wiring from inn-nightly-call.mjs?v=39'
+  );
+});
+
+test('staging-polyfork/README.md npc-animation.mjs bullet matches npc-animation.mjs exports', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`npc-animation.mjs`'));
+  assert.ok(bullet, '## Contents must have a `npc-animation.mjs` bullet');
+  const norm = bullet.replace(/\s+/g, ' ');
+  assert.ok(norm.includes('Mixamo Idle/Walk clip attachment wrapper'), 'npc-animation.mjs bullet must state Mixamo Idle/Walk wrapper');
+  assert.ok(norm.includes('`attachNpcAnimation`'), 'npc-animation.mjs bullet must name `attachNpcAnimation`');
+  assert.ok(norm.includes("`base: './anim/'`"), 'npc-animation.mjs bullet must state base ./anim/');
+  assert.ok(norm.includes('`./kit-medieval/clips.mjs`'), 'npc-animation.mjs bullet must name ./kit-medieval/clips.mjs');
+
+  const npcAnimSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'npc-animation.mjs'), 'utf8');
+  assert.match(npcAnimSrc, /export async function attachNpcAnimation\(THREE, group, options = \{\}\)/);
+  assert.match(npcAnimSrc, /export async function attachIdleAnimation\(THREE, group, options = \{\}\)/);
+  assert.match(npcAnimSrc, /export function updateNpcAnimations\(standIns, dt\)/);
+});
+
+test('staging-polyfork/README.md header Inn glow sentence matches staging.js and town-api/server.mjs', () => {
+  const contentsIdx = readmeMd.indexOf('## Contents');
+  assert.ok(contentsIdx !== -1, 'README.md must have ## Contents');
+  const header = readmeMd.slice(0, contentsIdx).replace(/\s+/g, ' ');
+  assert.ok(
+    header.includes("drives the Inn's per-room window glow from `state.inn` (front-upper windows per room, `X(+3.60)` stair window dark; ground/back/side panes any-occupancy)"),
+    'README header must state Inn per-room glow from state.inn with X(+3.60) stair window dark'
+  );
+
+  assert.match(stagingJs, /updateStagingInnOccupancy\(tavernGroup,\s*state\?\.inn\)/);
+
+  const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api/server.mjs'), 'utf8');
+  assert.ok(
+    serverSrc.includes('const inn = { lantern: null, window: null, quiet: null };'),
+    'town-api/server.mjs must build inn as { lantern: null, window: null, quiet: null }'
+  );
+  assert.match(serverSrc, /const stateBody = \{[\s\S]*?\n\s*inn,\n/);
+});
+
+test('staging-polyfork/test-staging-readme.mjs file hygiene: 52 tests, 52 unique names, 7 imports, no banned literals', () => {
+  const src = fs.readFileSync(path.join(BUNDLE_DIR, 'test-staging-readme.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 52, `Expected 52 top-level tests, found ${names.length}`);
+  assert.equal(new Set(names).size, 52, 'Test names must be unique');
+  assert.ok(!names.some((n) => n.includes("'")), 'Test names must contain no apostrophes');
+  const importLines = src.split(/\r?\n/).filter((line) => line.startsWith('import '));
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { execFileSync } from 'node:child_process';",
+    "import fs from 'node:fs';",
+    "import os from 'node:os';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+  ]);
+  const retiredRe = new RegExp('camp' + 'fire', 'g');
+  assert.equal([...src.matchAll(retiredRe)].length, 0, 'Retired term must not appear literally');
+  assert.equal([...src.matchAll(/fetch\(/g)].length, 0, 'fetch' + '(' + ' must not appear literally');
+  assert.equal([...src.matchAll(/Math\.random/g)].length, 0, 'Math.' + 'random' + ' must not appear literally');
+  assert.equal([...src.matchAll(/Date\.now/g)].length, 0, 'Date.' + 'now' + ' must not appear literally');
+  assert.equal([...src.matchAll(new RegExp('TO' + 'DO', 'g'))].length, 0, 'TO' + 'DO' + ' must not appear literally');
+  assert.equal([...src.matchAll(new RegExp('FIX' + 'ME', 'g'))].length, 0, 'FIX' + 'ME' + ' must not appear literally');
+});
