@@ -1747,3 +1747,470 @@ test('Slice 319: fallback concept-bandstand stays dependency-free and Milo pre-l
     assert.equal(placardDraws[0].font, 'bold 28px monospace');
   });
 });
+
+test('Slice 439: createAvatarCapsule renders muse, npc, and guest badges with role colors and defaults (G1)', () => {
+  const THREE = createThreeStub();
+  withRecordingCanvas((draws) => {
+    draws.length = 0;
+    const alice = createAvatarCapsule(THREE, { handle: 'alice', role: 'muse' });
+    assert.equal(alice.name, 'avatar_alice');
+    assert.equal(alice.userData.role, 'muse');
+    assert.equal(alice.userData.handle, 'alice');
+    assert.equal(alice.userData.nametagLift, 0);
+    assert.equal(alice.children[0].material.color, '#6cb4d8');
+    assert.equal(alice.children[1].material.color, '#f2dcc4');
+    assert.equal(alice.userData.nametagSprite.scale.x, 1.5);
+    assert.equal(alice.userData.nametagSprite.scale.y, 0.375);
+    assert.equal(alice.userData.nametagSprite.position.y, 1.8);
+    assert.deepEqual(draws.map((d) => d.text), ['[MUSE] alice']);
+    assert.equal(draws[0].font, 'bold 30px monospace');
+
+    draws.length = 0;
+    const wick = createAvatarCapsule(THREE, { handle: 'wick', role: 'npc', nametagLift: 0.5 });
+    assert.equal(wick.userData.role, 'npc');
+    assert.equal(wick.children[0].material.color, '#d49a45');
+    assert.equal(wick.userData.nametagSprite.position.y, 2.3);
+    assert.deepEqual(draws.map((d) => d.text), ['[NPC] wick']);
+
+    draws.length = 0;
+    const rue = createAvatarCapsule(THREE, { handle: 'rue', role: 'guest' });
+    assert.equal(rue.userData.role, 'guest');
+    assert.equal(rue.children[0].material.color, '#6cb4d8');
+    assert.deepEqual(draws.map((d) => d.text), ['[guest] rue']);
+
+    draws.length = 0;
+    const admin = createAvatarCapsule(THREE, { handle: 'x', role: 'admin' });
+    assert.equal(admin.userData.role, 'muse');
+    assert.deepEqual(draws.map((d) => d.text), ['[MUSE] x']);
+
+    draws.length = 0;
+    const def = createAvatarCapsule(THREE, {});
+    assert.equal(def.name, 'avatar_muse');
+    assert.equal(def.userData.role, 'muse');
+    assert.deepEqual(draws.map((d) => d.text), ['[MUSE] muse']);
+  });
+});
+
+test('Slice 439: formatPromptBookEntries normalizes kind, handle, body, role, and ids, and caps at 100 (G2)', () => {
+  const kinds = formatPromptBookEntries([
+    { id: 1, handle: 'a', kind: 'emote', body: 'waves', created_at: 1, role: 'muse' },
+    { id: 2, handle: 'b', kind: 'system', body: 'sys', created_at: 2, role: 'muse' },
+    { id: 3, handle: 'c', kind: 'shout', body: 'hey', created_at: 3, role: 'muse' },
+    { id: 4, handle: 'd', body: 'no kind', created_at: 4, role: 'muse' },
+  ]);
+  assert.deepEqual(kinds.map((e) => e.kind), ['emote', 'system', 'say', 'say']);
+
+  const defaults = formatPromptBookEntries([
+    { id: 5, handle: 123, body: 456, role: 'admin', created_at: 9 },
+    {},
+    null,
+    'nope',
+  ]);
+  assert.equal(defaults[0].handle, 'unknown');
+  assert.equal(defaults[0].body, '');
+  assert.equal(defaults[0].role, 'muse');
+  assert.equal(defaults[1].id, null);
+  assert.equal(defaults[1].handle, 'unknown');
+  assert.equal(defaults[1].kind, 'say');
+  assert.equal(defaults[1].body, '');
+  assert.equal(defaults[1].reply_to, null);
+  assert.equal(defaults[1].created_at, 0);
+  assert.equal(defaults[1].role, 'muse');
+  assert.equal(defaults[2].handle, 'unknown');
+  assert.equal(defaults[3].handle, 'unknown');
+
+  const guest = formatPromptBookEntries([{ id: 1, handle: 'rue', kind: 'say', body: 'hi', role: 'guest' }]);
+  assert.equal(guest[0].role, 'guest');
+
+  assert.deepEqual(formatPromptBookEntries(null), []);
+  assert.deepEqual(formatPromptBookEntries('x'), []);
+  assert.deepEqual(formatPromptBookEntries(undefined), []);
+
+  const many = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, handle: 'a', kind: 'say', body: `b${i + 1}`, created_at: i + 1, role: 'muse' }));
+  const capped = formatPromptBookEntries(many);
+  assert.equal(capped.length, 100);
+  assert.equal(capped[0].id, 21);
+  assert.equal(capped[99].id, 120);
+
+  const replies = formatPromptBookEntries([
+    { id: 1, handle: 'a', kind: 'say', body: 'x', reply_to: 0 },
+    { id: 2, handle: 'b', kind: 'say', body: 'y', reply_to: 3.5 },
+  ]);
+  assert.equal(replies[0].reply_to, 0);
+  assert.equal(replies[1].reply_to, null);
+});
+
+test('Slice 439: renderPromptBook empty state, emote spacing, guest pill, and re-render clearing (G3)', () => {
+  const doc = createDomStub();
+  const empty = doc.createElement('div');
+  renderPromptBook(empty, [], doc);
+  assert.equal(empty.children.length, 1);
+  assert.equal(empty.children[0].className, 'pb-empty');
+  assert.equal(empty.children[0].textContent, 'No remarks yet in the last 24h.');
+
+  assert.doesNotThrow(() => renderPromptBook(null, [{ id: 1, handle: 'a', kind: 'say', body: 'x' }], doc));
+  const noDoc = doc.createElement('div');
+  assert.doesNotThrow(() => renderPromptBook(noDoc, [{ id: 1, handle: 'a', kind: 'say', body: 'x' }], null));
+
+  const container = doc.createElement('div');
+  renderPromptBook(container, [
+    { id: 1, handle: 'wick', kind: 'emote', body: 'waves', role: 'npc' },
+    { id: 2, handle: 'alice', kind: 'say', body: 'hello', role: 'muse' },
+    { id: 3, handle: 'sys', kind: 'system', body: 'joined', role: 'muse' },
+  ], doc);
+  assert.equal(container.children.length, 3);
+  assert.equal(container.children[0].className, 'pb-line pb-kind-emote');
+  assert.equal(container.children[0].children.at(-1).textContent, ' waves');
+  assert.equal(container.children[1].className, 'pb-line pb-kind-say');
+  assert.equal(container.children[1].children.at(-1).textContent, ': hello');
+  assert.equal(container.children[2].className, 'pb-line pb-kind-system');
+  assert.equal(container.children[2].children.at(-1).textContent, ': joined');
+
+  const guest = doc.createElement('div');
+  renderPromptBook(guest, [{ id: 1, handle: 'rue', kind: 'say', body: 'hi', role: 'guest' }], doc);
+  assert.deepEqual(guest.children[0].children.map((x) => x.className), ['pb-guest-pill', 'pb-handle', 'pb-body']);
+  assert.equal(guest.children[0].children[0].textContent, '[guest]');
+
+  renderPromptBook(container, [
+    { id: 1, handle: 'a', kind: 'say', body: 'one', role: 'muse' },
+    { id: 2, handle: 'b', kind: 'say', body: 'two', role: 'muse' },
+  ], doc);
+  assert.equal(container.children.length, 2);
+  renderPromptBook(container, [{ id: 3, handle: 'c', kind: 'say', body: 'three', role: 'muse' }], doc);
+  assert.equal(container.children.length, 1);
+  assert.ok(container.children[0].textContent.includes('three'));
+});
+
+test('Slice 439: formatPlotGuestbookTabLabel formats only finite counts above zero (G4)', () => {
+  assert.equal(formatPlotGuestbookTabLabel(-1), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(NaN), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(Infinity), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel('3'), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(null), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(1), 'Guestbook (1)');
+  assert.equal(formatPlotGuestbookTabLabel(50), 'Guestbook (50)');
+  assert.equal(formatPlotGuestbookTabLabel(1.5), 'Guestbook (1.5)');
+});
+
+test('Slice 439: resolveGuestbookOverlayContent renders town-time dates, skips bad entries, caps at 50, keeps order (G5)', async () => {
+  const dated = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return {
+          entries: [
+            { id: 1, kind: 'guestbook', name: 'A', body: 'x', created_at: 1794614400 },
+            { id: 2, kind: 'guestbook', name: 'B', body: 'y', created_at: 0 },
+            { id: 3, kind: 'guestbook', name: 'C', body: 'z' },
+            { id: 4, kind: 'guestbook', name: 'D', body: 'w', created_at: 'nope' },
+          ],
+        };
+      },
+    }),
+  });
+  assert.equal(dated.kind, 'api');
+  assert.ok(dated.html.includes('Nov 13, 2026'));
+  assert.ok(dated.html.includes('Dec 31, 1969'));
+  assert.equal((dated.html.match(/<span class="meta">&middot;/g) || []).length, 2);
+
+  const bad = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return { entries: [null, 'x', { id: 1, kind: 'guestbook' }, { id: 2, kind: 'letter', name: 'L' }] };
+      },
+    }),
+  });
+  assert.equal(bad.kind, 'api');
+  assert.equal((bad.html.match(/<li>/g) || []).length, 2);
+  assert.ok(bad.html.includes('<li><strong></strong><br></li>'));
+
+  const entries = [
+    ...Array.from({ length: 48 }, (_, i) => ({ id: i + 1, kind: 'guestbook', name: `g${i + 1}`, body: 'x', created_at: 1794614400 })),
+    { id: 49, kind: 'unknown_kind', name: 'u1', body: 'x', created_at: 1794614400 },
+    { id: 50, kind: 'guestbook', name: 'g49', body: 'x', created_at: 1794614400 },
+    { id: 51, kind: 'guestbook', name: 'g50', body: 'x', created_at: 1794614400 },
+    { id: 52, kind: 'guestbook', name: 'g51', body: 'x', created_at: 1794614400 },
+  ];
+  const capped = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, async json() { return { entries }; } }),
+  });
+  assert.equal((capped.html.match(/<li>/g) || []).length, 49);
+  assert.ok(capped.html.includes('g49'));
+  assert.ok(!capped.html.includes('g50'));
+  assert.ok(!capped.html.includes('g51'));
+  assert.ok(!capped.html.includes('u1'));
+
+  const ordered = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      async json() {
+        return {
+          entries: [
+            { id: 9, kind: 'guestbook', name: 'new', body: 'x', created_at: 1794614400 },
+            { id: 1, kind: 'guestbook', name: 'old', body: 'y', created_at: 1794441600 },
+          ],
+        };
+      },
+    }),
+  });
+  assert.ok(ordered.html.indexOf('>new<') < ordered.html.indexOf('>old<'));
+});
+
+test('Slice 439: resolveInnOverlayContent nights-left math, vacant edges, and handle escaping (G6)', async () => {
+  const nowSec = 1700000000;
+  const math = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'a', nights: 3, expires_at: nowSec + 1.5 * 86400 },
+      window: { handle: 'b', nights: 3, expires_at: nowSec + 0.2 * 86400 },
+      quiet: { handle: 'c', nights: 3, expires_at: nowSec - 86400 },
+    },
+    nowSec,
+  });
+  assert.equal(math.kind, 'api');
+  assert.ok(math.html.includes('Occupied — @a, 2 nights left.'));
+  assert.ok(math.html.includes('Occupied — @b, 1 night left.'));
+  assert.ok(math.html.includes('Occupied — @c, 1 night left.'));
+
+  const fallback = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'a', nights: 2.5 },
+      window: { handle: 'b' },
+      quiet: { handle: 'c', nights: 0 },
+    },
+    nowSec,
+  });
+  assert.ok(fallback.html.includes('Occupied — @a, 3 nights left.'));
+  assert.ok(fallback.html.includes('Occupied — @b, 1 night left.'));
+  assert.ok(fallback.html.includes('Occupied — @c, 1 night left.'));
+
+  const vacant = await resolveInnOverlayContent({
+    innState: {
+      lantern: {},
+      window: 'not-an-object',
+      quiet: { handle: '' },
+    },
+    nowSec,
+  });
+  assert.equal(vacant.kind, 'api');
+  assert.equal((vacant.html.match(/Vacant — free tonight\./g) || []).length, 3);
+
+  const escaped = await resolveInnOverlayContent({
+    innState: { lantern: { handle: '<b>wick</b>', nights: 1, expires_at: nowSec + 86400 }, window: null, quiet: null },
+    nowSec,
+  });
+  assert.equal(escaped.html.includes('<b>wick</b>'), false);
+  assert.ok(escaped.html.includes('&lt;b&gt;wick&lt;/b&gt;'));
+});
+
+test('Slice 439: applyState ignores out-of-range and non-integer footlight slots, last duplicate wins, unknown role reads muse (G7)', () => {
+  const THREE = createThreeStub();
+  const town = buildTown(THREE);
+  assert.equal(town.parts.footlights.length, 10);
+  applyState(town, {
+    state_seq: 1,
+    footlights: [
+      { handle: 'a', slot: 10, role: 'muse' },
+      { handle: 'b', slot: -1, role: 'muse' },
+      { handle: 'c', slot: 1.5, role: 'muse' },
+      { handle: 'd', slot: '2', role: 'muse' },
+    ],
+    presence: [],
+  });
+  for (const fl of town.parts.footlights) {
+    if (fl.userData.slot === 0) {
+      assert.equal(fl.userData.handle, 'milo');
+      continue;
+    }
+    assert.equal(fl.userData.lit, false, `slot ${fl.userData.slot} must stay dark`);
+  }
+
+  const town2 = buildTown(createThreeStub());
+  applyState(town2, {
+    state_seq: 1,
+    footlights: [
+      { handle: 'alice', slot: 1, role: 'muse' },
+      { handle: 'bob', slot: 1, role: 'npc' },
+    ],
+    presence: [],
+  });
+  assert.equal(town2.parts.footlights[1].userData.handle, 'bob');
+  assert.equal(town2.parts.footlights[1].userData.role, 'npc');
+
+  const town3 = buildTown(createThreeStub());
+  applyState(town3, {
+    state_seq: 1,
+    footlights: [{ handle: 'z', slot: 4, role: 'guest' }],
+    presence: [],
+  });
+  assert.equal(town3.parts.footlights[4].userData.role, 'muse');
+  assert.equal(town3.parts.footlights[4].userData.shell.material.emissive, FOOTLIGHT_COLORS.muse.emissive);
+});
+
+test('Slice 439: applyPlotManifest pins seed pads, orders strangers, replaces on re-apply, guards, and exhausts at 7 pads (G8)', () => {
+  const manifestFor = (handle) => ({
+    cottage: 'gable',
+    wall: '#ddccbb',
+    roof: '#554433',
+    trim: '#221100',
+    signpost_text: handle,
+    props: [],
+  });
+  const THREE = createThreeStub();
+  const town = buildTown(THREE);
+  assert.deepEqual(town.parts.plotPads.map((p) => p.userData.plotNumber), [2, 3, 4, 5, 6, 7, 8]);
+
+  const wick = applyPlotManifest(town, 'wick', manifestFor('wick'));
+  const maren = applyPlotManifest(town, 'maren', manifestFor('maren'));
+  const tomas = applyPlotManifest(town, 'tomas', manifestFor('tomas'));
+  assert.equal(wick.userData.plotNumber, 2);
+  assert.equal(maren.userData.plotNumber, 3);
+  assert.equal(tomas.userData.plotNumber, 4);
+  assert.equal(wick.userData.handle, 'wick');
+  assert.equal(town._live.plotAssignments.get('wick').plotNumber, 2);
+  assert.equal(town._live.cottagesByHandle.get('maren'), maren);
+
+  const amy = applyPlotManifest(town, 'amy', manifestFor('amy'));
+  const bob = applyPlotManifest(town, 'bob', manifestFor('bob'));
+  assert.equal(amy.userData.plotNumber, 5);
+  assert.equal(bob.userData.plotNumber, 6);
+
+  const first = applyPlotManifest(town, 'wick', manifestFor('wick'));
+  const second = applyPlotManifest(town, 'wick', { ...manifestFor('wick'), wall: '#112233', cottage: 'tower' });
+  assert.equal(second.userData.plotNumber, 2);
+  assert.notEqual(second, first);
+  assert.equal(first.parent, null);
+  assert.equal(town._live.cottagesByHandle.get('wick'), second);
+  assert.equal(town.scene.children.includes(second), true);
+
+  assert.equal(applyPlotManifest(town, 'milo', manifestFor('milo')), null);
+  assert.equal(applyPlotManifest(town, 'amy', null), null);
+  assert.equal(applyPlotManifest(town, '', manifestFor('x')), null);
+  assert.equal(applyPlotManifest(town, 'amy', 'not-an-object'), null);
+  assert.equal(applyPlotManifest(null, 'amy', manifestFor('amy')), null);
+
+  const town2 = buildTown(createThreeStub());
+  for (const h of ['wick', 'maren', 'tomas', 'a', 'b', 'c', 'd']) {
+    assert.notEqual(applyPlotManifest(town2, h, manifestFor(h)), null, `${h} should get a pad`);
+  }
+  assert.deepEqual([...town2._live.plotAssignments.values()].map((a) => a.plotNumber).sort((x, y) => x - y), [2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(applyPlotManifest(town2, 'e', manifestFor('e')), null);
+  assert.equal(applyPlotManifest(town2, 'ninth', manifestFor('ninth')), null);
+});
+
+test('Slice 439: TownLive start and stop, backoff cap, invalid state, no-fetch, and status callbacks (G9)', async () => {
+  const makeTimer = () => {
+    const calls = { set: 0, clear: 0 };
+    let nextId = 1;
+    return {
+      calls,
+      setInterval: () => { calls.set += 1; return nextId++; },
+      clearInterval: () => { calls.clear += 1; },
+    };
+  };
+
+  const THREE = createThreeStub();
+  const town = buildTown(THREE);
+  const timer = makeTimer();
+  let fetchCalls = 0;
+  const live = new TownLive(town, {
+    fetch: async () => { fetchCalls += 1; return { status: 304 }; },
+    apiBase: '',
+    timer,
+  });
+  live.start();
+  live.start();
+  assert.equal(timer.calls.set, 1);
+  assert.equal(fetchCalls, 1);
+  live.stop();
+  assert.equal(timer.calls.clear, 1);
+  live.stop();
+  assert.equal(timer.calls.clear, 1);
+
+  const town2 = buildTown(createThreeStub());
+  const live2 = new TownLive(town2, {
+    fetch: async () => { throw new Error('down'); },
+    apiBase: '',
+    pollIntervalMs: 5000,
+    maxBackoffMs: 12000,
+    timer: makeTimer(),
+  });
+  let r = await live2.pollOnce();
+  assert.equal(r.error, 'network_error');
+  assert.equal(live2.currentIntervalMs, 10000);
+  r = await live2.pollOnce();
+  assert.equal(live2.currentIntervalMs, 12000);
+  r = await live2.pollOnce();
+  assert.equal(live2.currentIntervalMs, 12000);
+  assert.equal(live2.connected, false);
+
+  const town3 = buildTown(createThreeStub());
+  let mode = 'invalid';
+  const live3 = new TownLive(town3, {
+    fetch: async () => {
+      if (mode === 'invalid') return { status: 200, async json() { return { footlights: [] }; } };
+      return { status: 200, async json() { return { state_seq: 7, footlights: [], presence: [], prompt_book: [] }; } };
+    },
+    apiBase: '',
+    pollIntervalMs: 5000,
+    maxBackoffMs: 60000,
+    timer: makeTimer(),
+  });
+  r = await live3.pollOnce();
+  assert.equal(r.error, 'invalid_state');
+  assert.equal(live3.currentIntervalMs, 10000);
+  assert.equal(live3.lastSeq, null);
+  mode = 'valid';
+  r = await live3.pollOnce();
+  assert.equal(r.changed, true);
+  assert.equal(live3.currentIntervalMs, 5000);
+  assert.equal(live3.lastSeq, 7);
+  assert.equal(live3.connected, true);
+
+  const town4 = buildTown(createThreeStub());
+  const live4 = new TownLive(town4, { apiBase: '' });
+  live4.fetchFn = null;
+  r = await live4.pollOnce();
+  assert.deepEqual(r, { changed: false, error: 'no_fetch' });
+
+  const town5 = buildTown(createThreeStub());
+  const states = [];
+  const statuses = [];
+  const live5 = new TownLive(town5, {
+    fetch: async () => ({ status: 200, async json() { return { state_seq: 3, footlights: [], presence: [], prompt_book: [] }; } }),
+    apiBase: '',
+    timer: makeTimer(),
+    onState: (s) => states.push(s.state_seq),
+    onStatus: (s) => statuses.push(s),
+  });
+  r = await live5.pollOnce();
+  assert.equal(r.changed, true);
+  assert.deepEqual(states, [3]);
+  assert.equal(statuses.length, 1);
+  assert.equal(statuses[0].connected, true);
+  assert.equal(statuses[0].intervalMs, 5000);
+  assert.equal(statuses[0].stateSeq, 3);
+
+  const live6 = new TownLive(buildTown(createThreeStub()), { fetch: async () => ({ status: 304 }), apiBase: 'https://x.example///' });
+  assert.equal(live6.apiBase, 'https://x.example');
+});
+
+test('Slice 439: file hygiene - 50 unique test names, 11 import lines, and pinned literal counts (G10)', () => {
+  const src = fsSync.readFileSync(path.join(__dirname, 'test-3d-live.mjs'), 'utf8');
+  const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 50);
+  assert.equal(new Set(names).size, 50);
+  for (const name of names) {
+    assert.equal(name.includes("'"), false, 'test names must contain no apostrophes');
+  }
+  const lines = src.split('\n');
+  assert.equal(lines.filter((l) => l.startsWith('import ')).length, 11);
+  const countLines = (needle) => lines.filter((l) => l.includes(needle)).length;
+  assert.equal(countLines('fet' + 'ch('), 1);
+  assert.equal(countLines('Date' + '.now'), 0);
+  assert.equal(countLines('Math' + '.random'), 0);
+  assert.equal(countLines('TO' + 'DO'), 0);
+  assert.equal(countLines('FIX' + 'ME'), 0);
+  assert.equal(countLines('inner' + 'HTML'), 3);
+  assert.equal(lines.filter((l) => new RegExp('camp' + 'fire', 'i').test(l)).length, 3);
+});
