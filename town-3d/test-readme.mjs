@@ -875,3 +875,257 @@ test('town-3d/README.md shipped-table town.js role keywords trace to town.js', (
     assert.ok(role.toLowerCase().includes(kw), `town.js role cell must contain ${kw}`);
   }
 });
+
+test('town-3d/README.md shared-files bullet decomposes as 5 Gazette + 4 desk notes + 3 pages', () => {
+  const readme = readReadme();
+  const stageDeploy = fs.readFileSync(
+    path.join(REPO_ROOT, 'scripts', 'stage-deploy.mjs'),
+    'utf8'
+  );
+  const blockMatch = stageDeploy.match(/const STAGING_SHARED_TOWN3D_FILES = \[([\s\S]*?)\];/);
+  assert.ok(blockMatch, 'scripts/stage-deploy.mjs must define STAGING_SHARED_TOWN3D_FILES');
+  const entries = [...blockMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.equal(entries.length, 12, 'STAGING_SHARED_TOWN3D_FILES must hold 12 entries');
+  const gazette = entries.filter((f) => f.startsWith('gazette/'));
+  const desk = entries.filter((f) => f.startsWith('plots/'));
+  const pages = entries.filter((f) => !f.startsWith('gazette/') && !f.startsWith('plots/'));
+  assert.deepEqual([...gazette].sort(), [
+    'gazette/feed.xml',
+    'gazette/issue-001.html',
+    'gazette/issue-002.html',
+    'gazette/issue-003.html',
+    'gazette/latest.json',
+  ]);
+  assert.equal(desk.length, 4, 'shared desk notes must be 4');
+  assert.deepEqual([...pages].sort(), ['guestbook/index.html', 'inn/index.html', 'move-in.html']);
+  const readmeNorm = readme.replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes('12 `town-3d/` files'),
+    'town-3d/README.md must state 12 shared town-3d files'
+  );
+});
+
+test('town-3d/README.md intro paragraph names the client stack and the 2026-11-14 live-root switch', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Procedural WebGL 3D client for Ghostlight Town (`town.js` + `concept-*.js` + CC0 `.glb` props).'
+    ),
+    'town-3d/README.md intro must name town.js + concept-*.js + CC0 .glb props'
+  );
+  assert.ok(
+    readmeNorm.includes(
+      'The `staging-polyfork` bundle replaced `town-3d/` as the default live root at the 2026-11-14 adoption,'
+    ),
+    'town-3d/README.md intro must state staging-polyfork replaced town-3d as the default live root'
+  );
+  assert.ok(
+    readmeNorm.includes('`town-3d/` remains the 25-file fallback bundle (`town.js?v=16`)'),
+    'town-3d/README.md intro must state the 25-file fallback bundle at town.js?v=16'
+  );
+});
+
+test('town-3d/README.md footlight status renders statusText on the placard and the nametag', () => {
+  const bandstandJs = fs.readFileSync(path.join(__dirname, 'concept-bandstand.js'), 'utf8');
+  assert.ok(
+    bandstandJs.includes(
+      "export function lightFootlightSlot(THREE, flGroup, { handle = 'milo', role = 'muse', permanent = false, statusText } = {})"
+    ),
+    'town-3d/concept-bandstand.js lightFootlightSlot must accept statusText'
+  );
+  assert.ok(
+    bandstandJs.includes('function formatFootlightStatusLines(statusText) {'),
+    'town-3d/concept-bandstand.js must define formatFootlightStatusLines(statusText)'
+  );
+  assert.ok(
+    bandstandJs.includes('flGroup.userData.statusText = trimmedStatus;'),
+    'town-3d/concept-bandstand.js lightFootlightSlot must store statusText on flGroup.userData'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('const nextStatus = raw ? (raw.length > 24 ? `${raw.slice(0, 23)}…` : raw) : null;'),
+    'town-3d/town.js setAvatarStatusText must cap statusText at 24 chars (23 + ellipsis)'
+  );
+  assert.ok(
+    townJs.includes('const lines = nextStatus ? [badge, nextStatus] : [badge];'),
+    'town-3d/town.js setAvatarStatusText must draw badge plus status lines'
+  );
+  assert.ok(
+    townJs.includes('sprite.material.map = makeTextTexture(THREE, lines, opts);'),
+    'town-3d/town.js setAvatarStatusText must redraw the nametag via makeTextTexture'
+  );
+});
+
+test('town-3d/README.md Notice Board overlay is built from 3 papers with gate, Gazette, and inn notices', () => {
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('function buildNoticeBoard(THREE) {'),
+    'town-3d/town.js must define buildNoticeBoard(THREE)'
+  );
+  assert.ok(
+    townJs.includes('export function buildNoticeBoardOverlayHtml() {'),
+    'town-3d/town.js must export buildNoticeBoardOverlayHtml()'
+  );
+  assert.ok(
+    townJs.includes('const noticesHtml = NOTICE_BOARD_PAPERS.map(([, , lines]) => {'),
+    'town-3d/town.js buildNoticeBoardOverlayHtml must map NOTICE_BOARD_PAPERS'
+  );
+  const papers = [...townJs.matchAll(/\['notice_board_paper_([a-z]+)',/g)].map((m) => m[1]);
+  assert.deepEqual(papers, ['gazette', 'inn', 'gate'], 'NOTICE_BOARD_PAPERS must hold gazette, inn, gate');
+  const fnStart = townJs.indexOf('export function buildNoticeBoardOverlayHtml() {');
+  assert.ok(fnStart >= 0, 'town-3d/town.js must contain buildNoticeBoardOverlayHtml');
+  const fnBody = townJs.slice(fnStart, fnStart + 2000);
+  assert.ok(fnBody.includes('<title>Notice Board</title>'), 'Notice Board overlay must title itself Notice Board');
+  assert.ok(fnBody.includes('<h1>Notice Board</h1>'), 'Notice Board overlay must head itself Notice Board');
+});
+
+test('town-3d/README.md inn common windows bullet states the any-occupancy rule verbatim', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      '`commonWindowMaterial` lights when any room is claimed; the three room windows are per-room'
+    ),
+    'town-3d/README.md inn bullet must state the any-occupancy rule verbatim'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('function applyInnWindowPalette(material, isClaimed) {'),
+    'town-3d/town.js must define applyInnWindowPalette(material, isClaimed)'
+  );
+});
+
+test('town-3d/README.md Gazette latest.json issues carry headline and date; feed titles match them', () => {
+  const latestJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'gazette', 'latest.json'), 'utf8')
+  );
+  assert.equal(latestJson.latest, 3, 'gazette/latest.json latest must be 3');
+  assert.equal(latestJson.issues.length, 3, 'gazette/latest.json must list 3 issues');
+  for (const issue of latestJson.issues) {
+    assert.deepEqual(
+      Object.keys(issue).sort(),
+      ['date', 'file', 'headline', 'n'],
+      'gazette/latest.json issue entries must carry date, file, headline, n'
+    );
+    const html = fs.readFileSync(path.join(__dirname, 'gazette', issue.file), 'utf8');
+    assert.ok(html.includes(issue.headline), `${issue.file} must contain its headline`);
+  }
+  const feedXml = fs.readFileSync(path.join(__dirname, 'gazette', 'feed.xml'), 'utf8');
+  const channelTitle = feedXml.match(/<channel>[\s\S]*?<title>([^<]+)<\/title>/)[1];
+  assert.equal(channelTitle, 'The Ghostlight Gazette', 'feed.xml channel title must be The Ghostlight Gazette');
+  const channelDesc = feedXml.match(/<channel>[\s\S]*?<description>([^<]+)<\/description>/)[1];
+  assert.equal(
+    channelDesc,
+    'The paper of record for Ghostlight Town — a clearing where nobody&apos;s cottage gets torn down.',
+    'feed.xml channel description must match the Gazette tagline'
+  );
+  for (const issue of latestJson.issues) {
+    const escaped = issue.headline.replaceAll("'", '&apos;');
+    assert.ok(
+      feedXml.includes(`<title>${escaped}</title>`),
+      `gazette/feed.xml must carry title ${escaped}`
+    );
+  }
+});
+
+test('town-3d/README.md shipped town.js imports all three vendored concept modules', () => {
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes("import { createConceptMilosCottage } from './concept-cottage.js';"),
+    'town-3d/town.js must import createConceptMilosCottage from ./concept-cottage.js'
+  );
+  assert.ok(
+    townJs.includes("import { createConceptMiloGhost } from './concept-ghost.js?v=2';"),
+    'town-3d/town.js must import createConceptMiloGhost from ./concept-ghost.js?v=2'
+  );
+  assert.ok(
+    townJs.includes(
+      "import { buildConceptBandstand, lightFootlightSlot } from './concept-bandstand.js';"
+    ),
+    'town-3d/town.js must import buildConceptBandstand and lightFootlightSlot from ./concept-bandstand.js'
+  );
+  const readme = readReadme();
+  assert.ok(
+    readme.includes('`town.js` + `concept-*.js`'),
+    'town-3d/README.md must name town.js + concept-*.js in the intro'
+  );
+});
+
+test('town-3d/README.md move-in, inn, and guestbook pages carry their distinctive content', () => {
+  const moveIn = fs.readFileSync(path.join(__dirname, 'move-in.html'), 'utf8');
+  assert.ok(
+    moveIn.includes('openssl genpkey -algorithm ed25519 -out ghostlight-key.pem'),
+    'town-3d/move-in.html must show the ed25519 keygen command'
+  );
+  const inn = fs.readFileSync(path.join(__dirname, 'inn/index.html'), 'utf8');
+  for (const room of ['The Lantern Room', 'The Window Room', 'The Quiet Room']) {
+    assert.ok(inn.includes(room), `town-3d/inn/index.html must name ${room}`);
+  }
+  const guestbook = fs.readFileSync(path.join(__dirname, 'guestbook/index.html'), 'utf8');
+  assert.ok(
+    guestbook.includes('Sign with the town client (<code>signGuestbook</code>'),
+    'town-3d/guestbook/index.html must say to sign with the town client'
+  );
+});
+
+test('town-3d/README.md CREDITS.md header states the procedural core and the CC0 credit policy', () => {
+  const credits = fs.readFileSync(path.join(__dirname, 'CREDITS.md'), 'utf8');
+  assert.ok(
+    credits.includes('is procedural Three.js geometry'),
+    'town-3d/CREDITS.md must state the architectural core is procedural Three.js geometry'
+  );
+  assert.ok(
+    credits.includes('Although CC0 1.0 requires no attribution, we credit the creator here.'),
+    'town-3d/CREDITS.md must state CC0 1.0 requires no attribution but creators are credited'
+  );
+  const entries = credits.match(/^-\s+\*\*.*\(`models\//gm) ?? [];
+  assert.equal(entries.length, 7, 'town-3d/CREDITS.md must list 7 prop entries');
+  const idLines = credits.match(/Poly Pizza ID:/g) ?? [];
+  assert.equal(idLines.length, 7, 'town-3d/CREDITS.md must carry 7 Poly Pizza ID lines');
+});
+
+test('town-3d/test-readme.mjs file hygiene: 51 unique names, 6 imports, pinned literal counts', () => {
+  const self = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
+  const names = [...self.matchAll(/^test\((['"])(.*?)\1,/gm)].map((m) => m[2]);
+  assert.equal(names.length, 51, 'town-3d/test-readme.mjs must hold 51 top-level tests');
+  assert.equal(new Set(names).size, 51, 'town-3d/test-readme.mjs test names must be unique');
+  const importLines = [...self.matchAll(/^import .*$/gm)].map((m) => m[0]);
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "import { collectSourceFilesFromTown3d, collectSourceFiles } from '../scripts/stage-deploy.mjs';",
+  ]);
+  const retired = `camp${'fire'}`;
+  assert.equal(
+    (self.match(new RegExp(retired, 'gi')) ?? []).length,
+    0,
+    'retired term must not occur in town-3d/test-readme.mjs'
+  );
+  assert.equal(
+    (self.match(/Math\.random/g) ?? []).length,
+    1,
+    'Math.' + 'random' + ' must occur exactly once (the line-588 test name)'
+  );
+  assert.equal(
+    (self.match(/fetch\(/g) ?? []).length,
+    3,
+    'fetch' + '(' + ' must occur exactly three times (lines 801 and 856)'
+  );
+  assert.equal(
+    (self.match(new RegExp(`Date.${'now'}`, 'g')) ?? []).length,
+    0,
+    'Date.' + 'now' + ' must not occur in town-3d/test-readme.mjs'
+  );
+  assert.equal(
+    (self.match(new RegExp('TO' + 'DO', 'g')) ?? []).length,
+    0,
+    'TO' + 'DO' + ' must not occur in town-3d/test-readme.mjs'
+  );
+  assert.equal(
+    (self.match(new RegExp('FIX' + 'ME', 'g')) ?? []).length,
+    0,
+    'FIX' + 'ME' + ' must not occur in town-3d/test-readme.mjs'
+  );
+});
