@@ -1243,3 +1243,254 @@ test('terrain.mjs SEASONS asymmetry and season-knob counts match', () => {
   }
   assert.deepEqual(dist, { summer: 59, autumn: 2, spring: 1 }, 'kit-campground season default distribution');
 });
+
+test('KIT.md "## What is in this folder" opening paragraph is identical across kits and the buildKit snippet placement counts match LAYOUT.json', () => {
+  const sections = {};
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    sections[kit] = kitMd.split('## What is in this folder\n')[1].split('\n## ')[0];
+  }
+
+  const opening = [
+    '',
+    'Every part twice: `<part>.glb` for any engine, `<part>.mjs` as a drop-in three.js',
+    'module with its options. `scene.glb` is the composed kit scene, the whole thing',
+  ];
+  for (const kit of KITS) {
+    assert.deepEqual(
+      sections[kit].split('\n').slice(0, 3),
+      opening,
+      `${kit}/KIT.md "## What is in this folder" opening paragraph`
+    );
+    assert.ok(sections[kit].includes('`scene.glb` is the composed kit scene'), `${kit}/KIT.md folder section must mention scene.glb`);
+  }
+
+  const expectedPlacements = { 'kit-campground': 174, 'kit-medieval': 559 };
+  for (const kit of KITS) {
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    assert.equal(layoutJson.length, expectedPlacements[kit], `${kit}/LAYOUT.json row count`);
+    assert.ok(
+      sections[kit].includes(`all ${expectedPlacements[kit]} placements`),
+      `${kit}/KIT.md buildKit snippet must state 'all ${expectedPlacements[kit]} placements'`
+    );
+  }
+});
+
+test('kit.json classes distribution matches PARTS.json part counts', () => {
+  const expected = {
+    'kit-campground': { building: 5, prop: 45, character: 5, vehicle: 6, terrain: 1 },
+    'kit-medieval': { prop: 31, building: 18, vehicle: 4, animal: 2, character: 4, terrain: 1 },
+  };
+  for (const kit of KITS) {
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const dist = {};
+    for (const value of Object.values(kitJson.classes)) {
+      dist[value] = (dist[value] || 0) + 1;
+    }
+    assert.deepEqual(dist, expected[kit], `${kit}/kit.json classes distribution`);
+    assert.equal(
+      Object.values(dist).reduce((a, b) => a + b, 0),
+      Object.keys(partsJson).length,
+      `${kit}/kit.json classes must cover every PARTS.json key`
+    );
+  }
+});
+
+test('PARTS.json knob-name vocabulary counts and seed/wear presence match', () => {
+  const expected = {
+    'kit-campground': { knobs: 150, seedParts: ['campground-pine-stand', 'lakeside-swing-tree'], wearParts: 61 },
+    'kit-medieval': { knobs: 147, seedParts: [], wearParts: 1 },
+  };
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const knobNames = new Set();
+    const seedParts = [];
+    let wearParts = 0;
+    for (const [partKey, entry] of Object.entries(partsJson)) {
+      for (const knobName of Object.keys(entry.knobs || {})) {
+        knobNames.add(knobName);
+        if (knobName === 'seed') seedParts.push(partKey);
+        if (knobName === 'wear') wearParts++;
+      }
+    }
+    assert.equal(knobNames.size, expected[kit].knobs, `${kit}/PARTS.json distinct knob-name count`);
+    assert.deepEqual(seedParts, expected[kit].seedParts, `${kit}/PARTS.json parts with a seed knob`);
+    assert.equal(wearParts, expected[kit].wearParts, `${kit}/PARTS.json parts with a wear knob`);
+    assert.ok(knobNames.has('colorway'), `${kit}/PARTS.json knob vocabulary must include colorway`);
+    assert.ok(knobNames.has('season'), `${kit}/PARTS.json knob vocabulary must include season`);
+  }
+});
+
+test('LAYOUT.json ry is present on every row with pinned distinct counts and zero counts', () => {
+  const expected = {
+    'kit-campground': { rows: 174, distinctRy: 65, ryZero: 29 },
+    'kit-medieval': { rows: 559, distinctRy: 515, ryZero: 5 },
+  };
+  for (const kit of KITS) {
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    const ryValues = new Set();
+    let ryZero = 0;
+    for (let i = 0; i < layoutJson.length; i++) {
+      assert.equal(typeof layoutJson[i].ry, 'number', `${kit} LAYOUT[${i}].ry must be a number`);
+      ryValues.add(layoutJson[i].ry);
+      if (layoutJson[i].ry === 0) ryZero++;
+    }
+    assert.equal(layoutJson.length, expected[kit].rows, `${kit}/LAYOUT.json row count`);
+    assert.equal(ryValues.size, expected[kit].distinctRy, `${kit}/LAYOUT.json distinct ry count`);
+    assert.equal(ryZero, expected[kit].ryZero, `${kit}/LAYOUT.json rows with ry === 0`);
+  }
+});
+
+test('terrain.mjs ZONES and COLORWAYS agree, with one colorway per zone set', () => {
+  const expectedZones = {
+    'kit-campground': ['grass', 'meadow', 'duff', 'soil', 'sand', 'rock', 'camp', 'water', 'ice'],
+    'kit-medieval': ['pasture', 'meadow', 'soil', 'stone', 'water'],
+  };
+  const expectedColorways = {
+    'kit-campground': ['summer-weekend', 'golden-evening', 'high-tarn', 'red-clay'],
+    'kit-medieval': ['green-shire', 'harvest-gold', 'wet-spring', 'winter-fell'],
+  };
+  for (const kit of KITS) {
+    const terrainSrc = readKitFile(kit, 'terrain.mjs');
+    const zonesMatch = terrainSrc.match(/const ZONES = \[([^\]]+)\];/);
+    assert.ok(zonesMatch, `${kit}/terrain.mjs must declare const ZONES`);
+    const zones = [...zonesMatch[1].matchAll(/'([a-zA-Z]+)'/g)].map((m) => m[1]);
+    assert.deepEqual(zones, expectedZones[kit], `${kit}/terrain.mjs ZONES`);
+
+    const cwMatch = terrainSrc.match(/const COLORWAYS = \{([\s\S]*?)\n\};/);
+    assert.ok(cwMatch, `${kit}/terrain.mjs must declare const COLORWAYS`);
+    const colorways = [...cwMatch[1].matchAll(/'([a-z0-9-]+)':\s*\{([^}]*)\}/g)];
+    assert.deepEqual(
+      colorways.map((m) => m[1]),
+      expectedColorways[kit],
+      `${kit}/terrain.mjs COLORWAYS names`
+    );
+    for (const [, name, body] of colorways.map((m) => [m[0], m[1], m[2]])) {
+      const keys = [...body.matchAll(/([a-zA-Z]+): '#[0-9a-fA-F]{6}'/g)].map((m) => m[1]);
+      assert.deepEqual(keys, zones, `${kit}/terrain.mjs COLORWAYS '${name}' keys must equal ZONES`);
+      for (const hex of [...body.matchAll(/#([0-9a-fA-F]{6})/g)].map((m) => m[0])) {
+        assert.match(hex, /^#[0-9a-fA-F]{6}$/, `${kit}/terrain.mjs COLORWAYS '${name}' value '${hex}' must be 6-digit hex`);
+      }
+    }
+  }
+});
+
+test('CREDITS.txt asset ids are unique 6-hex suffixes, one per PARTS.json key', () => {
+  const expectedCounts = { 'kit-campground': 62, 'kit-medieval': 60 };
+  for (const kit of KITS) {
+    const credits = readKitFile(kit, 'CREDITS.txt');
+    const ids = [...credits.matchAll(/polyfork\.dev\/asset\/[a-z0-9-]+-([0-9a-f]{6})\)/g)].map((m) => m[1]);
+    assert.equal(ids.length, expectedCounts[kit], `${kit}/CREDITS.txt asset-id count`);
+    assert.equal(new Set(ids).size, ids.length, `${kit}/CREDITS.txt asset ids must be unique`);
+    for (const id of ids) {
+      assert.match(id, /^[0-9a-f]{6}$/, `${kit}/CREDITS.txt asset id '${id}' must be 6 hex digits`);
+    }
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    assert.equal(ids.length, Object.keys(partsJson).length, `${kit}/CREDITS.txt asset ids must number one per PARTS.json key`);
+  }
+});
+
+test('KIT.md "## Parts" section is the pinned two-paragraph form with the kit page URL', () => {
+  for (const kit of KITS) {
+    const kitMd = readKitFile(kit, 'KIT.md');
+    const kitJson = JSON.parse(readKitFile(kit, 'kit.json'));
+    const partsCount = Object.keys(JSON.parse(readKitFile(kit, 'PARTS.json'))).length;
+    const body = kitMd.split('## Parts\n')[1].split('\n## ')[0];
+    const lines = body.trim().split('\n');
+    assert.deepEqual(
+      lines,
+      [
+        `${partsCount} parts. \`PARTS.json\` beside this file lists each one on one line: file, size, knobs with their options and defaults, colour zones, rig nodes, lit zones. \`grep '"<key>"' PARTS.json\` rather than opening its \`.mjs\`.`,
+        '',
+        'Every part also has its own page with renders and live options:',
+        `https://polyfork.dev/kit/${kitJson.kit}`,
+      ],
+      `${kit}/KIT.md ## Parts section body`
+    );
+  }
+});
+
+test('stage.mjs TIMES gradient and LIGHTING order match the API contract', () => {
+  for (const kit of KITS) {
+    const stageSrc = readKitFile(kit, '_internal/stage.mjs');
+    const timesBlock = stageSrc.match(/const TIMES = \[([\s\S]*?)\n\];/);
+    assert.ok(timesBlock, `${kit}/_internal/stage.mjs must declare const TIMES`);
+    const pairs = [...timesBlock[1].matchAll(/\{ at: ([\d.]+), name: '([a-z]+)'/g)].map((m) => [m[2], Number(m[1])]);
+    assert.deepEqual(
+      pairs,
+      [['day', 0], ['golden', 0.55], ['dusk', 0.82], ['night', 1]],
+      `${kit}/_internal/stage.mjs TIMES name/at pairs`
+    );
+    assert.ok(
+      stageSrc.includes('const NAMED = Object.fromEntries(TIMES.map((t) => [t.name, t.at]));'),
+      `${kit}/_internal/stage.mjs must build NAMED from TIMES`
+    );
+
+    const lightingMatch = stageSrc.match(/export const LIGHTING = \[([^\]]+)\];/);
+    assert.ok(lightingMatch, `${kit}/_internal/stage.mjs must export LIGHTING`);
+    const lighting = lightingMatch[1].split(', ').map((s) => s.replace(/^'|'$/g, ''));
+    assert.deepEqual(
+      lighting,
+      ['noon', 'day', 'golden', 'dusk', 'night', 'dawn', 'overcast', 'moonlit', 'space'],
+      `${kit}/_internal/stage.mjs LIGHTING order`
+    );
+
+    const looksMatch = stageSrc.match(/const LOOKS = \{([\s\S]*?)\n\};/);
+    assert.ok(looksMatch, `${kit}/_internal/stage.mjs must declare const LOOKS`);
+    const looksNames = [...looksMatch[1].matchAll(/^  ([a-z]+):/gm)].map((m) => m[1]);
+    assert.deepEqual(
+      looksNames,
+      ['dawn', 'noon', 'overcast', 'moonlit', 'space'],
+      `${kit}/_internal/stage.mjs LOOKS preset names`
+    );
+  }
+});
+
+test('PARTS.json color-zone vocabularies: counts, 47-zone overlap, and terrain zones present', () => {
+  const expectedCounts = { 'kit-campground': 223, 'kit-medieval': 169 };
+  const expectedOverlap = ['bark', 'blossom', 'board', 'boards', 'boot', 'brass', 'char', 'coat', 'cream', 'cut', 'denim', 'door', 'edge', 'flame', 'frame', 'glass', 'hair', 'handle', 'hatBand', 'heartwood', 'hose', 'interior', 'iron', 'leaf', 'meadow', 'mortar', 'mouth', 'plank', 'plate', 'post', 'rail', 'rope', 'shirt', 'skin', 'skirt', 'slate', 'soil', 'sole', 'soot', 'steel', 'stone', 'strap', 'straw', 'tail', 'timber', 'water', 'wood'];
+  const zoneSets = {};
+  for (const kit of KITS) {
+    const partsJson = JSON.parse(readKitFile(kit, 'PARTS.json'));
+    const zones = new Set();
+    for (const entry of Object.values(partsJson)) {
+      for (const zone of entry.colors || []) zones.add(zone);
+    }
+    zoneSets[kit] = zones;
+    assert.equal(zones.size, expectedCounts[kit], `${kit}/PARTS.json distinct color-zone count`);
+  }
+  const overlap = [...zoneSets['kit-campground']].filter((z) => zoneSets['kit-medieval'].has(z)).sort();
+  assert.deepEqual(overlap, expectedOverlap, 'color-zone overlap across kits');
+
+  const expectedZones = {
+    'kit-campground': ['grass', 'meadow', 'duff', 'soil', 'sand', 'rock', 'camp', 'water', 'ice'],
+    'kit-medieval': ['pasture', 'meadow', 'soil', 'stone', 'water'],
+  };
+  for (const kit of KITS) {
+    for (const zone of expectedZones[kit]) {
+      assert.ok(zoneSets[kit].has(zone), `${kit}/PARTS.json color zones must include terrain zone '${zone}'`);
+    }
+  }
+});
+
+test('LAYOUT.json y values: distinct counts and non-zero row counts match', () => {
+  const expected = {
+    'kit-campground': { distinctY: 93, nonZero: 154, zero: 20 },
+    'kit-medieval': { distinctY: 65, nonZero: 554, zero: 5 },
+  };
+  for (const kit of KITS) {
+    const layoutJson = JSON.parse(readKitFile(kit, 'LAYOUT.json'));
+    const yValues = new Set();
+    let nonZero = 0;
+    let zero = 0;
+    for (const row of layoutJson) {
+      yValues.add(row.y);
+      if (row.y === 0) zero++;
+      else nonZero++;
+    }
+    assert.equal(yValues.size, expected[kit].distinctY, `${kit}/LAYOUT.json distinct y count`);
+    assert.equal(nonZero, expected[kit].nonZero, `${kit}/LAYOUT.json rows with y !== 0`);
+    assert.equal(zero, expected[kit].zero, `${kit}/LAYOUT.json rows with y === 0`);
+  }
+});
