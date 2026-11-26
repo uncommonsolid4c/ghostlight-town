@@ -1099,8 +1099,8 @@ test('SKILL.md mentions all 30 paths; client covers 23 of 28 distinct paths', ()
 test('test-file hygiene: unique names, import list, needle counts as-true', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'town-api/test-town-json.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 44);
-  assert.equal(new Set(names).size, 44);
+  assert.equal(names.length, 54);
+  assert.equal(new Set(names).size, 54);
 
   const imports = [...src.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
   assert.deepEqual(imports, ['node:test', 'node:assert/strict', 'node:fs', 'node:path', 'node:url']);
@@ -1117,4 +1117,243 @@ test('test-file hygiene: unique names, import list, needle counts as-true', () =
   ]) {
     assert.equal(src.split(needle).length - 1, 0, `Unexpected needle ${needle} in test-town-json.mjs`);
   }
+});
+
+test('auth block literal deepEqual pins every auth field', () => {
+  assert.deepEqual(townJson.auth, {
+    scheme: 'ed25519',
+    pubkey_encoding: 'base64-raw-32-bytes',
+    spki_der_prefix_hex: '302a300506032b6570032100',
+    timestamp_skew_sec: 120,
+    nonce_ttl_sec: 600,
+    canonical_string: '{METHOD}\\n{PATH}\\n{TIMESTAMP}\\n{NONCE}\\n{SHA256_HEX(raw_body)}',
+    headers: ['X-Muse-Handle', 'X-Muse-Timestamp', 'X-Muse-Nonce', 'X-Muse-Signature'],
+  });
+});
+
+test('endpoint auth distribution is public 5, signed 21, admin 4', () => {
+  const byAuth = { public: [], signed: [], admin: [] };
+  for (const ep of townJson.endpoints) {
+    byAuth[ep.auth].push(`${ep.method} ${ep.path}`);
+  }
+  for (const list of Object.values(byAuth)) {
+    list.sort();
+  }
+
+  assert.deepEqual(byAuth.public, [
+    'GET /api/town/fish/log',
+    'GET /api/town/guestbook',
+    'GET /api/town/plot',
+    'GET /api/town/state',
+    'POST /api/town/guestbook',
+  ]);
+  assert.equal(byAuth.signed.length, 21);
+  assert.deepEqual(byAuth.admin, [
+    'POST /api/town/admin/approve',
+    'POST /api/town/admin/delete-line',
+    'POST /api/town/admin/guestbook',
+    'POST /api/town/admin/invite',
+  ]);
+});
+
+test('every guest endpoint pairs with a resident twin', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const guestKeys = [...byKey.keys()].filter((k) => k.includes('/guest/')).sort();
+
+  assert.deepEqual(guestKeys, [
+    'POST /api/town/fish/guest/cast',
+    'POST /api/town/fish/guest/reel',
+    'POST /api/town/garden/guest/plant',
+    'POST /api/town/ghostlight/guest/checkin',
+    'POST /api/town/ghostlight/guest/say',
+    'POST /api/town/inn/guest/claim',
+    'POST /api/town/inn/guest/extend',
+    'POST /api/town/inn/guest/vacate',
+  ]);
+
+  for (const guestKey of guestKeys) {
+    const [method, guestPath] = guestKey.split(' ');
+    const twinKey = `${method} ${guestPath.replace('/guest/', '/')}`;
+    const guestEp = byKey.get(guestKey);
+    const twinEp = byKey.get(twinKey);
+
+    assert.ok(twinEp, `Guest endpoint ${guestKey} must have resident twin ${twinKey}`);
+    assert.equal(guestEp.method, 'POST', `${guestKey} must be POST`);
+    assert.equal(guestEp.auth, 'signed', `${guestKey} must be signed`);
+    assert.ok(
+      /guest/i.test(guestEp.summary),
+      `${guestKey} summary must name the guest mode`
+    );
+    assert.ok(
+      !/guest/i.test(twinEp.summary),
+      `Resident twin ${twinKey} summary must not mention guests`
+    );
+  }
+});
+
+test('state summary event annotation matches the server footlight code', () => {
+  const stateEp = townJson.endpoints.find(
+    (ep) => ep.method === 'GET' && ep.path === '/api/town/state'
+  );
+  assert.ok(stateEp, 'Missing endpoint GET /api/town/state');
+
+  assert.ok(
+    stateEp.summary.includes('during an active event window'),
+    'GET /api/town/state summary must name the active event window'
+  );
+  assert.ok(
+    stateEp.summary.includes('event: true'),
+    'GET /api/town/state summary must pin the event: true flag'
+  );
+  assert.ok(
+    stateEp.summary.includes('status_text = the event title'),
+    'GET /api/town/state summary must pin status_text = the event title'
+  );
+
+  assert.ok(
+    serverSrc.includes('if (nowEvent) {'),
+    'server.mjs must guard the footlight annotation on nowEvent'
+  );
+  assert.ok(
+    serverSrc.includes('hostRow.status_text = nowEvent.title;'),
+    'server.mjs must overwrite the host footlight status_text with the event title'
+  );
+  assert.ok(
+    serverSrc.includes('hostRow.event = true;'),
+    'server.mjs must set event = true on the host footlight row'
+  );
+});
+
+test('rate_limit strings round-trip through formatRateLimit and RATE_LIMITS', () => {
+  const rl = parseRateLimits();
+  const routeToRlKey = {
+    'POST /api/town/join': ['joinIp', true],
+    'POST /api/town/ghostlight/checkin': ['checkin', false],
+    'POST /api/town/ghostlight/say': ['say', false],
+    'POST /api/town/ghostlight/guest/checkin': ['guestCheckin', false],
+    'POST /api/town/ghostlight/guest/say': ['guestSay', false],
+    'PUT /api/town/plot': ['plot', false],
+    'POST /api/town/inn/claim': ['innClaim', false],
+    'POST /api/town/inn/extend': ['innClaim', false],
+    'POST /api/town/inn/guest/claim': ['guestInnClaim', false],
+    'POST /api/town/inn/guest/extend': ['guestInnClaim', false],
+    'POST /api/town/key/rotate': ['keyRotate', false],
+    'POST /api/town/guestbook': ['guestbook', true],
+    'POST /api/town/fish/cast': ['fishCast', false],
+    'POST /api/town/fish/guest/cast': ['guestFishCast', false],
+    'POST /api/town/garden/plant': ['gardenPlant', false],
+    'POST /api/town/garden/guest/plant': ['guestGardenPlant', false],
+  };
+
+  const limited = townJson.endpoints.filter((ep) => ep.rate_limit !== null);
+  assert.equal(limited.length, 16);
+
+  for (const ep of limited) {
+    const key = `${ep.method} ${ep.path}`;
+    const mapping = routeToRlKey[key];
+    assert.ok(mapping, `No RATE_LIMITS mapping for limited endpoint ${key}`);
+    const [rlKey, perIp] = mapping;
+    assert.equal(
+      formatRateLimit(rl[rlKey], perIp),
+      ep.rate_limit,
+      `${key} rate_limit must round-trip through formatRateLimit`
+    );
+  }
+});
+
+test('inn claim summary lists rooms in order with the nights phrasing', () => {
+  const claimEp = townJson.endpoints.find(
+    (ep) => ep.method === 'POST' && ep.path === '/api/town/inn/claim'
+  );
+  assert.ok(claimEp, 'Missing endpoint POST /api/town/inn/claim');
+
+  const roomIds = townJson.inn_rooms.rooms.map((r) => r.id);
+  const roomListPhrase = `(${roomIds.slice(0, -1).join(', ')}, or ${roomIds[roomIds.length - 1]})`;
+  assert.ok(
+    claimEp.summary.includes(roomListPhrase),
+    `POST /api/town/inn/claim summary must list rooms as ${JSON.stringify(roomListPhrase)}`
+  );
+  assert.ok(
+    claimEp.summary.includes(
+      `${townJson.inn_rooms.nights_min}-${townJson.inn_rooms.nights_max} nights`
+    ),
+    'POST /api/town/inn/claim summary must pin the nights range'
+  );
+  assert.ok(
+    claimEp.summary.includes(`default ${townJson.inn_rooms.nights_default}`),
+    'POST /api/town/inn/claim summary must pin the default nights'
+  );
+});
+
+test('guestbook kinds in the summaries match the server kind guards', () => {
+  const byKey = new Map(townJson.endpoints.map((ep) => [`${ep.method} ${ep.path}`, ep]));
+  const postEp = byKey.get('POST /api/town/guestbook');
+  const getEp = byKey.get('GET /api/town/guestbook');
+  assert.ok(postEp, 'Missing endpoint POST /api/town/guestbook');
+  assert.ok(getEp, 'Missing endpoint GET /api/town/guestbook');
+
+  assert.ok(
+    postEp.summary.includes('kind=guestbook'),
+    'POST /api/town/guestbook summary must mention kind=guestbook'
+  );
+  assert.ok(
+    postEp.summary.includes('kind=letter'),
+    'POST /api/town/guestbook summary must mention kind=letter'
+  );
+  assert.ok(
+    getEp.summary.includes('kind=guestbook|letter'),
+    'GET /api/town/guestbook summary must mention kind=guestbook|letter'
+  );
+
+  assert.ok(
+    serverSrc.includes("if (kind !== 'guestbook' && kind !== 'letter')"),
+    'server.mjs must reject non-guestbook/non-letter kinds on submit'
+  );
+  assert.ok(
+    serverSrc.includes("if (kind !== null && kind !== 'guestbook' && kind !== 'letter')"),
+    'server.mjs must reject non-guestbook/non-letter kinds on list'
+  );
+  assert.ok(
+    serverSrc.includes("if (r.kind === 'guestbook')") &&
+      serverSrc.includes("else if (r.kind === 'letter')"),
+    'server.mjs must count both kinds in the state guestbook totals'
+  );
+});
+
+test('plot bound operators pin inclusive coords and 360-exclusive rotation', () => {
+  assert.ok(
+    plotValidationSrc.includes('p[axis] < -12 || p[axis] > 12'),
+    'plot-validation.mjs must reject coords strictly outside -12..12 (bounds inclusive)'
+  );
+  assert.ok(
+    plotValidationSrc.includes('p.rot_y < 0 || p.rot_y >= 360'),
+    'plot-validation.mjs must reject rot_y 360 and above (upper bound exclusive)'
+  );
+  assert.deepEqual(townJson.plot.coord_range, [-12, 12]);
+  assert.deepEqual(townJson.plot.rot_y_range, [0, 360]);
+});
+
+test('every summary ends with a period and carries no stray whitespace', () => {
+  for (const ep of townJson.endpoints) {
+    const label = `${ep.method} ${ep.path}`;
+    assert.ok(ep.summary.length >= 20, `${label} summary must be at least 20 chars`);
+    assert.ok(ep.summary.endsWith('.'), `${label} summary must end with a period`);
+    assert.equal(ep.summary, ep.summary.trim(), `${label} summary must have no edge whitespace`);
+    assert.ok(!ep.summary.includes('\n'), `${label} summary must be a single line`);
+    assert.ok(!ep.summary.includes('  '), `${label} summary must have no double space`);
+  }
+});
+
+test('summaries are unique and README links the live base_url', () => {
+  const summaries = townJson.endpoints.map((ep) => ep.summary);
+  assert.equal(new Set(summaries).size, 30, 'All 30 endpoint summaries must be distinct');
+
+  const keys = townJson.endpoints.map((ep) => `${ep.method} ${ep.path}`);
+  assert.equal(new Set(keys).size, 30, 'All 30 method+path keys must be distinct');
+
+  const readmeSrc = fs.readFileSync(path.join(REPO_ROOT, 'README.md'), 'utf8');
+  assert.ok(
+    readmeSrc.includes(townJson.base_url),
+    'README.md must link the live base_url town.json documents'
+  );
 });
