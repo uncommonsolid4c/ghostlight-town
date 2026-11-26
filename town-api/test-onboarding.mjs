@@ -2430,8 +2430,8 @@ test('test-file hygiene: unique names, no banned terms, exact import/fetch/Date.
   const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
 
   const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 44);
-  assert.equal(new Set(names).size, 44);
+  assert.equal(names.length, 54);
+  assert.equal(new Set(names).size, 54);
 
   const banned = 'camp' + 'fire';
   assert.equal(selfSrc.toLowerCase().includes(banned), false);
@@ -2459,4 +2459,641 @@ test('test-file hygiene: unique names, no banned terms, exact import/fetch/Date.
   const townBuf = fs.readFileSync(path.join(REPO_ROOT, 'town.json'));
   assert.equal(townBuf.length, 11616);
   assert.equal(townBuf.toString('utf8').split('\n').length - 1, 313);
+});
+test('say works before checkin and the footlight stays lit', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g1-sayer',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const said1 = await client.say('Hello before lighting up.');
+    assert.equal(said1.status, 201);
+    assert.equal(said1.data.kind, 'say');
+    assert.equal(said1.data.reply_to, null);
+
+    const st1 = await client.state();
+    assert.equal(st1.status, 200);
+    assert.equal(
+      st1.data.footlights.some((f) => f.handle === 'g1-sayer'),
+      false
+    );
+    assert.ok(
+      st1.data.prompt_book.some(
+        (line) => line.handle === 'g1-sayer' && line.body === 'Hello before lighting up.'
+      )
+    );
+
+    const chk = await client.checkin({ status_text: 'now lit' });
+    assert.equal(chk.status, 200);
+    assert.equal(chk.data.slot, 0);
+
+    const said2 = await client.say('Still here, still lit.');
+    assert.equal(said2.status, 201);
+
+    const st2 = await client.state();
+    assert.equal(st2.status, 200);
+    const fl = st2.data.footlights.find((f) => f.handle === 'g1-sayer');
+    assert.ok(fl, 'g1-sayer footlight must still be lit after say');
+    assert.equal(fl.slot, 0);
+    assert.equal(fl.status_text, 'now lit');
+    assert.equal(fl.expires_at - fl.lit_at, 2700);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('join rate limit is 5 per hour per IP', async () => {
+  const srv = await startTestServer();
+  try {
+    for (let i = 0; i < 5; i += 1) {
+      const keys = generateKeypair();
+      const client = new GhostlightClient({
+        baseUrl: srv.baseUrl,
+        handle: `g2-joiner-${i}`,
+        pubkey: keys.pubkey,
+        privateKeyPem: keys.privateKeyPem,
+      });
+      const res = await client.join({ origin: 'colony' });
+      assert.equal(res.status, 201, `join ${i} must succeed`);
+    }
+
+    const keys6 = generateKeypair();
+    const sixth = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g2-sixth',
+      pubkey: keys6.pubkey,
+      privateKeyPem: keys6.privateKeyPem,
+    });
+    const res6 = await sixth.join({ origin: 'colony' });
+    assert.equal(res6.status, 429);
+    assert.equal(res6.data?.error, 'rate_limited');
+    assert.deepEqual(Object.keys(res6.data).sort(), ['error', 'retry_after']);
+    assert.equal(typeof res6.data.retry_after, 'number');
+    assert.ok(res6.data.retry_after > 0);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('invite origin is advisory and the code is single-use', async () => {
+  const srv = await startTestServer();
+  try {
+    const inv = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/invite', {
+      intended_handle: 'cross-origin',
+      origin: 'direct',
+    });
+    assert.equal(inv.status, 201);
+    assert.equal(inv.data.origin, 'direct');
+
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'cross-origin',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    const joined = await client.join({ origin: 'colony', invite_code: inv.data.code });
+    assert.equal(joined.status, 201);
+    assert.equal(joined.data.origin, 'colony');
+    assert.equal(joined.data.status, 'active');
+
+    const row = srv.db
+      .prepare('SELECT used_by, used_at FROM invitations WHERE code = ?')
+      .get(inv.data.code);
+    assert.equal(row.used_by, 'cross-origin');
+    assert.equal(typeof row.used_at, 'number');
+    assert.ok(row.used_at > 0);
+
+    const keys2 = generateKeypair();
+    const other = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'cross-origin-2',
+      pubkey: keys2.pubkey,
+      privateKeyPem: keys2.privateKeyPem,
+    });
+    const reuse = await other.join({ origin: 'colony', invite_code: inv.data.code });
+    assert.equal(reuse.status, 403);
+    assert.equal(reuse.data?.error, 'invalid_invite');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('musebook origin joins without an invite and approve with explicit role muse keeps role muse', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g4-musebook',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    const joined = await client.join({ origin: 'musebook' });
+    assert.equal(joined.status, 201);
+    assert.equal(joined.data.status, 'active');
+    assert.equal(joined.data.origin, 'musebook');
+
+    const row0 = srv.db.prepare('SELECT role FROM residents WHERE handle = ?').get('g4-musebook');
+    assert.equal(row0.role, 'muse');
+
+    const approved = await adminPost(srv.baseUrl, srv.operatorKeys, '/api/town/admin/approve', {
+      handle: 'g4-musebook',
+      role: 'muse',
+    });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.data.role, 'muse');
+    assert.equal(approved.data.status, 'active');
+    assert.deepEqual(
+      Object.keys(approved.data).sort(),
+      ['handle', 'role', 'state_seq', 'status']
+    );
+
+    const chk = await client.checkin({ status_text: 'musebook light' });
+    assert.equal(chk.status, 200);
+
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    const fl = st.data.footlights.find((f) => f.handle === 'g4-musebook');
+    assert.ok(fl, 'g4-musebook footlight must exist after checkin');
+    assert.equal(fl.role, 'muse');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('resident inn claim, extend, and vacate end to end', async () => {
+  const srv = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const clientA = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g5-innkeeper',
+      pubkey: keysA.pubkey,
+      privateKeyPem: keysA.privateKeyPem,
+    });
+    assert.equal((await clientA.join({ origin: 'colony' })).status, 201);
+
+    const claim = await clientA.claimInnRoom('window', 2);
+    assert.equal(claim.status, 201);
+    assert.deepEqual(
+      Object.keys(claim.data).sort(),
+      ['claimed_at', 'expires_at', 'handle', 'key', 'nights', 'room', 'state_seq']
+    );
+    assert.equal(claim.data.room, 'window');
+    assert.equal(claim.data.nights, 2);
+    assert.equal(typeof claim.data.key, 'string');
+    assert.equal(claim.data.key.length, 12);
+    assert.equal(claim.data.expires_at - claim.data.claimed_at, 2 * 86400);
+
+    const st1 = await clientA.state();
+    assert.equal(st1.status, 200);
+    assert.deepEqual(st1.data.inn.window, {
+      handle: 'g5-innkeeper',
+      nights: 2,
+      expires_at: claim.data.expires_at,
+      guest: false,
+    });
+
+    const keysB = generateKeypair();
+    const clientB = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g5-second',
+      pubkey: keysB.pubkey,
+      privateKeyPem: keysB.privateKeyPem,
+    });
+    assert.equal((await clientB.join({ origin: 'colony' })).status, 201);
+
+    const taken = await clientB.claimInnRoom('window', 2);
+    assert.equal(taken.status, 409);
+    assert.equal(taken.data?.error, 'room_already_claimed');
+
+    const double = await clientA.claimInnRoom('lantern', 2);
+    assert.equal(double.status, 409);
+    assert.equal(double.data?.error, 'resident_already_claimed');
+
+    const ext = await clientA.extendInnStay('window', claim.data.key, 2);
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.nights, 4);
+    assert.equal(ext.data.expires_at, claim.data.claimed_at + 4 * 86400);
+    assert.deepEqual(
+      Object.keys(ext.data).sort(),
+      ['claimed_at', 'expires_at', 'handle', 'nights', 'room', 'state_seq']
+    );
+
+    const badKey = await clientA.extendInnStay('window', '000000000000', 1);
+    assert.equal(badKey.status, 403);
+    assert.equal(badKey.data?.error, 'invalid_key');
+
+    const vac = await clientA.vacateInnRoom('window', claim.data.key);
+    assert.equal(vac.status, 200);
+    assert.deepEqual(vac.data, {
+      room: 'window',
+      handle: 'g5-innkeeper',
+      vacated: true,
+      state_seq: vac.data.state_seq,
+    });
+
+    const st2 = await clientA.state();
+    assert.equal(st2.status, 200);
+    assert.equal(st2.data.inn.window, null);
+
+    const reclaim = await clientA.claimInnRoom('window', 1);
+    assert.equal(reclaim.status, 201);
+    assert.equal(reclaim.data.nights, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('resident inn error matrix', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g6-innkeeper',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const badRoom = await client.claimInnRoom('attic', 2);
+    assert.equal(badRoom.status, 400);
+    assert.equal(badRoom.data?.error, 'invalid_room');
+
+    const nights0 = await client.claimInnRoom('lantern', 0);
+    assert.equal(nights0.status, 400);
+    assert.equal(nights0.data?.error, 'invalid_nights');
+
+    const nights8 = await client.claimInnRoom('lantern', 8);
+    assert.equal(nights8.status, 400);
+    assert.equal(nights8.data?.error, 'invalid_nights');
+
+    const claim = await client.claimInnRoom('lantern', 7);
+    assert.equal(claim.status, 201);
+    assert.equal(claim.data.nights, 7);
+
+    const over = await client.extendInnStay('lantern', claim.data.key, 1);
+    assert.equal(over.status, 400);
+    assert.equal(over.data?.error, 'max_stay_exceeded');
+
+    const badKey = await client.extendInnStay('lantern', '000000000000', 1);
+    assert.equal(badKey.status, 403);
+    assert.equal(badKey.data?.error, 'invalid_key');
+
+    const noClaim = await client.extendInnStay('quiet', '000000000000', 1);
+    assert.equal(noClaim.status, 404);
+    assert.equal(noClaim.data?.error, 'claim_not_found');
+
+    const vacNo = await client.vacateInnRoom('quiet', '000000000000');
+    assert.equal(vacNo.status, 404);
+    assert.equal(vacNo.data?.error, 'claim_not_found');
+
+    const vacBad = await client.vacateInnRoom('lantern', '000000000000');
+    assert.equal(vacBad.status, 403);
+    assert.equal(vacBad.data?.error, 'invalid_key');
+
+    const badRoomExt = await client.extendInnStay('attic', '000000000000', 1);
+    assert.equal(badRoomExt.status, 400);
+    assert.equal(badRoomExt.data?.error, 'invalid_room');
+
+    const badRoomVac = await client.vacateInnRoom('attic', '000000000000');
+    assert.equal(badRoomVac.status, 400);
+    assert.equal(badRoomVac.data?.error, 'invalid_room');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('guestbook letter kind, plot guestbook, and moderation round-trip', async () => {
+  const srv = await startTestServer();
+  try {
+    const opClient = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'milo',
+      pubkey: srv.operatorKeys.pubkey,
+      privateKeyPem: srv.operatorKeys.privateKeyPem,
+    });
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g7-resident',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const letter = await client.signGuestbook('letter', 'Ed', 'Dear Gazette, lovely light tonight.');
+    assert.equal(letter.status, 201);
+    assert.equal(letter.data?.status, 'pending');
+    assert.equal(typeof letter.data?.id, 'number');
+    assert.deepEqual(Object.keys(letter.data).sort(), ['id', 'status']);
+
+    const plotEntry = await client.signGuestbook('guestbook', 'Fan', 'Loved the lights.', 'milo');
+    assert.equal(plotEntry.status, 201);
+    assert.equal(plotEntry.data?.status, 'pending');
+
+    const badKind = await client.signGuestbook('postcard', 'Fan', 'Hi.');
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data?.error, 'invalid_kind');
+
+    const badPlot = await client.signGuestbook('guestbook', 'Fan', 'Hi.', 'no-such-plot');
+    assert.equal(badPlot.status, 400);
+    assert.equal(badPlot.data?.error, 'unknown_plot');
+
+    const letterPlot = await client.signGuestbook('letter', 'Ed', 'Dear Gazette.', 'milo');
+    assert.equal(letterPlot.status, 400);
+    assert.equal(letterPlot.data?.error, 'invalid_plot');
+
+    const urlBody = await client.signGuestbook('guestbook', 'Fan', 'See https://example.com for photos.');
+    assert.equal(urlBody.status, 400);
+    assert.equal(urlBody.data?.error, 'urls_not_allowed');
+
+    const emptyName = await client.signGuestbook('guestbook', '   ', 'Hi.');
+    assert.equal(emptyName.status, 400);
+    assert.equal(emptyName.data?.error, 'invalid_name');
+
+    const emptyBody = await client.signGuestbook('guestbook', 'Fan', '   ');
+    assert.equal(emptyBody.status, 400);
+    assert.equal(emptyBody.data?.error, 'invalid_body');
+
+    const before = await client.getGuestbook();
+    assert.equal(before.status, 200);
+    assert.deepEqual(before.data.entries, []);
+
+    const badAction = await opClient.moderateGuestbook(letter.data.id, 'erase');
+    assert.equal(badAction.status, 400);
+    assert.equal(badAction.data?.error, 'invalid_action');
+
+    const badId = await opClient.moderateGuestbook(999999, 'approve');
+    assert.equal(badId.status, 404);
+    assert.equal(badId.data?.error, 'guestbook_not_found');
+
+    const zeroId = await opClient.moderateGuestbook(0, 'approve');
+    assert.equal(zeroId.status, 400);
+    assert.equal(zeroId.data?.error, 'invalid_id');
+
+    const residentMod = await client.moderateGuestbook(letter.data.id, 'approve');
+    assert.equal(residentMod.status, 401);
+    assert.equal(residentMod.data?.error, 'invalid_signature');
+
+    const modLetter = await opClient.moderateGuestbook(letter.data.id, 'approve');
+    assert.equal(modLetter.status, 200);
+    assert.deepEqual(modLetter.data, { id: letter.data.id, status: 'approved' });
+
+    const modPlot = await opClient.moderateGuestbook(plotEntry.data.id, 'approve');
+    assert.equal(modPlot.status, 200);
+    assert.equal(modPlot.data.status, 'approved');
+
+    const again = await opClient.moderateGuestbook(letter.data.id, 'approve');
+    assert.equal(again.status, 409);
+    assert.equal(again.data?.error, 'already_decided');
+    assert.equal(again.data?.status, 'approved');
+
+    const gate = await client.getGuestbook();
+    assert.equal(gate.status, 200);
+    assert.equal(gate.data.entries.length, 1);
+    assert.equal(gate.data.entries[0].kind, 'letter');
+    assert.equal(gate.data.entries[0].name, 'Ed');
+
+    const letters = await client.getGuestbook('letter');
+    assert.equal(letters.status, 200);
+    assert.equal(letters.data.entries.length, 1);
+    assert.deepEqual(
+      Object.keys(letters.data.entries[0]).sort(),
+      ['body', 'created_at', 'id', 'kind', 'name']
+    );
+    assert.equal(letters.data.entries[0].kind, 'letter');
+    assert.equal(letters.data.entries[0].name, 'Ed');
+
+    const plotList = await client.getGuestbook('guestbook', 'milo');
+    assert.equal(plotList.status, 200);
+    assert.equal(plotList.data.entries.length, 1);
+    assert.equal(plotList.data.entries[0].name, 'Fan');
+    assert.equal(plotList.data.entries[0].body, 'Loved the lights.');
+
+    const gateKind = await client.getGuestbook('guestbook');
+    assert.equal(gateKind.status, 200);
+    assert.deepEqual(gateKind.data.entries, []);
+
+    const badKindGet = await client.getGuestbook('bogus');
+    assert.equal(badKindGet.status, 400);
+    assert.equal(badKindGet.data?.error, 'invalid_kind');
+
+    const badPlotGet = await client.getGuestbook('guestbook', 'no-such-plot');
+    assert.equal(badPlotGet.status, 400);
+    assert.equal(badPlotGet.data?.error, 'unknown_plot');
+
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    assert.deepEqual(st.data.guestbook, { signed: 0, letters: 1 });
+  } finally {
+    await srv.close();
+  }
+});
+
+test('plot PUT error matrix', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g8-plotter',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const base = { cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f' };
+    const html = '<p>Desk note</p>';
+
+    const badCottage = await client.plot({ ...base, cottage: 'igloo' }, html);
+    assert.equal(badCottage.status, 400);
+    assert.deepEqual(badCottage.data, { error: 'invalid_cottage' });
+
+    const badColor = await client.plot({ ...base, wall: 'red' }, html);
+    assert.equal(badColor.status, 400);
+    assert.deepEqual(badColor.data, { error: 'invalid_color', field: 'wall' });
+
+    const badKind = await client.plot(
+      { ...base, props: [{ kind: 'dragon', x: 0, y: 0, z: 0, rot_y: 0 }] },
+      html
+    );
+    assert.equal(badKind.status, 400);
+    assert.deepEqual(badKind.data, { error: 'invalid_prop_kind', index: 0 });
+
+    const badSignpost = await client.plot({ ...base, signpost_text: 's'.repeat(121) }, html);
+    assert.equal(badSignpost.status, 400);
+    assert.deepEqual(badSignpost.data, { error: 'invalid_signpost_text', max: 120 });
+
+    const noManifest = await client._signedPut('/api/town/plot', { html });
+    assert.equal(noManifest.status, 400);
+    assert.deepEqual(noManifest.data, { error: 'missing_manifest' });
+
+    const noHtml = await client._signedPut('/api/town/plot', { manifest: base });
+    assert.equal(noHtml.status, 400);
+    assert.deepEqual(noHtml.data, { error: 'missing_html' });
+
+    const unsafe = await client.plot(base, '<script>alert(1)</script>');
+    assert.equal(unsafe.status, 400);
+    assert.deepEqual(unsafe.data, { error: 'unsafe_html', reason: 'forbidden_tag:script' });
+
+    const ok = await client.plot(base, html);
+    assert.equal(ok.status, 200);
+    assert.deepEqual(Object.keys(ok.data).sort(), ['handle', 'plot_updated_at', 'state_seq']);
+
+    const got = await client.getPlot('g8-plotter');
+    assert.equal(got.status, 200);
+    assert.equal(got.data.manifest.cottage, 'gable');
+    assert.equal(got.data.html, html);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('presence plot zones accept any well-formed handle and leave always bumps state_seq', async () => {
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g9-wanderer',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    const joined = await client.join({ origin: 'colony' });
+    assert.equal(joined.status, 201);
+
+    const st0 = await client.state();
+    assert.equal(st0.status, 200);
+    assert.equal(st0.data.state_seq, joined.data.state_seq);
+
+    const p1 = await client.presence('plot:never-joined');
+    assert.equal(p1.status, 200);
+    assert.equal(p1.data.zone, 'plot:never-joined');
+    assert.deepEqual(
+      Object.keys(p1.data).sort(),
+      ['handle', 'state_seq', 'updated_at', 'zone']
+    );
+
+    const st1 = await client.state();
+    assert.equal(st1.status, 200);
+    const row = st1.data.presence.find((p) => p.handle === 'g9-wanderer');
+    assert.ok(row, 'g9-wanderer presence row must exist');
+    assert.equal(row.zone, 'plot:never-joined');
+    assert.equal(row.role, 'muse');
+
+    const badCase = await client.presence('Plot:x');
+    assert.equal(badCase.status, 400);
+    assert.equal(badCase.data?.error, 'invalid_zone');
+
+    const badEmpty = await client.presence('plot:');
+    assert.equal(badEmpty.status, 400);
+    assert.equal(badEmpty.data?.error, 'invalid_zone');
+
+    const left1 = await client.leave();
+    assert.equal(left1.status, 200);
+    assert.deepEqual(
+      Object.keys(left1.data).sort(),
+      ['extinguished', 'handle', 'state_seq']
+    );
+    assert.equal(left1.data.extinguished, true);
+    assert.equal(left1.data.handle, 'g9-wanderer');
+    assert.equal(left1.data.state_seq, st1.data.state_seq + 1);
+
+    const left2 = await client.leave();
+    assert.equal(left2.status, 200);
+    assert.equal(left2.data.state_seq, left1.data.state_seq + 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('guest inn claim, extend, and vacate share the 2 per hour budget; extend with another keypair is a pubkey mismatch', async () => {
+  const srv = await startTestServer();
+  try {
+    const keysA = generateKeypair();
+    const guestA = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g10-guest',
+      pubkey: keysA.pubkey,
+      privateKeyPem: keysA.privateKeyPem,
+    });
+
+    const claim = await guestA.guestInnClaim('quiet', 2);
+    assert.equal(claim.status, 201);
+    assert.deepEqual(
+      Object.keys(claim.data).sort(),
+      ['claimed_at', 'expires_at', 'handle', 'key', 'nights', 'room', 'state_seq']
+    );
+    assert.equal(claim.data.nights, 2);
+    assert.equal(claim.data.expires_at - claim.data.claimed_at, 2 * 86400);
+    assert.equal(typeof claim.data.key, 'string');
+    assert.equal(claim.data.key.length, 12);
+
+    const st1 = await guestA.state();
+    assert.equal(st1.status, 200);
+    assert.deepEqual(st1.data.inn.quiet, {
+      handle: 'g10-guest',
+      nights: 2,
+      expires_at: claim.data.expires_at,
+      guest: true,
+    });
+
+    const ext = await guestA.guestInnExtend('quiet', claim.data.key, 1);
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.nights, 3);
+    assert.equal(ext.data.expires_at, claim.data.claimed_at + 3 * 86400);
+    assert.deepEqual(
+      Object.keys(ext.data).sort(),
+      ['claimed_at', 'expires_at', 'handle', 'nights', 'room', 'state_seq']
+    );
+
+    const vac = await guestA.guestInnVacate('quiet', claim.data.key);
+    assert.equal(vac.status, 200);
+    assert.deepEqual(vac.data, {
+      room: 'quiet',
+      handle: 'g10-guest',
+      vacated: true,
+      state_seq: vac.data.state_seq,
+    });
+
+    const st2 = await guestA.state();
+    assert.equal(st2.status, 200);
+    assert.equal(st2.data.inn.quiet, null);
+
+    const third = await guestA.guestInnClaim('quiet', 1);
+    assert.equal(third.status, 429);
+    assert.equal(third.data?.error, 'rate_limited');
+
+    const keysC = generateKeypair();
+    const guestC = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g10-other',
+      pubkey: keysC.pubkey,
+      privateKeyPem: keysC.privateKeyPem,
+    });
+    const claimC = await guestC.guestInnClaim('window', 2);
+    assert.equal(claimC.status, 201);
+
+    const keysD = generateKeypair();
+    const guestD = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g10-other',
+      pubkey: keysD.pubkey,
+      privateKeyPem: keysD.privateKeyPem,
+    });
+    const mismatch = await guestD.guestInnExtend('window', claimC.data.key, 1);
+    assert.equal(mismatch.status, 403);
+    assert.equal(mismatch.data?.error, 'pubkey_mismatch');
+  } finally {
+    await srv.close();
+  }
 });
