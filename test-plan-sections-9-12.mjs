@@ -780,3 +780,193 @@ test('PLAN.md §12.1 records bandstand description, naming decision, and layout/
     'PLAN.md §12.1 must name both Gazette columns'
   );
 });
+
+test('PLAN.md §12.1 footlight mapping row matches concept-bandstand.js', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+
+  assert.match(sec121, /Switch on your footlight at the Bandstand/, 'PLAN.md §12.1 must state Switch on your footlight at the Bandstand');
+  assert.match(sec121, /one of 10 brass footlight shells on the rim/, 'PLAN.md §12.1 must state one of 10 brass footlight shells on the rim');
+  assert.match(sec121, /warm upward cone/, 'PLAN.md §12.1 must state warm upward cone');
+  assert.match(sec121, /wooden name placard flips up/, 'PLAN.md §12.1 must state wooden name placard flips up');
+  assert.match(sec121, /the central Ghostlight stays lit 24\/7/, 'PLAN.md §12.1 must state the central Ghostlight stays lit 24/7');
+
+  const bandstandSrc = fs.readFileSync(path.join(__dirname, 'town-3d', 'concept-bandstand.js'), 'utf8');
+  assert.ok(bandstandSrc.includes('footlightCount: 10'), 'town-3d/concept-bandstand.js must define footlightCount: 10');
+  assert.ok(bandstandSrc.includes('rimRadius: 4.15'), 'town-3d/concept-bandstand.js must define rimRadius: 4.15');
+  assert.ok(bandstandSrc.includes('placard.rotation.x = -0.55'), 'town-3d/concept-bandstand.js must flip the placard up');
+});
+
+test('PLAN.md §12.1 NPC archetype mapping row matches town-npc/characters.mjs', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+
+  assert.match(sec121, /Lantern-keeper → \*\*Stagehand \/ Lamp-Trimmer\*\* \(tends the central bulb at dusk, sweeps the steps\)/, 'PLAN.md §12.1 must map Lantern-keeper to Stagehand / Lamp-Trimmer');
+  assert.match(sec121, /Retired Typesetter stays \(walks newsstand → Prompt Book copying quotes\)/, 'PLAN.md §12.1 must keep Retired Typesetter walking newsstand to Prompt Book');
+  assert.match(sec121, /Tea-kettle Tinkerer → \*\*Props-Master \/ Tea-Urn Keeper\*\* \(copper samovar steaming on the bandstand corner step\)/, 'PLAN.md §12.1 must map Tea-kettle Tinkerer to Props-Master / Tea-Urn Keeper');
+
+  assert.equal(CHARACTERS.find((c) => c.handle === 'wick').title, 'Stagehand / Lamp-Trimmer', 'CHARACTERS wick title must be Stagehand / Lamp-Trimmer');
+  assert.equal(CHARACTERS.find((c) => c.handle === 'maren').title, 'Retired Typesetter', 'CHARACTERS maren title must be Retired Typesetter');
+  assert.equal(CHARACTERS.find((c) => c.handle === 'tomas').title, 'Props-Master / Tea-Urn Keeper', 'CHARACTERS tomas title must be Props-Master / Tea-Urn Keeper');
+});
+
+test('PLAN.md §12.1 bandstand structure row matches concept-bandstand.js railings and steps', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+
+  assert.match(sec121, /Octagonal cedar bandstand, open timber rail on 3 back sides, wide steps in front; center pole holds the glowing Ghostlight bulb/, 'PLAN.md §12.1 must describe the octagonal cedar bandstand structure row');
+
+  const bandstandSrc = fs.readFileSync(path.join(__dirname, 'town-3d', 'concept-bandstand.js'), 'utf8');
+  assert.ok(bandstandSrc.includes("cedar: '#6b492b'"), "town-3d/concept-bandstand.js must define cedar '#6b492b'");
+  assert.ok(bandstandSrc.includes('bandstand_steps'), 'town-3d/concept-bandstand.js must build bandstand_steps');
+  assert.ok(bandstandSrc.includes('Octagonal perimeter railings'), 'town-3d/concept-bandstand.js must build octagonal perimeter railings');
+  assert.ok(bandstandSrc.includes('all 7 closed'), 'town-3d/concept-bandstand.js must rail all 7 closed sides');
+});
+
+test('PLAN.md §12.2 fix #2 Week-1 invites shortcut and single-file reference client', () => {
+  const tail = readPlanTailSections();
+  const sec122Match = tail.match(/### 12\.2[\s\S]*?(?=\n### 12\.3)/);
+  assert.ok(sec122Match, 'PLAN.md must contain §12.2');
+  const sec122 = sec122Match[0];
+
+  assert.match(sec122, /For Week 1's 5–8 hand-picked\s+invites, skip the full invitations\/pending-queue machinery/, 'PLAN.md §12.2 fix #2 must record the Week-1 invites shortcut');
+  assert.match(sec122, /Milo pre-seeds or `admin\/approve`s their pubkey on DM reply/, 'PLAN.md §12.2 fix #2 must record pre-seed or admin/approve on DM reply');
+  assert.match(sec122, /Ship a copy-pasteable\s+single-file reference client \(`ghostlight-client\.mjs`/, 'PLAN.md §12.2 fix #2 must require a copy-pasteable single-file reference client');
+  assert.match(sec122, /if the MacBook is on Node 18\/20, move `town-api` to Python 3\s+`sqlite3` \+ `openssl`, or to the i5 box/, 'PLAN.md §12.2 fix #2 must record the Node 18/20 contingency');
+
+  assert.ok(fs.existsSync(path.join(__dirname, 'town-api', 'ghostlight-client.mjs')), 'town-api/ghostlight-client.mjs must exist');
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(serverMjs.includes('POST /api/town/admin/approve'), 'town-api/server.mjs must route POST /api/town/admin/approve');
+});
+
+test('PLAN.md §12.2 fix #3 proxy forwarding, sandboxed iframe, and WAL backup warning', () => {
+  const tail = readPlanTailSections();
+  const sec122Match = tail.match(/### 12\.2[\s\S]*?(?=\n### 12\.3)/);
+  assert.ok(sec122Match, 'PLAN.md must contain §12.2');
+  const sec122 = sec122Match[0];
+
+  assert.match(sec122, /Verify `~\/musebook-text\/proxy\.py` implements `do_PUT`/, 'PLAN.md §12.2 fix #3 must require proxy.py do_PUT');
+  assert.match(sec122, /preserves\s+exact `\/api\/town\/\*` paths/, 'PLAN.md §12.2 fix #3 must require exact /api/town/* paths');
+  assert.match(sec122, /forwards `X-Forwarded-For`\/`CF-Connecting-IP`/, 'PLAN.md §12.2 fix #3 must require forwarded headers');
+  assert.match(sec122, /per-IP\s+`join` rate limit doesn't lock out `127\.0\.0\.1` after 5 requests/, 'PLAN.md §12.2 fix #3 must record the per-IP join limit guard');
+  assert.match(sec122, /\(never rsync a live WAL-mode db\)/, 'PLAN.md §12.2 fix #3 must warn never rsync a live WAL-mode db');
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(serverMjs.includes('joinIp: { max: 5, windowSec: 60 * 60 }'), 'town-api/server.mjs must cap join per IP at 5 per hour');
+  const index3dHtml = fs.readFileSync(path.join(__dirname, 'town-3d', 'index.html'), 'utf8');
+  assert.ok(index3dHtml.includes('<iframe id="plot-iframe" sandbox=""'), 'town-3d/index.html must render the desk-note iframe sandboxed with zero exceptions');
+});
+
+test('PLAN.md §12.4 stale-items paragraph names never-built admin endpoints', () => {
+  const tail = readPlanTailSections();
+  const sec124Match = tail.match(/### 12\.4[\s\S]*?(?=\n### 12\.5)/);
+  assert.ok(sec124Match, 'PLAN.md must contain §12.4');
+  const sec124 = sec124Match[0];
+
+  assert.match(sec124, /claims admin endpoints \(`rotate-lost-key`\/`mute`\/`suspend`\)\s+that were never built/, 'PLAN.md §12.4 must record the never-built admin endpoints');
+  assert.match(sec124, /says plot HTML is "stripped" \(it is\s+rejected, `400 unsafe_html`\)/, 'PLAN.md §12.4 must record stripped vs rejected 400 unsafe_html');
+  assert.match(sec124, /lists `nonces` as a SQLite\s+table/, 'PLAN.md §12.4 must record nonces listed as a SQLite table');
+
+  const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
+  assert.ok(!serverMjs.includes('rotate-lost-key'), 'town-api/server.mjs must not contain rotate-lost-key');
+  assert.ok(!serverMjs.includes('/admin/mute'), 'town-api/server.mjs must not route /admin/mute');
+  assert.ok(!serverMjs.includes('/admin/suspend'), 'town-api/server.mjs must not route /admin/suspend');
+  for (const route of ['approve', 'invite', 'delete-line', 'guestbook']) {
+    assert.ok(serverMjs.includes(`POST /api/town/admin/${route}`), `town-api/server.mjs must route POST /api/town/admin/${route}`);
+  }
+
+  assert.ok(fs.existsSync(path.join(__dirname, 'session', 'slice29-mvp-readiness.md')), 'session/slice29-mvp-readiness.md must exist');
+  const report = fs.readFileSync(path.join(__dirname, 'session', 'slice29-mvp-readiness.md'), 'utf8');
+  assert.ok(report.includes('READY-EXCEPT-LIVE-API-DEPLOY'), 'session/slice29-mvp-readiness.md must record READY-EXCEPT-LIVE-API-DEPLOY');
+});
+
+test('PLAN.md §12.5 section 6 and 8 updates match npc_state and backup CLIs', () => {
+  const tail = readPlanTailSections();
+  const sec125Match = tail.match(/### 12\.5[\s\S]*?(?=\n### 12\.6)/);
+  assert.ok(sec125Match, 'PLAN.md must contain §12.5');
+  const sec125 = sec125Match[0];
+
+  assert.match(sec125, /§6 updated for `npc_state\/<handle>\/\{state\.json,memory\.md,key\.pem,pubkey\.txt\}`/, 'PLAN.md §12.5 must record §6 npc_state paths');
+  assert.match(sec125, /3-hour hatch runtime scheduler \(no VM crontab\)/, 'PLAN.md §12.5 must record the 3-hour hatch runtime scheduler');
+  assert.match(sec125, /`prompt_book` \+\s+`memory\.md` inspection in Phase 0/, 'PLAN.md §12.5 must record prompt_book + memory.md inspection');
+  assert.match(sec125, /§8 updated to reflect `backup\.mjs` and `backup-plots\.mjs` already\s+shipped in Phase 0 \(slices 25–26\)/, 'PLAN.md §12.5 must record §8 backup CLIs shipped');
+  assert.match(sec125, /§9, §10, §11, and §12\.1–§12\.4 were left untouched/, 'PLAN.md §12.5 must record §§9–12.4 left untouched');
+
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    for (const file of ['state.json', 'memory.md', 'key.pem', 'pubkey.txt']) {
+      assert.ok(fs.existsSync(path.join(__dirname, 'npc_state', handle, file)), `npc_state/${handle}/${file} must exist`);
+    }
+  }
+  assert.ok(fs.existsSync(path.join(__dirname, 'town-api', 'backup.mjs')), 'town-api/backup.mjs must exist');
+  assert.ok(fs.existsSync(path.join(__dirname, 'town-api', 'backup-plots.mjs')), 'town-api/backup-plots.mjs must exist');
+});
+
+test('PLAN.md §9 Q3, Q8, and Q9 open prose records the editorial and budget questions', () => {
+  const tail = readPlanTailSections();
+  const q3Match = tail.match(/3\.\s*\*\*Gazette split:\*\*[\s\S]*?(?=\n4\.\s*\*\*Plot catalog:)/);
+  assert.ok(q3Match, 'PLAN.md §9 must contain Q3 Gazette split');
+  assert.match(q3Match[0], /A Ghostlight\s+story earns a place in the twice-weekly paper when it is town news,\s+not as a standing second edition/, 'PLAN.md §9 Q3 must state a Ghostlight story earns a place when it is town news');
+
+  const q8Match = tail.match(/8\.\s*\*\*NPC budget:\*\*[\s\S]*?(?=\n9\.\s*\*\*Public by default:)/);
+  assert.ok(q8Match, 'PLAN.md §9 must contain Q8 NPC budget');
+  assert.match(q8Match[0], /Fine on the spare account's quota\?/, 'PLAN.md §9 Q8 must ask Fine on the spare account quota');
+  assert.match(q8Match[0], /\(Worth one check before Phase 0 starts\.\)/, 'PLAN.md §9 Q8 must note worth one check before Phase 0');
+  assert.match(q8Match[0], /NPCs run on the VM calling Gemini every 2–4 hours\s+plus reactive evening checks/, 'PLAN.md §9 Q8 must state the 2-4 hour NPC cadence');
+
+  const q9Match = tail.match(/9\.\s*\*\*Public by default:\*\*[\s\S]*?(?=\n---)/);
+  assert.ok(q9Match, 'PLAN.md §9 must contain Q9 Public by default');
+  assert.match(q9Match[0], /Any line Milo\s+should not cross in what the town publishes\?/, 'PLAN.md §9 Q9 must ask what line Milo should not cross');
+  const retired = `camp${'fire'}`;
+  assert.match(q9Match[0], new RegExp(`plots, ${retired} log \\(now the Prompt Book,\\s+§12\\.1\\), and Gazette are all public, like Musebook`), 'PLAN.md §9 Q9 must state plots, log, and Gazette are all public');
+});
+
+test('PLAN.md §12 header records the Argon review and §11 records the gathering-place challenge', () => {
+  const tail = readPlanTailSections();
+  const sec12HeadMatch = tail.match(/## 12\. Argon review[\s\S]*?(?=\n### 12\.1)/);
+  assert.ok(sec12HeadMatch, 'PLAN.md must contain §12 header');
+  const sec12Head = sec12HeadMatch[0];
+
+  assert.match(sec12Head, /Reviewer:\*\* Gemini 4 Argon \(`gemini-4-argon-medium`\), independent of the\s+Hydrogen planning session/, 'PLAN.md §12 header must name the Argon reviewer');
+  assert.match(sec12Head, /Full text: `session\/argon-review\.txt`/, 'PLAN.md §12 header must point at session/argon-review.txt');
+  assert.match(sec12Head, /\*\*Verdict: GO WITH CHANGES\.\*\*/, 'PLAN.md §12 header must record verdict GO WITH CHANGES');
+  assert.match(sec12Head, /Do not start coding Phase 0 until the\s+amendments below are applied/, 'PLAN.md §12 header must gate coding on the amendments');
+  assert.match(sec12Head, /Milo's owner call: \*\*accepted in full\*\*/, 'PLAN.md §12 header must record accepted in full');
+
+  const sec11Match = tail.match(/## 11\. Decisions[\s\S]*?(?=\n---)/);
+  assert.ok(sec11Match, 'PLAN.md must contain §11');
+  const sec11 = sec11Match[0];
+  const retired = `camp${'fire'}`;
+  assert.match(sec11, new RegExp(`why copy Musebook's ${retired}\\? The town needs its\\s+own vibe`), 'PLAN.md §11 must record the why-copy-the-gathering-place challenge');
+  assert.match(sec11, /a brainstorm \(with Gemini\) is owed before Phase 0 locks\s+the gathering place/, 'PLAN.md §11 must record the brainstorm owed before Phase 0 locks the gathering place');
+
+  assert.ok(fs.existsSync(path.join(__dirname, 'session', 'argon-review.txt')), 'session/argon-review.txt must exist');
+});
+
+test('PLAN.md sections 9-12 test file hygiene: 51 tests, 51 unique names, 1 apostrophe name, 7 imports, banned-literal lines pinned', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'test-plan-sections-9-12.mjs'), 'utf8');
+  const lines = src.split('\n');
+  const names = [...src.matchAll(/^(?:await )?test\(('([^']*)'|"([^"]*)")/gm)].map((m) => m[2] ?? m[3]);
+  assert.equal(names.length, 51, 'test-plan-sections-9-12.mjs must have 51 top-level tests');
+  assert.equal(new Set(names).size, 51, 'test-plan-sections-9-12.mjs test names must be 51 unique');
+  const apostropheNames = names.filter((n) => n.includes("'"));
+  assert.deepEqual(apostropheNames, ["PLAN.md §11 Q6–Q9 preserve Werther's 2026-11-12 decisions"], 'exactly 1 test name contains an apostrophe, pre-existing, pinned as-is');
+  const importLines = lines.filter((l) => /^import /.test(l)).length;
+  assert.equal(importLines, 7, 'test-plan-sections-9-12.mjs must have 7 import lines');
+  const retiredRe = new RegExp(`camp${'fire'}`, 'i');
+  const counts = {
+    fetchCall: lines.filter((l) => l.includes('fet' + 'ch(')).length,
+    dateNow: lines.filter((l) => l.includes('Date' + '.now')).length,
+    mathRandom: lines.filter((l) => l.includes('Math' + '.random')).length,
+    todo: lines.filter((l) => l.includes('TO' + 'DO')).length,
+    fixme: lines.filter((l) => l.includes('FIX' + 'ME')).length,
+    retired: lines.filter((l) => retiredRe.test(l)).length,
+    innerHtml: lines.filter((l) => l.includes('inner' + 'HTML')).length,
+  };
+  assert.deepEqual(counts, { fetchCall: 0, dateNow: 0, mathRandom: 0, todo: 0, fixme: 0, retired: 6, innerHtml: 0 }, 'banned-literal line counts must match the pinned values');
+});
