@@ -1342,3 +1342,318 @@ test('unrelated file already in out-dir survives the backup untouched', async ()
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('collision suffix fills the -2 gap when base and -3 already exist', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(outDir);
+    const expectedCounts = seedDatabase(dbPath);
+
+    // Align to the start of a UTC second so the backup lands in the window.
+    const msIntoSecond = Date.now() % 1000;
+    if (msIntoSecond > 250) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 - msIntoSecond + 15));
+    }
+
+    const baseMs = Date.now();
+    for (let offset = 0; offset <= 5; offset++) {
+      const ts = formatUtcTimestamp(new Date(baseMs + offset * 1000));
+      fs.writeFileSync(path.join(outDir, `town-${ts}.db`), '');
+      fs.writeFileSync(path.join(outDir, `town-${ts}-3.db`), '');
+    }
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.match(payload.backup, /^town-\d{8}-\d{6}-2\.db$/);
+    assert.deepEqual(payload.tables, expectedCounts);
+
+    const backupPath = path.join(outDir, payload.backup);
+    assert.ok(fs.existsSync(backupPath), 'Backup file must exist');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('only the -2 file exists, so the collision suffix is skipped and the base name is used', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(outDir);
+    seedDatabase(dbPath);
+
+    const msIntoSecond = Date.now() % 1000;
+    if (msIntoSecond > 250) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 - msIntoSecond + 15));
+    }
+
+    const baseMs = Date.now();
+    for (let offset = 0; offset <= 5; offset++) {
+      const ts = formatUtcTimestamp(new Date(baseMs + offset * 1000));
+      fs.writeFileSync(path.join(outDir, `town-${ts}-2.db`), '');
+    }
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.match(payload.backup, /^town-\d{8}-\d{6}\.db$/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('multi-row backup reports exact counts for every seeded table', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    const expectedCounts = seedDatabase(dbPath, (db, now) => {
+      const insertResident = db.prepare(
+        `INSERT INTO residents (handle, pubkey, origin, status, role, bio, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+      insertResident.run('bob', 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=', 'colony', 'active', 'muse', 'Bob', now);
+      insertResident.run('carol', 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=', 'rstation', 'active', 'muse', 'Carol', now);
+
+      const insertSay = db.prepare(
+        `INSERT INTO prompt_book (handle, kind, body, created_at) VALUES (?, ?, ?, ?)`
+      );
+      insertSay.run('bob', 'say', 'Bob line one.', now);
+      insertSay.run('bob', 'emote', 'waves.', now);
+      insertSay.run('carol', 'say', 'Carol line one.', now);
+      insertSay.run('carol', 'say', 'Carol line two.', now);
+
+      db.prepare(
+        `INSERT INTO footlights (handle, status_text, lit_at, expires_at, slot)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run('bob', 'tending lamps', now, now + 2700, 1);
+
+      const insertInvite = db.prepare(
+        `INSERT INTO invitations (code, intended_handle, origin, created_by, used_by, expires_at, used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+      insertInvite.run('INV-A', 'dave', 'musebook', 'alice', null, now + 3600, null);
+      insertInvite.run('INV-B', 'erin', 'colony', 'alice', null, now + 3600, null);
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.deepEqual(payload.tables, expectedCounts);
+    assert.equal(payload.tables.residents, 3);
+    assert.equal(payload.tables.prompt_book, 5);
+    assert.equal(payload.tables.footlights, 2);
+    assert.equal(payload.tables.invitations, 2);
+    assert.equal(payload.tables.meta, 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves a 100,000-character prompt book body byte-exact', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    const bigBody = 'x'.repeat(100000);
+    seedDatabase(dbPath, (db) => {
+      db.prepare("UPDATE prompt_book SET body = ? WHERE handle = 'alice'").run(bigBody);
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const row = backupDb.prepare("SELECT body FROM prompt_book WHERE handle = 'alice'").get();
+      assert.equal(row.body, bigBody);
+      assert.equal(row.body.length, 100000);
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves NULL invitation columns (used_by, used_at)', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath, (db, now) => {
+      db.prepare(
+        `INSERT INTO invitations (code, intended_handle, origin, created_by, used_by, expires_at, used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run('INV-NULL', 'fran', 'guestbook', 'alice', null, now + 3600, null);
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.tables.invitations, 1);
+
+    const backupDb = new DatabaseSync(path.join(outDir, payload.backup), { readOnly: true });
+    try {
+      const row = backupDb
+        .prepare('SELECT used_by, used_at FROM invitations WHERE code = ?')
+        .get('INV-NULL');
+      assert.equal(row.used_by, null);
+      assert.equal(row.used_at, null);
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves an extra meta key alongside state_seq', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath, (db) => {
+      db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('backup_probe', 'yes');
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const rows = backupDb
+        .prepare('SELECT key, value FROM meta ORDER BY key')
+        .all()
+        .map((r) => ({ ...r }));
+      assert.deepEqual(rows, [
+        { key: 'backup_probe', value: 'yes' },
+        { key: 'state_seq', value: '0' },
+      ]);
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves a custom index in sqlite_master', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath, (db) => {
+      db.exec('CREATE INDEX idx_backup_probe_handle ON residents(handle);');
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const row = backupDb
+        .prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?")
+        .get('idx_backup_probe_handle');
+      assert.ok(row, 'Custom index must survive in the backup');
+      assert.equal(row.type, 'index');
+      assert.equal(row.tbl_name, 'residents');
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--db pointing at a dangling symlink fails as not found with the symlink path', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const missingTarget = path.join(tmpDir, 'never-there.db');
+    const linkPath = path.join(tmpDir, 'link.db');
+    fs.symlinkSync(missingTarget, linkPath);
+    const outDir = path.join(tmpDir, 'never-created-backups');
+
+    const res = await runBackupCli(['--db', linkPath, '--out-dir', outDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, 'Source database not found');
+    assert.equal(errPayload.db, linkPath);
+    assert.equal(fs.existsSync(outDir), false, 'out-dir must not be created when --db is a dangling symlink');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup file starts with the SQLite format 3 header', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath);
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const header = fs.readFileSync(path.join(outDir, payload.backup)).subarray(0, 16);
+    assert.equal(header.toString('latin1'), 'SQLite format 3\0');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('VACUUM INTO failure error payload keys are exactly {status, error}', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    seedDatabase(dbPath);
+
+    const fileAsOutDir = path.join(tmpDir, 'existing-file.txt');
+    const knownContent = 'i am a file\n';
+    fs.writeFileSync(fileAsOutDir, knownContent, 'utf8');
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', fileAsOutDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+    const errPayload = JSON.parse(errLines[0]);
+    assert.deepEqual(Object.keys(errPayload).sort(), ['error', 'status']);
+    assert.ok(
+      errPayload.error.startsWith('Backup failed during VACUUM INTO: '),
+      `Unexpected error message: ${errPayload.error}`
+    );
+
+    assert.equal(fs.readFileSync(fileAsOutDir, 'utf8'), knownContent);
+    const townFiles = fs.readdirSync(tmpDir).filter((name) => name.startsWith('town-'));
+    assert.deepEqual(townFiles, []);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
