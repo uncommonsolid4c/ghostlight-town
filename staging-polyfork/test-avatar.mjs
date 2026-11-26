@@ -1207,3 +1207,205 @@ test('avatar.mjs source discipline, export surface, and test-avatar.mjs hygiene'
   assert.equal(selfSrc.includes(randomToken), false);
   assert.equal(selfSrc.includes(legacyToken), false);
 });
+
+test('TOWN_LAYOUT plots exact x/z literal list for all 8 plots', () => {
+  assert.deepEqual(
+    TOWN_LAYOUT.plots.map((p) => [p.x, p.z]),
+    [
+      [17.919, 4.601],
+      [17.833, -4.922],
+      [13.023, -13.14],
+      [4.761, -17.877],
+      [-4.761, -17.877],
+      [-13.023, -13.14],
+      [-17.833, -4.922],
+      [-17.919, 4.601],
+    ]
+  );
+});
+
+test('TOWN_LAYOUT and SEED_HOME_PADS exact key order', () => {
+  assert.deepEqual(Object.keys(TOWN_LAYOUT), [
+    'clearingRadius',
+    'bandstand',
+    'gate',
+    'newsstand',
+    'noticeBoard',
+    'inn',
+    'plotRadius',
+    'plots',
+  ]);
+  assert.deepEqual(Object.keys(TOWN_LAYOUT.bandstand), ['x', 'y', 'z', 'radius', 'height']);
+  assert.deepEqual(Object.keys(SEED_HOME_PADS), ['wick', 'maren', 'tomas']);
+});
+
+test('avatar.mjs header comment lines are exact', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const avatarSrc = fs.readFileSync(path.join(dir, 'avatar.mjs'), 'utf8');
+  assert.deepEqual(avatarSrc.split('\n').slice(0, 9), [
+    '// Copied verbatim from town-3d/town.js:',
+    '//   - TOWN_LAYOUT (lines 10-54)',
+    '//   - makeCanvas (lines 200-233)',
+    '//   - makeTextTexture (lines 235-265)',
+    '//   - createAvatarCapsule (lines 757-794)',
+    '//   - SEED_HOME_PADS (line 1806)',
+    '//   - getPlotTargetPosition (lines 2134-2146)',
+    '//   - pickBandstandSpot (lines 2148-2174)',
+    '// Keep in step with town-3d/town.js; no THREE import (passed in), no top-level document access.',
+  ]);
+});
+
+test('pickBandstandSpot preferred slot exact coords with distinct spot values', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i * 2,
+    y: 0.6,
+    z: i * 3,
+    rotY: i,
+  }));
+  const used = new Set();
+
+  const s7 = pickBandstandSpot(spots, used, 7);
+  assert.deepEqual(s7, { x: 14, y: 0.6, z: 21, rotY: 7, slot: 7, nametagLift: 0.5 });
+
+  const s8 = pickBandstandSpot(spots, used, 8);
+  assert.deepEqual(s8, { x: 16, y: 0.6, z: 24, rotY: 8, slot: 8, nametagLift: 0 });
+
+  assert.deepEqual([...used].sort((a, b) => a - b), [7, 8]);
+
+  s7.x = 999;
+  assert.equal(spots[7].x, 14);
+});
+
+test('getPlotTargetPosition indices 11 and 12 continue the ±0.9 stagger ladder', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const p0 = getPlotTargetPosition(plot1, 0);
+  const sideX = Math.cos(plot1.rotY);
+  const sideZ = -Math.sin(plot1.rotY);
+
+  const p11 = getPlotTargetPosition(plot1, 11);
+  const p12 = getPlotTargetPosition(plot1, 12);
+  for (const p of [p11, p12]) {
+    assert.equal(p.y, 0);
+    assert.equal(p.rotY, plot1.rotY);
+  }
+
+  const proj11 = (p11.x - p0.x) * sideX + (p11.z - p0.z) * sideZ;
+  const proj12 = (p12.x - p0.x) * sideX + (p12.z - p0.z) * sideZ;
+  assert.ok(Math.abs(proj11 - 5.4) < 0.01, `expected index 11 lateral +5.4, got ${proj11}`);
+  assert.ok(Math.abs(proj12 + 5.4) < 0.01, `expected index 12 lateral -5.4, got ${proj12}`);
+});
+
+test('pickBandstandSpot overflow slots 39 and 40: fourth ring 8.4 m, fifth ring 9.3 m', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set();
+
+  for (let i = 0; i < 39; i++) {
+    pickBandstandSpot(spots, used, null);
+  }
+  const slot39 = pickBandstandSpot(spots, used, null);
+  assert.deepEqual(slot39, {
+    x: -3.8664,
+    y: 0,
+    z: 7.4573,
+    rotY: 2.6633,
+    slot: 39,
+    nametagLift: 0.5,
+  });
+  assert.ok(Math.abs(Math.hypot(slot39.x, slot39.z) - 8.4) < 0.01, 'slot 39 must sit on the fourth ring at 8.4 m');
+
+  const slot40 = pickBandstandSpot(spots, used, null);
+  assert.deepEqual(slot40, {
+    x: 1.3898,
+    y: 0,
+    z: 9.1956,
+    rotY: -2.9916,
+    slot: 40,
+    nametagLift: 0,
+  });
+  assert.ok(Math.abs(Math.hypot(slot40.x, slot40.z) - 9.3) < 0.01, 'slot 40 must sit on the fifth ring at 9.3 m');
+});
+
+test('setAvatarStatusText with a null map creates a new texture instead of throwing', () => {
+  const THREE = createFakeTHREE();
+  const npc = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+  npc.userData.nametagSprite.material.map = null;
+
+  setAvatarStatusText(THREE, npc, 'Tea is on');
+  assert.ok(npc.userData.nametagSprite.material.map, 'a null map must be replaced by a new texture');
+  assert.equal(npc.userData.statusText, 'Tea is on');
+  assert.equal(npc.userData.nametagSprite.material.map.canvas.width, 384);
+  assert.equal(npc.userData.nametagSprite.material.map.canvas.height, 144);
+  assert.equal(npc.userData.nametagSprite.scale.y, 0.5625);
+});
+
+test('getPlotTargetPosition exact index-1 targets for plots 1 and 5', () => {
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[0], 1), {
+    x: 14.2083,
+    y: 0,
+    z: 4.5775,
+    rotY: -1.8221,
+  });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[4], 1), {
+    x: -2.9648,
+    y: 0,
+    z: -14.6299,
+    rotY: 0.2603,
+  });
+});
+
+test('pickBandstandSpot pre-filled used set with a gap beyond spots length overflows by used.size', () => {
+  const spots = Array.from({ length: 3 }, (_, i) => ({
+    slot: i,
+    x: i,
+    y: 0.6,
+    z: i,
+    rotY: 0,
+  }));
+  const used = new Set([0, 1, 2, 5]);
+
+  const over = pickBandstandSpot(spots, used, null);
+  assert.deepEqual(over, {
+    x: 2.6236,
+    y: 0,
+    z: -5.0603,
+    rotY: -0.4783,
+    slot: 4,
+    nametagLift: 0,
+  });
+  assert.ok(Math.abs(Math.hypot(over.x, over.z) - 5.7) < 0.01, 'gap overflow must sit on the first ring at 5.7 m');
+  assert.equal(used.size, 5);
+  assert.equal(used.has(4), true);
+});
+
+test('File hygiene for test-avatar.mjs at 53 tests', () => {
+  const selfPath = fileURLToPath(import.meta.url);
+  const self = fs.readFileSync(selfPath, 'utf8');
+  const names = [...self.matchAll(/^test\(['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+  assert.equal(names.length, 53, 'test-avatar.mjs must have 53 top-level tests');
+  assert.equal(new Set(names).size, 53, 'test names must be unique');
+  const imports = [...self.matchAll(/^import .+$/gm)].map((m) => m[0]);
+  assert.deepEqual(imports, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'import {',
+  ]);
+  assert.equal(self.includes('camp' + 'fire'), false, 'test-avatar.mjs must not contain the banned term');
+  const loopbackRe = new RegExp(`127\\.0\\.0\\.${'0.1'}|local${'host'}`);
+  assert.equal(loopbackRe.test(self), false, 'test-avatar.mjs must not hardcode loopback host');
+  assert.equal(/:\d{4,5}\b/.test(self), false, 'test-avatar.mjs must not hardcode a port');
+  assert.equal(self.includes('fet' + 'ch('), false, 'test-avatar.mjs must not call fetch');
+  assert.equal(self.includes('Math.' + 'random'), false, 'test-avatar.mjs must not call the random-number helper');
+  assert.equal(self.includes('Date.' + 'now'), false, 'test-avatar.mjs must not read the wall clock');
+  assert.equal(self.includes('TO' + 'DO'), false, 'test-avatar.mjs must not contain a to-do marker');
+  assert.equal(self.includes('FIX' + 'ME'), false, 'test-avatar.mjs must not contain a fix-me marker');
+});
