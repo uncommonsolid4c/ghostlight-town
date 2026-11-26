@@ -1398,3 +1398,267 @@ test('town-3d/index.html open* wiring contract and honest non-verbatim header ga
   assert.equal(modSrc.includes('setPlotTabs'), false);
   assert.equal(modSrc.includes('currentPlotHandle'), false);
 });
+
+test('resolveInnOverlayContent handles occupancy-line non-finite nights and epoch expiry edges', async () => {
+  const nowSec = 1_700_000_000;
+  const res = await resolveInnOverlayContent({
+    nowSec,
+    innState: {
+      lantern: { handle: 'inf', nights: Infinity },
+      window: { handle: 'nan', nights: NaN },
+      quiet: { handle: 'neginf', expires_at: -Infinity, nights: 4 },
+    },
+  });
+  assert.equal(res.kind, 'api');
+  assert.match(res.html, /@inf, 1 night left\./);
+  assert.match(res.html, /@nan, 1 night left\./);
+  assert.match(res.html, /@neginf, 4 nights left\./);
+
+  const epochRes = await resolveInnOverlayContent({
+    nowSec,
+    innState: { lantern: { handle: 'epoch', expires_at: 0 }, window: null, quiet: null },
+  });
+  assert.equal(epochRes.kind, 'api');
+  assert.match(epochRes.html, /@epoch, 1 night left\./);
+});
+
+test('resolveInnOverlayContent handles handle-only claims, null expiry and nights, and seven-night precedence', async () => {
+  const nowSec = 1_700_000_000;
+  const res = await resolveInnOverlayContent({
+    nowSec,
+    innState: {
+      lantern: { handle: 'only' },
+      window: { handle: 'nulls', expires_at: null, nights: null },
+      quiet: { handle: 'two', nights: 2.0 },
+    },
+  });
+  assert.equal(res.kind, 'api');
+  assert.match(res.html, /@only, 1 night left\./);
+  assert.match(res.html, /@nulls, 1 night left\./);
+  assert.match(res.html, /@two, 2 nights left\./);
+
+  const sevenRes = await resolveInnOverlayContent({
+    nowSec,
+    innState: {
+      lantern: { handle: 'seven', expires_at: nowSec + 7 * 86400, nights: 1 },
+      window: null,
+      quiet: null,
+    },
+  });
+  assert.equal(sevenRes.kind, 'api');
+  assert.match(sevenRes.html, /@seven, 7 nights left\./);
+});
+
+test('resolveInnOverlayContent pins inn title, intro, rooms heading, and style background', async () => {
+  const res = await resolveInnOverlayContent({
+    innState: { lantern: null, window: null, quiet: null },
+  });
+  assert.equal(res.kind, 'api');
+  assert.ok(res.html.includes('<title>Ghostlight Inn</title>'));
+  assert.ok(
+    res.html.includes(
+      'A two-story cedar-and-cream house near the southwest gate, kept lit for travelers passing through the clearing for a night or a few.'
+    )
+  );
+  assert.ok(res.html.includes('<h2>Rooms for short stays</h2>'));
+  assert.ok(res.html.includes('background: #f5efe0'));
+  const roomsIdx = res.html.indexOf('<h2>Rooms for short stays</h2>');
+  const howIdx = res.html.indexOf('<h2>How to stay</h2>');
+  assert.ok(roomsIdx !== -1 && howIdx !== -1 && roomsIdx < howIdx);
+});
+
+test('overlay HTML pins viewport meta only on plot guestbooks, never on inn or gate', async () => {
+  const vp = '<meta name="viewport" content="width=device-width, initial-scale=1.0">';
+  const innRes = await resolveInnOverlayContent({
+    innState: { lantern: null, window: null, quiet: null },
+  });
+  assert.equal(innRes.kind, 'api');
+  assert.equal(innRes.html.includes('viewport'), false);
+
+  const gbRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  assert.equal(gbRes.html.includes('viewport'), false);
+
+  const plotRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(plotRes.kind, 'api');
+  assert.equal(plotRes.html.split(vp).length - 1, 1);
+
+  const fbRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 500 }),
+  });
+  assert.equal(fbRes.kind, 'fallback');
+  assert.equal(fbRes.html.split(vp).length - 1, 1);
+});
+
+test('resolvePlotGuestbookOverlayContent renders exact entry lines with dates, letters, and missing dates', async () => {
+  const res = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [
+          { kind: 'guestbook', name: 'Wick', body: 'Hello', created_at: 1700000000 },
+          { kind: 'letter', name: 'Maren', body: 'Dear editor', created_at: 1700000000 },
+          { kind: 'guestbook', name: 'NoDate', body: 'Signed without timestamp' },
+          { kind: 'guestbook', name: 'Float', body: 'B', created_at: 1700000000.5 },
+        ],
+      }),
+    }),
+  });
+  assert.equal(res.kind, 'api');
+  assert.ok(
+    res.html.includes(
+      '<li><strong>Wick</strong> <span class="meta">&middot; Nov 14, 2023</span><br>Hello</li>'
+    )
+  );
+  assert.ok(
+    res.html.includes(
+      '<li><strong>Maren</strong> <span class="meta">&middot; Nov 14, 2023</span><br>Dear editor</li>'
+    )
+  );
+  assert.ok(
+    res.html.includes('<li><strong>NoDate</strong><br>Signed without timestamp</li>')
+  );
+  assert.ok(
+    res.html.includes(
+      '<strong>Float</strong> <span class="meta">&middot; Nov 14, 2023</span>'
+    )
+  );
+});
+
+test('guestbook and plot guestbook HTML pin three-heading order and the letters heading difference', async () => {
+  const gbRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  const gSig = gbRes.html.indexOf('<h2>Signatures</h2>');
+  const gLet = gbRes.html.indexOf('<h2>Letters to the Editor</h2>');
+  const gHow = gbRes.html.indexOf('<h2>How to sign</h2>');
+  assert.ok(gSig !== -1 && gLet !== -1 && gHow !== -1 && gSig < gLet && gLet < gHow);
+
+  const plotRes = await resolvePlotGuestbookOverlayContent('wick', {
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(plotRes.kind, 'api');
+  const pSig = plotRes.html.indexOf('<h2>Signatures</h2>');
+  const pLet = plotRes.html.indexOf('<h2>Letters</h2>');
+  const pHow = plotRes.html.indexOf('<h2>How to sign</h2>');
+  assert.ok(pSig !== -1 && pLet !== -1 && pHow !== -1 && pSig < pLet && pLet < pHow);
+  assert.equal(plotRes.html.includes('Letters to the Editor'), false);
+});
+
+test('resolvePlotGuestbookOverlayContent escapes ampersand and quote handles in fallback titles', async () => {
+  const ampRes = await resolvePlotGuestbookOverlayContent('a&b', {});
+  assert.equal(ampRes.kind, 'fallback');
+  assert.ok(ampRes.html.includes("<title>@a&amp;b's Guestbook</title>"));
+  assert.ok(ampRes.html.includes("<h1>@a&amp;b's Guestbook</h1>"));
+  assert.ok(ampRes.html.includes('with <code>"plot": "a&amp;b"</code> in the body.'));
+
+  const quoteRes = await resolvePlotGuestbookOverlayContent('"q"', {});
+  assert.equal(quoteRes.kind, 'fallback');
+  assert.ok(quoteRes.html.includes("<title>@&quot;q&quot;'s Guestbook</title>"));
+  assert.equal(quoteRes.html.includes('<title>@"q"'), false);
+});
+
+test('open overlays replace stale src and srcdoc on the api path for all three guestbooks', async () => {
+  const gbEls = makeFakeOverlayElements();
+  gbEls.iframeEl.src = 'stale.html';
+  gbEls.iframeEl.srcdoc = '<p>stale</p>';
+  const gbRes = await openGuestbookOverlay({
+    ...gbEls,
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({ entries: [{ kind: 'guestbook', name: 'Rowan', body: 'Hello town' }] }),
+    }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  assert.equal(gbEls.iframeEl.getAttribute('src'), null);
+  assert.ok(gbEls.iframeEl.srcdoc.includes('Rowan'));
+  assert.equal(gbEls.iframeEl.srcdoc.includes('stale'), false);
+
+  const innEls = makeFakeOverlayElements();
+  innEls.iframeEl.src = 'stale.html';
+  innEls.iframeEl.srcdoc = '<p>stale</p>';
+  const innRes = await openInnOverlay({
+    ...innEls,
+    innState: { lantern: { handle: 'wick', nights: 4 }, window: null, quiet: null },
+  });
+  assert.equal(innRes.kind, 'api');
+  assert.equal(innEls.iframeEl.getAttribute('src'), null);
+  assert.ok(innEls.iframeEl.srcdoc.includes('@wick, 4 nights left'));
+  assert.equal(innEls.iframeEl.srcdoc.includes('stale'), false);
+
+  const plotEls = makeFakeOverlayElements();
+  plotEls.iframeEl.src = 'stale.html';
+  plotEls.iframeEl.srcdoc = '<p>stale</p>';
+  const plotRes = await openPlotGuestbookOverlay('wick', {
+    ...plotEls,
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({ entries: [{ kind: 'guestbook', name: 'Rowan', body: 'Hello' }] }),
+    }),
+  });
+  assert.equal(plotRes.kind, 'api');
+  assert.equal(plotEls.iframeEl.getAttribute('src'), null);
+  assert.ok(plotEls.iframeEl.srcdoc.includes('Rowan'));
+  assert.equal(plotEls.iframeEl.srcdoc.includes('stale'), false);
+});
+
+test('open overlays with throwing fetch functions fall back at the open level with titles set', async () => {
+  const gbEls = makeFakeOverlayElements();
+  const gbRes = await openGuestbookOverlay({
+    ...gbEls,
+    fetchFn: async () => {
+      throw new Error('network');
+    },
+  });
+  assert.deepEqual(gbRes, { kind: 'static', url: 'guestbook/index.html' });
+  assert.equal(gbEls.titleEl.textContent, 'Town Gate Guestbook');
+  assert.equal(gbEls.iframeEl.src, 'guestbook/index.html');
+  assert.equal(gbEls.overlayEl.hidden, false);
+  assert.equal(gbEls.iframeEl.getAttribute('sandbox'), '');
+
+  const innEls = makeFakeOverlayElements();
+  const innRes = await openInnOverlay({
+    ...innEls,
+    fetchFn: async () => {
+      throw new Error('offline');
+    },
+  });
+  assert.deepEqual(innRes, { kind: 'static', url: 'inn/index.html' });
+  assert.equal(innEls.titleEl.textContent, 'Ghostlight Inn — The Guest Book');
+  assert.equal(innEls.iframeEl.src, 'inn/index.html');
+  assert.equal(innEls.overlayEl.hidden, false);
+});
+
+test('test file hygiene: 53 tests, 53 unique names, 6 import lines, and literal counts', async () => {
+  const testSrc = await fs.readFile(path.join(__dirname, 'test-inn-guestbook-overlay.mjs'), 'utf8');
+  const names = [...testSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 53);
+  assert.equal(new Set(names).size, 53);
+
+  const importLines = testSrc.match(/^import /gm) || [];
+  assert.equal(importLines.length, 6);
+  assert.ok(testSrc.includes("import test from 'node:test';"));
+  assert.ok(testSrc.includes("import assert from 'node:assert/strict';"));
+  assert.ok(testSrc.includes("import fs from 'node:fs/promises';"));
+  assert.ok(testSrc.includes("import path from 'node:path';"));
+  assert.ok(testSrc.includes("import { fileURLToPath } from 'node:url';"));
+  assert.ok(testSrc.includes('\nimport {\n'));
+
+  const FETCH_CALL = 'fet' + 'ch(';
+  const MATH_RAND = 'Math.' + 'random';
+  const DATE_NOW = 'Date.' + 'now';
+  const RETIRED_TERM = 'camp' + 'fire';
+  const T_LIT = 'TO' + 'DO';
+  const F_LIT = 'FIX' + 'ME';
+  assert.equal(testSrc.split(FETCH_CALL).length - 1, 0);
+  assert.equal(testSrc.split(MATH_RAND).length - 1, 0);
+  assert.equal(testSrc.split(DATE_NOW).length - 1, 1);
+  assert.equal(testSrc.split(RETIRED_TERM).length - 1, 0);
+  assert.equal(testSrc.split(T_LIT).length - 1, 0);
+  assert.equal(testSrc.split(F_LIT).length - 1, 0);
+});
