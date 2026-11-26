@@ -919,3 +919,368 @@ test('staging-polyfork README 65c and index.html tap hints match the live files'
     )
   );
 });
+
+test('stepGlide pulls an out-of-bounds position inside the radius while stepping', () => {
+  // The 28.5 clamp lands at 28.499999999999996 in floating point, so use a 1e-9 band.
+  const a = stepGlide({ x: 40, z: 0 }, { x: 10, z: 0 }, 1, { speed: 7.5 });
+  assert.ok(Math.abs(a.x - 28.5) < 1e-9);
+  assert.equal(a.z, 0);
+  assert.equal(a.arrived, false);
+  const b = stepGlide({ x: 40, z: 0 }, { x: 10, z: 0 }, 0.1, { speed: 7.5 });
+  assert.ok(Math.abs(b.x - 28.5) < 1e-9);
+  assert.equal(b.z, 0);
+  assert.equal(b.arrived, false);
+  const diag = stepGlide({ x: 30, z: 40 }, { x: 0, z: 0 }, 1, { speed: 7.5 });
+  assert.ok(Math.abs(diag.x - 17.1) < 1e-9);
+  assert.ok(Math.abs(diag.z - 22.8) < 1e-9);
+  assert.equal(diag.arrived, false);
+  assert.deepEqual(stepGlide({ x: 5, z: 5 }, { x: 15, z: 5 }, 1, { speed: 7.5 }), {
+    x: 12.5,
+    z: 5,
+    arrived: false,
+  });
+  // From (40, 0) toward (0, 0) at 7.5 m/s for 2 s the position steps 15 m to 25,
+  // already inside 28.5 — no clamp fires, rem 25 > 0.3.
+  assert.deepEqual(stepGlide({ x: 40, z: 0 }, { x: 0, z: 0 }, 2, { speed: 7.5 }), {
+    x: 25,
+    z: 0,
+    arrived: false,
+  });
+});
+
+test('deriveGlideMaxRadius floor widths and non-object inputs', () => {
+  // Widths 100–108.1 all sit on the 28.5 floor (width/2 − 26 < 28.5); the floor
+  // boundary is width 109 (existing test); 112–126 are the linear middle.
+  assert.equal(deriveGlideMaxRadius({ width: 100 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 104 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 105 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 106 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 107 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 107.9 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 108.1 }), 28.5);
+  assert.equal(deriveGlideMaxRadius({ width: 112 }), 30);
+  assert.equal(deriveGlideMaxRadius({ width: 115 }), 31.5);
+  assert.equal(deriveGlideMaxRadius({ width: 118 }), 33);
+  assert.equal(deriveGlideMaxRadius({ width: 119 }), 33.5);
+  assert.equal(deriveGlideMaxRadius({ width: 121 }), 34.5);
+  assert.equal(deriveGlideMaxRadius({ width: 122 }), 35);
+  assert.equal(deriveGlideMaxRadius({ width: 125 }), 36.5);
+  assert.equal(deriveGlideMaxRadius({ width: 126 }), 37);
+  assert.equal(deriveGlideMaxRadius({ width: 128.5 }), 38);
+  // Non-object / width-less inputs all fall back to the 38 m default.
+  assert.equal(deriveGlideMaxRadius(128), 38);
+  assert.equal(deriveGlideMaxRadius('128'), 38);
+  assert.equal(deriveGlideMaxRadius({ width: null }), 38);
+  assert.equal(deriveGlideMaxRadius({ width: 'abc' }), 38);
+  assert.equal(deriveGlideMaxRadius(true), 38);
+  assert.equal(deriveGlideMaxRadius(0), 38);
+  assert.equal(deriveGlideMaxRadius([]), 38);
+});
+
+test('clampGlideTarget zero radius diagonal and NaN inputs', () => {
+  assert.deepEqual(clampGlideTarget(5, 0, 0), { x: 0, z: 0 });
+  assert.deepEqual(clampGlideTarget(0, 5, 0), { x: 0, z: 0 });
+  assert.deepEqual(clampGlideTarget(-38, 0), { x: -38, z: 0 });
+  assert.deepEqual(clampGlideTarget(0, -38), { x: 0, z: -38 });
+  assert.deepEqual(clampGlideTarget(3, 4, 5), { x: 3, z: 4 });
+  assert.deepEqual(clampGlideTarget(1, 1, 5), { x: 1, z: 1 });
+  const onDiag = clampGlideTarget(38, 38);
+  assert.ok(Math.abs(onDiag.x - 38 / Math.SQRT2) < 1e-9);
+  assert.ok(Math.abs(onDiag.z - 38 / Math.SQRT2) < 1e-9);
+  const farDiag = clampGlideTarget(100, 100, 38);
+  assert.ok(Math.abs(farDiag.x - 38 / Math.SQRT2) < 1e-9);
+  assert.ok(Math.abs(farDiag.z - 38 / Math.SQRT2) < 1e-9);
+  const negDiag = clampGlideTarget(-100, -100, 38);
+  assert.ok(Math.abs(negDiag.x - -38 / Math.SQRT2) < 1e-9);
+  assert.ok(Math.abs(negDiag.z - -38 / Math.SQRT2) < 1e-9);
+  const nanBoth = clampGlideTarget(NaN, NaN);
+  assert.ok(Number.isNaN(nanBoth.x));
+  assert.ok(Number.isNaN(nanBoth.z));
+  const nanZ = clampGlideTarget(10, NaN);
+  assert.equal(nanZ.x, 10);
+  assert.ok(Number.isNaN(nanZ.z));
+});
+
+test('stepOrbitGlide Infinity dt zero speed and large arriveDist snap', () => {
+  assert.deepEqual(
+    stepOrbitGlide({ x: 2, z: -3 }, { x: 10, z: 45 }, { x: 15, z: 5 }, Infinity),
+    { targetX: 2, targetZ: -3, cameraX: 10, cameraZ: 45, arrived: false }
+  );
+  assert.deepEqual(
+    stepOrbitGlide({ x: 0, z: 0 }, { x: 5, z: 50 }, { x: 14, z: 0 }, 1, { speed: 0 }),
+    { targetX: 0, targetZ: 0, cameraX: 5, cameraZ: 50, arrived: false }
+  );
+  assert.deepEqual(
+    stepOrbitGlide({ x: 5, z: 5 }, { x: 10, z: 10 }, { x: 5, z: 5 }, 1, { speed: 0 }),
+    { targetX: 5, targetZ: 5, cameraX: 10, cameraZ: 10, arrived: true }
+  );
+  // The (30, 40) target is clamped to the 38 m radius (22.8, 30.4) BEFORE the
+  // 50 m arriveDist snaps — the snap lands on the clamped target, not (30, 40).
+  assert.deepEqual(
+    stepOrbitGlide({ x: 0, z: 0 }, { x: 100, z: -50 }, { x: 30, z: 40 }, 0.1, {
+      speed: 14,
+      arriveDist: 50,
+    }),
+    { targetX: 22.8, targetZ: 30.4, cameraX: 122.8, cameraZ: -19.6, arrived: true }
+  );
+  // The (30, 40) target clamps to (12, 16) at radius 20, but one 14 m step only
+  // covers 14 of those 20 m — the step lands at (8.4, 11.2), not the target.
+  const partial = stepOrbitGlide({ x: 0, z: 0 }, { x: 100, z: -50 }, { x: 30, z: 40 }, 1, {
+    speed: 14,
+    maxRadius: 20,
+  });
+  assert.ok(Math.abs(partial.targetX - 8.4) < 1e-9);
+  assert.ok(Math.abs(partial.targetZ - 11.2) < 1e-9);
+  assert.ok(Math.abs(partial.cameraX - 108.4) < 1e-9);
+  assert.ok(Math.abs(partial.cameraZ - -38.8) < 1e-9);
+  assert.equal(partial.arrived, false);
+});
+
+test('createPointerTracker same-id re-down diagonal threshold and button defaults', () => {
+  // Re-down with the same pointerId resets downPos (size stays 1) — the next
+  // move/up are judged against the NEW down position, not the first one.
+  const tracker = createPointerTracker();
+  assert.deepEqual(tracker.onPointerDown(1, 100, 100, { pointerType: 'touch' }), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(tracker.onPointerDown(1, 120, 100, { pointerType: 'touch' }), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.equal(tracker.size, 1);
+  assert.deepEqual(tracker.onPointerMove(1, 121, 100), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(tracker.onPointerUp(1, 121, 100), { ended: true, shouldClick: true });
+
+  // Diagonal threshold: (3, 3) is within 4 px on both axes and still clicks;
+  // (3, 5) exceeds on Y and cancels the glide.
+  const diag = createPointerTracker();
+  diag.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(diag.onPointerMove(1, 103, 103), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.deepEqual(diag.onPointerUp(1, 103, 103), { ended: true, shouldClick: true });
+  diag.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(diag.onPointerMove(1, 103, 105), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: true,
+  });
+  assert.deepEqual(diag.onPointerUp(1, 103, 105), { ended: true, shouldClick: false });
+
+  // Mouse button defaults to 0 (left) so a bare mouse down starts; the button
+  // check applies to mouse only, so a touch down with button 1 still starts.
+  const mouse = createPointerTracker();
+  assert.deepEqual(mouse.onPointerDown(1, 50, 50, { pointerType: 'mouse' }), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  const touchButton = createPointerTracker();
+  assert.deepEqual(touchButton.onPointerDown(1, 50, 50, { pointerType: 'touch', button: 1 }), {
+    started: true,
+    isPinch: false,
+    cancelGlide: false,
+  });
+
+  // Overlay opening between down and up (no move) still suppresses the tap.
+  const overlay = createPointerTracker();
+  overlay.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(overlay.onPointerUp(1, 100, 100, { overlayHidden: false }), {
+    ended: true,
+    shouldClick: false,
+  });
+});
+
+test('glide loops frame counts for stepGlide and stepOrbitGlide', () => {
+  // Orbit glide: 14 m at 14 m/s, dt 1/60 -> 0.2333 m/frame; the 0.3 arriveDist
+  // snaps on frame 59 (13.7667 m, rem 0.2333 <= 0.3).
+  let target = { x: 0, z: 0 };
+  let camera = { x: 0, z: 58 };
+  let steps = 0;
+  let arrived = false;
+  for (let i = 1; i <= 200; i += 1) {
+    const next = stepOrbitGlide(target, camera, { x: 14, z: 0 }, 1 / 60, { speed: 14 });
+    target = { x: next.targetX, z: next.targetZ };
+    camera = { x: next.cameraX, z: next.cameraZ };
+    steps = i;
+    if (next.arrived) {
+      arrived = true;
+      break;
+    }
+  }
+  assert.equal(arrived, true);
+  assert.equal(steps, 59);
+  assert.deepEqual(target, { x: 14, z: 0 });
+  assert.deepEqual(camera, { x: 14, z: 58 });
+
+  // Walk glide: 20 m at 7.5 m/s, dt 1/30 -> 0.25 m/frame; snaps on frame 79.
+  let pos = { x: 0, z: 0 };
+  steps = 0;
+  arrived = false;
+  for (let i = 1; i <= 500; i += 1) {
+    const next = stepGlide(pos, { x: 20, z: 0 }, 1 / 30, { speed: 7.5 });
+    pos = { x: next.x, z: next.z };
+    steps = i;
+    if (next.arrived) {
+      arrived = true;
+      break;
+    }
+  }
+  assert.equal(arrived, true);
+  assert.equal(steps, 79);
+  assert.deepEqual(pos, { x: 20, z: 0 });
+
+  // Orbit glide to the clamped (30, 40) target at dt 0.5: 7 m/frame over 38 m,
+  // 6 steps, camera offset (100, -50) invariant on every step.
+  target = { x: 0, z: 0 };
+  camera = { x: 100, z: -50 };
+  steps = 0;
+  arrived = false;
+  for (let i = 1; i <= 100; i += 1) {
+    const next = stepOrbitGlide(target, camera, { x: 30, z: 40 }, 0.5, { speed: 14 });
+    assert.ok(Math.abs(next.cameraX - next.targetX - 100) < 1e-9);
+    assert.ok(Math.abs(next.cameraZ - next.targetZ - -50) < 1e-9);
+    target = { x: next.targetX, z: next.targetZ };
+    camera = { x: next.cameraX, z: next.cameraZ };
+    steps = i;
+    if (next.arrived) {
+      arrived = true;
+      break;
+    }
+  }
+  assert.equal(arrived, true);
+  assert.equal(steps, 6);
+  assert.ok(Math.abs(target.x - 22.8) < 1e-9);
+  assert.ok(Math.abs(target.z - 30.4) < 1e-9);
+  assert.ok(Math.abs(camera.x - 122.8) < 1e-9);
+  assert.ok(Math.abs(camera.z - -19.6) < 1e-9);
+});
+
+test('tap-glide source pins header signatures and pure JS claim', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'tap-glide.mjs'), 'utf8');
+  for (const line of [
+    '// Orbit tap-to-glide + multi-pointer suppression helpers for staging-polyfork.',
+    'lines 3043-3090',
+    'Pure JS (no THREE import, no top-level document/window access)',
+    'export const DEFAULT_ORBIT_GLIDE_MAX_RADIUS = 38;',
+    'export function stepGlide(',
+    'export function deriveGlideMaxRadius(',
+    'export function clampGlideTarget(',
+    'export function stepOrbitGlide(',
+    'export function createPointerTracker(',
+    '{ speed = 7.5, maxRadius = 28.5, arriveDist = 0.3 } = {}',
+    '{ speed = 14, maxRadius = DEFAULT_ORBIT_GLIDE_MAX_RADIUS, arriveDist = 0.3 } = {}',
+    '{ dragThreshold = 4 } = {}',
+    'Step an {x, z} position toward a target by at most speed * dt, clamping',
+    'Derive a safe island-bound glide radius from the terrain',
+    'Clamp an {x, z} glide target inside maxRadius.',
+    'Step an OrbitControls target toward glideTarget using stepGlide and translate',
+    'Track active pointers so a two-finger pinch (or >4 px drag) cancels any',
+  ]) {
+    assert.ok(src.includes(line), `Missing source line: ${line}`);
+  }
+  // 'document' and 'window' each occur exactly once — both inside the header
+  // comment on line 3, never as code. Use split needles so this body adds no
+  // occurrence of the counted literal below.
+  const occ = (needle) => src.split(needle).length - 1;
+  assert.equal(occ('docu' + 'ment'), 1, 'document occurs once, in the header comment');
+  assert.equal(occ('win' + 'dow'), 1, 'window occurs once, in the header comment');
+  assert.equal(occ('fet' + 'ch('), 0, 'no fetch in the pure-JS module');
+  assert.equal(src.split('export function ').length - 1, 5, 'five exported functions');
+});
+
+test('staging.js wires pointerdown move up finishPointer and glide target', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const countIn = (src, needle) => src.split(needle).length - 1;
+  assert.equal(countIn(stagingSrc, 'glideTarget = null;'), 11);
+  assert.equal(
+    countIn(stagingSrc, 'interiorLook'),
+    13,
+    'grep -c counts lines (10); split counts occurrences (13) — two lines carry it twice'
+  );
+  assert.equal(countIn(stagingSrc, 'setGlideTargetFromTap'), 2, 'definition + call');
+  assert.equal(countIn(stagingSrc, 'finishPointer'), 3, 'definition + pointerup + pointercancel');
+  assert.ok(stagingSrc.includes("window.addEventListener('pointerup', (e) => finishPointer(e, true));"));
+  assert.ok(stagingSrc.includes("const ground = camp?.terrain?.getObjectByName('ground');"));
+  assert.ok(
+    stagingSrc.includes(
+      'const clamped = clampGlideTarget(hits[0].point.x, hits[0].point.z, glideMaxRadius);'
+    )
+  );
+  assert.ok(stagingSrc.includes('const gy = camp.groundAt(clamped.x, clamped.z);'));
+  assert.ok(stagingSrc.includes('if (gy <= camp.groundY + 0.01 || gy < waterY) return;'));
+  assert.ok(stagingSrc.includes('glideTarget = clamped;'));
+  assert.ok(
+    stagingSrc.includes('interiorVisit.lookBy(e.clientX - interiorLook.x, e.clientY - interiorLook.y);')
+  );
+  assert.ok(stagingSrc.includes('interiorLook = { id: e.pointerId, x: e.clientX, y: e.clientY };'));
+  assert.ok(stagingSrc.includes('let interiorLook = null;'));
+  assert.ok(stagingSrc.includes("renderer.domElement.addEventListener('pointerdown', (e) => {"));
+  assert.ok(stagingSrc.includes('function setGlideTargetFromTap(e) {'));
+  assert.ok(stagingSrc.includes('function finishPointer(e, allowTap) {'));
+});
+
+test('index.html tap hints swap script HUD paragraph and controls hint style', async () => {
+  const html = await fs.readFile(path.join(__dirname, 'index.html'), 'utf8');
+  for (const line of [
+    '// Swap controls hint on coarse-pointer (touch) devices before module load.',
+    "var controlsHint = document.getElementById('controls-hint');",
+    "if (controlsHint && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {",
+    'Tap ground: walk \\u00b7 Drag: look \\u00b7 Pinch: zoom \\u00b7 Tap: inspect',
+    'The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck. Tap ground to glide; tap a cottage, newsstand, Inn, or gatehouse to inspect.',
+    'background: rgba(10, 12, 26, 0.78);',
+    '<script type="module" src="./staging.js?v=41"></script>',
+    'Move in &rarr;',
+    "&larr; back to Milo&apos;s corner",
+    '// Collapsible HUD intro: on narrow screens the intro starts collapsed',
+  ]) {
+    assert.ok(html.includes(line), `Missing index.html line: ${line}`);
+  }
+  const hintBlock = html.slice(html.indexOf('#controls-hint {'));
+  assert.ok(hintBlock.includes('font-size: 11px;'), 'mobile controls-hint font size');
+});
+
+test('file hygiene 48 unique names 6 imports pinned counts', async () => {
+  const self = await fs.readFile(path.join(__dirname, 'test-tap-glide.mjs'), 'utf8');
+  const lines = self.split('\n');
+  const names = [...self.matchAll(/^test\((['"])(.*?)\1, /gm)].map((m) => m[2]);
+  assert.equal(names.length, 48);
+  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs/promises';",
+    "import path from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'import {',
+  ]); // no new top-level imports
+  const importEnd = self.indexOf("from './tap-glide.mjs'");
+  const importBlock = self.slice(self.indexOf('import {', Math.max(0, importEnd - 400)), importEnd);
+  for (const name of [
+    'DEFAULT_ORBIT_GLIDE_MAX_RADIUS',
+    'stepGlide',
+    'deriveGlideMaxRadius',
+    'clampGlideTarget',
+    'stepOrbitGlide',
+    'createPointerTracker',
+  ]) {
+    assert.equal(importBlock.split(name).length - 1, 1, `import block names ${name} exactly once`);
+  }
+  const occ = (needle) => self.split(needle).length - 1;
+  assert.equal(occ('fet' + 'ch('), 0);
+  assert.equal(occ('Date' + '.now'), 0);
+  assert.equal(occ('Math' + '.random'), 0);
+  assert.equal(occ('TO' + 'DO'), 0);
+  assert.equal(occ('FIX' + 'ME'), 0);
+  assert.equal(occ('camp' + 'fire'), 0);
+  assert.equal(occ('inner' + 'HTML'), 0);
+});
