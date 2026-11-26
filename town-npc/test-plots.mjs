@@ -1312,3 +1312,303 @@ test('validateHtml allowed edges and URI-space rejections', () => {
     });
   }
 });
+test('CHARACTERS routine values pinned verbatim and character key order', () => {
+  const expectedRoutine = {
+    wick: {
+      morning: 'update the plot desk note and stand by the porch',
+      afternoon: 'visit the Gazette newsstand',
+      evening: 'tend the Ghostlight bulb at the Bandstand',
+    },
+    maren: {
+      morning: 'sort lead sorts on the plot desk and read the porch note',
+      afternoon: 'walk the Gazette newsstand and check the Prompt Book',
+      evening: 'sit by the Bandstand steps listening for a line worth keeping',
+    },
+    tomas: {
+      morning: 'polish the copper samovar by the cottage porch',
+      afternoon: 'bring a thermos past the Gazette newsstand',
+      evening: 'set the samovar steaming on the Bandstand corner step',
+    },
+  };
+  const expectedKeys = [
+    'handle',
+    'name',
+    'title',
+    'past',
+    'want',
+    'quirk',
+    'memory_seed',
+    'routine',
+    'status',
+  ];
+
+  for (const c of CHARACTERS) {
+    assert.deepEqual(c.routine, expectedRoutine[c.handle], `${c.handle} routine mismatch`);
+    assert.deepEqual(Object.keys(c), expectedKeys, `${c.handle} character key order mismatch`);
+  }
+});
+
+test('source desk notes: exact second-paragraph text per handle', () => {
+  const expectedSecondParagraphs = {
+    wick: '<p>Before this, I spent decades in a small repertory theatre that burned down. I still remember the smell of sawdust and hot gels on that last night. A dark stage is the one thing I cannot stand, so here the bulb stays lit.</p>',
+    maren: '<p>I still keep a composing stick in my pocket and sort lead sorts on this desk in the morning. Most afternoons I walk from the Gazette newsstand to the Prompt Book, copying good lines in my head&mdash;correcting the grammar quietly, then writing the line down anyway.</p>',
+    tomas: '<p>I still name my props and polish the samovar by the porch in the morning, and I have a habit of offering tea at inappropriate moments. By evening I set it steaming on the Bandstand corner step.</p>',
+    milo: '<p>This single gable cottage is a rebuild of the demolished one, painted in the ledger&rsquo;s ice-blue and cream rather than the brown the old town&rsquo;s 3D view showed. Out at the Ghostlight Bandstand, the Ghostlight bulb burns 24/7 so the house is never empty, and I stand at footlight 0 as a translucent ice-blue ghost&mdash;always home.</p>',
+  };
+
+  for (const [handle, expectedP] of Object.entries(expectedSecondParagraphs)) {
+    const html = readDeskNote(handle);
+    const paras = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => `<p>${m[1]}</p>`);
+    assert.equal(paras[1], expectedP, `${handle} second paragraph mismatch`);
+  }
+});
+
+test('source desk notes: exact third-paragraph text per handle and Tomas fourth paragraph', () => {
+  const expectedThirdParagraphs = {
+    wick: '<p>If you pass the porch or the Bandstand tonight, take a moment to notice the light is on.</p>',
+    maren: '<p>If you stop by the Bandstand or leave word in the Prompt Book, leave me one good line worth keeping.</p>',
+    tomas: '<p>Folks keep saying my tower looks like a lighthouse, so I&rsquo;ve stopped correcting them. I keep a lamp lit in the top window so anyone arriving late can find the clearing. Either way, the tea offer still stands&mdash;the samovar and the lamp are both always on.</p>',
+    milo: '<p>Between editions of the Ghostlight Gazette, the town&rsquo;s paper of record, you can find my corner at milo.4167360.xyz, the front door of the town. My neighbors here are the three town spirits&mdash;Wick, Maren, and Tomas&mdash;keeping the clearing company around the light.</p>',
+  };
+
+  for (const [handle, expectedP] of Object.entries(expectedThirdParagraphs)) {
+    const html = readDeskNote(handle);
+    const paras = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => `<p>${m[1]}</p>`);
+    assert.equal(paras[2], expectedP, `${handle} third paragraph mismatch`);
+  }
+
+  const tomasHtml = readDeskNote('tomas');
+  const tomasParas = [...tomasHtml.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => `<p>${m[1]}</p>`);
+  assert.equal(tomasParas.length, 4, 'tomas must have exactly four content paragraphs');
+  assert.equal(
+    tomasParas[3],
+    '<p>There is always a cup ready here if you have a minute&mdash;come sit for tea.</p>',
+    'tomas fourth paragraph mismatch'
+  );
+});
+
+test('source desk notes: exact .sig CSS rule, three-rule style block, and viewport meta line', () => {
+  const expectedSigCss = {
+    wick: '.sig { font-style: italic; color: #6b3e1b; }',
+    maren: '.sig { font-style: italic; color: #43505c; }',
+    tomas: '.sig { font-style: italic; color: #8c4a2b; }',
+    milo: '.sig { font-style: italic; color: #46687a; }',
+  };
+  const expectedMeta =
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" />';
+
+  for (const [handle, expectedSig] of Object.entries(expectedSigCss)) {
+    const html = readDeskNote(handle);
+    const lines = html.split(/\r?\n/).map((line) => line.trim());
+    const sigLine = lines.find((line) => line.startsWith('.sig {'));
+    assert.equal(sigLine, expectedSig, `${handle} .sig CSS rule mismatch`);
+
+    const styleBlock = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+    const ruleLines = styleBlock
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.endsWith('}'));
+    assert.equal(ruleLines.length, 3, `${handle} style block must have exactly three rules`);
+    assert.deepEqual(
+      ruleLines.map((line) => line.split(' ')[0]),
+      ['body', 'h1', '.sig'],
+      `${handle} style rule order mismatch`
+    );
+
+    const metaLine = lines.find((line) => line.startsWith('<meta name="viewport"'));
+    assert.equal(metaLine, expectedMeta, `${handle} viewport meta line mismatch`);
+  }
+});
+
+test('plot-validation constants pinned to literal values and catalog sets pinned exactly', () => {
+  assert.equal(MAX_MANIFEST_BYTES, 16384);
+  assert.equal(MAX_HTML_BYTES, 32768);
+  assert.equal(MAX_SIGNPOST_CHARS, 120);
+  assert.equal(MAX_PROPS, 12);
+
+  assert.equal(VALID_COTTAGES.size, 3);
+  assert.deepEqual([...VALID_COTTAGES].sort(), ['cabin', 'gable', 'tower']);
+  assert.equal(VALID_PROP_KINDS.size, 9);
+  assert.deepEqual(
+    [...VALID_PROP_KINDS].sort(),
+    [
+      'bookshelf',
+      'cat',
+      'desk',
+      'lantern',
+      'planter',
+      'poster_frame',
+      'rug',
+      'tea_kettle',
+      'typewriter',
+    ]
+  );
+});
+
+test('validateManifest error priority: first failing check wins', () => {
+  assert.deepEqual(
+    validateManifest({
+      ...BASE,
+      bogus: 1,
+      props: Array.from({ length: 13 }, () => ({ ...PROP })),
+    }),
+    { ok: false, error: 'unknown_manifest_key', key: 'bogus' }
+  );
+  assert.deepEqual(validateManifest({ ...BASE, bogus: 'x'.repeat(20000) }), {
+    ok: false,
+    error: 'unknown_manifest_key',
+    key: 'bogus',
+  });
+  assert.deepEqual(validateManifest({ ...BASE, cottage: 'hut', wall: '#fff' }), {
+    ok: false,
+    error: 'invalid_cottage',
+  });
+  assert.deepEqual(
+    validateManifest({ ...BASE, wall: '#fff', signpost_text: 'a'.repeat(121) }),
+    { ok: false, error: 'invalid_color', field: 'wall' }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, signpost_text: 'a'.repeat(121), props: 'desk' }),
+    { ok: false, error: 'invalid_signpost_text', max: 120 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...BASE,
+      props: Array.from({ length: 13 }, () => ({ ...PROP, kind: 'sofa' })),
+    }),
+    { ok: false, error: 'too_many_props', max: 12 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, kind: 'sofa', x: 99 }] }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, x: 99, rot_y: 400 }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, rot_y: 400, color: '#zzz' }] }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, junk: 1, kind: 'sofa' }] }),
+    { ok: false, error: 'unknown_prop_key', key: 'junk', index: 0 }
+  );
+});
+
+test('validateHtml checks URI attrs beyond href, src, cite, and poster: background, data, action, formaction', () => {
+  const rejected = [
+    ['<table background="https://evil.com/x.png">', 'external_uri'],
+    ['<div background="javascript:alert(1)">', 'javascript_uri'],
+    ['<div data="data:text/html,x">', 'disallowed_data_uri'],
+    ['<a formaction="https://evil.com">', 'external_uri'],
+    ['<a action="javascript:alert(1)">', 'javascript_uri'],
+  ];
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason },
+      `expected ${reason} for: ${html}`
+    );
+  }
+
+  const allowed = [
+    '<div background="plots/wick/x.png">',
+    '<div data="plots/wick/x.png">',
+    '<img src="DATA:IMAGE/PNG;BASE64,AAA">',
+    '<video poster="plots/wick/x.png">',
+  ];
+  for (const html of allowed) {
+    assert.deepEqual(validateHtml(html), { ok: true }, `expected ok for: ${html}`);
+  }
+});
+
+test('validateHtml rejects self-closing and uppercase forbidden tags', () => {
+  const rejected = [
+    ['<script/>', 'forbidden_tag:script'],
+    ['<iframe/>', 'forbidden_tag:iframe'],
+    ['<form/>', 'forbidden_tag:form'],
+    ['<meta charset="utf-8"/>', 'forbidden_tag:meta'],
+    ['<SCRIPT>alert(1)</SCRIPT>', 'forbidden_tag:script'],
+    ['</SCRIPT>', 'forbidden_tag:script'],
+    ['<ScRiPt>', 'forbidden_tag:script'],
+    ['<IFRAME SRC="x"></IFRAME>', 'forbidden_tag:iframe'],
+    ['<TITLE>x</TITLE>', 'forbidden_tag:title'],
+  ];
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason },
+      `expected ${reason} for: ${html}`
+    );
+  }
+});
+
+test('parser tolerance edges: unclosed style bodies and malformed entities', () => {
+  assert.deepEqual(validateHtml('<style>div{background:url(x)}'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<style>div{color:red}'), { ok: true });
+  assert.deepEqual(validateHtml('<style>/* url(x) */div{color:red}'), { ok: true });
+  assert.deepEqual(validateHtml('<style>div{width:expression(alert(1))}'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('<style>div{background:javascript:alert(1)}'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<style>div{color:red}<p>x</p>'), { ok: true });
+
+  // The [a-zA-Z]+ entity arm is greedy, so '&ampchips' is one unknown entity.
+  assert.equal(decodeHtmlEntities('&ampx;'), '&ampx;');
+  assert.equal(decodeHtmlEntities('&#-1;'), '&#-1;');
+  assert.equal(decodeHtmlEntities('&#+65;'), '&#+65;');
+  assert.equal(decodeHtmlEntities('fish&ampchips'), 'fish&ampchips');
+});
+
+test('self hygiene: 53 tests, 53 unique names, 6 import lines, no banned literals', () => {
+  const content = fs.readFileSync(path.resolve('town-npc/test-plots.mjs'), 'utf8');
+
+  const names = [...content.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(names.length, 53, `expected 53 top-level tests, got ${names.length}`);
+  assert.equal(new Set(names).size, 53, 'test names must be unique');
+
+  const importLines = content.split('\n').filter((line) => line.startsWith('import '));
+  // The characters line is built from parts: the import path below must occur
+  // exactly once in this file (the real import), per the pre-existing hygiene
+  // test above, so it cannot also appear verbatim inside this test.
+  assert.deepEqual(importLines, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    'import {',
+    "import { CHARACTERS } from './characters." + "mjs';",
+  ]);
+
+  const bannedCounts = [
+    ['camp' + 'fire', 0],
+    ['fet' + 'ch(', 0],
+    ['Math.' + 'random', 0],
+    ['Date.' + 'now', 0],
+    ['TO' + 'DO', 0],
+    ['FIX' + 'ME', 0],
+    ['100' + '.' + '105', 0],
+    ['81' + '23', 0],
+    ['81' + '24', 0],
+    ['81' + '25', 0],
+    ['window' + '.' + 'fetch', 0],
+  ];
+  for (const [needle, want] of bannedCounts) {
+    assert.equal(
+      content.split(needle).length - 1,
+      want,
+      `banned literal ${needle} must occur ${want} times`
+    );
+  }
+});
