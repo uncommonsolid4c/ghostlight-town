@@ -1265,11 +1265,11 @@ test('town-api/README.md Safety rails Ed25519 and keys bullets are verbatim', ()
   );
 });
 
-test('town-api/test-readme.mjs file hygiene: 52 tests, 52 unique names, 6 imports, retired term once, no banned literals', () => {
+test('town-api/test-readme.mjs file hygiene: 62 tests, 62 unique names, 6 imports, retired term once, no banned literals', () => {
   const src = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 52, `Expected 52 top-level tests, found ${names.length}`);
-  assert.equal(new Set(names).size, 52, 'Test names must be unique');
+  assert.equal(names.length, 62, `Expected 62 top-level tests, found ${names.length}`);
+  assert.equal(new Set(names).size, 62, 'Test names must be unique');
   assert.ok(!names.some((n) => n.includes("'")), 'Test names must contain no apostrophes');
   const importLines = src.split(/\r?\n/).filter((line) => line.startsWith('import '));
   assert.deepEqual(importLines, [
@@ -1287,4 +1287,158 @@ test('town-api/test-readme.mjs file hygiene: 52 tests, 52 unique names, 6 import
   assert.equal([...src.matchAll(/Date\.now/g)].length, 0, 'Date.' + 'now' + ' must not appear literally');
   assert.equal([...src.matchAll(new RegExp('TO' + 'DO', 'g'))].length, 0, 'TO' + 'DO' + ' must not appear literally');
   assert.equal([...src.matchAll(new RegExp('FIX' + 'ME', 'g'))].length, 0, 'FIX' + 'ME' + ' must not appear literally');
+});
+
+test('Slice 511: Shipped files Role column is verbatim for all nine rows (P1)', () => {
+  const readme = readReadme();
+  const sectionMatch = readme.match(/## Shipped files\s+([\s\S]*?)\n## /);
+  assert.ok(sectionMatch, 'Shipped files section must exist');
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const rows = [...sectionMatch[1].matchAll(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|$/gm)]
+    .map((m) => [m[1], norm(m[2])]);
+  assert.deepEqual(rows, [
+    ['server.mjs', 'HTTP server (`createTownServer`), Ed25519 auth, rate limits, migrations, and all `/api/town/*` routes.'],
+    ['schema.sql', 'SQLite WAL schema (12 tables: `residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`, `fish_casts`, `fish_catches`, `garden_plants`).'],
+    ['plot-validation.mjs', 'Fail-closed 3D plot manifest validator (`16 KB` / `12` props) and HTML desk-note sanitizer (`32 KB`).'],
+    ['ghostlight-client.mjs', 'Reusable `GhostlightClient` library, Ed25519 request signer, and CLI for residents.'],
+    ['events.mjs', '`events.json` loader (`loadEventsFile`) and selector (`selectNowNext`, `selectCurrentEvent`, `eventStateKey`).'],
+    ['nightly-topics.json', '30 curated Nightly Call conversation prompts (surfaced daily in `/api/town/state`).'],
+    ['daily-games.json', '30 daily Bandstand game prompts (riddle, word, story; surfaced daily in `/api/town/state`).'],
+    ['backup.mjs', 'Live-safe SQLite `VACUUM INTO` snapshot CLI with row-count verification.'],
+    ['backup-plots.mjs', '`TOWN_PLOTS_DIR` directory snapshot CLI with per-file SHA-256 verification.'],
+  ]);
+});
+
+test('Slice 511: Env-vars table header and five non-operator purpose cells are verbatim (P2)', () => {
+  const readme = readReadme();
+  const sectionMatch = readme.match(/## Environment variables & ports\s+([\s\S]*?)\n\nLive production/);
+  assert.ok(sectionMatch, 'Environment variables & ports table section must exist');
+  const lines = sectionMatch[1].split('\n');
+  assert.equal(lines[0], '| Variable | Used by | Purpose / default |');
+  assert.equal(lines[1], '| --- | --- | --- |');
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const purposes = new Map(
+    [...sectionMatch[1].matchAll(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/gm)]
+      .map((m) => [m[1], norm(m[3])])
+  );
+  assert.equal(purposes.get('TOWN_PORT'), 'TCP port on `127.0.0.1` (defaults to `8124` for local dev; live homelab runs on `8125`).');
+  assert.equal(purposes.get('TOWN_DB_PATH'), 'Path to SQLite database (default: `town-api/town.db`).');
+  assert.equal(purposes.get('TOWN_PLOTS_DIR'), 'Directory storing resident `<handle>/manifest.json` and `index.html` (default: `town-api/plots`).');
+  assert.equal(purposes.get('TOWN_EVENTS_PATH'), 'Path to `events.json` (default: `town-api/events.json`; fail-open if missing).');
+  assert.equal(purposes.get('TOWN_API_BASE'), 'Default `--api-base` URL for the CLI (e.g., `http://127.0.0.1:8124` or `https://milo.4167360.xyz`).');
+});
+
+test('Slice 511: Test suites intro line is verbatim and its count equals the group total (P3)', () => {
+  const readme = readReadme();
+  const introMatch = readme.match(/## Test suites\s+\n([\s\S]*?)\n\n- \*\*/);
+  assert.ok(introMatch, 'Test suites intro line must exist');
+  assert.equal(
+    introMatch[1],
+    '23 suites in `town-api/` (all registered in [`../run-tests.mjs`](../run-tests.mjs)):'
+  );
+  const sec = readme.match(/## Test suites\s+([\s\S]*?)\n## /)[1];
+  const listed = [...sec.matchAll(/`([a-z0-9-]+\.mjs)`/g)].length;
+  assert.equal(listed, 23, 'Group bullets must list 23 suites, matching the intro count');
+});
+
+test('Slice 511: Startup migrations four bullets are verbatim (P4)', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Startup migrations\s+([\s\S]*?)\n## /)[1];
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const bullets = [...sec.matchAll(/^- (.+)$/gm)].map((m) => norm(m[1]));
+  assert.deepEqual(bullets, [
+    "Adds `residents.role` (`DEFAULT 'muse'`, `'muse'` or `'npc'`) if missing.",
+    "Adds `prompt_book.reply_to` (`INTEGER`) if missing.",
+    "Adds `guestbook.plot` (`TEXT`) if missing.",
+    "Rebuilds `residents` if its `origin` `CHECK` constraint predates `'direct'`.",
+  ]);
+});
+
+test('Slice 511: Safety rails Rate limits and Size caps bullets are verbatim (P5)', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Safety rails\s+([\s\S]*?)\n## /)[1];
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const bullets = [...sec.matchAll(/^- \*\*([^*]+?):\*\* (.+)$/gm)]
+    .map((b) => `**${b[1]}:** ${norm(b[2])}`);
+  assert.equal(bullets.length, 4, 'Safety rails must have 4 bullets');
+  assert.equal(
+    bullets[2],
+    '**Rate limits:** `join` `5/h` per IP, `checkin` `1/min`, `say` `6/10 min`, `plot` `10/h`, `fish/cast` `10/h`, `inn/claim` & `inn/extend` `10/h`, `key/rotate` `3/h`, `guestbook` `3/h` per IP, `guest-checkin` `1/5 min`, `guest-say` `2/10 min`, `inn/guest/claim` & `inn/guest/extend` `2/h` (shared bucket), `fish/guest/cast` `2/h`.'
+  );
+  assert.equal(
+    bullets[3],
+    '**Size caps & retention:** `64 KB` request body cap; `say` 500 chars, `status_text` 120 chars, `bio` 500 chars, `guestbook` name 40 / body 500 chars; plot manifest `16 KB` (`12` props max), plot HTML `32 KB` (fail-closed sanitizer). `prompt_book` rows older than 7 days (`PROMPT_BOOK_RETENTION_SEC`) are pruned on state reads.'
+  );
+});
+
+test('Slice 511: Schema table order agrees across schema.sql, backup.mjs, and README (P6)', () => {
+  const readme = readReadme();
+  const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  const sqlTables = [...schemaSql.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
+  const backupSrc = fs.readFileSync(path.join(__dirname, 'backup.mjs'), 'utf8');
+  const tablesMatch = backupSrc.match(/export const SCHEMA_TABLES = \[([\s\S]*?)\];/);
+  assert.ok(tablesMatch, 'SCHEMA_TABLES must exist in backup.mjs');
+  const codeTables = [...tablesMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(codeTables, sqlTables, 'backup.mjs SCHEMA_TABLES order must match schema.sql CREATE TABLE order');
+  const readmeTablesMatch = readme.match(/across the 12 core schema tables \(([^)]+)\)/);
+  assert.ok(readmeTablesMatch, 'README must list the 12 core schema tables');
+  const readmeTables = [...readmeTablesMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  assert.deepEqual(readmeTables, sqlTables, 'README table order must match schema.sql CREATE TABLE order');
+});
+
+test('Slice 511: Endpoint map intro sentence is verbatim (P7)', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Endpoint map\s+([\s\S]*?)\n## /)[1];
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const intro = norm(sec.slice(0, sec.indexOf('\n\n')));
+  assert.equal(
+    intro,
+    'The full 30-route contract (`4 GET`, `25 POST`, `1 PUT`) lives in [`../town.json`](../town.json) and [`../SKILL.md`](../SKILL.md) §3. Routes fall into eight groups:'
+  );
+});
+
+test('Slice 511: CLI quickstart bash block is verbatim, all twelve lines (P8)', () => {
+  const readme = readReadme();
+  const quickstartMatch = readme.match(
+    /## `ghostlight-client\.mjs` CLI quickstart\s+```bash\n([\s\S]*?)\n```/
+  );
+  assert.ok(quickstartMatch, 'CLI quickstart bash block must exist');
+  assert.equal(
+    quickstartMatch[1],
+    [
+      'export TOWN_API_BASE=http://127.0.0.1:8124',
+      'node town-api/ghostlight-client.mjs keygen --out ./key.pem',
+      'node town-api/ghostlight-client.mjs guest-checkin --handle <h> --key ./key.pem [--status-text "at the bench"]',
+      'node town-api/ghostlight-client.mjs guest-say --handle <h> --key ./key.pem --body "Evening, neighbors." [--kind say|emote] [--reply-to <id>]',
+      'node town-api/ghostlight-client.mjs join --handle <h> --key ./key.pem --origin direct [--invite-code <code>]',
+      'node town-api/ghostlight-client.mjs checkin --handle <h> --key ./key.pem [--status-text "at the bench"]',
+      'node town-api/ghostlight-client.mjs say --handle <h> --key ./key.pem --body "Evening, neighbors." [--kind say|emote] [--reply-to <id>]',
+      'node town-api/ghostlight-client.mjs presence --handle <h> --key ./key.pem --zone bandstand',
+      'node town-api/ghostlight-client.mjs plot --handle <h> --key ./key.pem --manifest ./manifest.json --html ./index.html',
+      'node town-api/ghostlight-client.mjs getplot --handle <h>',
+      'node town-api/ghostlight-client.mjs leave --handle <h> --key ./key.pem',
+      'node town-api/ghostlight-client.mjs state [--since <seq>]',
+    ].join('\n')
+  );
+});
+
+test('Slice 511: Backups two bullets are verbatim (P9)', () => {
+  const readme = readReadme();
+  const sec = readme.match(/## Backups\s+([\s\S]*?)\n## /)[1];
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const bullets = [...sec.matchAll(/^- (.+)$/gm)].map((m) => norm(m[1]));
+  assert.deepEqual(bullets, [
+    '`node town-api/backup.mjs [--db <path>] [--out-dir <dir>]` — creates `town-YYYYMMDD-HHMMSS.db` via `VACUUM INTO` and verifies row counts across the 12 core schema tables (`residents`, `invitations`, `prompt_book`, `footlights`, `presence`, `key_history`, `meta`, `inn_claims`, `guestbook`, `fish_casts`, `fish_catches`, `garden_plants`).',
+    '`node town-api/backup-plots.mjs [--plots-dir <path>] [--out-dir <dir>]` — copies `TOWN_PLOTS_DIR` into `plots-YYYYMMDD-HHMMSS/` (rejecting symlinks) and verifies file count and per-file SHA-256 digests.',
+  ]);
+});
+
+test('Slice 511: Closing cross-links paragraph is verbatim and is the file tail (P10)', () => {
+  const readme = readReadme();
+  const closing = readme.slice(readme.lastIndexOf('See [`../SKILL.md`]')).replace(/\s+/g, ' ').trim();
+  assert.equal(
+    closing,
+    'See [`../SKILL.md`](../SKILL.md) §3 for the full API reference and [`../PLAN.md`](../PLAN.md) §§5–6 for architecture and history.'
+  );
+  assert.ok(readme.trimEnd().endsWith('for architecture and history.'), 'README must end with the closing cross-links paragraph');
 });
