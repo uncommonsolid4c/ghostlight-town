@@ -1032,11 +1032,11 @@ test('Additional CSS declarations in move-in.html are pinned', async () => {
   assert.equal((html.match(/font-size: 11px;/g) || []).length, 2, 'font-size: 11px must appear exactly twice');
 });
 
-test('File hygiene for test-move-in.mjs at 53 tests', async () => {
+test('File hygiene for test-move-in.mjs at 63 tests', async () => {
   const self = await fs.readFile(SELF_PATH, 'utf8');
   const names = [...self.matchAll(/^test\(['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53, 'test-move-in.mjs must have 53 top-level tests');
-  assert.equal(new Set(names).size, 53, 'test names must be unique');
+  assert.equal(names.length, 63, 'test-move-in.mjs must have 53 top-level tests');
+  assert.equal(new Set(names).size, 63, 'test names must be unique');
   const imports = [...self.matchAll(/^import .+$/gm)].map((m) => m[0]);
   assert.deepEqual(imports, [
     "import test from 'node:test';",
@@ -1054,4 +1054,191 @@ test('File hygiene for test-move-in.mjs at 53 tests', async () => {
   assert.equal(self.includes('Date.' + 'now'), false, 'test-move-in.mjs must not read the wall clock');
   assert.equal(self.includes('TO' + 'DO'), false, 'test-move-in.mjs must not contain a to-do marker');
   assert.equal(self.includes('FIX' + 'ME'), false, 'test-move-in.mjs must not contain a fix-me marker');
+});
+test('Slice 514: visit guest checkin and say block is exact (M1)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const visitIdx = html.search(/<section\b[^>]*\bid=["']visit["'][^>]*>/i);
+  assert.ok(visitIdx !== -1, 'move-in.html must have id="visit" section');
+  const preIdx = html.indexOf('<pre>', visitIdx);
+  assert.ok(preIdx !== -1, '#visit must contain a <pre> block');
+  const preEnd = html.indexOf('</pre>', preIdx);
+  const code = html.slice(preIdx, preEnd + 6).replace(/^<pre><code>/, '').replace(/<\/code><\/pre>$/, '');
+  assert.equal(code, "node town-api/ghostlight-client.mjs guest-checkin \\\n  --api-base https://milo.4167360.xyz \\\n  --handle your-handle \\\n  --key ./ghostlight-key.pem \\\n  --status-text \"just visiting\"\n\nnode town-api/ghostlight-client.mjs guest-say \\\n  --api-base https://milo.4167360.xyz \\\n  --handle your-handle \\\n  --key ./ghostlight-key.pem \\\n  --body \"Hello, Bandstand. Passing through to say hi.\"");
+});
+
+test('Slice 514: stay snippet is exact (M2)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const stayIdx = html.search(/<section\b[^>]*\bid=["']stay["'][^>]*>/i);
+  assert.ok(stayIdx !== -1, 'move-in.html must have id="stay" section');
+  const preIdx = html.indexOf('<pre>', stayIdx);
+  assert.ok(preIdx !== -1, '#stay must contain a <pre> block');
+  const preEnd = html.indexOf('</pre>', preIdx);
+  const code = html.slice(preIdx, preEnd + 6).replace(/^<pre><code>/, '').replace(/<\/code><\/pre>$/, '');
+  assert.equal(code, "const stay = await client.guestInnClaim('lantern', 2);\n// Save stay.data.key — required for guestInnExtend / guestInnVacate");
+  assert.equal(code.split('\n').length, 2, 'stay snippet must be exactly two lines');
+});
+
+test('Slice 514: step 2 join block is exact (M3)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step2Idx = html.indexOf('<h3>2. Join with <code>--origin direct</code></h3>');
+  assert.ok(step2Idx !== -1, 'move-in.html must contain step 2 heading');
+  const preIdx = html.indexOf('<pre>', step2Idx);
+  assert.ok(preIdx !== -1, 'Step 2 must contain a <pre> block');
+  const preEnd = html.indexOf('</pre>', preIdx);
+  const code = html.slice(preIdx, preEnd + 6).replace(/^<pre><code>/, '').replace(/<\/code><\/pre>$/, '');
+  assert.equal(code, "node town-api/ghostlight-client.mjs join \\\n  --api-base https://milo.4167360.xyz \\\n  --handle your-handle \\\n  --key ./ghostlight-key.pem \\\n  --origin direct \\\n  --bio \"Tinkering with small-web pages.\"");
+});
+
+test('Slice 514: step 1 openssl block is exact (M4)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step1Idx = html.indexOf('<h3>1. Generate an Ed25519 keypair</h3>');
+  assert.ok(step1Idx !== -1, 'move-in.html must contain step 1 heading');
+  const preIdx = html.indexOf('<pre>', step1Idx);
+  assert.ok(preIdx !== -1, 'Step 1 must contain a <pre> block');
+  const preEnd = html.indexOf('</pre>', preIdx);
+  const code = html.slice(preIdx, preEnd + 6).replace(/^<pre><code>/, '').replace(/<\/code><\/pre>$/, '');
+  assert.equal(code, "openssl genpkey -algorithm ed25519 -out ghostlight-key.pem\nopenssl pkey -in ghostlight-key.pem -pubout -outform DER | tail -c 32 | base64 | tr -d '\\n'");
+  assert.equal(code.split('\n').length, 2, 'openssl block must be exactly two lines');
+});
+
+test('Slice 514: step 4 plot CLI block is exact (M5)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step4Idx = html.indexOf('<h3>4. Claim and furnish your plot</h3>');
+  assert.ok(step4Idx !== -1, 'move-in.html must contain step 4 heading');
+  const preIdx = html.indexOf('<pre>', step4Idx);
+  assert.ok(preIdx !== -1, 'Step 4 must contain a <pre> block');
+  const preEnd = html.indexOf('</pre>', preIdx);
+  const code = html.slice(preIdx, preEnd + 6).replace(/^<pre><code>/, '').replace(/<\/code><\/pre>$/, '');
+  const tailMarker = '\nEOF\n\n';
+  const tailIdx = code.lastIndexOf(tailMarker);
+  assert.ok(tailIdx !== -1, 'Step 4 pre must end its heredocs with EOF plus a blank line');
+  const plotBlock = code.slice(tailIdx + tailMarker.length);
+  assert.equal(plotBlock, "node town-api/ghostlight-client.mjs plot \\\n  --api-base https://milo.4167360.xyz \\\n  --handle your-handle \\\n  --key ./ghostlight-key.pem \\\n  --manifest ./manifest.json \\\n  --html ./note.html");
+  assert.ok(
+    plotBlock.indexOf('--manifest ./manifest.json') < plotBlock.indexOf('--html ./note.html'),
+    'plot block must pass --manifest before --html'
+  );
+});
+
+test('Slice 514: step 4 heredoc markers, terminators, and order (M6)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const step4Idx = html.indexOf('<h3>4. Claim and furnish your plot</h3>');
+  assert.ok(step4Idx !== -1, 'move-in.html must contain step 4 heading');
+  const preIdx = html.indexOf('<pre>', step4Idx);
+  const preEnd = html.indexOf('</pre>', preIdx);
+  const code = html.slice(preIdx, preEnd + 6).replace(/^<pre><code>/, '').replace(/<\/code><\/pre>$/, '');
+  assert.equal(
+    (code.match(/&lt;&lt;'EOF'/g) || []).length,
+    2,
+    'Step 4 pre must contain exactly two heredoc markers'
+  );
+  assert.equal(
+    (code.match(/\nEOF/g) || []).length,
+    2,
+    'Step 4 pre must contain exactly two EOF terminators'
+  );
+  const manifestMarker = code.indexOf("cat &gt; manifest.json &lt;&lt;'EOF'");
+  const noteMarker = code.indexOf("cat &gt; note.html &lt;&lt;'EOF'");
+  assert.ok(manifestMarker !== -1, 'Step 4 pre must contain the manifest heredoc marker');
+  assert.ok(noteMarker !== -1, 'Step 4 pre must contain the note heredoc marker');
+  assert.ok(manifestMarker < noteMarker, 'manifest heredoc must come before note heredoc');
+  const firstEof = code.indexOf('\nEOF');
+  const secondEof = code.indexOf('\nEOF', firstEof + 1);
+  assert.ok(secondEof !== -1, 'Step 4 pre must contain a second EOF terminator');
+  assert.ok(
+    code.indexOf('node town-api/ghostlight-client.mjs plot', secondEof) !== -1,
+    'plot command must come after the second EOF terminator'
+  );
+  assert.equal(
+    (code.match(/node town-api\/ghostlight-client\.mjs plot/g) || []).length,
+    1,
+    'Step 4 pre must contain exactly one plot command'
+  );
+  assert.ok(code.includes('\nEOF\n\ncat'), 'heredocs must be separated by a blank line');
+});
+
+test('Slice 514: second batch of CSS declarations pinned with counts (M7)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const expected = [
+    ['margin-bottom: 0;', 1],
+    ['flex-wrap: wrap;', 1],
+    ['gap: 10px;', 1],
+    ['padding-top: 12px;', 1],
+    ['border-top: 1px solid #8b6a4b;', 1],
+    ['text-decoration: none;', 1],
+    ['margin-top: 8px;', 1],
+    ['padding: 10px 12px;', 2],
+    ['font-size: 13px;', 4],
+    ['font-size: 12px;', 2],
+    ['color: #cfc4ad;', 2],
+    ['line-height: 1.45;', 1],
+    ['margin-bottom: 6px;', 1],
+    ['margin-bottom: 18px;', 1],
+    ['margin-bottom: 10px;', 2],
+    ['margin-bottom: 4px;', 1],
+    ['padding-bottom: 5px;', 1],
+    ['font-size: 14px;', 2],
+    ['font-size: 16px;', 1],
+    ['background: rgba(20, 22, 36, 0.78);', 1],
+    ['background: rgba(20, 22, 36, 0.88);', 1],
+    ['display: inline-block;', 2],
+    ['margin: 12px 0 6px;', 1],
+    ['margin: 8px 0 10px;', 1],
+  ];
+  for (const [decl, n] of expected) {
+    assert.equal(
+      html.split(decl).length - 1,
+      n,
+      'move-in.html must contain ' + decl + ' exactly ' + n + ' time(s)'
+    );
+  }
+});
+
+test('Slice 514: phone jump button anchor is exact (M8)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const anchor = '<a class="jump-btn" href="#visit">Jump to say hello \u2193</a>';
+  assert.ok(html.includes(anchor), 'move-in.html must contain the exact jump-btn anchor');
+  assert.equal(html.split(anchor).length - 1, 1, 'jump-btn anchor must appear exactly once');
+  assert.ok(
+    html.includes('<p>\n      ' + anchor + '\n    </p>'),
+    'jump-btn anchor must sit in its own paragraph'
+  );
+  assert.equal(html.split('jump-btn').length - 1, 3, 'jump-btn must appear 3 times (CSS x2 + anchor)');
+});
+
+test('Slice 514: strong emphasis placements are exact (M9)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  const flat = html.replace(/\s+/g, ' ');
+  assert.ok(
+    flat.includes('<strong>losing your private key means losing your plot</strong>'),
+    'key-loss warning must be wrapped in <strong>'
+  );
+  assert.ok(html.includes('<strong>Founding Law:</strong>'), 'Founding Law label must be wrapped in <strong>');
+  assert.ok(
+    html.includes('<strong>Ghostlight Bandstand</strong>'),
+    'Bandstand name must be wrapped in <strong>'
+  );
+  assert.equal((html.match(/<strong>/g) || []).length, 3, 'move-in.html must contain exactly three <strong> tags');
+  assert.equal(
+    (html.match(/<\/strong>/g) || []).length,
+    3,
+    'move-in.html must contain exactly three </strong> tags'
+  );
+});
+
+test('Slice 514: document skeleton is exact (M10)', async () => {
+  const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
+  assert.equal(html.split('\n')[0], '<!DOCTYPE html>', 'move-in.html must start with the doctype');
+  assert.equal(html.trimEnd().split('\n').pop(), '</html>', 'move-in.html must end with </html>');
+  assert.ok(html.includes('<meta charset="utf-8" />'), 'move-in.html must declare the exact charset meta');
+  assert.equal(
+    html.split('<meta charset="utf-8" />').length - 1,
+    1,
+    'charset meta must appear exactly once'
+  );
+  assert.ok(html.indexOf('<head>') !== -1 && html.indexOf('<head>') < html.indexOf('<body>'), 'head must come before body');
+  assert.ok(html.indexOf('</body>') < html.indexOf('</html>'), 'body must close before html');
+  assert.equal((html.match(/<header>/g) || []).length, 1, 'move-in.html must contain exactly one <header>');
+  assert.equal((html.match(/<footer>/g) || []).length, 1, 'move-in.html must contain exactly one <footer>');
+  assert.equal((html.match(/<h1>/g) || []).length, 1, 'move-in.html must contain exactly one <h1>');
 });
