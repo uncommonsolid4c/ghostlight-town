@@ -1634,11 +1634,267 @@ test('open overlays with throwing fetch functions fall back at the open level wi
   assert.equal(innEls.overlayEl.hidden, false);
 });
 
-test('test file hygiene: 53 tests, 53 unique names, 6 import lines, and literal counts', async () => {
+test('resolveInnOverlayContent pins exact occupancy-line nights math, floor/ceil, and handle escaping', async () => {
+  const NOW = 1795000000;
+  const lineFor = async (claim) => {
+    const res = await resolveInnOverlayContent({ innState: { lantern: claim }, nowSec: NOW });
+    assert.equal(res.kind, 'api');
+    const m = res.html.match(/<strong>The Lantern Room<\/strong> &mdash; [^<]*<br><span class="occupancy">([^<]*)<\/span>/);
+    return m ? m[1] : null;
+  };
+
+  assert.equal(await lineFor({ handle: 'milo', expires_at: NOW + 86400 }), 'Occupied — @milo, 1 night left.');
+  assert.equal(await lineFor({ handle: 'milo', expires_at: NOW + 86401 }), 'Occupied — @milo, 2 nights left.');
+  assert.equal(await lineFor({ handle: 'milo', expires_at: NOW }), 'Occupied — @milo, 1 night left.');
+  assert.equal(await lineFor({ handle: 'milo', expires_at: NOW - 5000 }), 'Occupied — @milo, 1 night left.');
+  assert.equal(await lineFor({ handle: 'x', nights: 2.5 }), 'Occupied — @x, 3 nights left.');
+  assert.equal(await lineFor({ handle: 'x', nights: 0 }), 'Occupied — @x, 1 night left.');
+  assert.equal(await lineFor({ handle: '<b>bad</b>', nights: 1 }), 'Occupied — @&lt;b&gt;bad&lt;/b&gt;, 1 night left.');
+});
+
+test('resolveInnOverlayContent pins innState precedence, fetch spy, and apiBase edges', async () => {
+  let calls = 0;
+  const usableRes = await resolveInnOverlayContent({
+    innState: { lantern: null },
+    fetchFn: async () => {
+      calls += 1;
+      return { status: 200, json: async () => ({ inn: { lantern: null } }) };
+    },
+  });
+  assert.equal(usableRes.kind, 'api');
+  assert.equal(calls, 0);
+
+  const arrUrls = [];
+  const arrRes = await resolveInnOverlayContent({
+    innState: [{ lantern: null }],
+    fetchFn: async (u) => {
+      arrUrls.push(u);
+      return { status: 200, json: async () => ({ inn: { lantern: null } }) };
+    },
+  });
+  assert.equal(arrRes.kind, 'api');
+  assert.deepEqual(arrUrls, ['/api/town/state']);
+
+  const unknownUrls = [];
+  const unknownRes = await resolveInnOverlayContent({
+    innState: { pool: { handle: 'x' } },
+    apiBase: 42,
+    fetchFn: async (u) => {
+      unknownUrls.push(u);
+      return { status: 404, json: async () => ({}) };
+    },
+  });
+  assert.deepEqual(unknownRes, { kind: 'static', url: 'inn/index.html' });
+  assert.deepEqual(unknownUrls, ['/api/town/state']);
+
+  const slashUrls = [];
+  const slashRes = await resolveInnOverlayContent({
+    apiBase: 'https://x///',
+    fetchFn: async (u) => {
+      slashUrls.push(u);
+      return { status: 200, json: async () => ({ inn: { quiet: null } }) };
+    },
+  });
+  assert.equal(slashRes.kind, 'api');
+  assert.deepEqual(slashUrls, ['https://x/api/town/state']);
+});
+
+test('resolveGuestbookOverlayContent falls back to static on string status, null response, non-array entries, thrown json, and null json', async () => {
+  const cases = [
+    async () => ({ status: '200', json: async () => ({ entries: [] }) }),
+    async () => null,
+    async () => ({ status: 200, json: async () => ({ entries: {} }) }),
+    async () => ({ status: 200, json: async () => { throw new Error('bad json'); } }),
+    async () => ({ status: 200, json: async () => null }),
+  ];
+  for (const fetchFn of cases) {
+    const res = await resolveGuestbookOverlayContent({ fetchFn });
+    assert.deepEqual(res, { kind: 'static', url: 'guestbook/index.html' });
+  }
+});
+
+test('formatPlotGuestbookTabLabel handles float, exponential, negative zero, string, NaN, and zero edges', () => {
+  assert.equal(formatPlotGuestbookTabLabel(1.5), 'Guestbook (1.5)');
+  assert.equal(formatPlotGuestbookTabLabel(1e21), 'Guestbook (1e+21)');
+  assert.equal(formatPlotGuestbookTabLabel(-0), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel('5'), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(NaN), 'Guestbook');
+  assert.equal(formatPlotGuestbookTabLabel(0), 'Guestbook');
+});
+
+test('resolvePlotGuestbookOverlayContent pins handle length and case boundaries', async () => {
+  const h32 = 'a'.repeat(32);
+  const urls32 = [];
+  const res32 = await resolvePlotGuestbookOverlayContent(h32, {
+    fetchFn: async (u) => {
+      urls32.push(u);
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(res32.kind, 'api');
+  assert.deepEqual(urls32, [`/api/town/guestbook?plot=${h32}&limit=50`]);
+
+  let calls33 = 0;
+  const res33 = await resolvePlotGuestbookOverlayContent('a'.repeat(33), {
+    fetchFn: async () => {
+      calls33 += 1;
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(res33.kind, 'fallback');
+  assert.equal(calls33, 0);
+
+  let upperCalls = 0;
+  const upperRes = await resolvePlotGuestbookOverlayContent('Wick', {
+    fetchFn: async () => {
+      upperCalls += 1;
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(upperRes.kind, 'fallback');
+  assert.equal(upperCalls, 0);
+  assert.ok(upperRes.html.includes("<title>@Wick's Guestbook</title>"));
+
+  const oneRes = await resolvePlotGuestbookOverlayContent('a', {});
+  assert.equal(oneRes.kind, 'fallback');
+
+  const twoUrls = [];
+  const twoRes = await resolvePlotGuestbookOverlayContent('a-', {
+    fetchFn: async (u) => {
+      twoUrls.push(u);
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(twoRes.kind, 'api');
+  assert.deepEqual(twoUrls, ['/api/town/guestbook?plot=a-&limit=50']);
+});
+
+test('openPlotGuestbookOverlay invalid-handle contract sets raw title, sandbox, srcdoc, removes src, and shows overlay', async () => {
+  const els = makeFakeOverlayElements();
+  const res = await openPlotGuestbookOverlay('Bad Handle!', els);
+  assert.equal(els.titleEl.textContent, '@Bad Handle! — Guestbook');
+  assert.equal(els.iframeEl.getAttribute('sandbox'), '');
+  assert.equal(res.kind, 'fallback');
+  assert.equal(els.iframeEl.srcdoc, res.html);
+  assert.equal(els.iframeEl.src, undefined);
+  assert.equal(els.overlayEl.hidden, false);
+});
+
+test('resolveGuestbookOverlayContent pins Signatures-before-Letters order, numeric name 0, null body, and 51-entry cap', async () => {
+  const res = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({
+        entries: [
+          { kind: 'letter', name: 'L', body: 'letter body', created_at: 1700000000 },
+          { kind: 'guestbook', name: 0, body: null, created_at: 1700000000 },
+        ],
+      }),
+    }),
+  });
+  assert.equal(res.kind, 'api');
+  const sigIdx = res.html.indexOf('<h2>Signatures</h2>');
+  const letIdx = res.html.indexOf('<h2>Letters to the Editor</h2>');
+  assert.ok(sigIdx !== -1 && letIdx !== -1 && sigIdx < letIdx);
+  assert.ok(res.html.includes('<li><strong>0</strong> <span class="meta">&middot; Nov 14, 2023</span><br></li>'));
+
+  const many = Array.from({ length: 51 }, (_, i) => ({
+    kind: 'guestbook',
+    name: `n${i}`,
+    body: 'b',
+    created_at: 1700000000,
+  }));
+  const capRes = await resolveGuestbookOverlayContent({
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: many }) }),
+  });
+  assert.equal((capRes.html.match(/<li>/g) || []).length, 50);
+  assert.ok(capRes.html.includes('n49'));
+  assert.equal(capRes.html.includes('n50'), false);
+});
+
+test('resolveInnOverlayContent pins exact room lines for mixed claims and ignores unknown rooms', async () => {
+  const NOW = 1795000000;
+  const res = await resolveInnOverlayContent({
+    innState: {
+      lantern: { handle: 'milo', nights: 2 },
+      window: null,
+      quiet: { handle: 'x', expires_at: NOW + 86400 },
+      pool: { handle: 'y' },
+    },
+    nowSec: NOW,
+  });
+  assert.equal(res.kind, 'api');
+  assert.equal((res.html.match(/<li>/g) || []).length, 3);
+  assert.ok(res.html.includes('<li><strong>The Lantern Room</strong> &mdash; front corner upstairs, looking out toward the bandstand light.<br><span class="occupancy">Occupied — @milo, 2 nights left.</span></li>'));
+  assert.ok(res.html.includes('<li><strong>The Window Room</strong> &mdash; side gable overlooking the pines and the western path.<br><span class="occupancy">Vacant — free tonight.</span></li>'));
+  assert.ok(res.html.includes('<li><strong>The Quiet Room</strong> &mdash; tucked at the back, away from the gate and the evening talk.<br><span class="occupancy">Occupied — @x, 1 night left.</span></li>'));
+  assert.equal(res.html.includes('pool'), false);
+});
+
+test('resolveGuestbookOverlayContent pins exact formatted dates for epoch, integer, float, and string created_at', async () => {
+  const mk = (created_at) => resolveGuestbookOverlayContent({
+    fetchFn: async () => ({
+      status: 200,
+      json: async () => ({ entries: [{ kind: 'guestbook', name: 'n', body: 'b', created_at }] }),
+    }),
+  });
+
+  const epochRes = await mk(0);
+  assert.ok(epochRes.html.includes('&middot; Dec 31, 1969</span>'));
+
+  const intRes = await mk(1700000000);
+  assert.ok(intRes.html.includes('&middot; Nov 14, 2023</span>'));
+
+  const floatRes = await mk(1700000000.9);
+  assert.ok(floatRes.html.includes('&middot; Nov 14, 2023</span>'));
+
+  const strRes = await mk('1700000000');
+  assert.equal(strRes.html.includes('meta">&middot;'), false);
+});
+
+test('openGuestbookOverlay and openInnOverlay pin attribute contract and missing iframeEl short-circuit', async () => {
+  const gbEls = makeFakeOverlayElements();
+  const gbRes = await openGuestbookOverlay({
+    ...gbEls,
+    fetchFn: async () => ({ status: 200, json: async () => ({ entries: [] }) }),
+  });
+  assert.equal(gbRes.kind, 'api');
+  assert.equal(gbEls.iframeEl.getAttribute('sandbox'), '');
+  assert.equal(gbEls.iframeEl.getAttribute('src'), null);
+  assert.equal(gbEls.iframeEl.src, undefined);
+  assert.equal(gbEls.iframeEl.srcdoc, gbRes.html);
+  assert.equal(gbEls.titleEl.textContent, 'Town Gate Guestbook');
+  assert.equal(gbEls.overlayEl.hidden, false);
+
+  const innEls = makeFakeOverlayElements();
+  const innRes = await openInnOverlay({
+    ...innEls,
+    fetchFn: async () => { throw new Error('down'); },
+  });
+  assert.equal(innRes.kind, 'static');
+  assert.equal(innEls.iframeEl.src, 'inn/index.html');
+  assert.equal(innEls.iframeEl.srcdoc, undefined);
+  assert.equal(innEls.iframeEl.getAttribute('srcdoc'), null);
+
+  let calls = 0;
+  const partialEls = makeFakeOverlayElements();
+  const partialRes = await openGuestbookOverlay({
+    overlayEl: partialEls.overlayEl,
+    titleEl: partialEls.titleEl,
+    fetchFn: async () => {
+      calls += 1;
+      return { status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  assert.equal(partialRes, null);
+  assert.equal(calls, 0);
+});
+
+test('test file hygiene: 63 tests, 63 unique names, 6 import lines, and literal counts', async () => {
   const testSrc = await fs.readFile(path.join(__dirname, 'test-inn-guestbook-overlay.mjs'), 'utf8');
   const names = [...testSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53);
-  assert.equal(new Set(names).size, 53);
+  assert.equal(names.length, 63);
+  assert.equal(new Set(names).size, 63);
 
   const importLines = testSrc.match(/^import /gm) || [];
   assert.equal(importLines.length, 6);
