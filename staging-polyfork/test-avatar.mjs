@@ -1384,12 +1384,12 @@ test('pickBandstandSpot pre-filled used set with a gap beyond spots length overf
   assert.equal(used.has(4), true);
 });
 
-test('File hygiene for test-avatar.mjs at 53 tests', () => {
+test('File hygiene for test-avatar.mjs at 63 tests', () => {
   const selfPath = fileURLToPath(import.meta.url);
   const self = fs.readFileSync(selfPath, 'utf8');
   const names = [...self.matchAll(/^test\(['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53, 'test-avatar.mjs must have 53 top-level tests');
-  assert.equal(new Set(names).size, 53, 'test names must be unique');
+  assert.equal(names.length, 63, 'test-avatar.mjs must have 63 top-level tests');
+  assert.equal(new Set(names).size, 63, 'test names must be unique');
   const imports = [...self.matchAll(/^import .+$/gm)].map((m) => m[0]);
   assert.deepEqual(imports, [
     "import test from 'node:test';",
@@ -1408,4 +1408,193 @@ test('File hygiene for test-avatar.mjs at 53 tests', () => {
   assert.equal(self.includes('Date.' + 'now'), false, 'test-avatar.mjs must not read the wall clock');
   assert.equal(self.includes('TO' + 'DO'), false, 'test-avatar.mjs must not contain a to-do marker');
   assert.equal(self.includes('FIX' + 'ME'), false, 'test-avatar.mjs must not contain a fix-me marker');
+});
+
+test('createAvatarCapsule two capsules stay independent with headless badge texture and origin zeroed', () => {
+  const THREE = createFakeTHREE();
+  const a = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+  const b = createAvatarCapsule(THREE, { handle: 'wick', role: 'npc' });
+  assert.equal(a.position.x, 0);
+  assert.equal(a.position.y, 0);
+  assert.equal(a.position.z, 0);
+  assert.equal(a.rotation.x, 0);
+  assert.equal(a.children[0].position.x, 0);
+  assert.equal(a.children[0].position.z, 0);
+  assert.equal(a.children[1].position.x, 0);
+  assert.equal(a.children[1].position.z, 0);
+  assert.equal(a.userData.nametagSprite.material.map.canvas.width, 384);
+  assert.equal(a.userData.nametagSprite.material.map.canvas.height, 96);
+  assert.equal(a.userData.nametagSprite.material.map.needsUpdate, true);
+  setAvatarStatusText(THREE, a, 'Hello');
+  assert.equal(a.userData.statusText, 'Hello');
+  assert.equal(b.userData.statusText, undefined);
+  assert.notEqual(a.userData.nametagSprite.material.map, b.userData.nametagSprite.material.map);
+  assert.equal(b.userData.nametagSprite.material.map.canvas.height, 96);
+});
+
+test('setAvatarStatusText badge-only restore emits exact draw call list for muse and npc', () => {
+  const THREE = createFakeTHREE();
+  withRecordingDocument((calls) => {
+    const muse = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse' });
+    calls.length = 0;
+    setAvatarStatusText(THREE, muse, 'First');
+    calls.length = 0;
+    setAvatarStatusText(THREE, muse, null);
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 96],
+      ['strokeRect', '#9be0ff', 8, 8, 8, 368, 80],
+      ['fillText', 'bold 30px monospace', '#9be0ff', '[MUSE] sol', 192, 48],
+    ]);
+
+    const npc = createAvatarCapsule(THREE, { handle: 'maren', role: 'npc' });
+    calls.length = 0;
+    setAvatarStatusText(THREE, npc, 'Tea');
+    calls.length = 0;
+    setAvatarStatusText(THREE, npc, '   ');
+    assert.deepEqual(calls, [
+      ['fillRect', '#161b28', 0, 0, 384, 96],
+      ['strokeRect', '#ffbe55', 8, 8, 8, 368, 80],
+      ['fillText', 'bold 30px monospace', '#ffbe55', '[NPC] maren', 192, 48],
+    ]);
+  });
+});
+
+test('setAvatarStatusText multibyte truncation counts UTF-16 code units', () => {
+  const THREE = createFakeTHREE();
+  const av = createAvatarCapsule(THREE, { handle: 'sol' });
+  const twelve = '🌙'.repeat(12);
+  assert.equal(twelve.length, 24);
+  setAvatarStatusText(THREE, av, twelve);
+  assert.equal(av.userData.statusText, twelve);
+  assert.equal(av.userData.statusText.includes('…'), false);
+
+  const thirteen = '🌙'.repeat(13);
+  assert.equal(thirteen.length, 26);
+  setAvatarStatusText(THREE, av, thirteen);
+  assert.equal(av.userData.statusText, '🌙'.repeat(11) + '\uD83C' + '…');
+  assert.equal(av.userData.statusText.length, 24);
+
+  const mixed = 'a'.repeat(23) + '🌙';
+  assert.equal(mixed.length, 25);
+  setAvatarStatusText(THREE, av, mixed);
+  assert.equal(av.userData.statusText, 'a'.repeat(23) + '…');
+});
+
+test('pickBandstandSpot invalid preferredSlot variants fall to first-free and used set grows by 1', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({ slot: i, x: i, y: 0.6, z: i, rotY: 0 }));
+  const used = new Set();
+  assert.equal(pickBandstandSpot(spots, used, NaN).slot, 0);
+  assert.equal(pickBandstandSpot(spots, used, Infinity).slot, 1);
+  assert.equal(pickBandstandSpot(spots, used, true).slot, 2);
+  assert.equal(pickBandstandSpot(spots, used, -Infinity).slot, 3);
+  assert.equal(used.size, 4);
+  assert.deepEqual([...used].sort((a, b) => a - b), [0, 1, 2, 3]);
+  assert.equal(pickBandstandSpot(spots, used, 0).slot, 4);
+  assert.equal(used.size, 5);
+});
+
+test('getPlotTargetPosition fractional and huge stagger indices match exact coords and lateral projection', () => {
+  const plot1 = TOWN_LAYOUT.plots[0];
+  const p15 = getPlotTargetPosition(plot1, 1.5);
+  const p25 = getPlotTargetPosition(plot1, 2.5);
+  const p100 = getPlotTargetPosition(plot1, 100);
+  assert.deepEqual(p15, { x: 14.6559, y: 0, z: 2.8341, rotY: -1.8221 });
+  assert.deepEqual(p25, { x: 14.8797, y: 0, z: 1.9623, rotY: -1.8221 });
+  assert.deepEqual(p100, { x: 25.6221, y: 0, z: -39.8807, rotY: -1.8221 });
+
+  const p0 = getPlotTargetPosition(plot1, 0);
+  const sideX = Math.cos(plot1.rotY);
+  const sideZ = -Math.sin(plot1.rotY);
+  const proj = (p) => (p.x - p0.x) * sideX + (p.z - p0.z) * sideZ;
+  assert.ok(Math.abs(proj(p15) + 0.9) < 0.01, `idx 1.5 lateral ${proj(p15)}`);
+  assert.ok(Math.abs(proj(p25) + 1.8) < 0.01, `idx 2.5 lateral ${proj(p25)}`);
+  assert.ok(Math.abs(proj(p100) + 45) < 0.01, `idx 100 lateral ${proj(p100)}`);
+});
+
+test('SEED_HOME_PADS cross-maps to TOWN_LAYOUT plots with distinct consecutive numbers', () => {
+  for (const [handle, plotNumber] of Object.entries(SEED_HOME_PADS)) {
+    const plot = TOWN_LAYOUT.plots[plotNumber - 1];
+    assert.equal(plot.plotNumber, plotNumber, `${handle} plotNumber`);
+    assert.equal(plot.y, 0);
+    assert.ok(Math.abs(Math.hypot(plot.x, plot.z) - 18.5) < 0.01);
+  }
+  assert.deepEqual(
+    Object.entries(SEED_HOME_PADS).map(([h, n]) => [h, TOWN_LAYOUT.plots[n - 1].x, TOWN_LAYOUT.plots[n - 1].z]),
+    [
+      ['wick', 17.833, -4.922],
+      ['maren', 13.023, -13.14],
+      ['tomas', 4.761, -17.877],
+    ]
+  );
+  const nums = Object.values(SEED_HOME_PADS);
+  assert.equal(new Set(nums).size, 3);
+  assert.deepEqual([...nums].sort((a, b) => a - b), [2, 3, 4]);
+});
+
+test('setAvatarStatusText keeps internal newline and tab verbatim and counts newline as 1 char', () => {
+  const THREE = createFakeTHREE();
+  const av = createAvatarCapsule(THREE, { handle: 'sol' });
+  setAvatarStatusText(THREE, av, 'line1\nline2');
+  assert.equal(av.userData.statusText, 'line1\nline2');
+  setAvatarStatusText(THREE, av, 'a\tb');
+  assert.equal(av.userData.statusText, 'a\tb');
+  const withNewline25 = 'a'.repeat(23) + '\n' + 'b';
+  assert.equal(withNewline25.length, 25);
+  setAvatarStatusText(THREE, av, withNewline25);
+  assert.equal(av.userData.statusText, 'a'.repeat(23) + '…');
+});
+
+test('pickBandstandSpot overflow exact coords for idx 19 and 21 match ring formulas', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({ slot: i, x: i, y: 0.6, z: i, rotY: 0 }));
+  const used = new Set();
+  for (let i = 0; i < 19; i++) pickBandstandSpot(spots, used, null);
+
+  const s19 = pickBandstandSpot(spots, used, null);
+  assert.deepEqual(s19, {
+    x: -3.0379,
+    y: 0,
+    z: 5.8593,
+    rotY: 2.6633,
+    slot: 19,
+    nametagLift: 0.5,
+  });
+  assert.equal(s19.x, +(Math.sin((9 / 10) * Math.PI * 2 + 0.15) * 6.6).toFixed(4));
+  assert.equal(s19.z, +(Math.cos((9 / 10) * Math.PI * 2 + 0.15) * 6.6).toFixed(4));
+  assert.ok(Math.abs(Math.hypot(s19.x, s19.z) - 6.6) < 0.01);
+
+  const s20 = pickBandstandSpot(spots, used, null);
+  assert.equal(s20.slot, 20);
+
+  const s21 = pickBandstandSpot(spots, used, null);
+  assert.deepEqual(s21, {
+    x: 5.2656,
+    y: 0,
+    z: 5.3407,
+    rotY: -2.3633,
+    slot: 21,
+    nametagLift: 0.5,
+  });
+  assert.equal(s21.x, +(Math.sin((1 / 10) * Math.PI * 2 + 0.15) * 7.5).toFixed(4));
+  assert.equal(s21.z, +(Math.cos((1 / 10) * Math.PI * 2 + 0.15) * 7.5).toFixed(4));
+  assert.ok(Math.abs(Math.hypot(s21.x, s21.z) - 7.5) < 0.01);
+});
+
+test('createAvatarCapsule null options and missing THREE pieces throw TypeError and extra keys are ignored', () => {
+  const THREE = createFakeTHREE();
+  assert.throws(() => createAvatarCapsule(THREE, null), TypeError);
+  assert.throws(() => createAvatarCapsule({}, { handle: 'sol' }), TypeError);
+  assert.throws(() => createAvatarCapsule({ Group: createFakeTHREE().Group }, { handle: 'sol' }), TypeError);
+  const av = createAvatarCapsule(THREE, { handle: 'sol', role: 'muse', nametagLift: 0, foo: 1, bar: 'x' });
+  assert.deepEqual(Object.keys(av.userData), ['handle', 'role', 'nametagLift', 'nametagSprite']);
+});
+
+test('getPlotTargetPosition missing rotY yields NaN coords and string rotY coerces', () => {
+  const noRot = { x: 5, y: 0, z: 5 };
+  const r = getPlotTargetPosition(noRot, 0);
+  assert.equal(Number.isNaN(r.x), true);
+  assert.equal(Number.isNaN(r.z), true);
+  assert.equal(r.y, 0);
+  assert.equal(r.rotY, undefined);
+  const strRot = { x: 0, y: 0, z: 27, rotY: '0' };
+  assert.deepEqual(getPlotTargetPosition(strRot, 0), { x: 0, y: 0, z: 30.6, rotY: '0' });
 });
