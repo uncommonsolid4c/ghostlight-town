@@ -811,10 +811,10 @@ test('PLAN.md §8 entries from slice 400 are contiguous and all record Scratch v
   }
 });
 
-test('file hygiene — 51 unique test names, 6 import lines, 0 banned-literal lines', () => {
+test('file hygiene — 61 unique test names, 6 import lines, 0 banned-literal lines', () => {
   const src = fs.readFileSync(path.join(__dirname, 'test-plan-header.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 51, 'test-plan-header.mjs must have exactly 51 top-level tests');
+  assert.equal(names.length, 61, 'test-plan-header.mjs must have exactly 61 top-level tests');
   assert.equal(new Set(names).size, names.length, 'test-plan-header.mjs test names must be unique');
   for (const name of names) {
     assert.equal(name.includes("'"), false, `test-plan-header.mjs test name must not contain an apostrophe: ${name}`);
@@ -826,4 +826,145 @@ test('file hygiene — 51 unique test names, 6 import lines, 0 banned-literal li
     const hits = src.split('\n').filter((line) => line.includes(needle)).length;
     assert.equal(hits, 0, 'test-plan-header.mjs must have 0 lines containing a banned literal (split-needle check)');
   }
+});
+
+test('Slice 504: section 12.6 Social Gate phrase matches README Status (P1)', () => {
+  const { planText } = readPlanHeader();
+  const idx126 = planText.indexOf('### 12.6');
+  assert.ok(idx126 !== -1, 'PLAN.md must contain ### 12.6');
+  const endIdx = planText.indexOf('### 12.7', idx126);
+  const sec126 = endIdx === -1 ? planText.slice(idx126) : planText.slice(idx126, endIdx);
+  const readmeStatus = readReadmeStatusSection();
+  const gatePhrase = /2–3 real external muses claiming\s+plots and quoted in Gazette #2 within 7 days of opening \(~Nov 20\)/;
+  assert.match(sec126, gatePhrase, 'PLAN.md §12.6 must include the Social Gate acceptance phrase');
+  assert.match(readmeStatus, gatePhrase, 'README.md ## Status must include the Social Gate acceptance phrase');
+});
+
+test('Slice 504: section 12.6 Build Gate live sentence matches header live-since (P2)', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const idx126 = planText.indexOf('### 12.6');
+  assert.ok(idx126 !== -1, 'PLAN.md must contain ### 12.6');
+  const endIdx = planText.indexOf('### 12.7', idx126);
+  const sec126 = endIdx === -1 ? planText.slice(idx126) : planText.slice(idx126, endIdx);
+  assert.ok(
+    sec126.includes('The engineering Build Gate is now live, not pending.'),
+    'PLAN.md §12.6 must state The engineering Build Gate is now live, not pending.'
+  );
+  assert.ok(
+    statusLine.includes('town API live since 2026-11-13'),
+    'PLAN.md **Status:** must state town API live since 2026-11-13'
+  );
+});
+
+test('Slice 504: section 12.6 Reggie cease-and-desist matches header blocked note (P3)', () => {
+  const { planText, statusLine } = readPlanHeader();
+  const idx126 = planText.indexOf('### 12.6');
+  assert.ok(idx126 !== -1, 'PLAN.md must contain ### 12.6');
+  const endIdx = planText.indexOf('### 12.7', idx126);
+  const sec126 = endIdx === -1 ? planText.slice(idx126) : planText.slice(idx126, endIdx);
+  assert.match(
+    sec126,
+    /Musebook\s+invites remain blocked by Reggie cease-and-desist/,
+    'PLAN.md §12.6 must record Musebook invites remain blocked by Reggie cease-and-desist'
+  );
+  assert.ok(
+    statusLine.includes('Musebook invites still blocked'),
+    'PLAN.md **Status:** must note Musebook invites still blocked'
+  );
+});
+
+test('Slice 504: header Status full Social Gate clause is verbatim (P4)', () => {
+  const { statusLine } = readPlanHeader();
+  assert.ok(
+    statusLine.includes('Social Gate to ~Nov 20 (2 of 2–3 real muses — lampmoth, muse; Musebook invites still blocked)'),
+    'PLAN.md **Status:** must include the full Social Gate clause verbatim'
+  );
+});
+
+test('Slice 504: header Status live-API clause with section 12.6 pointer is verbatim (P5)', () => {
+  const { statusLine } = readPlanHeader();
+  assert.ok(
+    statusLine.includes('town API live since 2026-11-13 (see §12.6; live counters such as `state_seq` are not pinned here — they move with every state mutation)'),
+    'PLAN.md **Status:** must include the full live-API clause verbatim'
+  );
+});
+
+test('Slice 504: README as-of-slice equals header built-through-slice dynamically (P6)', () => {
+  const { statusLine } = readPlanHeader();
+  const readmeStatus = readReadmeStatusSection();
+  const headerSlice = statusLine.match(/built through slice (\d+)/);
+  assert.ok(headerSlice, 'PLAN.md **Status:** must state built through slice <N>');
+  const readmeSlice = readmeStatus.match(/Phase 0 is done and Phase 2 code is complete \(as of slice (\d+)/);
+  assert.ok(readmeSlice, 'README.md ## Status must state Phase 0 is done and Phase 2 code is complete (as of slice <N>');
+  assert.equal(readmeSlice[1], headerSlice[1], 'README.md ## Status slice must equal PLAN.md header slice');
+});
+
+test('Slice 504: needing Gazette #2 quotes appears in README Status and latest section 8 entry (P7)', () => {
+  const { planText } = readPlanHeader();
+  const readmeStatus = readReadmeStatusSection();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.ok(
+    readmeStatus.includes('needing Gazette #2 quotes'),
+    'README.md ## Status must include needing Gazette #2 quotes'
+  );
+  assert.ok(
+    latestLine.includes('needing Gazette #2 quotes'),
+    'Latest §8 entry must include needing Gazette #2 quotes'
+  );
+});
+
+test('Slice 504: header Planned-with and Owner lines are verbatim (P8)', () => {
+  const { headerLines } = readPlanHeader();
+  assert.equal(
+    headerLines[5],
+    '**Planned with:** Gemini 4 (`gemini-4-hydrogen-medium`) via the Antigravity CLI,',
+    'PLAN.md header line 6 must match **Planned with:** verbatim'
+  );
+  assert.equal(
+    headerLines[6],
+    '5-turn planning session, 2026-11-12. Raw session transcripts in `session/`.',
+    'PLAN.md header line 7 must match planning session continuation verbatim'
+  );
+  assert.equal(
+    headerLines[7],
+    '**Owner:** Milo. Werther approves big moves.',
+    'PLAN.md header line 8 must match **Owner:** verbatim'
+  );
+});
+
+test('Slice 504: section 12.6 heading, section 12.4 verdict, and superseded marker stay intact (P9)', () => {
+  const { planText } = readPlanHeader();
+  assert.ok(
+    planText.includes('### 12.6 Header refresh; §12.4 verdict superseded (slice 95, 2026-11-14)'),
+    'PLAN.md must include §12.6 heading verbatim'
+  );
+  const idx124 = planText.indexOf('### 12.4');
+  assert.ok(idx124 !== -1, 'PLAN.md must contain ### 12.4');
+  const end124 = planText.indexOf('### 12.5', idx124);
+  const sec124 = end124 === -1 ? planText.slice(idx124) : planText.slice(idx124, end124);
+  assert.ok(
+    sec124.includes('**Verdict: READY-EXCEPT-LIVE-API-DEPLOY.**'),
+    'PLAN.md §12.4 must retain **Verdict: READY-EXCEPT-LIVE-API-DEPLOY.**'
+  );
+  const idx126 = planText.indexOf('### 12.6');
+  const end126 = planText.indexOf('### 12.7', idx126);
+  const sec126 = end126 === -1 ? planText.slice(idx126) : planText.slice(idx126, end126);
+  assert.ok(
+    sec126.includes('**§12.4 verdict superseded:**'),
+    'PLAN.md §12.6 must retain **§12.4 verdict superseded:**'
+  );
+});
+
+test('Slice 504: latest section 8 entry records handoff and dated live fields (P10)', () => {
+  const { planText } = readPlanHeader();
+  const { latestLine } = readLatestSliceEntry(planText);
+  assert.match(
+    latestLine,
+    /Next slice: \d+, re-audit at session start\./,
+    'Latest §8 entry must record Next slice: <N>, re-audit at session start.'
+  );
+  assert.ok(latestLine.includes('guestbook_pending'), 'Latest §8 entry must record guestbook_pending');
+  assert.ok(latestLine.includes('footlights'), 'Latest §8 entry must record footlights');
+  assert.match(latestLine, /`nightly_call` \d{4}-\d{2}-\d{2} \(/, 'Latest §8 entry must record dated nightly_call');
+  assert.match(latestLine, /`daily_game` \d{4}-\d{2}-\d{2} \w+/, 'Latest §8 entry must record dated daily_game');
 });
