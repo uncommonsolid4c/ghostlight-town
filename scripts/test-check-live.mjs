@@ -1501,8 +1501,8 @@ test('extra-issue fetch does not inflate checked/ok counts and test-check-live.m
 
   const selfSrc = await fs.readFile(path.join(__dirname, 'test-check-live.mjs'), 'utf8');
   const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 45);
-  assert.equal(new Set(names).size, 45);
+  assert.equal(names.length, 55);
+  assert.equal(new Set(names).size, 55);
 
   const importLines = selfSrc.split('\n').filter((line) => line.startsWith('import '));
   assert.equal(importLines.length, 10);
@@ -1512,4 +1512,312 @@ test('extra-issue fetch does not inflate checked/ok counts and test-check-live.m
   assert.equal(countOccurrences(selfSrc, 'FIX' + 'ME'), 0);
   assert.equal(countOccurrences(selfSrc, 'Date.' + 'now'), 2);
   assert.equal(countOccurrences(selfSrc, 'Math.' + 'random'), 1);
+});
+test('Slice 473 G1: BUNDLE_CONFIG exact markers, version keys, and entry JS for both bundles', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'check-live.mjs'), 'utf8');
+
+  assert.ok(src.includes("entryJs: 'town.js',"));
+  assert.ok(src.includes("versionKey: 'town_js_v',"));
+  assert.ok(src.includes('/town\\.js\\?v=(\\d+)/'));
+  assert.ok(src.includes("'PROP_PLACEMENTS',"));
+  assert.ok(src.includes("'buildConceptBandstand',"));
+  assert.ok(src.includes("'SEED_WANDER_CONFIG',"));
+  assert.ok(src.includes("'newsstand_papers_shelf',"));
+
+  assert.ok(src.includes("entryJs: 'staging.js',"));
+  assert.ok(src.includes("versionKey: 'staging_js_v',"));
+  assert.ok(src.includes('/staging\\.js\\?v=(\\d+)/'));
+  assert.ok(src.includes("'applyStagingState',"));
+  assert.ok(src.includes("'liveStore',"));
+  assert.ok(src.includes("'concept-bandstand.js',"));
+
+  assert.ok(src.includes('const REQUEST_TIMEOUT_MS = 5000;'));
+});
+
+test('Slice 473 G2: summary key order is exact for town-3d and staging-polyfork', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-keyorder-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.deepEqual(Object.keys(summary), [
+      'status',
+      'bundle',
+      'base',
+      'town_js_v',
+      'checked',
+      'ok',
+      'failures',
+      'api',
+    ]);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  const tmpDirStaging = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-keyorder-staging-'));
+  let serverStaging;
+  try {
+    const servedStaging = await createStagingFixtureTree(tmpDirStaging);
+    serverStaging = await startFixtureServer(servedStaging);
+
+    const resStaging = await runCheck(['--base', serverStaging.baseUrl, '--root', tmpDirStaging]);
+    assert.equal(resStaging.status, 0, `Expected exit 0, got ${resStaging.status}: ${resStaging.stderr}`);
+    const summaryStaging = JSON.parse(resStaging.stdout.trim());
+    assert.deepEqual(Object.keys(summaryStaging), [
+      'status',
+      'bundle',
+      'base',
+      'staging_js_v',
+      'checked',
+      'ok',
+      'failures',
+      'api',
+    ]);
+  } finally {
+    if (serverStaging) await serverStaging.close();
+    await fs.rm(tmpDirStaging, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G3: repo and live index.html both without ?v= pass with null version', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-bothnull-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    await fs.writeFile(
+      path.join(tmpDir, 'town-3d', 'index.html'),
+      '<!doctype html><script type="module">import "./town.js";</script>\n',
+    );
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js";</script>\n';
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.town_js_v, null);
+    assert.equal(summary.status, 'ok');
+    assert.deepEqual(summary.failures, []);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G4: latest matching a non-first issue fetches that issue, not issues[0]', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-bylatest-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['gazette/latest.json'] = JSON.stringify({
+      latest: 2,
+      issues: [
+        { n: 1, file: 'issue-001.html', date: '2026-11-12', headline: 'Issue 1' },
+        { n: 2, file: 'issue-002.html', date: '2026-11-14', headline: 'Issue 2' },
+      ],
+    });
+    served['gazette/issue-002.html'] = '<h1>Ghostlight Gazette #2</h1>\n';
+    server = await startPathRecordingFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.checked, 10);
+    assert.equal(summary.ok, 10);
+
+    const requests = server.getRequests();
+    assert.equal(requests.length, 12);
+    assert.ok(requests.includes('/ghostlight-town/gazette/issue-002.html'));
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G5: extra-issue fetch 404 fails as missing without decrementing ok', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-issue404-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['gazette/latest.json'] = JSON.stringify({
+      latest: 4,
+      issues: [{ n: 4, file: 'issue-004.html', date: '2026-11-24', headline: 'Issue 4' }],
+    });
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 1, `Expected exit 1, got ${res.status}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'fail');
+    assert.equal(summary.checked, 10);
+    assert.equal(summary.ok, 10);
+    assert.equal(summary.failures.length, 1);
+    assert.deepEqual(summary.failures[0], {
+      file: 'gazette/issue-004.html',
+      problem: 'missing',
+      detail: 'HTTP 404',
+    });
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G6: four-byte GLB with valid magic passes the boundary', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-glb4-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    served['models/bench.glb'] = Buffer.from([0x67, 0x6c, 0x54, 0x46]);
+    server = await startFixtureServer(served);
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.checked, 10);
+    assert.equal(summary.ok, 10);
+    assert.deepEqual(summary.failures, []);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G7: duplicate --bundle uses the last value in both directions', async () => {
+  const tmpDirStaging = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-dupbundle-staging-'));
+  let serverStaging;
+  try {
+    const servedStaging = await createStagingFixtureTree(tmpDirStaging);
+    serverStaging = await startFixtureServer(servedStaging);
+
+    const resStaging = await runCheck([
+      '--bundle', 'town-3d',
+      '--bundle', 'staging-polyfork',
+      '--base', serverStaging.baseUrl,
+      '--root', tmpDirStaging,
+    ]);
+    assert.equal(resStaging.status, 0, `Expected exit 0, got ${resStaging.status}: ${resStaging.stderr}`);
+    const summaryStaging = JSON.parse(resStaging.stdout.trim());
+    assert.equal(summaryStaging.bundle, 'staging-polyfork');
+    assert.equal(summaryStaging.staging_js_v, 38);
+  } finally {
+    if (serverStaging) await serverStaging.close();
+    await fs.rm(tmpDirStaging, { recursive: true, force: true });
+  }
+
+  const tmpDirTown = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-dupbundle-town-'));
+  let serverTown;
+  try {
+    const servedTown = await createFixtureTree(tmpDirTown);
+    serverTown = await startFixtureServer(servedTown);
+
+    const resTown = await runCheck([
+      '--bundle', 'staging-polyfork',
+      '--bundle', 'town-3d',
+      '--base', serverTown.baseUrl,
+      '--root', tmpDirTown,
+    ]);
+    assert.equal(resTown.status, 0, `Expected exit 0, got ${resTown.status}: ${resTown.stderr}`);
+    const summaryTown = JSON.parse(resTown.stdout.trim());
+    assert.equal(summaryTown.bundle, 'town-3d');
+    assert.equal(summaryTown.town_js_v, 13);
+  } finally {
+    if (serverTown) await serverTown.close();
+    await fs.rm(tmpDirTown, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G8: API 404 without --require-api exits 0 with api not-live', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-api404-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served, { apiStatus: 404 });
+
+    const res = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.status, 'ok');
+    assert.equal(summary.api, 'not-live');
+    assert.deepEqual(summary.failures, []);
+    assert.equal(summary.ok, summary.checked);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G9: stdout is a single JSON line and stderr is empty on success and failure', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-lines-'));
+  let server;
+  try {
+    const served = await createFixtureTree(tmpDir);
+    server = await startFixtureServer(served);
+
+    const resOk = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resOk.status, 0, `Expected exit 0, got ${resOk.status}: ${resOk.stderr}`);
+    assert.equal(resOk.stderr, '');
+    assert.equal(resOk.stdout.endsWith('\n'), true);
+    const okLines = resOk.stdout.split('\n').filter((line) => line.length > 0);
+    assert.equal(okLines.length, 1);
+    assert.deepEqual(JSON.parse(okLines[0]).failures, []);
+
+    served['index.html'] = '<!doctype html><script type="module">import "./town.js?v=12";</script>\n';
+    const resFail = await runCheck(['--bundle', 'town-3d', '--base', server.baseUrl, '--root', tmpDir]);
+    assert.equal(resFail.status, 1, `Expected exit 1, got ${resFail.status}`);
+    assert.equal(resFail.stderr, '');
+    assert.equal(resFail.stdout.endsWith('\n'), true);
+    const failLines = resFail.stdout.split('\n').filter((line) => line.length > 0);
+    assert.equal(failLines.length, 1);
+    assert.equal(JSON.parse(failLines[0]).failures.length, 1);
+  } finally {
+    if (server) await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 473 G10: getExpectedFiles exact fixture lists for both bundles', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'check-live-lists-'));
+  try {
+    await createFixtureTree(tmpDir);
+    const townList = await getExpectedFiles(tmpDir, 'town-3d');
+    assert.deepEqual(townList, [
+      'CREDITS.md',
+      'gazette/issue-001.html',
+      'gazette/latest.json',
+      'guestbook/index.html',
+      'index.html',
+      'inn/index.html',
+      'models/bench.glb',
+      'move-in.html',
+      'plots/milo/index.html',
+      'town.js',
+    ]);
+
+    await createStagingFixtureTree(tmpDir);
+    const stagingList = await getExpectedFiles(tmpDir, 'staging-polyfork');
+    assert.deepEqual(stagingList, [
+      'concept-bandstand.js',
+      'gazette/feed.xml',
+      'gazette/issue-001.html',
+      'gazette/issue-002.html',
+      'gazette/issue-003.html',
+      'gazette/latest.json',
+      'guestbook/index.html',
+      'index.html',
+      'inn/index.html',
+      'move-in.html',
+      'plots/maren/index.html',
+      'plots/milo/index.html',
+      'plots/tomas/index.html',
+      'plots/wick/index.html',
+      'staging.js',
+    ]);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
