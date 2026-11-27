@@ -1195,7 +1195,7 @@ test('CONCEPT.md kit set dressing sentence matches staging.js kit imports', () =
   }
 });
 
-test('CONCEPT.md no-modern-minimal Donts line, Night row, and file hygiene hold', () => {
+test('Slice 502: CONCEPT.md no-modern-minimal Donts line, Night row, and file hygiene hold (61 unique tests)', () => {
   const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ').trim();
   assert.ok(conceptNorm.includes('No photoreal, no neon, no modern-minimal.'));
   assert.ok(conceptNorm.includes('Ground, sky, the dark the warm windows sit in'));
@@ -1226,6 +1226,139 @@ test('CONCEPT.md no-modern-minimal Donts line, Night row, and file hygiene hold'
     );
   }
   const names = [...testConcept.matchAll(/^test\((['"])(.*?)\1,/gm)].map((m) => m[2]);
-  assert.equal(names.length, 51, `test-concept.mjs must hold 51 tests, got ${names.length}`);
-  assert.equal(new Set(names).size, 51, 'all 51 test names must be unique');
+  assert.equal(names.length, 61, `test-concept.mjs must hold 61 tests, got ${names.length}`);
+  assert.equal(new Set(names).size, 61, 'all 61 test names must be unique');
+});
+
+test('Slice 502: Palette Hex column values in order (P1)', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const lines = conceptText.split(/\r?\n/);
+  const paletteStart = lines.findIndex((line) => line.trim() === '## Palette');
+  assert.notEqual(paletteStart, -1);
+  const paletteEnd = lines.findIndex((line, idx) => idx > paletteStart && line.startsWith('## '));
+  const dataRows = lines
+    .slice(paletteStart + 1, paletteEnd === -1 ? lines.length : paletteEnd)
+    .filter((line) => line.trim().startsWith('|'))
+    .slice(2);
+  const hexes = dataRows.map((row) => row.split('|')[2].trim());
+  assert.deepEqual(hexes, [
+    '`#a8d8ea`',
+    '`#f5efe0`',
+    '`#5a4332`',
+    'bandstand wood',
+    '`#ffbe5c`',
+    'amber glass',
+    'footlight shells',
+    'dark clearing',
+    '`#c8922e`, `#43505c`, `#b5633a`',
+  ]);
+});
+
+test('Slice 502: Palette Lives-on column values in order (P2)', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  const lines = conceptText.split(/\r?\n/);
+  const paletteStart = lines.findIndex((line) => line.trim() === '## Palette');
+  assert.notEqual(paletteStart, -1);
+  const paletteEnd = lines.findIndex((line, idx) => idx > paletteStart && line.startsWith('## '));
+  const dataRows = lines
+    .slice(paletteStart + 1, paletteEnd === -1 ? lines.length : paletteEnd)
+    .filter((line) => line.trim().startsWith('|'))
+    .slice(2);
+  const livesOn = dataRows.map((row) => row.split('|')[3].trim());
+  assert.deepEqual(livesOn, [
+    "Milo's ghost (translucent, opacity 0.85); cottage ground floor",
+    'Cottage upper floor; paper stack `#ebe4d1`',
+    'Cottage roofs — **OPEN: contractor default, repaint undecided**',
+    'Octagonal bandstand, gate, newsstand booth `#6b492b`',
+    'Lit cottage windows (emissive, intensity 1.4)',
+    'Gate lanterns, newsstand lantern, footlight glow',
+    'Ten footlights around the bandstand rim',
+    'Ground, sky, the dark the warm windows sit in',
+    'Per-resident cottage back wall from `town-npc/plots/<handle>/manifest.json`: wick brass `#c8922e` (trim), maren slate `#43505c` (roof), tomas terracotta `#b5633a` (roof)',
+  ]);
+});
+
+test('Slice 502: Ghost face decal, not bead eyes, facing the gate, in both clients (P3)', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('Face decal, not bead eyes'));
+  assert.ok(conceptText.includes('facing the gate'));
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const ghostJs = fs.readFileSync(path.join(__dirname, dir, 'concept-ghost.js'), 'utf8');
+    assert.equal(/bead/i.test(ghostJs), false, `${dir}/concept-ghost.js must not mention bead`);
+    assert.match(ghostJs, /ghost\.rotation\.y\s*=\s*Math\.atan2\(x,\s*z\)/);
+  }
+});
+
+test('Slice 502: Notice Board header panel sentence and no-new-color counts (P4)', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('dark `#3b2b1d` header panel (`#7d5a3c` border)'));
+  assert.ok(conceptText.includes('three cream `#f5efe0` notice papers (`#8b6a4b` border, `#2e2218` ink)'));
+  assert.equal((conceptText.match(/same palette, no new color/g) || []).length, 1);
+  assert.equal((conceptText.match(/\(no new color\)/g) || []).length, 1);
+});
+
+test('Slice 502: Event Banner uses the Nightly Call card palette, card exists in both clients (P5)', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ');
+  assert.ok(
+    conceptNorm.includes("using the Nightly Call card's cream `#f2e6cf` / brass `#b59449` / `#2b1e14` palette (no new color)")
+  );
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const bandstandJs = fs.readFileSync(path.join(__dirname, dir, 'concept-bandstand.js'), 'utf8');
+    assert.ok(bandstandJs.includes("callBoard.name = 'nightly_call_card'"));
+  }
+});
+
+test('Slice 502: Ghost wisp tip sentence and exact 0.35 wisp in both clients (P6)', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ');
+  assert.ok(conceptNorm.includes('only a short wisp tip at the bottom'));
+  for (const dir of ['staging-polyfork', 'town-3d']) {
+    const ghostJs = fs.readFileSync(path.join(__dirname, dir, 'concept-ghost.js'), 'utf8');
+    const match = ghostJs.match(/const wispHeight\s*=\s*([0-9.]+);/);
+    assert.ok(match, `${dir}/concept-ghost.js must define const wispHeight`);
+    assert.equal(Number(match[1]), 0.35);
+  }
+});
+
+test('Slice 502: Inn is the two-story Polyfork Village Tavern with 9 window units (P7)', () => {
+  const conceptText = fs.readFileSync(CONCEPT_PATH, 'utf8');
+  assert.ok(conceptText.includes('live town uses the two-story Polyfork Village Tavern'));
+  assert.equal((tavernText.match(/windowUnit\(/g) || []).length, 9);
+});
+
+test('Slice 502: Palette header and separator rows are exact (P8)', () => {
+  const trimmedLines = fs
+    .readFileSync(CONCEPT_PATH, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  assert.ok(trimmedLines.includes('| Color | Hex | Lives on |'));
+  assert.ok(trimmedLines.includes('| --- | --- | --- |'));
+});
+
+test('Slice 502: Status intro sentences match (P9)', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ');
+  assert.ok(
+    conceptNorm.includes(
+      'make the art concept first, build the 3D against it, and always compare the end result to the initial concept.'
+    )
+  );
+  assert.ok(conceptNorm.includes('This sheet is that reference.'));
+});
+
+test('Slice 502: Starter porch and seed door-side props match the builders (P10)', () => {
+  const conceptNorm = fs.readFileSync(CONCEPT_PATH, 'utf8').replace(/\s+/g, ' ');
+  assert.ok(conceptNorm.includes('starter porch props'));
+  assert.ok(conceptNorm.includes('seed door-side character props'));
+  const seedProps = fs.readFileSync(
+    path.join(__dirname, 'staging-polyfork', 'seed-door-props.mjs'),
+    'utf8'
+  );
+  assert.ok(seedProps.includes('wick: { build: buildProceduralOilLamp, rotY: -1.1733 }'));
+  assert.ok(seedProps.includes('maren: { build: buildProceduralTypewriter, rotY: -0.6525 }'));
+  assert.ok(seedProps.includes('tomas: { build: buildProceduralTeapot, rotY: -0.1322 }'));
+  assert.ok(seedProps.includes('group.name = `seed_door_prop_${handle}`'));
+  assert.ok(seedProps.includes('SEED_DOOR_PROP_POS = [-2.9, 0, 2.9]'));
+  assert.match(
+    seedProps,
+    /import\s*\{[^}]*buildProceduralOilLamp[^}]*buildProceduralTypewriter[^}]*buildProceduralTeapot[^}]*\}\s*from\s*'\.\/interior-room\.mjs';/s
+  );
 });
