@@ -1639,11 +1639,11 @@ test('staging-polyfork/README.md header Inn glow sentence matches staging.js and
   assert.match(serverSrc, /const stateBody = \{[\s\S]*?\n\s*inn,\n/);
 });
 
-test('staging-polyfork/test-staging-readme.mjs file hygiene: 52 tests, 52 unique names, 7 imports, no banned literals', () => {
+test('staging-polyfork/test-staging-readme.mjs file hygiene: 62 tests, 62 unique names, 7 imports, no banned literals', () => {
   const src = fs.readFileSync(path.join(BUNDLE_DIR, 'test-staging-readme.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 52, `Expected 52 top-level tests, found ${names.length}`);
-  assert.equal(new Set(names).size, 52, 'Test names must be unique');
+  assert.equal(names.length, 62, `Expected 62 top-level tests, found ${names.length}`);
+  assert.equal(new Set(names).size, 62, 'Test names must be unique');
   assert.ok(!names.some((n) => n.includes("'")), 'Test names must contain no apostrophes');
   const importLines = src.split(/\r?\n/).filter((line) => line.startsWith('import '));
   assert.deepEqual(importLines, [
@@ -1662,4 +1662,225 @@ test('staging-polyfork/test-staging-readme.mjs file hygiene: 52 tests, 52 unique
   assert.equal([...src.matchAll(/Date\.now/g)].length, 0, 'Date.' + 'now' + ' must not appear literally');
   assert.equal([...src.matchAll(new RegExp('TO' + 'DO', 'g'))].length, 0, 'TO' + 'DO' + ' must not appear literally');
   assert.equal([...src.matchAll(new RegExp('FIX' + 'ME', 'g'))].length, 0, 'FIX' + 'ME' + ' must not appear literally');
+});
+
+test('Slice 512: event-banner.mjs bullet matches event-banner.mjs and staging.js wiring (S1)', () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`event-banner.mjs`'));
+  assert.ok(bullet, '## Contents must have an `event-banner.mjs` bullet');
+  const normBullet = bullet.replace(/\s+/g, ' ');
+  for (const phrase of [
+    '`loadEvents` fail-open fetch of `events.json` returning `{ events: [] }` on failure',
+    "`selectCurrentEvent` picking active `'now'` or earliest upcoming `'next'` by wall clock",
+    '`eventBannerLines` calling `splitNightlyCallLines(title)` at its 30-char default for the 768×256 `event_banner` 3D card via `updateEventBanner`',
+    '`renderEventBannerHeader` updating `#prompt-book-event` via `textContent`',
+    "wired in `staging.js` (`loadEvents()` and `applyStagingState(..., eventBannerEl)`)",
+  ]) {
+    assert.ok(normBullet.includes(phrase), `event-banner.mjs bullet must include "${phrase}"`);
+  }
+
+  const ebSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'event-banner.mjs'), 'utf8');
+  assert.ok(ebSrc.includes("if (typeof fetchFn !== 'function') return { events: [] };"), 'loadEvents must fail open when fetchFn is not a function');
+  assert.match(ebSrc, /export function selectCurrentEvent\(events, nowMs = Date\.now\(\)\)/);
+  assert.ok(ebSrc.includes("if (nowCandidate) return { event: nowCandidate, status: 'now' };"));
+  assert.ok(ebSrc.includes("if (nextCandidate) return { event: nextCandidate, status: 'next' };"));
+  assert.ok(ebSrc.includes('return [heading, ...splitNightlyCallLines(title)];'), 'eventBannerLines must call splitNightlyCallLines(title) with no second arg');
+  const innSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'inn-nightly-call.mjs'), 'utf8');
+  assert.match(innSrc, /export function splitNightlyCallLines\(topic,\s*maxLineLen\s*=\s*30\)/);
+  assert.ok(ebSrc.includes('width: 768,') && ebSrc.includes('height: 256,'), 'updateEventBanner card must be 768x256');
+  assert.ok(ebSrc.includes('headerEl.textContent = `Now: ${event.title} — hosted by @${event.host_handle}`;'));
+  assert.ok(ebSrc.includes('headerEl.textContent = `Next: ${event.title} — ${when} · hosted by @${event.host_handle}`;'));
+
+  assert.match(stagingJs, /loadEvents\(\)\s*\n\s*\.then/, 'staging.js must call loadEvents()');
+  assert.match(stagingJs, /selectCurrentEvent\(liveStore\.events, Date\.now\(\)\)/, 'staging.js must call selectCurrentEvent with live events and wall clock');
+  assert.match(stagingJs, /applyStagingState\(\s*[\s\S]*?eventBannerEl\s*\n/, 'staging.js must pass eventBannerEl to applyStagingState');
+});
+
+test('Slice 512: NPC stand-ins moved outward along the same angles to about 6.5 m (S2)', () => {
+  const npcSec = getSection(readmeMd, 'NPC stand-ins').replace(/\s+/g, ' ');
+  assert.ok(
+    npcSec.includes('Originally placed at (2.5, 3), (−2.2, 3.4), (0.4, −3.4), they were moved outward along the same angles to ~6.5 m — Wick at (4.16, 4.99), Maren at (−3.53, 5.46), Tomas at (0.76, −6.46) — so they stand cleanly outside the bandstand deck (radius 4.5 m).'),
+    '## NPC stand-ins must state the original coords, the move outward to ~6.5 m, and the 4.5 m deck'
+  );
+
+  const mapMatch = stagingJs.match(/const\s+npcStandIns\s*=\s*new\s+Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(mapMatch, 'Could not parse npcStandIns Map in staging.js');
+  const entries = [...mapMatch[1].matchAll(/\['(\w+)',\s*\{\s*group:\s*place\((Villager|Tradesman),\s*\{([\s\S]*?)\},\s*(-?[\d.]+),\s*(-?[\d.]+)\)/g)];
+  assert.equal(entries.length, 3, 'Expected 3 entries in npcStandIns');
+  const originals = { wick: [2.5, 3], maren: [-2.2, 3.4], tomas: [0.4, -3.4] };
+  for (const [, handle, , , xStr, zStr] of entries) {
+    const x = Number(xStr);
+    const z = Number(zStr);
+    const dist = Math.hypot(x, z);
+    assert.ok(Math.abs(dist - 6.5) < 0.01, `${handle} distance from origin (${dist.toFixed(4)}) must be ~6.5 m`);
+    assert.ok(dist > 4.5, `${handle} must stand outside the bandstand deck (radius 4.5 m)`);
+    const [ox, oz] = originals[handle];
+    const angleDiff = Math.abs(Math.atan2(z, x) - Math.atan2(oz, ox));
+    assert.ok(angleDiff < 0.005, `${handle} must keep its original angle (diff ${angleDiff.toFixed(5)})`);
+  }
+});
+
+test('Slice 512: lamp post glow default and night flame/glass match lamp-post.mjs (S3)', () => {
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  assert.ok(buildingsSec.includes("glow default #ffbe57 — already the town's window colour"), '## Buildings Lamp post row must state glow default #ffbe57');
+  assert.ok(buildingsSec.includes('flame #ffd98a, glass #ffb04a'), '## Buildings Lamp post row must state flame #ffd98a, glass #ffb04a');
+
+  const lampSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'kit-medieval/lamp-post.mjs'), 'utf8');
+  assert.ok(lampSrc.includes("flame: { color: '#ffd98a', intensity: 1.0,"), 'lamp-post.mjs night must set flame #ffd98a intensity 1.0');
+  assert.ok(lampSrc.includes("glass: { color: '#ffb04a', intensity: 0.75,"), 'lamp-post.mjs night must set glass #ffb04a intensity 0.75');
+  assert.ok(lampSrc.includes("glow:    { type: 'color', default: '#ffbe57'"), 'lamp-post.mjs params must default glow to #ffbe57');
+  assert.match(stagingJs, /place\(LampPost,\s*\{\s*scale:\s*s\s*\},\s*x,\s*z,\s*\{\s*rotY:\s*0\s*\}\)/, 'staging.js LampPost placement must pass no glow override, so the default applies');
+});
+
+test('Slice 512: Terrain table full rows verbatim including notes (S4)', () => {
+  const terrainSec = getSection(readmeMd, 'Terrain (as built — no fallbacks needed)').replace(/\s+/g, ' ');
+  for (const row of [
+    '| span | 2 | 128 × 128 m (the live clearing is a 60 m disc) |',
+    "| clearing | 30 | matches the town's clearing radius |",
+    '| flatten | 0.5 | a level circle ~1/3 of the block across, in the middle |',
+    '| lake | 0.3 | a small lake, not a shoreline takeover |',
+    '| colorway | golden-evening | warm ground, darker water |',
+    '| edges | island |',
+  ]) {
+    assert.ok(terrainSec.includes(row), `## Terrain table must include the full row "${row}"`);
+  }
+});
+
+test('Slice 512: one kit cottage shape for all resident styles (S5)', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  assert.ok(
+    limitsSec.includes("**One kit cottage shape for all resident styles**: `kit-medieval/cottage-small.mjs` has one cottage silhouette (so Tomas's `tower` style reads as a cottage; his signpost + manifest colors carry the identity)."),
+    '## Known limits must state one kit cottage shape for all resident styles'
+  );
+
+  const cottageFiles = fs.readdirSync(path.join(BUNDLE_DIR, 'kit-medieval')).filter((n) => /^cottage-.*\.mjs$/.test(n));
+  assert.deepEqual(cottageFiles, ['cottage-small.mjs'], 'kit-medieval/ must hold exactly one cottage module');
+  assert.ok(stagingJs.includes("import * as Cottage from './kit-medieval/cottage-small.mjs';"), 'staging.js must import cottage-small.mjs');
+  const cottageImports = [...stagingJs.matchAll(/from\s+'\.\/kit-medieval\/cottage-[^']+'/g)].map((m) => m[0]);
+  assert.deepEqual(cottageImports, ["from './kit-medieval/cottage-small.mjs'"], 'staging.js must import no other cottage module');
+});
+
+test('Slice 512: Terrain pitches left at the kit default of 4 (S6)', () => {
+  const limitsSec = getSection(readmeMd, 'Known limits / follow-ups').replace(/\s+/g, ' ');
+  assert.ok(
+    limitsSec.includes('Terrain `pitches` left at the kit default (4 level packed-earth camp pitches on the shelf behind the shore) — they read as clearings, away from the town middle.'),
+    '## Known limits must state Terrain pitches left at the kit default of 4'
+  );
+
+  const terrainJson = JSON.parse(fs.readFileSync(path.join(BUNDLE_DIR, 'kit-campground/TERRAIN.json'), 'utf8'));
+  assert.equal(terrainJson.pitches, 4, 'kit-campground/TERRAIN.json pitches must be 4');
+  const layoutJson = JSON.parse(fs.readFileSync(path.join(BUNDLE_DIR, 'kit-campground/LAYOUT.json'), 'utf8'));
+  assert.ok(Array.isArray(layoutJson), 'kit-campground/LAYOUT.json must be an array');
+  assert.equal(layoutJson[0]?.params?.pitches, 4, 'kit-campground/LAYOUT.json terrain entry pitches must be 4');
+});
+
+test('Slice 512: inn-nightly-call, event-banner, and prompt-book have no THREE import or top-level document access (S7)', () => {
+  // inn-nightly-call.mjs wraps the claim across two comment lines
+  // ("...; no" / "// top-level ..."), so check the two fragments.
+  const innSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'inn-nightly-call.mjs'), 'utf8');
+  assert.ok(innSrc.includes('No THREE import; no') && innSrc.includes('top-level document access.'), 'inn-nightly-call.mjs header must state no THREE import and no top-level document access');
+  assert.doesNotMatch(innSrc, /from\s+['"]three['"]/, 'inn-nightly-call.mjs must not import from three');
+  assert.doesNotMatch(innSrc, /document\./, 'inn-nightly-call.mjs must not contain a document. reference');
+
+  for (const [file, headerClaim] of [
+    ['event-banner.mjs', 'No THREE import; no top-level document access'],
+    ['prompt-book.mjs', 'no THREE dependency, no top-level document access'],
+  ]) {
+    const src = fs.readFileSync(path.join(BUNDLE_DIR, file), 'utf8');
+    assert.ok(src.includes(headerClaim), `${file} header must state ${headerClaim}`);
+    assert.doesNotMatch(src, /from\s+['"]three['"]/, `${file} must not import from three`);
+    assert.doesNotMatch(src, /document\./, `${file} must not contain a document. reference`);
+  }
+});
+
+test('Slice 512: node --check on staging.js as .mjs matches Verification bullet (S8)', () => {
+  const verSec = getSection(readmeMd, 'Verification done locally (no browser here — no visual check claimed)').replace(/\s+/g, ' ');
+  assert.ok(verSec.includes('`node --check` on staging.js (as `.mjs`).'), '## Verification must state node --check on staging.js (as .mjs)');
+
+  const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-check512-'));
+  try {
+    const copyPath = path.join(tmpOut, 'staging-check.mjs');
+    fs.copyFileSync(path.join(BUNDLE_DIR, 'staging.js'), copyPath);
+    execFileSync(process.execPath, ['--check', copyPath], { encoding: 'utf8' });
+  } finally {
+    fs.rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+
+test('Slice 512: buildings stood via groundAt, faced to centre, lit via camp.light with module defaults (S9)', () => {
+  const buildingsSec = getSection(readmeMd, 'Buildings (place coordinates, metres; bandstand spot at 0,0)').replace(/\s+/g, ' ');
+  assert.ok(
+    buildingsSec.includes("Every Polyfork building is stood on the terrain at runtime via `camp.groundAt(x, z)` and faced toward the centre (as are the bandstand and Milo's cottage). Night glow for Polyfork modules is wired by hand through `camp.light(obj, pairs)` built from each module's `night` export — `kit-campground/kit.json` has no night pairs for the `kit-medieval/` building modules imported directly, so explicit pairs are required. No building's lit zone was recolored, so every `from` colour is the module default."),
+    '## Buildings must state groundAt placement, facing the centre, camp.light night glow, and module-default from colours'
+  );
+
+  assert.ok(stagingJs.includes('const faceCenter = (x, z) => Math.atan2(-x, -z);'), 'staging.js must define faceCenter as atan2(-x, -z)');
+  assert.match(stagingJs, /obj\.position\.set\(x,\s*camp\.groundAt\(x,\s*z\),\s*z\);[\s\S]*?obj\.rotation\.y\s*=\s*opts\.rotY\s*\?\?\s*faceCenter\(x,\s*z\);/, 'place() must stand on camp.groundAt and face the centre by default');
+  assert.ok(stagingJs.includes('const from = params[zone] ?? mod.params?.[zone]?.default;'), 'lightUp must derive from as params[zone] ?? module default');
+  assert.ok(stagingJs.includes('if (pairs.length) camp.light(obj, pairs);'), 'lightUp must call camp.light when pairs are non-empty');
+
+  const kitJson = JSON.parse(fs.readFileSync(path.join(BUNDLE_DIR, 'kit-campground/kit.json'), 'utf8'));
+  const nightParts = new Set();
+  for (const entry of kitJson.night || []) for (const part of entry.parts || []) nightParts.add(part);
+  for (const med of ['tavern', 'cottage-small', 'gatehouse', 'windmill', 'well', 'lamp-post']) {
+    assert.ok(!nightParts.has(med), `kit-campground/kit.json night must have no pairs for ${med}`);
+  }
+
+  for (const [name, file, params] of [
+    ['Tavern', 'tavern.mjs', ['width', 'plaster', 'tile', 'timber']],
+    ['Gatehouse', 'gatehouse.mjs', ['shingle', 'plaster', 'gateState', 'windows']],
+    ['Well', 'well.mjs', []],
+    ['LampPost', 'lamp-post.mjs', ['scale']],
+    ['Windmill', 'windmill.mjs', ['tallness', 'stone']],
+  ]) {
+    const src = fs.readFileSync(path.join(BUNDLE_DIR, 'kit-medieval', file), 'utf8');
+    const nightMatch = src.match(/export const night = \{([\s\S]*?)\n\};/);
+    const zones = nightMatch ? [...nightMatch[1].matchAll(/^\s*(\w+):\s*\{/gm)].map((m) => m[1]) : [];
+    const clash = zones.filter((z) => params.includes(z));
+    assert.deepEqual(clash, [], `${name} night zones must not collide with place() params (no recolor)`);
+  }
+});
+
+test('Slice 512: test-prompt-book.mjs bullet claims match prompt-book.mjs behavior (S10)', async () => {
+  const contentsSec = getSection(readmeMd, 'Contents');
+  const bullet = contentsSec.split(/\r?\n- /).find((b) => b.startsWith('`test-prompt-book.mjs`'));
+  assert.ok(bullet, '## Contents must have a `test-prompt-book.mjs` bullet');
+  assert.ok(
+    bullet.replace(/\s+/g, ' ').includes('unit tests for `prompt-book.mjs` (100-entry cap, chronological order, `[NPC]` pill, `reply_to` threading, say vs emote, empty state, `textContent`-only XSS safety).'),
+    'test-prompt-book.mjs bullet must list the 100-entry cap, chronological order, [NPC] pill, reply_to threading, say vs emote, empty state, and textContent-only XSS safety'
+  );
+
+  const { formatPromptBookEntries, renderPromptBook } = await import('./prompt-book.mjs');
+  const entries = Array.from({ length: 101 }, (_, i) => ({ id: i + 1, handle: `h${i + 1}`, role: 'muse', kind: 'say', body: `b${i + 1}` }));
+  const formatted = formatPromptBookEntries(entries);
+  assert.equal(formatted.length, 100, 'formatPromptBookEntries must cap at the most recent 100 lines');
+  assert.equal(formatted[0].id, 2, 'formatPromptBookEntries must drop the oldest line');
+  assert.equal(formatted[99].id, 101, 'formatPromptBookEntries must keep the newest line');
+  assert.ok(formatted.every((e, i) => e.id === i + 2), 'formatPromptBookEntries must preserve chronological order');
+
+  const pbSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'prompt-book.mjs'), 'utf8');
+  assert.ok(pbSrc.includes('Format and cap Prompt Book entries to the most recent 100 lines,'), 'prompt-book.mjs must document the 100-line cap');
+  assert.equal([...pbSrc.matchAll(/innerHTML/g)].length, 1, 'innerHTML must appear exactly once in prompt-book.mjs (the header comment)');
+  assert.ok(pbSrc.includes('(never innerHTML)'), 'prompt-book.mjs header must state textContent only (never innerHTML)');
+  assert.ok(pbSrc.includes("entry.kind === 'emote' ? ` ${entry.body}` : `: ${entry.body}`"), 'renderPromptBook must use a space for emote and a colon for say');
+  assert.ok(pbSrc.includes("empty.textContent = 'No remarks yet in the last 24h.';"), 'renderPromptBook must show the empty state');
+  assert.ok(pbSrc.includes('`\\u21a9 #${entry.reply_to} @${targetHandle}`'), 'renderPromptBook must thread reply_to with the target handle');
+
+  const makeEl = (tag) => {
+    const el = { tag, className: '', textContent: '', children: [] };
+    el.appendChild = (c) => { el.children.push(c); };
+    el.removeChild = (c) => { el.children = el.children.filter((x) => x !== c); };
+    Object.defineProperty(el, 'firstChild', { get: () => el.children[0] || null });
+    return el;
+  };
+  const doc = { createElement: makeEl };
+  const container = makeEl('div');
+  renderPromptBook(container, [
+    { id: 1, handle: 'wick', role: 'npc', kind: 'say', body: 'Hello', reply_to: null },
+    { id: 2, handle: 'visitor', role: 'guest', kind: 'emote', body: 'waves', reply_to: 1 },
+  ], doc);
+  assert.equal(container.children.length, 2);
+  assert.equal(container.children[0].children[2].textContent, ': Hello');
+  assert.equal(container.children[1].children[1].textContent, '\u21a9 #1 @wick');
+  assert.equal(container.children[1].children[3].textContent, ' waves');
 });
