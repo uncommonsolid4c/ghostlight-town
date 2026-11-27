@@ -1394,12 +1394,12 @@ test('staging.js plot-overlay wiring source pins', async () => {
   assert.equal(sl.filter((l) => l.includes('resolveGazetteOverlayContent')).length, 0);
 });
 
-test('file hygiene — 48 unique names, 6 imports, and pinned as-true counts', async () => {
+test('file hygiene — 58 unique names, 6 imports, and pinned as-true counts', async () => {
   const self = await fs.readFile(path.join(__dirname, 'test-plot-overlay.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -1415,4 +1415,186 @@ test('file hygiene — 48 unique names, 6 imports, and pinned as-true counts', a
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
   assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 0);
+});
+
+test('P1 — HANDLE_RE drift pin between town-3d/town.js and staging-polyfork/plot-overlay.mjs', async () => {
+  const expected = 'const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;';
+  const [townSrc, overlaySrc] = await Promise.all([
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'plot-overlay.mjs'), 'utf8'),
+  ]);
+  const townLine = townSrc.split('\n').find((l) => l.includes('const HANDLE_RE'));
+  const overlayLine = overlaySrc.split('\n').find((l) => l.includes('const HANDLE_RE'));
+  assert.equal(townLine, expected);
+  assert.equal(overlayLine, expected);
+});
+
+test('P2 — resolvePlotOverlayContent apiBase object, boolean, and 0 resolve to bare path', async () => {
+  for (const apiBase of [{}, true, 0]) {
+    let seenUrl = null;
+    const res = await resolvePlotOverlayContent('wick', {
+      apiBase,
+      fetchFn: async (url) => {
+        seenUrl = url;
+        return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+      },
+    });
+    assert.equal(seenUrl, '/api/town/plot?handle=wick');
+    assert.deepEqual(res, { kind: 'api', html: '<p>x</p>' });
+  }
+});
+
+test('P3 — resolvePlotOverlayContent plot data null or html boolean fall back to static', async () => {
+  for (const payload of [null, { html: true }, { html: false }]) {
+    const res = await resolvePlotOverlayContent('wick', {
+      fetchFn: async () => ({ status: 200, json: async () => payload }),
+    });
+    assert.deepEqual(res, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+});
+
+test('P4 — resolvePlotOverlayContent percent and query-shaped handles encode into static URLs with no fetch', async () => {
+  let calls = 0;
+  const countingFetch = async () => {
+    calls += 1;
+    return { status: 200, json: async () => ({ html: '<p>nope</p>' }) };
+  };
+  const pctRes = await resolvePlotOverlayContent('wick%20x', { fetchFn: countingFetch });
+  const qryRes = await resolvePlotOverlayContent('wick?x=1', { fetchFn: countingFetch });
+  assert.deepEqual(pctRes, { kind: 'static', url: 'plots/wick%2520x/index.html' });
+  assert.deepEqual(qryRes, { kind: 'static', url: 'plots/wick%3Fx%3D1/index.html' });
+  assert.equal(calls, 0);
+});
+
+test('P5 — resolveGazetteOverlayContent leading-dot file, missing latest, and latest true', async () => {
+  const dotRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      json: async () => ({ latest: 2, issues: [{ n: 2, file: '.issue-002.html' }] }),
+    }),
+  });
+  assert.equal(dotRes.issueNum, 2);
+  assert.equal(dotRes.issueFile, '.issue-002.html');
+
+  const noLatestRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      json: async () => ({ issues: [{ n: 5, file: 'issue-005.html' }] }),
+    }),
+  });
+  assert.equal(noLatestRes.issueNum, 5);
+  assert.equal(noLatestRes.issueFile, 'issue-005.html');
+
+  const boolLatestRes = await resolveGazetteOverlayContent({
+    fetchFn: async () => ({
+      ok: true,
+      json: async () => ({
+        latest: true,
+        issues: [
+          { n: 3, file: 'issue-003.html' },
+          { n: 4, file: 'issue-004.html' },
+        ],
+      }),
+    }),
+  });
+  assert.equal(boolLatestRes.issueNum, 3);
+  assert.equal(boolLatestRes.issueFile, 'issue-003.html');
+});
+
+test('P6 — openGazetteOverlay with no fetchFn opens issue-001', async () => {
+  const els = makeFakeOverlayElements();
+  const res = await openGazetteOverlay({ ...els });
+  assert.deepEqual(res, {
+    issueNum: 1,
+    issueFile: 'issue-001.html',
+    url: 'gazette/issue-001.html',
+    title: 'The Ghostlight Gazette — Issue #1',
+  });
+  assert.equal(els.titleEl.textContent, 'The Ghostlight Gazette — Issue #1');
+  assert.equal(els.iframeEl.src, 'gazette/issue-001.html');
+  assert.equal(els.overlayEl.hidden, false);
+  assert.equal(els.iframeEl.getAttribute('sandbox'), '');
+});
+
+test('P7 — staging.js handleClosePlotOverlay source lines 216-230', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const sl = stagingSrc.split('\n');
+  assert.equal(sl[215], 'function handleClosePlotOverlay() {');
+  assert.equal(sl[216], '  currentPlotHandle = null;');
+  assert.equal(sl[217], '  setPlotTabs(null);');
+  assert.equal(sl[218], '  closePlotOverlay({');
+  assert.equal(sl[219], '    overlayEl: plotOverlayEl,');
+  assert.equal(sl[220], '    iframeEl: plotIframeEl,');
+  assert.equal(sl[221], '    onAfterClose: () => {');
+  assert.equal(sl[222], '      keys.clear();');
+  assert.equal(sl[223], '      if (!interiorVisit.isInside()) {');
+  assert.equal(sl[224], '        controls.enabled = true;');
+  assert.equal(sl[225], '      }');
+  assert.equal(sl[226], '      renderer.domElement.focus?.();');
+  assert.equal(sl[227], '    },');
+  assert.equal(sl[228], '  });');
+  assert.equal(sl[229], '}');
+});
+
+test('P8 — staging.js tab-note click handler source lines 234-253', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const sl = stagingSrc.split('\n');
+  assert.equal(sl[233], "plotOverlayTabNoteEl?.addEventListener('click', () => {");
+  assert.equal(sl[234], '  if (!currentPlotHandle) return;');
+  assert.equal(sl[235], "  const fetchFn = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;");
+  assert.equal(sl[236], '  // NOTE: no liveStore here — these handlers run at module scope, outside');
+  assert.equal(sl[237], '  // init() where liveStore lives. Referencing it threw a ReferenceError and');
+  assert.equal(sl[238], '  // killed both tabs (Nov 23 hotfix). The cottage opener sets the tab label');
+  assert.equal(sl[239], '  // fresh on every open, which is when it matters.');
+  assert.equal(sl[240], "  setPlotTabs('note');");
+  assert.equal(sl[241], '  openPlotOverlay(currentPlotHandle, {');
+  assert.equal(sl[242], '    overlayEl: plotOverlayEl,');
+  assert.equal(sl[243], '    titleEl: plotOverlayTitleEl,');
+  assert.equal(sl[244], '    iframeEl: plotIframeEl,');
+  assert.equal(sl[245], '    fetchFn,');
+  assert.equal(sl[246], '    onBeforeOpen: () => {');
+  assert.equal(sl[247], '      keys.clear();');
+  assert.equal(sl[248], '      controls.enabled = false;');
+  assert.equal(sl[249], '      glideTarget = null;');
+  assert.equal(sl[250], '    },');
+  assert.equal(sl[251], '  });');
+  assert.equal(sl[252], '});');
+});
+
+test('P9 — staging.js cottage-click branch source lines 1347-1361', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const sl = stagingSrc.split('\n');
+  assert.equal(sl[1346], '          currentPlotHandle = target.userData.handle;');
+  assert.equal(sl[1347], '          if (plotOverlayTabGuestbookEl) {');
+  assert.equal(sl[1348], '            plotOverlayTabGuestbookEl.textContent = formatPlotGuestbookTabLabel(');
+  assert.equal(sl[1349], '              liveStore.lastState?.guestbook_by_plot?.[currentPlotHandle]');
+  assert.equal(sl[1350], '            );');
+  assert.equal(sl[1351], '          }');
+  assert.equal(sl[1352], '          openPlotOverlay(target.userData.handle, {');
+  assert.equal(sl[1353], '            overlayEl: plotOverlayEl,');
+  assert.equal(sl[1354], '            titleEl: plotOverlayTitleEl,');
+  assert.equal(sl[1355], '            iframeEl: plotIframeEl,');
+  assert.equal(sl[1356], '            fetchFn,');
+  assert.equal(sl[1357], '            onBeforeOpen: onBeforeOverlayOpen,');
+  assert.equal(sl[1358], '          });');
+  assert.equal(sl[1359], "          setPlotTabs('note');");
+  assert.equal(sl[1360], '          return true;');
+});
+
+test('P10 — staging.js newsstand branch source lines 1363-1375', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const sl = stagingSrc.split('\n');
+  assert.equal(sl[1362], "        if (kind === 'newsstand') {");
+  assert.equal(sl[1363], '          if (infoStripEl) infoStripEl.hidden = true;');
+  assert.equal(sl[1364], '          currentPlotHandle = null;');
+  assert.equal(sl[1365], '          setPlotTabs(null);');
+  assert.equal(sl[1366], '          openGazetteOverlay({');
+  assert.equal(sl[1367], '            overlayEl: plotOverlayEl,');
+  assert.equal(sl[1368], '            titleEl: plotOverlayTitleEl,');
+  assert.equal(sl[1369], '            iframeEl: plotIframeEl,');
+  assert.equal(sl[1370], '            fetchFn,');
+  assert.equal(sl[1371], '            onBeforeOpen: onBeforeOverlayOpen,');
+  assert.equal(sl[1372], '          });');
+  assert.equal(sl[1373], '          return true;');
+  assert.equal(sl[1374], '        }');
 });
