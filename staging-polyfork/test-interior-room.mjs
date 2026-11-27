@@ -1378,12 +1378,12 @@ test('header dressing bullets agree with the built room', async () => {
   }
 });
 
-test('file hygiene 48 unique names 6 imports pinned counts', async () => {
+test('file hygiene 58 unique names 6 imports pinned counts', async () => {
   const self = await fs.readFile(path.join(__dirname, 'test-interior-room.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^test\((['"])(.*?)\1, /gm)].map((m) => m[2]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.ok(names.includes("every dressing group's world bounds fit the room"), 'apostrophe name extracts whole');
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
@@ -1414,4 +1414,149 @@ test('file hygiene 48 unique names 6 imports pinned counts', async () => {
   assert.equal(occ('FIX' + 'ME'), 0);
   assert.equal(occ('camp' + 'fire'), 3);
   assert.equal(occ('inner' + 'HTML'), 0);
+});
+
+test('P1 room group position is exactly (0, 0, 0)', () => {
+  const room = buildInteriorRoom(makeFakeThree());
+  assertNear(room.position.x, 0, 'room position.x');
+  assertNear(room.position.y, 0, 'room position.y');
+  assertNear(room.position.z, 0, 'room position.z');
+});
+
+test('P2 window glows have exact bounds and sit inside the wall height', () => {
+  const room = buildInteriorRoom(makeFakeThree());
+  const lg = meshBounds(room.children.find((m) => m.name === 'interior_window_glow_left'));
+  const rg = meshBounds(room.children.find((m) => m.name === 'interior_window_glow_right'));
+  assertNear(lg.minX, -1.73, 'left glow minX');
+  assertNear(lg.maxX, -1.71, 'left glow maxX');
+  assertNear(lg.minY, 1.05, 'left glow minY');
+  assertNear(lg.maxY, 1.85, 'left glow maxY');
+  assertNear(lg.minZ, -0.45, 'left glow minZ');
+  assertNear(lg.maxZ, 0.45, 'left glow maxZ');
+  assertNear(rg.minX, 1.71, 'right glow minX');
+  assertNear(rg.maxX, 1.73, 'right glow maxX');
+  assertNear(rg.minY, 1.05, 'right glow minY');
+  assertNear(rg.maxY, 1.85, 'right glow maxY');
+  assertNear(rg.minZ, -0.45, 'right glow minZ');
+  assertNear(rg.maxZ, 0.45, 'right glow maxZ');
+  assert.ok(lg.maxY < 2.6 && rg.maxY < 2.6, 'both glows below wall top 2.6');
+  assert.ok(lg.minY > 0.08 && rg.minY > 0.08, 'both glows above floor top 0.08');
+});
+
+test('P3 desk and rug are separated in z only, not in x', () => {
+  const room = buildInteriorRoom(makeFakeThree());
+  const desk = meshBounds(room.children.find((m) => m.name === 'interior_desk'));
+  const rug = meshBounds(room.children.find((m) => m.name === 'interior_rug'));
+  assertNear(desk.maxZ, -0.55, 'desk maxZ');
+  assertNear(rug.minZ, -0.4, 'rug minZ');
+  assertNear(rug.minZ - desk.maxZ, 0.15, 'desk-to-rug z gap');
+  assertNear(desk.maxX, -0.4, 'desk maxX');
+  assertNear(rug.minX, -0.55, 'rug minX');
+  assert.ok(desk.maxX > rug.minX, 'desk and rug x ranges overlap');
+});
+
+test('P4 setInteriorVisible coerces and assigns on plain objects', () => {
+  const obj1 = {};
+  assert.equal(setInteriorVisible(obj1, true), true);
+  assert.equal(obj1.visible, true);
+
+  const obj2 = { visible: 'yes' };
+  assert.equal(setInteriorVisible(obj2, 0), false);
+  assert.equal(obj2.visible, false);
+
+  const obj3 = { visible: 0 };
+  assert.equal(setInteriorVisible(obj3, 'yes'), true);
+  assert.strictEqual(obj3.visible, true);
+
+  const obj4 = {};
+  assert.equal(setInteriorVisible(obj4, 1), true);
+  assert.strictEqual(obj4.visible, true);
+});
+
+test('P5 non-object opts fall back to plaster', () => {
+  const THREE = makeFakeThree();
+  for (const opts of ['milo', 42, true]) {
+    const room = buildInteriorRoom(THREE, opts);
+    const back = room.children.find((m) => m.name === 'interior_wall_back');
+    assert.equal(back.material.color, '#f5efe0', `opts=${String(opts)} falls back to plaster`);
+  }
+});
+
+test('P6 setInteriorPalette skips null/undefined children entries', () => {
+  const wall = { name: 'interior_wall_back', material: { color: '#f5efe0' } };
+  const roomWithGaps = { children: [null, undefined, wall] };
+  assert.equal(setInteriorPalette(roomWithGaps, 'wick'), true);
+  assert.equal(wall.material.color, '#c8922e');
+
+  const noBackWall = { children: [null, { name: 'other' }] };
+  assert.equal(setInteriorPalette(noBackWall, 'milo'), false);
+});
+
+test('P7 oil lamp world bounds and handle protrudes past globe', () => {
+  const lamp = buildProceduralOilLamp(makeFakeThree());
+  const b = computeGroupBounds(lamp);
+  assertNear(b.minX, -0.18, 'lamp minX');
+  assertNear(b.maxX, 0.18, 'lamp maxX');
+  assertNear(b.minY, 0, 'lamp minY');
+  assertNear(b.maxY, 0.38, 'lamp maxY');
+  assertNear(b.minZ, -0.18, 'lamp minZ');
+  assertNear(b.maxZ, 0.18, 'lamp maxZ');
+  assertNear(b.sizeX, 0.36, 'lamp sizeX');
+  assertNear(b.sizeY, 0.38, 'lamp sizeY');
+  assertNear(b.sizeZ, 0.36, 'lamp sizeZ');
+  const globeBounds = meshBounds(lamp.children[1]);
+  const handleBounds = meshBounds(lamp.children[2]);
+  assertNear(globeBounds.maxX, 0.12, 'globe maxX');
+  assertNear(handleBounds.maxX, 0.15, 'handle maxX');
+  assert.ok(handleBounds.maxX > globeBounds.maxX, 'handle protrudes past globe');
+});
+
+test('P8 typewriter roller meshBounds ignores the 90-degree rotation', () => {
+  const typewriter = buildProceduralTypewriter(makeFakeThree());
+  const roller = typewriter.children[2];
+  assertNear(roller.rotation.z, Math.PI / 2, 'roller rotation.z');
+  const rb = meshBounds(roller);
+  assertNear(rb.minX, -0.05, 'roller minX');
+  assertNear(rb.maxX, 0.05, 'roller maxX');
+  assertNear(rb.minY, 0.07, 'roller minY');
+  assertNear(rb.maxY, 0.49, 'roller maxY');
+  assertNear(rb.minZ, -0.15, 'roller minZ');
+  assertNear(rb.maxZ, -0.05, 'roller maxZ');
+});
+
+test('P9 rafter spacing is exactly 0.7, symmetric about 0, 0.56 clear gap', () => {
+  const room = buildInteriorRoom(makeFakeThree());
+  const zs = [1, 2, 3, 4].map(
+    (i) => room.children.find((m) => m.name === `interior_rafter_${i}`).position.z
+  );
+  assertNear(zs[0] + zs[3], 0, 'outer rafters symmetric');
+  assertNear(zs[1] + zs[2], 0, 'inner rafters symmetric');
+  for (let i = 0; i < 3; i++) {
+    assertNear(zs[i + 1] - zs[i], 0.7, `rafter ${i + 1}->${i + 2} center spacing`);
+  }
+  const r0 = meshBounds(room.children.find((m) => m.name === 'interior_rafter_1'));
+  const r1 = meshBounds(room.children.find((m) => m.name === 'interior_rafter_2'));
+  assertNear(r1.minZ - r0.maxZ, 0.56, 'clear gap between adjacent rafters');
+});
+
+test('P10 milo kettle and cat have exact world bounds', () => {
+  const room = buildInteriorRoom(makeFakeThree());
+  const milo = room.children.find((m) => m.name === 'interior_dressing_milo');
+  assertNear(milo.position.x, 0, 'milo group x');
+  assertNear(milo.position.y, 0, 'milo group y');
+  assertNear(milo.position.z, 0, 'milo group z');
+  const kettle = meshBounds(milo.children.find((m) => m.name === 'interior_tea_kettle'));
+  assertNear(kettle.minX, -0.98, 'kettle minX');
+  assertNear(kettle.maxX, -0.62, 'kettle maxX');
+  assertNear(kettle.minY, 0.8, 'kettle minY');
+  assertNear(kettle.maxY, 1.04, 'kettle maxY');
+  assertNear(kettle.minZ, -1.03, 'kettle minZ');
+  assertNear(kettle.maxZ, -0.67, 'kettle maxZ');
+  const cat = meshBounds(milo.children.find((m) => m.name === 'interior_cat'));
+  assertNear(cat.minX, 1.19, 'cat minX');
+  assertNear(cat.maxX, 1.51, 'cat maxX');
+  assertNear(cat.minY, 0.08, 'cat minY');
+  assertNear(cat.maxY, 0.44, 'cat maxY');
+  assertNear(cat.minZ, -1.06, 'cat minZ');
+  assertNear(cat.maxZ, -0.74, 'cat maxZ');
 });
