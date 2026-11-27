@@ -1573,8 +1573,8 @@ test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G48)', as
   const lines = src.split('\n');
 
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48);
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58);
 
   const imports = lines.filter((l) => l.startsWith('import '));
   assert.deepEqual(imports, [
@@ -1594,4 +1594,351 @@ test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G48)', as
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(new RegExp('camp' + 'fire', 'i').test(src), false);
+});
+
+test('feed.xml item element order is title < link < guid < pubDate < description (G49)', async () => {
+  const xml = await fs.readFile(FEED_PATH, 'utf8');
+  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+  assert.equal(items.length, 3);
+  for (const item of items) {
+    const iTitle = item.indexOf('<title>');
+    const iLink = item.indexOf('<link>');
+    const iGuid = item.indexOf('<guid');
+    const iPubDate = item.indexOf('<pubDate>');
+    const iDesc = item.indexOf('<description>');
+    assert.ok(iTitle >= 0, 'item must have <title>');
+    assert.ok(iTitle < iLink, 'title must precede link');
+    assert.ok(iLink < iGuid, 'link must precede guid');
+    assert.ok(iGuid < iPubDate, 'guid must precede pubDate');
+    assert.ok(iPubDate < iDesc, 'pubDate must precede description');
+  }
+});
+
+test('build-feed.mjs extractLeadDescription truncates at 500 chars on word boundary or hard slice (G50)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-feed-g50-'));
+  try {
+    const scriptCopy = path.join(tmpDir, 'build-feed.mjs');
+    const outPath = path.join(tmpDir, 'feed.xml');
+    await fs.copyFile(BUILD_FEED_PATH, scriptCopy);
+
+    const words120 = Array(120).fill('word').join(' ');
+    const xs600 = 'x'.repeat(600);
+    await fs.writeFile(
+      path.join(tmpDir, 'issue-101.html'),
+      `<!doctype html><html><body><section><p>${words120}</p></section></body></html>`
+    );
+    await fs.writeFile(
+      path.join(tmpDir, 'issue-102.html'),
+      `<!doctype html><html><body><section><p>${xs600}</p></section></body></html>`
+    );
+    await fs.writeFile(
+      path.join(tmpDir, 'latest.json'),
+      JSON.stringify({
+        issues: [
+          { n: 101, date: '2026-11-20', file: 'issue-101.html', headline: 'Words' },
+          { n: 102, date: '2026-11-21', file: 'issue-102.html', headline: 'Xs' },
+        ],
+        latest: 102,
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [scriptCopy, '--out', outPath]);
+    assert.equal(stdout, 'feed.xml: 2 item(s)\n');
+    assert.equal(stderr, '');
+
+    const xml = await fs.readFile(outPath, 'utf8');
+    assert.ok(xml.includes('<lastBuildDate>Sat, 21 Nov 2026 12:00:00 +0000</lastBuildDate>'));
+
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+    assert.equal(items.length, 2);
+
+    const title0 = items[0].match(/<title>([\s\S]*?)<\/title>/)[1];
+    const title1 = items[1].match(/<title>([\s\S]*?)<\/title>/)[1];
+    assert.equal(title0, 'Xs');
+    assert.equal(title1, 'Words');
+
+    const desc0 = unescapeXml(items[0].match(/<description>([\s\S]*?)<\/description>/)[1]);
+    const desc1 = unescapeXml(items[1].match(/<description>([\s\S]*?)<\/description>/)[1]);
+    assert.equal(desc0, 'x'.repeat(500));
+    assert.equal(desc1, Array(100).fill('word').join(' '));
+    assert.equal(desc1.length, 499);
+    assert.ok(desc1.endsWith('word'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-feed.mjs formats weekday and zero-padded day in pubDate and lastBuildDate (G51)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-feed-g51-'));
+  try {
+    const scriptCopy = path.join(tmpDir, 'build-feed.mjs');
+    const outPath = path.join(tmpDir, 'feed.xml');
+    await fs.copyFile(BUILD_FEED_PATH, scriptCopy);
+
+    await fs.writeFile(
+      path.join(tmpDir, 'issue-201.html'),
+      '<!doctype html><html><body><section><p>Fifth issue lead.</p></section></body></html>'
+    );
+    await fs.writeFile(
+      path.join(tmpDir, 'issue-202.html'),
+      '<!doctype html><html><body><section><p>Fifteenth issue lead.</p></section></body></html>'
+    );
+    await fs.writeFile(
+      path.join(tmpDir, 'latest.json'),
+      JSON.stringify({
+        issues: [
+          { n: 201, date: '2026-11-05', file: 'issue-201.html', headline: 'Fifth' },
+          { n: 202, date: '2026-11-15', file: 'issue-202.html', headline: 'Fifteenth' },
+        ],
+        latest: 202,
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [scriptCopy, '--out', outPath]);
+    assert.equal(stdout, 'feed.xml: 2 item(s)\n');
+    assert.equal(stderr, '');
+
+    const xml = await fs.readFile(outPath, 'utf8');
+    assert.ok(xml.includes('<lastBuildDate>Sun, 15 Nov 2026 12:00:00 +0000</lastBuildDate>'));
+
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => m[1]);
+    assert.equal(items.length, 2);
+    assert.equal(items[0].match(/<pubDate>([\s\S]*?)<\/pubDate>/)[1], 'Sun, 15 Nov 2026 12:00:00 +0000');
+    assert.equal(items[1].match(/<pubDate>([\s\S]*?)<\/pubDate>/)[1], 'Thu, 05 Nov 2026 12:00:00 +0000');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs source pins: town time zone, formatting, 7-day helper (G52)', async () => {
+  const src = await fs.readFile(BUILD_DIGEST_PATH, 'utf8');
+  for (const needle of [
+    "const TOWN_TIME_ZONE = 'America/Los_Angeles';",
+    'timeZone: TOWN_TIME_ZONE,',
+    "hourCycle: 'h23',",
+    "weekday: 'long',",
+    'subtractDaysFromDateKey(resolvedUntil, 6)',
+    'Source: state snapshot(s) only',
+    'void __dirname;',
+    "month: '2-digit',",
+    "day: '2-digit',",
+  ]) {
+    assert.ok(src.includes(needle), `build-digest.mjs must include ${needle}`);
+  }
+});
+
+test('build-digest.mjs argument-error paths exit 1 with exact stderr (G53)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-g53-'));
+  try {
+    const statePath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(statePath, JSON.stringify({ prompt_book: [] }));
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', statePath, '--since', '2026-1-2']),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        err.stderr === 'build-digest error: Invalid --since date (expected YYYY-MM-DD): 2026-1-2\n'
+    );
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', statePath, '--until', '11/12/2026']),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        err.stderr === 'build-digest error: Invalid --until date (expected YYYY-MM-DD): 11/12/2026\n'
+    );
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', statePath, '--until']),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        err.stderr === 'build-digest error: Missing date after --until\n'
+    );
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', statePath, '--out']),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        err.stderr === 'build-digest error: Missing path after --out\n'
+    );
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [BUILD_DIGEST_PATH, '--state', path.join(tmpDir, 'does-not-exist.json')]),
+      (err) =>
+        err.code === 1 &&
+        err.stdout === '' &&
+        /Failed to read state file .*does-not-exist\.json/.test(err.stderr)
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs DST fall-back day grouping in town time (G54)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-g54-'));
+  try {
+    const statePath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        prompt_book: [
+          {
+            id: 1,
+            handle: 'alice',
+            role: 'muse',
+            kind: 'say',
+            body: 'oct31 late',
+            created_at: epochSec('2026-11-01T06:30:00Z'),
+          },
+          {
+            id: 2,
+            handle: 'bob',
+            role: 'muse',
+            kind: 'say',
+            body: 'nov1 pdt half past one',
+            created_at: epochSec('2026-11-01T08:30:00Z'),
+          },
+          {
+            id: 3,
+            handle: 'carol',
+            role: 'muse',
+            kind: 'say',
+            body: 'nov1 pst half past one',
+            created_at: epochSec('2026-11-01T09:30:00Z'),
+          },
+        ],
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state',
+      statePath,
+      '--since',
+      '2026-10-31',
+      '--until',
+      '2026-11-01',
+    ]);
+    assert.equal(stderr, '');
+
+    const iSat = stdout.indexOf('## Saturday, October 31, 2026');
+    const iSun = stdout.indexOf('## Sunday, November 1, 2026');
+    assert.ok(iSat >= 0, 'Saturday heading must be present');
+    assert.ok(iSun > iSat, 'Saturday heading must appear before Sunday heading');
+    assert.ok(stdout.includes('- **alice** 23:30 — oct31 late'));
+    assert.ok(stdout.includes('- **bob** 01:30 — nov1 pdt half past one'));
+    assert.ok(stdout.includes('- **carol** 01:30 — nov1 pst half past one'));
+    assert.ok(stdout.includes('3 line(s) from 3 speaker(s) in the window.'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('build-digest.mjs preserves body leading/trailing spaces and internal newlines verbatim (G55)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-digest-g55-'));
+  try {
+    const statePath = path.join(tmpDir, 'state.json');
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        prompt_book: [
+          {
+            id: 1,
+            handle: 'alice',
+            role: 'muse',
+            kind: 'say',
+            body: '  padded body  ',
+            created_at: epochSec('2026-11-12T19:00:00Z'),
+          },
+          {
+            id: 2,
+            handle: 'bob',
+            role: 'muse',
+            kind: 'say',
+            body: 'first line\nsecond line',
+            created_at: epochSec('2026-11-12T19:01:00Z'),
+          },
+        ],
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      BUILD_DIGEST_PATH,
+      '--state',
+      statePath,
+      '--since',
+      '2026-11-12',
+      '--until',
+      '2026-11-12',
+    ]);
+    assert.equal(stderr, '');
+    assert.ok(stdout.includes('- **alice** 11:00 —   padded body  '));
+    assert.ok(stdout.includes('- **bob** 11:01 — first line\nsecond line'));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('issue masthead-meta exact text for issues #2 and #3 (G56)', async () => {
+  const html2 = await fs.readFile(ISSUE_002_PATH, 'utf8');
+  const html3 = await fs.readFile(ISSUE_003_PATH, 'utf8');
+
+  const meta2 = html2.match(/<div class="masthead-meta">([\s\S]*?)<\/div>/);
+  assert.ok(meta2, 'issue #2 must have masthead-meta');
+  assert.equal(
+    meta2[1].replace(/\s+/g, ' ').trim(),
+    '<span>Issue #2</span> <span>14 November 2026</span> <span>No. 2 · Free to All</span>'
+  );
+
+  const meta3 = html3.match(/<div class="masthead-meta">([\s\S]*?)<\/div>/);
+  assert.ok(meta3, 'issue #3 must have masthead-meta');
+  assert.equal(
+    meta3[1].replace(/\s+/g, ' ').trim(),
+    '<span>Issue #3</span> <span>18 November 2026</span> <span>No. 3 · Free to All</span>'
+  );
+});
+
+test('latest.json top-level keys, unique issue numbers, and issue #1 headline (G57)', async () => {
+  const latest = JSON.parse(await fs.readFile(LATEST_PATH, 'utf8'));
+  assert.deepEqual(Object.keys(latest).sort(), ['issues', 'latest']);
+  const issue1 = latest.issues.find((i) => i.n === 1);
+  assert.ok(issue1, 'latest.json must include issue n=1');
+  assert.equal(issue1.headline, "A Town Where Nobody's Cottage Gets Torn Down");
+  assert.equal(new Set(latest.issues.map((i) => i.n)).size, latest.issues.length);
+});
+
+test('build-feed.mjs XML-escapes special characters in item title via CLI (G58)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gazette-feed-g58-'));
+  try {
+    const scriptCopy = path.join(tmpDir, 'build-feed.mjs');
+    const outPath = path.join(tmpDir, 'feed.xml');
+    await fs.copyFile(BUILD_FEED_PATH, scriptCopy);
+
+    const rawHeadline = `Tom & Jerry <The "Great" 'Escape'>`;
+    await fs.writeFile(
+      path.join(tmpDir, 'issue-301.html'),
+      '<!doctype html><html><body><section><p>Escaped headline test.</p></section></body></html>'
+    );
+    await fs.writeFile(
+      path.join(tmpDir, 'latest.json'),
+      JSON.stringify({
+        issues: [{ n: 301, date: '2026-11-22', file: 'issue-301.html', headline: rawHeadline }],
+        latest: 301,
+      })
+    );
+
+    const { stdout, stderr } = await execFileAsync(process.execPath, [scriptCopy, '--out', outPath]);
+    assert.equal(stdout, 'feed.xml: 1 item(s)\n');
+    assert.equal(stderr, '');
+
+    const xml = await fs.readFile(outPath, 'utf8');
+    const itemTitle = xml.match(/<item>[\s\S]*?<title>([\s\S]*?)<\/title>/)[1];
+    assert.equal(itemTitle, 'Tom &amp; Jerry &lt;The &quot;Great&quot; &apos;Escape&apos;&gt;');
+    assert.equal(xml.includes(rawHeadline), false);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
