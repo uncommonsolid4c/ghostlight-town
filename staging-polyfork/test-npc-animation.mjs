@@ -908,8 +908,8 @@ test('file hygiene: 45 unique names, 7 imports, zero banned terms, pinned as-tru
     const m = /^test\('([^']+)'/.exec(line);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 45);
-  assert.equal(new Set(names).size, 45);
+  assert.equal(names.length, 55);
+  assert.equal(new Set(names).size, 55);
 
   const importLines = lines.filter((l) => l.startsWith('import '));
   assert.equal(importLines.length, 7);
@@ -920,4 +920,212 @@ test('file hygiene: 45 unique names, 7 imports, zero banned terms, pinned as-tru
   assert.equal(countLines('Date' + '.now'), 0);
   assert.equal(countLines('fet' + 'ch('), 2);
   assert.equal(countLines('Math' + '.random'), 2);
+});
+
+test('Slice 476 G1: updateNpcAnimations with empty Map, array, Set, and generator does nothing', () => {
+  const calls = [];
+  const control = new Map([
+    ['wick', { anim: { update: (dt) => calls.push(dt) } }],
+  ]);
+  assert.doesNotThrow(() => {
+    updateNpcAnimations(new Map(), 0.016);
+    updateNpcAnimations([], 0.016);
+    updateNpcAnimations(new Set(), 0.016);
+    function* empty() {}
+    updateNpcAnimations(empty(), 0.016);
+  });
+  assert.deepEqual(calls, []);
+  updateNpcAnimations(control, 0.016);
+  assert.deepEqual(calls, [0.016]);
+});
+
+test('Slice 476 G2: explicit animateFn null falls back to the default import path and warns once', async () => {
+  const origWarn = console.warn;
+  try {
+    const idleWarnings = [];
+    console.warn = (...args) => idleWarnings.push(args.join(' '));
+    const idleResult = await attachIdleAnimation({}, { name: 'null-fn-idle' }, { animateFn: null });
+    assert.equal(idleResult, null);
+    assert.equal(idleWarnings.length, 1);
+    assert.ok(idleWarnings[0].includes('[npc-animation]'));
+    assert.ok(idleWarnings[0].includes('Idle clip'));
+    assert.ok(idleWarnings[0].includes('failed to attach'));
+
+    const npcWarnings = [];
+    console.warn = (...args) => npcWarnings.push(args.join(' '));
+    const npcResult = await attachNpcAnimation({}, { name: 'null-fn-npc' }, { animateFn: null });
+    assert.equal(npcResult, null);
+    assert.equal(npcWarnings.length, 1);
+    assert.ok(npcWarnings[0].includes('[npc-animation]'));
+    assert.ok(npcWarnings[0].includes('Idle/Walk clips'));
+    assert.ok(npcWarnings[0].includes('failed to attach'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('Slice 476 G3: attach passes the identical group and a fresh opts object per call', async () => {
+  const group = { name: 'g3' };
+  const seen = [];
+  const fakeAnimate = async (g, opts) => {
+    seen.push({ g, opts });
+    return { update() {} };
+  };
+
+  await attachIdleAnimation({}, group, { animateFn: fakeAnimate });
+  assert.equal(seen[0].g, group);
+  assert.deepEqual(seen[0].opts, { clips: ['Idle'], base: './anim/' });
+
+  seen[0].opts.base = 'MUTATED';
+  seen[0].opts.clips.push('Walk');
+  await attachIdleAnimation({}, group, { animateFn: fakeAnimate });
+  assert.equal(seen[1].g, group);
+  assert.notEqual(seen[1].opts, seen[0].opts);
+  assert.deepEqual(seen[1].opts, { clips: ['Idle'], base: './anim/' });
+});
+
+test('Slice 476 G4: updateNpcAnimations warns once per throwing handle for number and object throws', () => {
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const goodCalls = [];
+    const standIns = new Map([
+      ['num', { anim: { update: () => { throw 42; } } }],
+      ['good1', { anim: { update: (dt) => goodCalls.push(dt) } }],
+      ['obj', { anim: { update: () => { throw {}; } } }],
+      ['good2', { anim: { update: (dt) => goodCalls.push(dt) } }],
+    ]);
+
+    assert.doesNotThrow(() => updateNpcAnimations(standIns, 0.016));
+    assert.deepEqual(goodCalls, [0.016, 0.016]);
+    assert.equal(warnings.length, 2);
+    assert.ok(warnings[0].includes('[npc-animation] anim.update failed:'));
+    assert.ok(warnings[0].includes('42'));
+    assert.ok(warnings[1].includes('[npc-animation] anim.update failed:'));
+    assert.ok(warnings[1].includes('[object Object]'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('Slice 476 G5: vendored clip hips z-axis facts - idle all negative, walk all non-negative', () => {
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  const walk = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+
+  for (let i = 2; i < idle.hips.length; i += 3) {
+    assert.ok(idle.hips[i] < 0, `idle hips z[${i}] must be negative`);
+  }
+  for (let i = 1; i < idle.hips.length; i += 3) {
+    assert.ok(idle.hips[i] < 0, `idle hips y[${i}] must be negative`);
+  }
+  let walkMaxZ = -Infinity;
+  for (let i = 2; i < walk.hips.length; i += 3) {
+    assert.ok(walk.hips[i] >= 0, `walk hips z[${i}] must be non-negative`);
+    if (walk.hips[i] > walkMaxZ) walkMaxZ = walk.hips[i];
+  }
+  assert.equal(walkMaxZ, 0.0003);
+});
+
+test('Slice 476 G6: vendored clip hips loops close and byte lengths are pinned', () => {
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  const walk = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+
+  assert.deepEqual(idle.hips.slice(0, 3), [0.0055, -0.041, -0.0377]);
+  assert.deepEqual(idle.hips.slice(-3), [0.0055, -0.041, -0.0377]);
+  assert.deepEqual(idle.hips.slice(0, 3), idle.hips.slice(-3));
+  assert.deepEqual(walk.hips.slice(0, 3), [-0.0193, -0.0477, 0.0003]);
+  assert.deepEqual(walk.hips.slice(-3), [-0.0193, -0.0477, 0.0003]);
+  assert.deepEqual(walk.hips.slice(0, 3), walk.hips.slice(-3));
+
+  assert.equal(fs.statSync(path.join(__dirname, 'anim', 'anim-idle.json')).size, 46438);
+  assert.equal(fs.statSync(path.join(__dirname, 'anim', 'anim-walk.json')).size, 24647);
+});
+
+test('Slice 476 G7: npc-animation.mjs export shape is two async attachers and one updater', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'npc-animation.mjs'), 'utf8');
+  assert.equal((src.match(/export async function/g) || []).length, 2);
+  assert.ok(src.includes('export async function attachIdleAnimation'));
+  assert.ok(src.includes('export async function attachNpcAnimation'));
+  assert.equal((src.match(/export function/g) || []).length, 1);
+  assert.ok(src.includes('export function updateNpcAnimations'));
+  assert.equal(src.includes('export default'), false);
+  assert.equal((src.match(/function attachClips/g) || []).length, 1);
+  assert.equal((src.match(/export /g) || []).length, 3);
+});
+
+test('Slice 476 G8: attach with frozen options and group calls animateFn without mutating them', async () => {
+  const group = Object.freeze({ name: 'frozen' });
+  const calls = [];
+  const countingAnimate = async (g, opts) => {
+    calls.push({ g, opts });
+    return { update() {} };
+  };
+  const options = Object.freeze({ animateFn: countingAnimate, base: './custom/' });
+
+  const result = await attachIdleAnimation({}, group, options);
+  assert.ok(result && typeof result.update === 'function');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].g, group);
+  assert.deepEqual(calls[0].opts, { clips: ['Idle'], base: './custom/' });
+  assert.equal(Object.isFrozen(group), true);
+  assert.equal(Object.isFrozen(options), true);
+});
+
+test('Slice 476 G9: shared anim updates once per entry and fail-then-succeed has no state leakage', async () => {
+  const calls = [];
+  const shared = { update: (dt) => calls.push(dt) };
+  updateNpcAnimations(new Map([
+    ['a', { anim: shared }],
+    ['b', { anim: shared }],
+  ]), 0.016);
+  assert.deepEqual(calls, [0.016, 0.016]);
+
+  const origWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const bad = await attachIdleAnimation({}, { name: 'bad' }, {
+      animateFn: async () => {
+        throw new Error('first boom');
+      },
+    });
+    assert.equal(bad, null);
+    const handle = { update() {} };
+    const good = await attachIdleAnimation({}, { name: 'good' }, {
+      animateFn: async () => handle,
+    });
+    assert.equal(good, handle);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('first boom'));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('Slice 476 G10: ghost drift wiring, CLIP_NAMES order, and identical track key order', () => {
+  const stagingSrc = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(stagingSrc.includes('buildStagingGhostDrift,'));
+  assert.ok(stagingSrc.includes("} from './npc-wander.mjs';"));
+  assert.ok(stagingSrc.includes('wanderFigures.push(ghostDrift)'));
+
+  const clipsSrc = fs.readFileSync(path.join(__dirname, 'kit-medieval', '_internal', 'clips.mjs'), 'utf8');
+  const m = /export const CLIP_NAMES = \[([\s\S]*?)\];/.exec(clipsSrc);
+  assert.ok(m, 'CLIP_NAMES array literal must parse');
+  const names = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  assert.equal(names.length, 44);
+  assert.equal(names[0], 'Idle');
+  assert.equal(names[1], 'Walk');
+  assert.equal(names[names.length - 1], 'Dance');
+
+  const idle = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-idle.json'), 'utf8'));
+  const walk = JSON.parse(fs.readFileSync(path.join(__dirname, 'anim', 'anim-walk.json'), 'utf8'));
+  assert.deepEqual(Object.keys(walk.tracks), Object.keys(idle.tracks));
+  assert.deepEqual(Object.keys(idle.tracks), [
+    'Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head',
+    'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
+    'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand',
+    'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase',
+    'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase',
+  ]);
 });
