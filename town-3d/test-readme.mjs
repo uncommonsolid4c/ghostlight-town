@@ -1083,11 +1083,11 @@ test('town-3d/README.md CREDITS.md header states the procedural core and the CC0
   assert.equal(idLines.length, 7, 'town-3d/CREDITS.md must carry 7 Poly Pizza ID lines');
 });
 
-test('town-3d/test-readme.mjs file hygiene: 51 unique names, 6 imports, pinned literal counts', () => {
+test('town-3d/test-readme.mjs file hygiene: 61 unique names, 6 imports, pinned literal counts', () => {
   const self = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
   const names = [...self.matchAll(/^test\((['"])(.*?)\1,/gm)].map((m) => m[2]);
-  assert.equal(names.length, 51, 'town-3d/test-readme.mjs must hold 51 top-level tests');
-  assert.equal(new Set(names).size, 51, 'town-3d/test-readme.mjs test names must be unique');
+  assert.equal(names.length, 61, 'town-3d/test-readme.mjs must hold 51 top-level tests');
+  assert.equal(new Set(names).size, 61, 'town-3d/test-readme.mjs test names must be unique');
   const importLines = [...self.matchAll(/^import .*$/gm)].map((m) => m[0]);
   assert.deepEqual(importLines, [
     "import test from 'node:test';",
@@ -1127,5 +1127,140 @@ test('town-3d/test-readme.mjs file hygiene: 51 unique names, 6 imports, pinned l
     (self.match(new RegExp('FIX' + 'ME', 'g')) ?? []).length,
     0,
     'FIX' + 'ME' + ' must not occur in town-3d/test-readme.mjs'
+  );
+});
+
+test('Slice 508: town-3d/README.md fallback bundle literal is 25 files (P1)', async () => {
+  const readme = readReadme();
+  const { files } = await collectSourceFilesFromTown3d(__dirname);
+  assert.equal(files.length, 25, 'town-3d/ fallback bundle must hold 25 files');
+  assert.ok(
+    readme.includes('25-file fallback bundle'),
+    'town-3d/README.md must state 25-file fallback bundle'
+  );
+});
+
+test('Slice 508: town-3d/README.md staging bundle literal is 195 files (P2)', async () => {
+  const readme = readReadme();
+  const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
+  assert.equal(files.length, 195, 'staging-polyfork bundle must hold 195 files');
+  assert.ok(
+    readme.includes('195-file `staging-polyfork`'),
+    'town-3d/README.md must state 195-file `staging-polyfork` bundle'
+  );
+});
+
+test('Slice 508: town-3d/README.md test suites literal is 7 (P3)', () => {
+  const readme = readReadme();
+  const runTests = fs.readFileSync(path.join(REPO_ROOT, 'run-tests.mjs'), 'utf8');
+  const registered = [...runTests.matchAll(/'town-3d\/(test-[^']+\.mjs)'/g)].map((m) => m[1]);
+  assert.equal(registered.length, 7, 'run-tests.mjs must register 7 town-3d test suites');
+  assert.ok(
+    readme.includes('Test suites (7,'),
+    'town-3d/README.md must state Test suites (7,'
+  );
+});
+
+test('Slice 508: town-3d/README.md index.html loads town.js?v=16 (P4)', () => {
+  const readme = readReadme();
+  const readmeNorm = readme.replace(/\s+/g, ' ');
+  const indexHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  assert.ok(
+    indexHtml.includes("from './town.js?v=16'"),
+    'town-3d/index.html must import from ./town.js?v=16'
+  );
+  assert.ok(
+    readmeNorm.includes('`index.html` (loads `./town.js?v=16`)'),
+    'town-3d/README.md HTML bullet must state index.html loads ./town.js?v=16'
+  );
+});
+
+test('Slice 508: town-3d/README.md Deterministic wandering bullet body verbatim (P5)', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Deterministic wandering:** Wick, Maren, and Tomas capsule wanderers plus Milo\'s ghost drifting the Bandstand deck (`buildWanderState`), yielding to live presence avatars.'
+    ),
+    'town-3d/README.md Deterministic wandering bullet must state the full sentence verbatim'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('function buildWanderState('),
+    'town-3d/town.js must define buildWanderState'
+  );
+});
+
+test('Slice 508: town-3d/README.md Footlight status bullet body verbatim (P6)', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Footlight status:** `status_text` renders on the Bandstand placard (`lightFootlightSlot` in `concept-bandstand.js`) and avatar nametag (`setAvatarStatusText` in `town.js`).'
+    ),
+    'town-3d/README.md Footlight status bullet must state the full sentence verbatim'
+  );
+  const bandstandJs = fs.readFileSync(path.join(__dirname, 'concept-bandstand.js'), 'utf8');
+  assert.ok(
+    bandstandJs.includes('export function lightFootlightSlot('),
+    'town-3d/concept-bandstand.js must export lightFootlightSlot'
+  );
+});
+
+test('Slice 508: town-3d/README.md Per-plot guestbook tabs bullet body verbatim (P7)', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Per-plot guestbook tabs:** overlay tabs per plot (`formatPlotGuestbookTabLabel` / `resolvePlotGuestbookOverlayContent`).'
+    ),
+    'town-3d/README.md Per-plot guestbook tabs bullet must state the full sentence verbatim'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('export function formatPlotGuestbookTabLabel(count)'),
+    'town-3d/town.js must export formatPlotGuestbookTabLabel(count)'
+  );
+});
+
+test('Slice 508: town-3d/README.md Notice Board bullet body verbatim (P8)', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Notice board:** click-to-read overlay (`buildNoticeBoardOverlayHtml`).'
+    ),
+    'town-3d/README.md Notice Board bullet must state the full sentence verbatim'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes('export function buildNoticeBoardOverlayHtml()'),
+    'town-3d/town.js must export buildNoticeBoardOverlayHtml()'
+  );
+});
+
+test('Slice 508: town-3d/README.md Not the default live client bullet body verbatim (P9)', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Not the default live client:** visitors see `staging-polyfork` by default; `town-3d/` is the fallback procedural build.'
+    ),
+    'town-3d/README.md Not the default live client bullet must state the full sentence verbatim'
+  );
+  assert.ok(
+    fs.existsSync(path.join(REPO_ROOT, 'staging-polyfork', 'index.html')),
+    'staging-polyfork/index.html must exist on disk'
+  );
+});
+
+test('Slice 508: town-3d/README.md Staging is live bullet body verbatim (P10)', () => {
+  const readmeNorm = readReadme().replace(/\s+/g, ' ');
+  assert.ok(
+    readmeNorm.includes(
+      'Staging is live:** `https://milo.4167360.xyz/ghostlight-town/` serves the `staging-polyfork` bundle since the 2026-11-14 adoption.'
+    ),
+    'town-3d/README.md Staging is live bullet must state the full sentence verbatim'
+  );
+  const feedXml = fs.readFileSync(path.join(__dirname, 'gazette', 'feed.xml'), 'utf8');
+  assert.equal(
+    feedXml.match(/<channel>[\s\S]*?<link>([^<]+)<\/link>/)[1],
+    'https://milo.4167360.xyz/ghostlight-town/',
+    'gazette/feed.xml channel link must be the staging URL'
   );
 });
