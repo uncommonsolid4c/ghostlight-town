@@ -1183,8 +1183,8 @@ test('file hygiene: 47 unique names, 9 imports, pinned as-true counts', () => {
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 47);
-  assert.equal(new Set(names).size, 47);
+  assert.equal(names.length, 57);
+  assert.equal(new Set(names).size, 57);
 
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 9);
   assert.deepEqual(lines.slice(3, 9), [
@@ -1207,4 +1207,226 @@ test('file hygiene: 47 unique names, 9 imports, pinned as-true counts', () => {
   assert.equal(lines.filter((l) => new RegExp('Date' + '.now').test(l)).length, 2);
   assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
   assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 0);
+});
+
+test('one-game file serves the same game on three consecutive days', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-one-game-'));
+  const gamesPath = path.join(tmpDir, 'games.json');
+  fs.writeFileSync(
+    gamesPath,
+    JSON.stringify([{ format: 'riddle', prompt: 'Only game in town' }]),
+    'utf8'
+  );
+
+  try {
+    const ctx = await startTestServer({
+      baseNow: Math.floor(Date.UTC(2026, 10, 21, 12, 0, 0) / 1000),
+      gamesPath,
+    });
+    try {
+      const client = new GhostlightClient({ baseUrl: ctx.baseUrl });
+      const seen = [];
+      for (let i = 0; i < 3; i++) {
+        if (i > 0) ctx.advanceClock(DAY_SEC);
+        const res = await client.state();
+        assert.equal(res.status, 200);
+        seen.push([res.data.daily_game.date, res.data.daily_game.prompt]);
+      }
+      assert.deepEqual(
+        seen.map((s) => s[0]),
+        ['2026-11-21', '2026-11-22', '2026-11-23']
+      );
+      assert.ok(seen.every((s) => s[1] === 'Only game in town'));
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('daily game host handles the 400-year leap rule (2400 yes, 2100 no)', () => {
+  assert.equal(dailyGameHostForDate('2400-02-29'), 'wick');
+  assert.equal(dailyGameHostForDate('2000-02-29'), 'wick');
+  assert.equal(dailyGameHostForDate('2400-03-01'), 'maren');
+  assert.equal(dailyGameHostForDate('2100-02-29'), null);
+  assert.equal(dailyGameHostForDate('1900-02-29'), null);
+  assert.notEqual(dailyGameHostForDate('2100-03-01'), null);
+});
+
+test('bad topics file omits nightly_call but daily_game still serves', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-bad-topics-'));
+  const badTopicsPath = path.join(tmpDir, 'topics.json');
+  const objTopicsPath = path.join(tmpDir, 'topics-obj.json');
+  const goodGamesPath = path.join(tmpDir, 'games.json');
+  fs.writeFileSync(badTopicsPath, '{ not valid json', 'utf8');
+  fs.writeFileSync(objTopicsPath, JSON.stringify({ topic: 'not an array' }), 'utf8');
+  fs.writeFileSync(
+    goodGamesPath,
+    JSON.stringify([{ format: 'riddle', prompt: 'Good game' }]),
+    'utf8'
+  );
+
+  try {
+    for (const topicsPath of [badTopicsPath, objTopicsPath]) {
+      const ctx = await startTestServer({ topicsPath, gamesPath: goodGamesPath });
+      try {
+        const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+        assert.equal(res.status, 200);
+        assert.equal(res.data.nightly_call, undefined);
+        assert.ok(res.data.daily_game, 'daily_game still present');
+        assert.equal(res.data.daily_game.prompt, 'Good game');
+        assert.equal(res.data.daily_game.format, 'riddle');
+      } finally {
+        await ctx.close();
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('nightly_call and daily_game dates flip together at the UTC midnight boundary', async () => {
+  const ctx = await startTestServer({
+    baseNow: Math.floor(Date.UTC(2026, 10, 21, 23, 59, 0) / 1000),
+  });
+  try {
+    const client = new GhostlightClient({ baseUrl: ctx.baseUrl });
+    const before = await client.state();
+    assert.equal(before.status, 200);
+    assert.equal(before.data.nightly_call.date, '2026-11-21');
+    assert.equal(before.data.daily_game.date, '2026-11-21');
+    assert.equal(
+      before.data.nightly_call.topic,
+      'What\u0027s a handwritten note you\u0027re glad you saved?'
+    );
+
+    ctx.advanceClock(120);
+    const after = await client.state();
+    assert.equal(after.status, 200);
+    assert.equal(after.data.nightly_call.date, '2026-11-22');
+    assert.equal(after.data.daily_game.date, '2026-11-22');
+    assert.equal(
+      after.data.nightly_call.topic,
+      'What song or hum keeps you company while tidying?'
+    );
+    assert.notEqual(after.data.daily_game.prompt, before.data.daily_game.prompt);
+    assert.notEqual(after.data.nightly_call.topic, before.data.nightly_call.topic);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('daily_game at exactly UTC midnight serves the new day', async () => {
+  const dayNumber = 20778; // 2026-11-21
+  const ctx = await startTestServer({ baseNow: dayNumber * DAY_SEC });
+  try {
+    const client = new GhostlightClient({ baseUrl: ctx.baseUrl });
+    const res = await client.state();
+    assert.equal(res.status, 200);
+    assert.equal(res.data.daily_game.date, '2026-11-21');
+    assert.equal(res.data.daily_game.format, 'riddle');
+    assert.equal(
+      res.data.daily_game.prompt,
+      'I run but never walk. I have a mouth but never talk. I have a bed but never sleep. What am I?'
+    );
+
+    ctx.advanceClock(1);
+    const res2 = await client.state();
+    assert.equal(res2.status, 200);
+    assert.equal(res2.data.daily_game.prompt, res.data.daily_game.prompt);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('two servers with different games files serve different games on the same day', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-two-servers-'));
+  const gamesPath = path.join(tmpDir, 'games.json');
+  fs.writeFileSync(
+    gamesPath,
+    JSON.stringify([{ format: 'word', prompt: 'Alpha game' }]),
+    'utf8'
+  );
+  const baseNow = Math.floor(Date.UTC(2026, 10, 21, 12, 0, 0) / 1000);
+  const games = JSON.parse(fs.readFileSync(GAMES_PATH, 'utf8'));
+
+  try {
+    const ctxA = await startTestServer({ gamesPath, baseNow });
+    const ctxB = await startTestServer({ baseNow });
+    try {
+      const resA = await new GhostlightClient({ baseUrl: ctxA.baseUrl }).state();
+      const resB = await new GhostlightClient({ baseUrl: ctxB.baseUrl }).state();
+      assert.equal(resA.status, 200);
+      assert.equal(resB.status, 200);
+      assert.equal(resA.data.daily_game.prompt, 'Alpha game');
+      assert.equal(resA.data.daily_game.date, '2026-11-21');
+      assert.equal(resB.data.daily_game.date, '2026-11-21');
+      assert.equal(
+        resB.data.daily_game.prompt,
+        expectedGameForNow(games, ctxB.nowSec()).game.prompt
+      );
+      assert.notEqual(resA.data.daily_game.prompt, resB.data.daily_game.prompt);
+    } finally {
+      await ctxA.close();
+      await ctxB.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CRLF and trailing whitespace in the games file still serve daily_game', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-crlf-games-'));
+  const gamesPath = path.join(tmpDir, 'games.json');
+  fs.writeFileSync(
+    gamesPath,
+    JSON.stringify([{ format: 'word', prompt: 'CRLF game' }]) + '\r\n\r\n  ',
+    'utf8'
+  );
+
+  try {
+    const ctx = await startTestServer({ gamesPath });
+    try {
+      const res = await new GhostlightClient({ baseUrl: ctx.baseUrl }).state();
+      assert.equal(res.status, 200);
+      assert.equal(res.data.daily_game.prompt, 'CRLF game');
+      assert.equal(res.data.daily_game.format, 'word');
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('isDailyGamePosted with no arguments or an empty object returns false', () => {
+  assert.equal(isDailyGamePosted(), false);
+  assert.equal(isDailyGamePosted({}), false);
+  assert.equal(isDailyGamePosted({ dailyGame: { prompt: 'x' } }), false);
+  assert.equal(
+    isDailyGamePosted({ promptBook: undefined, dailyGame: { prompt: 'x' } }),
+    false
+  );
+  assert.equal(isDailyGamePosted({ promptBook: [], dailyGame: null }), false);
+  assert.equal(
+    isDailyGamePosted({ promptBook: [{ body: 'Say x now' }], dailyGame: { prompt: 'x' } }),
+    true
+  );
+});
+
+test('daily game host rejects single-digit month and day', () => {
+  assert.equal(dailyGameHostForDate('2026-11-5'), null);
+  assert.equal(dailyGameHostForDate('2026-1-05'), null);
+  assert.equal(dailyGameHostForDate('2026-1-5'), null);
+  assert.equal(dailyGameHostForDate('2026-11-05'), 'tomas');
+  assert.notEqual(dailyGameHostForDate('2026-11-05'), null);
+});
+
+test('daily game host rejects month 00 and day 00', () => {
+  assert.equal(dailyGameHostForDate('2026-00-15'), null);
+  assert.equal(dailyGameHostForDate('2026-11-00'), null);
+  assert.equal(dailyGameHostForDate('2026-00-00'), null);
+  assert.equal(dailyGameHostForDate('0000-00-00'), null);
+  assert.equal(dailyGameHostForDate('2026-13-15'), null);
 });
