@@ -1686,8 +1686,8 @@ test('G20: file hygiene: 47 unique names, 8 imports, zero banned terms, pinned a
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 47);
-  assert.equal(new Set(names).size, 47);
+  assert.equal(names.length, 57);
+  assert.equal(new Set(names).size, 57);
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 8);
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
@@ -1702,4 +1702,529 @@ test('G20: file hygiene: 47 unique names, 8 imports, zero banned terms, pinned a
   const stageSrc = await fs.readFile(STAGE_SCRIPT, 'utf8');
   assert.equal(BANNED_TERM_RE.test(stageSrc), false);
   assert.equal(new RegExp('\\bfet' + 'ch\\s*\\(').test(stageSrc), false);
+});
+
+test('G21: summary and manifest JSON shape exactness', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g21-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.deepEqual(Object.keys(summary), [
+      'ok',
+      'out',
+      'bundle',
+      'town_js_v',
+      'staging_js_v',
+      'file_count',
+      'total_bytes',
+    ]);
+
+    const raw = await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8');
+    assert.equal(raw.endsWith('\n'), true, 'MANIFEST.json must end with a newline');
+    const manifest = JSON.parse(raw);
+    assert.deepEqual(Object.keys(manifest.files[0]), ['path', 'bytes', 'sha256']);
+    assert.equal(
+      manifest.files.some((f) => f.path === 'MANIFEST.json'),
+      false,
+      'MANIFEST.json must not list itself in manifest.files'
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G22: duplicate flags last-wins, --verify ignores --bundle', async () => {
+  const tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g22-a-'));
+  try {
+    const fixtureRoot = path.join(tmpDirA, 'repo');
+    await setupPolyforkFixture(fixtureRoot, true);
+    const outA = path.join(tmpDirA, 'outA');
+    const outB = path.join(tmpDirA, 'outB');
+
+    const res = runStage([
+      '--root', fixtureRoot,
+      '--bundle', 'town-3d',
+      '--bundle', 'staging-polyfork',
+      '--out', outA,
+      '--out', outB,
+    ]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.bundle, 'staging-polyfork', 'Later --bundle wins');
+    assert.equal(summary.out, outB, 'Later --out wins');
+    assert.equal(await pathExists(outA), false, 'First --out must never be created');
+    assert.equal(
+      await pathExists(path.join(outB, 'ghostlight-town', 'MANIFEST.json')),
+      true
+    );
+  } finally {
+    await fs.rm(tmpDirA, { recursive: true, force: true });
+  }
+
+  const tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g22-b-'));
+  try {
+    const fixtureRoot = path.join(tmpDirB, 'repo');
+    const outDir = path.join(tmpDirB, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const okVerify = runStage(['--verify', stagedDir, '--bundle', 'town-3d']);
+    assert.equal(okVerify.status, 0, `Verify must ignore --bundle: ${okVerify.stderr}`);
+    const report = JSON.parse(okVerify.stdout.trim());
+    assert.equal(report.status, 'ok');
+
+    const badVerify = runStage(['--verify', stagedDir, '--bundle', 'bogus']);
+    assert.equal(badVerify.status, 1);
+    assert.equal(badVerify.stdout, '');
+    const errJson = JSON.parse(badVerify.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(
+      errJson.error,
+      'Unknown bundle: bogus (expected one of: town-3d, staging-polyfork)'
+    );
+  } finally {
+    await fs.rm(tmpDirB, { recursive: true, force: true });
+  }
+});
+
+test('G23: version extraction edges, naive substring match', async () => {
+  const htmlCases = [
+    { html: '<script>import "./town.js?v=16&x=1";</script>\n', want: '16', name: 'ampersand' },
+    { html: '<script>import "./town.js?v=16#frag";</script>\n', want: '16', name: 'hash' },
+    { html: "<script src='town.js?v=16'></script>\n", want: '16', name: 'single-quote' },
+    { html: '<script>import "./town.js?v=";</script>\n', want: null, name: 'empty' },
+    { html: '<!-- town.js?v=77 -->\n', want: '77', name: 'comment' },
+  ];
+  for (const c of htmlCases) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g23-'));
+    try {
+      const fixtureRoot = path.join(tmpDir, 'repo');
+      const outDir = path.join(tmpDir, 'out');
+      await createFixtureTree(fixtureRoot);
+      await fs.writeFile(path.join(fixtureRoot, 'town-3d', 'index.html'), c.html);
+
+      const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+      assert.equal(res.status, 0, `Expected exit 0 for ${c.name}: ${res.stderr}`);
+      const summary = JSON.parse(res.stdout.trim());
+      assert.equal(summary.town_js_v, c.want, `Expected town_js_v ${c.want} for ${c.name}`);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  // ?v= in move-in.html only is ignored: only index.html is read for the version.
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g23-movein-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    await fs.writeFile(
+      path.join(fixtureRoot, 'town-3d', 'index.html'),
+      '<script>import "./town.js";</script>\n'
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, 'town-3d', 'move-in.html'),
+      '<!-- town.js?v=77 -->\n'
+    );
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0: ${res.stderr}`);
+    const summary = JSON.parse(res.stdout.trim());
+    assert.equal(summary.town_js_v, null);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G24: missing, symlinked, and wrong-type source errors', async () => {
+  const tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g24-a-'));
+  try {
+    const fixtureRoot = path.join(tmpDirA, 'repo');
+    const outDir = path.join(tmpDirA, 'out');
+    await fs.mkdir(fixtureRoot, { recursive: true });
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(errJson.error, 'Missing required source directory: town-3d');
+    assert.equal(await pathExists(outDir), false);
+  } finally {
+    await fs.rm(tmpDirA, { recursive: true, force: true });
+  }
+
+  const tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g24-b-'));
+  try {
+    const fixtureRoot = path.join(tmpDirB, 'repo');
+    const outDir = path.join(tmpDirB, 'out');
+    const realTree = path.join(tmpDirB, 'real');
+    await createFixtureTree(realTree);
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    await fs.symlink(path.join(realTree, 'town-3d'), path.join(fixtureRoot, 'town-3d'));
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(errJson.error, 'Refusing symlink directory: town-3d');
+    assert.equal(await pathExists(outDir), false);
+  } finally {
+    await fs.rm(tmpDirB, { recursive: true, force: true });
+  }
+
+  const tmpDirC = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g24-c-'));
+  try {
+    const fixtureRoot = path.join(tmpDirC, 'repo');
+    const outDir = path.join(tmpDirC, 'out');
+    await createFixtureTree(fixtureRoot);
+    await fs.rm(path.join(fixtureRoot, 'town-3d', 'models', 'bench.glb'));
+    await fs.mkdir(path.join(fixtureRoot, 'town-3d', 'models', 'bench.glb'));
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(errJson.error, 'Expected regular file: town-3d/models/bench.glb');
+    assert.equal(await pathExists(outDir), false);
+  } finally {
+    await fs.rm(tmpDirC, { recursive: true, force: true });
+  }
+
+  const tmpDirD = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g24-d-'));
+  try {
+    const fixtureRoot = path.join(tmpDirD, 'repo');
+    const outDir = path.join(tmpDirD, 'out');
+    await createFixtureTree(fixtureRoot);
+    await fs.rm(path.join(fixtureRoot, 'town-3d', 'models'), { recursive: true });
+    await fs.writeFile(path.join(fixtureRoot, 'town-3d', 'models'), 'not a dir\n');
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(errJson.error, 'Expected directory: town-3d/models');
+    assert.equal(await pathExists(outDir), false);
+  } finally {
+    await fs.rm(tmpDirD, { recursive: true, force: true });
+  }
+});
+
+test('G25: secret guard scope edges, basename-only and collection-only', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g25-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    // The filename guard tests the basename only: a suspect directory name is fine.
+    await fs.mkdir(path.join(fixtureRoot, 'town-3d', 'gazette', 'token-vault'), { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, 'town-3d', 'gazette', 'token-vault', 'note.txt'),
+      'harmless\n'
+    );
+    // models/ only collects *.glb, so x.pem is never collected and never guarded:
+    // skipped silently, not blocked and not listed as excluded.
+    await fs.writeFile(path.join(fixtureRoot, 'town-3d', 'models', 'x.pem'), 'harmless\n');
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(
+      manifest.files.some((f) => f.path === 'gazette/token-vault/note.txt'),
+      true
+    );
+    assert.equal(manifest.files.some((f) => f.path === 'models/x.pem'), false);
+    assert.equal(manifest.excluded.some((e) => e.path === 'models/x.pem'), false);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G26: collector selection edges', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g26-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    const town3d = path.join(fixtureRoot, 'town-3d');
+    await fs.writeFile(path.join(town3d, 'models', 'readme.txt'), 'models readme\n');
+    await fs.mkdir(path.join(town3d, 'gazette', 'sub'), { recursive: true });
+    await fs.writeFile(path.join(town3d, 'gazette', 'sub', 'tool.mjs'), '// sub tool\n');
+    await fs.writeFile(path.join(town3d, 'plots', 'milo', 'tool.mjs'), '// plot tool\n');
+    await fs.writeFile(path.join(town3d, 'Concept-bandstand.js'), 'export const C = 1;\n');
+    await fs.writeFile(path.join(town3d, 'concept-.js'), 'export const EMPTY = 1;\n');
+
+    const res = runStage(['--root', fixtureRoot, '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    // Non-.glb files under models/ are skipped silently: not staged, not excluded.
+    assert.equal(manifest.files.some((f) => f.path === 'models/readme.txt'), false);
+    assert.equal(manifest.excluded.some((e) => e.path === 'models/readme.txt'), false);
+    // The gazette .mjs exclusion is top-level only: a .mjs in a subdir stages.
+    assert.equal(manifest.files.some((f) => f.path === 'gazette/sub/tool.mjs'), true);
+    // plots/ has no .mjs exclusion at all.
+    assert.equal(manifest.files.some((f) => f.path === 'plots/milo/tool.mjs'), true);
+    // The concept-*.js match is case-sensitive.
+    assert.equal(manifest.files.some((f) => f.path === 'Concept-bandstand.js'), false);
+    assert.equal(manifest.excluded.some((e) => e.path === 'Concept-bandstand.js'), false);
+    // concept-.js matches: .* may be empty.
+    assert.equal(manifest.files.some((f) => f.path === 'concept-.js'), true);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('G27: polyfork shared-fallback precedence, subdir README, polyfork symlink', async () => {
+  const tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g27-a-'));
+  try {
+    const fixtureRoot = path.join(tmpDirA, 'repo');
+    const outDir = path.join(tmpDirA, 'out');
+    await setupPolyforkFixture(fixtureRoot, true);
+    await fs.mkdir(path.join(fixtureRoot, 'staging-polyfork', 'plots', 'milo'), { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, 'staging-polyfork', 'plots', 'milo', 'index.html'),
+      '<p>polyfork milo</p>\n'
+    );
+    await fs.mkdir(path.join(fixtureRoot, 'staging-polyfork', 'kit'), { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, 'staging-polyfork', 'kit', 'README.md'),
+      '# kit docs\n'
+    );
+
+    const res = runStage(['--root', fixtureRoot, '--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    // A shared file present in staging-polyfork wins over the town-3d fallback.
+    assert.equal(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'plots', 'milo', 'index.html'), 'utf8'),
+      '<p>polyfork milo</p>\n'
+    );
+    // The README.md exclusion is the exact top-level path only: a kit README stages.
+    assert.equal(manifest.files.some((f) => f.path === 'kit/README.md'), true);
+  } finally {
+    await fs.rm(tmpDirA, { recursive: true, force: true });
+  }
+
+  const tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g27-b-'));
+  try {
+    const fixtureRoot = path.join(tmpDirB, 'repo');
+    const outDir = path.join(tmpDirB, 'out');
+    await setupPolyforkFixture(fixtureRoot, true);
+    const realPoly = path.join(tmpDirB, 'real-poly');
+    await fs.mkdir(realPoly, { recursive: true });
+    await fs.rm(path.join(fixtureRoot, 'staging-polyfork'), { recursive: true });
+    await fs.symlink(realPoly, path.join(fixtureRoot, 'staging-polyfork'));
+
+    const res = runStage(['--root', fixtureRoot, '--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(res.status, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.equal(errJson.error, 'Refusing symlink directory: staging-polyfork');
+    assert.equal(await pathExists(outDir), false);
+  } finally {
+    await fs.rm(tmpDirB, { recursive: true, force: true });
+  }
+});
+
+test('G28: --verify combined report and degenerate manifests', async () => {
+  const tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g28-a-'));
+  try {
+    const fixtureRoot = path.join(tmpDirA, 'repo');
+    const outDir = path.join(tmpDirA, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const townJs = path.join(stagedDir, 'town.js');
+    const buf = await fs.readFile(townJs);
+    buf[0] = buf[0] ^ 0xff;
+    await fs.writeFile(townJs, buf);
+    await fs.rm(path.join(stagedDir, 'CREDITS.md'));
+    await fs.writeFile(path.join(stagedDir, 'gazette', 'stray.html'), '<p>stray</p>\n');
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.equal(report.checked, 10);
+    assert.equal(report.ok, 8);
+    assert.deepEqual(report.mismatch, ['town.js']);
+    assert.deepEqual(report.missing, ['CREDITS.md']);
+    assert.deepEqual(report.extra, ['gazette/stray.html']);
+    assert.equal(report.town_js_v, '99');
+  } finally {
+    await fs.rm(tmpDirA, { recursive: true, force: true });
+  }
+
+  const tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g28-b-'));
+  try {
+    const stagedDir = path.join(tmpDirB, 'empty-staged');
+    await fs.mkdir(stagedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stagedDir, 'MANIFEST.json'),
+      JSON.stringify({ files: [] }),
+      'utf8'
+    );
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 0, `Expected exit 0: ${verifyRes.stderr}`);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'ok');
+    assert.equal(report.checked, 0);
+    assert.equal(report.ok, 0);
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDirB, { recursive: true, force: true });
+  }
+
+  const tmpDirC = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g28-c-'));
+  try {
+    const fixtureRoot = path.join(tmpDirC, 'repo');
+    const outDir = path.join(tmpDirC, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const townEntry = manifest.files.find((f) => f.path === 'town.js');
+    // Keep only town.js on disk, so the single-entry manifest has no extras.
+    for (const f of manifest.files) {
+      if (f.path !== 'town.js') await fs.rm(path.join(stagedDir, f.path));
+    }
+    // readManifest requires path + sha256 only: a missing bytes field still verifies.
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify({ files: [{ path: 'town.js', sha256: townEntry.sha256 }] }),
+      'utf8'
+    );
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 0, `Expected exit 0: ${verifyRes.stderr}`);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'ok');
+    assert.equal(report.checked, 1);
+    assert.equal(report.ok, 1);
+  } finally {
+    await fs.rm(tmpDirC, { recursive: true, force: true });
+  }
+});
+
+test('G29: --verify version mirrors, polyfork and staged-index removal', async () => {
+  const tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g29-a-'));
+  try {
+    const fixtureRoot = path.join(tmpDirA, 'repo');
+    const outDir = path.join(tmpDirA, 'out');
+    await setupPolyforkFixture(fixtureRoot, true);
+    const stageRes = runStage(['--root', fixtureRoot, '--bundle', 'staging-polyfork', '--out', outDir]);
+    assert.equal(stageRes.status, 0, `Expected exit 0, got ${stageRes.status}: ${stageRes.stderr}`);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    delete manifest.staging_js_v;
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const verifyRes = runStage(['--root', fixtureRoot, '--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.equal(report.bundle, 'staging-polyfork');
+    assert.equal(report.checked, manifest.file_count);
+    assert.equal(report.ok, manifest.file_count);
+    assert.equal(report.staging_js_v, null);
+    assert.equal(report.staged_staging_js_v, '41');
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDirA, { recursive: true, force: true });
+  }
+
+  const tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g29-b-'));
+  try {
+    const fixtureRoot = path.join(tmpDirB, 'repo');
+    const outDir = path.join(tmpDirB, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const stagedDir = path.join(outDir, 'ghostlight-town');
+    const indexPath = path.join(stagedDir, 'index.html');
+    const updatedHtml = (await fs.readFile(indexPath, 'utf8')).replace('town.js?v=99', 'town.js');
+    await fs.writeFile(indexPath, updatedHtml, 'utf8');
+    const manifestPath = path.join(stagedDir, 'MANIFEST.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const indexEntry = manifest.files.find((f) => f.path === 'index.html');
+    indexEntry.sha256 = crypto.createHash('sha256').update(updatedHtml, 'utf8').digest('hex');
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+
+    const verifyRes = runStage(['--verify', stagedDir]);
+    assert.equal(verifyRes.status, 1);
+    const report = JSON.parse(verifyRes.stdout.trim());
+    assert.equal(report.status, 'fail');
+    assert.equal(report.town_js_v, '99');
+    assert.equal(report.staged_town_js_v, null);
+    assert.deepEqual(report.mismatch, []);
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.extra, []);
+  } finally {
+    await fs.rm(tmpDirB, { recursive: true, force: true });
+  }
+});
+
+test('G30: re-stage drops removed files, exported collector API', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stage-deploy-g30-'));
+  try {
+    const fixtureRoot = path.join(tmpDir, 'repo');
+    const outDir = path.join(tmpDir, 'out');
+    await createFixtureTree(fixtureRoot);
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    await fs.rm(path.join(fixtureRoot, 'town-3d', 'concept-bandstand.js'));
+    assert.equal(runStage(['--root', fixtureRoot, '--out', outDir]).status, 0);
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(manifest.files.some((f) => f.path === 'concept-bandstand.js'), false);
+    assert.equal(
+      await pathExists(path.join(outDir, 'ghostlight-town', 'concept-bandstand.js')),
+      false
+    );
+    assert.equal(manifest.file_count, 9);
+
+    const mod = await import(STAGE_SCRIPT);
+    const listed = await mod.listStagedFiles(path.join(fixtureRoot, 'town-3d'));
+    assert.deepEqual(listed, [
+      'CREDITS.md',
+      'gazette/issue-001.html',
+      'guestbook/index.html',
+      'index.html',
+      'inn/index.html',
+      'models/bench.glb',
+      'move-in.html',
+      'plots/milo/index.html',
+      'town.js',
+    ]);
+    const collected = await mod.collectSourceFiles(fixtureRoot);
+    assert.equal(collected.files.length, 9);
+    assert.deepEqual(collected.excluded, [
+      { path: 'gazette/build-feed.mjs', reason: 'build tool, not served content' },
+    ]);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
