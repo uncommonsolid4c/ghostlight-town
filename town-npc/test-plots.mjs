@@ -1571,12 +1571,12 @@ test('parser tolerance edges: unclosed style bodies and malformed entities', () 
   assert.equal(decodeHtmlEntities('fish&ampchips'), 'fish&ampchips');
 });
 
-test('self hygiene: 53 tests, 53 unique names, 6 import lines, no banned literals', () => {
+test('self hygiene: 63 tests, 63 unique names, 6 import lines, no banned literals', () => {
   const content = fs.readFileSync(path.resolve('town-npc/test-plots.mjs'), 'utf8');
 
   const names = [...content.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53, `expected 53 top-level tests, got ${names.length}`);
-  assert.equal(new Set(names).size, 53, 'test names must be unique');
+  assert.equal(names.length, 63, `expected 53 top-level tests, got ${names.length}`);
+  assert.equal(new Set(names).size, 63, 'test names must be unique');
 
   const importLines = content.split('\n').filter((line) => line.startsWith('import '));
   // The characters line is built from parts: the import path below must occur
@@ -1611,4 +1611,244 @@ test('self hygiene: 53 tests, 53 unique names, 6 import lines, no banned literal
       `banned literal ${needle} must occur ${want} times`
     );
   }
+});
+
+test('validateManifest second-prop index reporting and first failing prop wins', () => {
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [PROP, { ...PROP, kind: 'sofa' }] }),
+    { ok: false, error: 'invalid_prop_kind', index: 1 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [PROP, PROP, { ...PROP, x: 99 }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 2 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [PROP, { ...PROP, rot_y: 400 }] }),
+    { ok: false, error: 'invalid_prop_rotation', index: 1 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [PROP, { ...PROP, color: '#zzz' }] }),
+    { ok: false, error: 'invalid_prop_color', index: 1 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [PROP, { ...PROP, junk: 1 }] }),
+    { ok: false, error: 'unknown_prop_key', key: 'junk', index: 1 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [PROP, null] }),
+    { ok: false, error: 'invalid_prop', index: 1 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, kind: 'sofa' }, { ...PROP, x: 99 }] }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, x: 99 }, { ...PROP, kind: 'sofa' }] }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+});
+
+test('validateManifest signpost emoji length and null/empty prop colors', () => {
+  const sixtyEmoji = '😀'.repeat(60);
+  assert.equal(sixtyEmoji.length, 120);
+  assert.equal(validateManifest({ ...BASE, signpost_text: sixtyEmoji }).ok, true);
+
+  assert.deepEqual(
+    validateManifest({ ...BASE, signpost_text: '😀'.repeat(61) }),
+    { ok: false, error: 'invalid_signpost_text', max: 120 }
+  );
+  assert.equal(validateManifest({ ...BASE, signpost_text: 'a\nb\tc' }).ok, true);
+
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, color: null }] }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, color: '' }] }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+});
+
+test('viewport meta: extra tokens, missing space, extra attrs, missing attrs rejected', () => {
+  const rejected = [
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1.0">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" data-x="1">',
+    '<meta name="viewport">',
+    '<meta content="width=device-width, initial-scale=1.0">',
+  ];
+  for (const html of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason: 'forbidden_tag:meta' },
+      `expected forbidden_tag:meta for: ${html}`
+    );
+  }
+});
+
+test('validateHtml URI scheme case, whitespace, entity, and other-scheme variants', () => {
+  const rejected = [
+    ['<a href="JaVaScRiPt:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="java\nscript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="&#x0A;javascript:alert(1)">x</a>', 'javascript_uri'],
+    ['<a href="DATA:TEXT/HTML;base64,AAA">x</a>', 'disallowed_data_uri'],
+    ['<a href="tel:+1-555-0100">x</a>', 'external_uri'],
+    ['<a href="ftp://example.com/x">x</a>', 'external_uri'],
+    ['<a href="https ://evil.com">x</a>', 'external_uri'],
+  ];
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason },
+      `expected ${reason} for: ${html}`
+    );
+  }
+  assert.deepEqual(validateHtml('<a href="DATA:IMAGE/SVG+XML;base64,AAA">x</a>'), { ok: true });
+});
+
+test('validateHtml CSS obfuscation variants: case, comment-split, spaced', () => {
+  const rejected = [
+    ['<div style="background:URL(x)">x</div>', 'css_url'],
+    ['<div style="background:u/**/rl(x)">x</div>', 'css_url'],
+    ['<div style="width:expression (alert(1))">x</div>', 'css_expression'],
+    ['<div style="background : url(x)">x</div>', 'css_url'],
+    ['<div style="background:JAVASCRIPT:alert(1)">x</div>', 'javascript_uri'],
+    ['<style>div{background:uRl(x)}</style>', 'css_url'],
+  ];
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason },
+      `expected ${reason} for: ${html}`
+    );
+  }
+  assert.deepEqual(validateHtml('<style>div{color:/*x*/red}</style>'), { ok: true });
+});
+
+test('decodeHtmlEntities numeric control chars, no-semicolon forms, double-encoding, surrogate pairs', () => {
+  assert.equal(decodeHtmlEntities('&#9;'), '\t');
+  assert.equal(decodeHtmlEntities('&#10;'), '\n');
+  assert.equal(decodeHtmlEntities('&#13;'), '\r');
+  assert.equal(decodeHtmlEntities('&#X41'), 'A');
+  assert.equal(decodeHtmlEntities('&#x4A'), 'J');
+  assert.equal(decodeHtmlEntities('&#65'), 'A');
+  assert.equal(decodeHtmlEntities('&amp;amp;'), '&amp;');
+  assert.equal(decodeHtmlEntities('&nbsp'), ' ');
+  assert.equal(decodeHtmlEntities('&#xD83D;&#xDE00;'), '😀');
+  assert.equal(decodeHtmlEntities('&#x1f600'), '😀');
+  assert.equal(decodeHtmlEntities('a&#38;b'), 'a&b');
+  assert.equal(decodeHtmlEntities('&colon'), ':');
+});
+
+test('validateManifest color and cottage edges', () => {
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, color: '#a8d8ea ' }] }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, props: [{ ...PROP, color: '#a8d8eaff' }] }),
+    { ok: false, error: 'invalid_prop_color', index: 0 }
+  );
+  assert.equal(
+    validateManifest({ ...BASE, props: [{ ...PROP, color: '#A8D8EA' }] }).ok,
+    true
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, wall: '#a8d8ea ' }),
+    { ok: false, error: 'invalid_color', field: 'wall' }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, roof: '' }),
+    { ok: false, error: 'invalid_color', field: 'roof' }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, cottage: 'Gable' }),
+    { ok: false, error: 'invalid_cottage' }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, cottage: null }),
+    { ok: false, error: 'invalid_cottage' }
+  );
+  assert.deepEqual(
+    validateManifest({ ...BASE, trim: '#f5efe' }),
+    { ok: false, error: 'invalid_color', field: 'trim' }
+  );
+});
+
+test('source desk notes: document skeleton pinned per handle', () => {
+  const handles = ['wick', 'maren', 'tomas', 'milo'];
+  const expectedContentParagraphs = [3, 3, 4, 3];
+
+  handles.forEach((handle, idx) => {
+    const html = readDeskNote(handle);
+    const lines = html
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    assert.equal(lines[0], '<!doctype html>', `${handle} first line`);
+    assert.equal(lines[1], '<html lang="en">', `${handle} second line`);
+    assert.equal(lines[lines.length - 1], '</html>', `${handle} last line`);
+
+    for (const tag of ['<style>', '<head>', '<body>']) {
+      assert.equal(html.split(tag).length - 1, 1, `${handle} ${tag} count`);
+    }
+
+    const contentMatches = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)];
+    assert.equal(
+      contentMatches.length,
+      expectedContentParagraphs[idx],
+      `${handle} content <p> count`
+    );
+    const lastContentMatch = contentMatches[contentMatches.length - 1];
+    const lastContentIdx = lastContentMatch.index;
+    const sigIdx = html.indexOf('<p class="sig">');
+    assert.ok(sigIdx > lastContentIdx, `${handle} sig must follow last content paragraph`);
+  });
+});
+
+test('validateHtml forbidden-tag prefix over-blocking and near-miss allowed tags', () => {
+  const rejected = [
+    ['<scriptx>alert(1)</scriptx>', 'script'],
+    ['<formatting>x</formatting>', 'form'],
+    ['<titlex>x</titlex>', 'title'],
+    ['<metax charset="utf-8">', 'meta'],
+    ['<linkx href="x.css">', 'link'],
+    ['<iframe2 src="x"></iframe2>', 'iframe'],
+    ['<objectx data="x"></objectx>', 'object'],
+    ['<script >alert(1)</script>', 'script'],
+    ['<script\n>alert(1)</script>', 'script'],
+    ['<formatting-x>x</formatting-x>', 'form'],
+  ];
+  for (const [html, tag] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason: `forbidden_tag:${tag}` },
+      `expected forbidden_tag:${tag} for: ${html}`
+    );
+  }
+
+  for (const html of ['<stylex>x</stylex>', '<s>x</s>', '<span>x</span>']) {
+    assert.deepEqual(validateHtml(html), { ok: true }, `expected ok for: ${html}`);
+  }
+});
+
+test('validateHtml attribute parsing edges: spacing, quotes, duplicates, case', () => {
+  const rejected = [
+    ['<a href = "javascript:alert(1)">x</a>', 'javascript_uri'],
+    ["<a href='javascript:alert(1)'>x</a>", 'javascript_uri'],
+    ['<p onClick = "x()">x</p>', 'forbidden_attr:onclick'],
+    ['<img src = " //evil.com/x.png ">', 'external_uri'],
+    ['<a href="plots/wick" onclick="x()">x</a>', 'forbidden_attr:onclick'],
+    ['<div style = "background:url(x)">x</div>', 'css_url'],
+    ['<a href="plots/wick" href="https://evil.com">x</a>', 'external_uri'],
+    ['<a HREF="https://evil.com">x</a>', 'external_uri'],
+  ];
+  for (const [html, reason] of rejected) {
+    assert.deepEqual(
+      validateHtml(html),
+      { ok: false, error: 'unsafe_html', reason },
+      `expected ${reason} for: ${html}`
+    );
+  }
+  assert.deepEqual(validateHtml('<a href = plots/wick>x</a>'), { ok: true });
 });
