@@ -1911,8 +1911,8 @@ test('file hygiene: 46 unique names, 7 imports, zero banned terms, pinned as-tru
     .map((l) => l.match(/^test\('([^']+)'/))
     .filter(Boolean)
     .map((m) => m[1]);
-  assert.equal(names.length, 46);
-  assert.equal(new Set(names).size, 46);
+  assert.equal(names.length, 56);
+  assert.equal(new Set(names).size, 56);
 
   const importLines = lines.filter((l) => l.startsWith('import '));
   assert.equal(importLines.length, 7);
@@ -1922,4 +1922,246 @@ test('file hygiene: 46 unique names, 7 imports, zero banned terms, pinned as-tru
   assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 1);
   assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 3);
   assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+});
+
+test('Slice 478 G1: guest checkin handle length and charset boundaries', async () => {
+  const ctx = await startTestServer();
+  try {
+    const cases = [
+      ['a', 400], ['ab', 200], ['a'.repeat(32), 200], ['a'.repeat(33), 400],
+      ['Ab', 400], ['-ab', 400], ['_ab', 400], ['9lives', 200], ['a_b-c9', 200],
+    ];
+    for (const [handle, want] of cases) {
+      const keys = generateKeypair();
+      const res = await signedPost(ctx, handle, keys, '/api/town/ghostlight/guest/checkin', {
+        handle, pubkey: keys.pubkey, status_text: 'bounds',
+      });
+      assert.equal(res.status, want, `${handle} -> ${res.status}`);
+      if (want === 400) {
+        assert.deepEqual(res.data, { error: 'invalid_handle' });
+      } else {
+        assert.equal(res.data.zone, 'bandstand');
+        assert.equal(typeof res.data.updated_at, 'number');
+      }
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G2: all three inn rooms fill and state inn carries exact guest shapes', async () => {
+  const ctx = await startTestServer();
+  try {
+    const probeKeys = generateKeypair();
+    const probe = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'probe-g2', ...probeKeys });
+    const st0 = await probe.state();
+    assert.deepEqual(st0.data.inn, { lantern: null, window: null, quiet: null });
+
+    const claims = [];
+    for (const [handle, room, nights] of [['room-a', 'lantern', 1], ['room-b', 'window', 2], ['room-c', 'quiet', 3]]) {
+      const keys = generateKeypair();
+      const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys });
+      const c = await guest.guestInnClaim(room, nights);
+      assert.equal(c.status, 201, `${room} claim ${c.status}`);
+      assert.equal(c.data.nights, nights);
+      assert.match(c.data.key, UNAMBIGUOUS_KEY_RE);
+      claims.push(c.data);
+    }
+    assert.notEqual(claims[0].key, claims[1].key);
+    assert.notEqual(claims[0].key, claims[2].key);
+    assert.notEqual(claims[1].key, claims[2].key);
+
+    const st = await probe.state();
+    for (const c of claims) {
+      const row = st.data.inn[c.room];
+      assert.deepEqual(Object.keys(row).sort(), ['expires_at', 'guest', 'handle', 'nights']);
+      assert.equal(row.guest, true);
+      assert.equal(row.handle, c.handle);
+      assert.equal(row.nights, c.nights);
+      assert.equal(row.expires_at, c.claimed_at + c.nights * NIGHT_SEC);
+    }
+
+    const k4 = generateKeypair();
+    const fourth = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'room-d', ...k4 });
+    const taken = await fourth.guestInnClaim('lantern', 1);
+    assert.equal(taken.status, 409);
+    assert.deepEqual(taken.data, { error: 'room_already_claimed' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G3: already_claimed consumes the claim bucket and the bucket is per-handle across keypairs', async () => {
+  const ctx = await startTestServer();
+  try {
+    const k1 = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bucket-guest', ...k1 });
+    const c1 = await guest.guestInnClaim('lantern', 1);
+    assert.equal(c1.status, 201);
+    const c2 = await guest.guestInnClaim('window', 1);
+    assert.equal(c2.status, 409);
+    assert.deepEqual(c2.data, { error: 'already_claimed' });
+    const k2 = generateKeypair();
+    const c3 = await signedPost(ctx, 'bucket-guest', k2, '/api/town/inn/guest/claim', {
+      handle: 'bucket-guest', pubkey: k2.pubkey, room: 'quiet', nights: 1,
+    });
+    assert.equal(c3.status, 429);
+    assert.equal(c3.data.error, 'rate_limited');
+    // 1s tolerance: the wall-clock second can tick between the consuming claim and this attempt.
+    assert.ok(c3.data.retry_after >= 3599 && c3.data.retry_after <= 3600);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G4: guest reply chain nests two deep', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: resClient } = await createResident(ctx, 'alder478');
+    const s1 = await resClient.say('root line');
+    assert.equal(s1.status, 201);
+    const ka = generateKeypair();
+    const a = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'replier-a', ...ka });
+    const r2 = await a.guestSay('reply one', 'say', s1.data.id);
+    assert.equal(r2.status, 201);
+    assert.equal(r2.data.reply_to, s1.data.id);
+    const kb = generateKeypair();
+    const b = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'replier-b', ...kb });
+    const r3 = await b.guestSay('reply two', 'say', r2.data.id);
+    assert.equal(r3.status, 201);
+    assert.equal(r3.data.reply_to, r2.data.id);
+    assert.ok(s1.data.id < r2.data.id && r2.data.id < r3.data.id);
+    const st = await b.state();
+    const entry = st.data.prompt_book.find((l) => l.id === r3.data.id);
+    assert.ok(entry);
+    assert.equal(entry.role, 'guest');
+    assert.equal(entry.reply_to, r2.data.id);
+    assert.equal(entry.body, 'reply two');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G5: guest checkin bucket is per-handle across keypairs', async () => {
+  const ctx = await startTestServer();
+  try {
+    const k1 = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'solo-key-guest', ...k1 });
+    const c1 = await guest.guestCheckin();
+    assert.equal(c1.status, 200);
+    const k2 = generateKeypair();
+    const c2 = await signedPost(ctx, 'solo-key-guest', k2, '/api/town/ghostlight/guest/checkin', {
+      handle: 'solo-key-guest', pubkey: k2.pubkey,
+    });
+    assert.equal(c2.status, 429);
+    assert.equal(c2.data.error, 'rate_limited');
+    // 1s tolerance: the wall-clock second can tick between the consuming checkin and this attempt.
+    assert.ok(c2.data.retry_after >= 299 && c2.data.retry_after <= 300);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G6: guest say bucket is per-handle across keypairs', async () => {
+  const ctx = await startTestServer();
+  try {
+    const k1 = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'solo-say-guest', ...k1 });
+    assert.equal((await guest.guestSay('one')).status, 201);
+    assert.equal((await guest.guestSay('two')).status, 201);
+    const k2 = generateKeypair();
+    const third = await signedPost(ctx, 'solo-say-guest', k2, '/api/town/ghostlight/guest/say', {
+      handle: 'solo-say-guest', pubkey: k2.pubkey, body: 'three', kind: 'say',
+    });
+    assert.equal(third.status, 429);
+    assert.equal(third.data.error, 'rate_limited');
+    // 1s tolerance: the wall-clock second can tick between the consuming says and this attempt.
+    assert.ok(third.data.retry_after >= 599 && third.data.retry_after <= 600);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G7: guest inn claim ignores unknown body fields', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const res = await signedPost(ctx, 'extra-guest', keys, '/api/town/inn/guest/claim', {
+      handle: 'extra-guest', pubkey: keys.pubkey, room: 'lantern', nights: 2, note: 'hello', vip: true,
+    });
+    assert.equal(res.status, 201);
+    assert.deepEqual(Object.keys(res.data).sort(), ['claimed_at', 'expires_at', 'handle', 'key', 'nights', 'room', 'state_seq']);
+    const g = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'extra-guest', ...keys });
+    const st = await g.state();
+    assert.deepEqual(Object.keys(st.data.inn.lantern).sort(), ['expires_at', 'guest', 'handle', 'nights']);
+    assert.equal('note' in st.data.inn.lantern, false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G8: guest inn extend and vacate with a different handle but the right key and pubkey succeed', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ka = generateKeypair();
+    const a = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'claim-guest', ...ka });
+    const claim = await a.guestInnClaim('lantern', 2);
+    assert.equal(claim.status, 201);
+    const claimedAt = claim.data.claimed_at;
+    const ext = await signedPost(ctx, 'other-guest', ka, '/api/town/inn/guest/extend', {
+      handle: 'other-guest', pubkey: ka.pubkey, room: 'lantern', key: claim.data.key, extra_nights: 1,
+    });
+    assert.equal(ext.status, 200);
+    assert.equal(ext.data.handle, 'claim-guest');
+    assert.equal(ext.data.nights, 3);
+    assert.equal(ext.data.expires_at, claimedAt + 3 * NIGHT_SEC);
+    const vac = await signedPost(ctx, 'other-guest', ka, '/api/town/inn/guest/vacate', {
+      handle: 'other-guest', pubkey: ka.pubkey, room: 'lantern', key: claim.data.key,
+    });
+    assert.equal(vac.status, 200);
+    assert.equal(vac.data.vacated, true);
+    assert.equal(vac.data.handle, 'claim-guest');
+    const st = await a.state();
+    assert.equal(st.data.inn.lantern, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G9: guest say emoji boundary counts UTF-16 code units', async () => {
+  const ctx = await startTestServer();
+  try {
+    assert.equal('😀'.length, 2);
+    const keys = generateKeypair();
+    const guest = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'emoji-guest', ...keys });
+    const ok = await guest.guestSay('😀'.repeat(250));
+    assert.equal(ok.status, 201);
+    assert.equal(ok.data.body.length, 500);
+    assert.equal(ok.data.body, '😀'.repeat(250));
+    const tooLong = await guest.guestSay('😀'.repeat(251));
+    assert.equal(tooLong.status, 400);
+    assert.equal(tooLong.data.error, 'invalid_body');
+    assert.equal(tooLong.data.max, 500);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 478 G10: guest checkin and claim fall back to the signed handle when body.handle is omitted', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const checkin = await signedPost(ctx, 'fallback-guest', keys, '/api/town/ghostlight/guest/checkin', {
+      pubkey: keys.pubkey,
+    });
+    assert.equal(checkin.status, 200);
+    assert.equal(checkin.data.handle, 'fallback-guest');
+    const claim = await signedPost(ctx, 'fallback-guest', keys, '/api/town/inn/guest/claim', {
+      pubkey: keys.pubkey, room: 'window', nights: 1,
+    });
+    assert.equal(claim.status, 201);
+    assert.equal(claim.data.handle, 'fallback-guest');
+  } finally {
+    await ctx.close();
+  }
 });
