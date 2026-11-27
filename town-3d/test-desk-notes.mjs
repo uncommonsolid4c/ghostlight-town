@@ -1109,12 +1109,12 @@ test('resolvePlotOverlayContent: single fetch call, nbsp html, String-object htm
   }
 });
 
-test('file hygiene: 53 tests, unique names, imports, banned literals pinned', async () => {
+test('file hygiene: 63 tests, unique names, imports, banned literals pinned', async () => {
   const self = await fs.readFile(SELF_PATH, 'utf8');
 
   const names = [...self.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53, 'test file must contain 53 top-level tests');
-  assert.equal(new Set(names).size, 53, 'test names must be unique');
+  assert.equal(names.length, 63, 'test file must contain 63 top-level tests');
+  assert.equal(new Set(names).size, 63, 'test names must be unique');
   for (const name of names) {
     assert.ok(name.length > 0, 'test names must be non-empty');
   }
@@ -1140,4 +1140,176 @@ test('file hygiene: 53 tests, unique names, imports, banned literals pinned', as
   assert.ok(!self.includes(`Date.${'now'}`), 'test file must not use the wall-clock helper');
   assert.ok(!new RegExp(`TO${'DO'}|FIX${'ME'}`).test(self), 'test file must not contain task markers');
   assert.ok(!self.includes('window.' + 'fetch'), 'test file must not reference the browser fetch function');
+});
+
+test('Slice 513: resolvePlotOverlayContent apiBase query, fragment, slash-only, and falsy non-string edges (D1)', async () => {
+  const cases = [
+    { apiBase: 'https://x.example?y=1', expectedUrl: 'https://x.example?y=1/api/town/plot?handle=wick' },
+    { apiBase: 'https://x.example#frag', expectedUrl: 'https://x.example#frag/api/town/plot?handle=wick' },
+    { apiBase: 'https://x.example/foo?bar=1/', expectedUrl: 'https://x.example/foo?bar=1/api/town/plot?handle=wick' },
+    { apiBase: '///', expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: 0, expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: false, expectedUrl: '/api/town/plot?handle=wick' },
+    { apiBase: NaN, expectedUrl: '/api/town/plot?handle=wick' },
+  ];
+
+  for (const { apiBase, expectedUrl } of cases) {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+    };
+    const result = await resolvePlotOverlayContent('wick', { fetchFn, apiBase });
+    assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+    assert.deepEqual(urls, [expectedUrl]);
+  }
+});
+
+test('Slice 513: resolvePlotOverlayContent unicode-whitespace html falls back, zero-width and nbsp content is api (D2)', async () => {
+  for (const html of ['\u00a0', '\u2003\u2003', '\u000b\u000c', '\u2003 \t\n']) {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  for (const html of ['\u200b', '\u00a0x', 'x\u00a0', '\u200bx']) {
+    const fetchFn = async () => ({ status: 200, json: async () => ({ html }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'api', html });
+  }
+});
+
+test('Slice 513: resolvePlotOverlayContent calls the fetch function exactly once per call with one string url (D3)', async () => {
+  const argLists = [];
+  const fetchFn = async (...args) => {
+    argLists.push(args);
+    return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+  };
+  await resolvePlotOverlayContent('wick', { fetchFn });
+  await resolvePlotOverlayContent('wick-2', { fetchFn });
+  assert.equal(argLists.length, 2, 'two sequential valid calls must record two calls');
+  for (const args of argLists) {
+    assert.equal(args.length, 1, 'the fetch function must receive exactly one argument');
+    assert.equal(typeof args[0], 'string', 'the fetch function argument must be a string');
+  }
+  assert.equal(argLists[0][0], '/api/town/plot?handle=wick');
+  assert.equal(argLists[1][0], '/api/town/plot?handle=wick-2');
+});
+
+test('Slice 513: seed manifest prop shape per handle: counts, starter catalog kinds, ranges, hex colors (D4)', async () => {
+  const catalog = new Set(['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame']);
+  const expectedCounts = { milo: 3, wick: 3, maren: 4, tomas: 4 };
+  const hexRe = /^#[0-9a-f]{6}$/;
+
+  for (const handle of SEED_HANDLES) {
+    const manifest = JSON.parse(await fs.readFile(path.join(SOURCE_PLOTS_DIR, handle, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.props.length, expectedCounts[handle], `${handle}: unexpected prop count`);
+    assert.ok(['gable', 'cabin', 'tower'].includes(manifest.cottage), `${handle}: cottage must be a starter style`);
+    for (const key of ['wall', 'roof', 'trim']) {
+      assert.match(manifest[key], hexRe, `${handle}: ${key} must be a lowercase hex color`);
+    }
+    for (const prop of manifest.props) {
+      assert.ok(catalog.has(prop.kind), `${handle}: prop kind ${prop.kind} must be in the starter catalog`);
+      assert.ok(Number.isInteger(prop.rot_y) && prop.rot_y >= 0 && prop.rot_y <= 359, `${handle}: rot_y ${prop.rot_y} out of range`);
+      assert.match(prop.color, hexRe, `${handle}: prop color must be a lowercase hex color`);
+      assert.ok(Math.abs(prop.x) <= 1.5, `${handle}: |x| ${prop.x} out of range`);
+      assert.ok(prop.z >= -1.5 && prop.z <= 2.5, `${handle}: z ${prop.z} out of range`);
+      assert.ok(prop.y >= 0 && prop.y <= 1, `${handle}: y ${prop.y} out of range`);
+    }
+  }
+});
+
+test('Slice 513: desk-note paragraphs contain no nested markup and no br, strong, em, code, or anchor tags (D5)', async () => {
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const inners = [...html.matchAll(/<p\b[^>]*>(.*?)<\/p>/gs)].map((m) => m[1]);
+    assert.ok(inners.length >= 3, `${handle}: must have at least 3 paragraphs`);
+    for (const inner of inners) {
+      assert.ok(!inner.includes('<'), `${handle}: paragraph text must contain no nested markup`);
+    }
+    for (const tag of ['<br', '<strong', '<em', '<code', '<a ']) {
+      assert.ok(!html.includes(tag), `${handle}: must not contain ${tag}`);
+    }
+  }
+});
+
+test('Slice 513: setPlotTabs definition and plot tab click listeners in index.html (D6)', async () => {
+  const indexHtml = await fs.readFile(INDEX_PATH, 'utf8');
+
+  for (const snippet of [
+    'function setPlotTabs(active) {',
+    'if (!plotOverlayTabs) return;',
+    'plotOverlayTabs.hidden = false;',
+    'plotOverlayTabs.hidden = true;',
+    "plotOverlayTabNote?.addEventListener('click', () => {",
+    'openPlotOverlay(currentPlotHandle);',
+    "plotOverlayTabGuestbook?.addEventListener('click', () => {",
+    'openPlotGuestbookOverlay(currentPlotHandle);',
+  ]) {
+    assert.ok(indexHtml.includes(snippet), `index.html missing ${snippet}`);
+  }
+
+  const setIdx = indexHtml.indexOf('function setPlotTabs(active)');
+  const openIdx = indexHtml.indexOf('async function openPlotOverlay(handle)');
+  const closeIdx = indexHtml.indexOf('function closePlotOverlay()');
+  const listenIdx = indexHtml.indexOf("plotOverlayTabNote?.addEventListener('click'");
+  assert.ok(setIdx !== -1 && setIdx < openIdx, 'setPlotTabs must be defined before openPlotOverlay');
+  assert.ok(closeIdx !== -1 && listenIdx > closeIdx, 'tab listeners must be wired after closePlotOverlay');
+});
+
+test('Slice 513: resolvePlotOverlayContent primitive response, string status, and non-function json fall back (D7)', async () => {
+  for (const ret of [42, 'ok', true]) {
+    const fetchFn = async () => ret;
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  {
+    const fetchFn = async () => ({ status: '200', json: async () => ({ html: '<p>x</p>' }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+
+  {
+    const fetchFn = async () => ({ status: 200, json: Promise.resolve({ html: '<p>x</p>' }) });
+    const result = await resolvePlotOverlayContent('wick', { fetchFn });
+    assert.deepEqual(result, { kind: 'static', url: 'plots/wick/index.html' });
+  }
+});
+
+test('Slice 513: exact paragraph word counts per handle (D8)', async () => {
+  const expectedCounts = { milo: 150, wick: 110, maren: 105, tomas: 133 };
+
+  for (const handle of SEED_HANDLES) {
+    const html = await fs.readFile(path.join(PLOTS_DIR, handle, 'index.html'), 'utf8');
+    const inners = [...html.matchAll(/<p\b[^>]*>(.*?)<\/p>/gs)].map((m) => m[1]);
+    const words = inners.join(' ').split(/\s+/).filter(Boolean);
+    assert.equal(words.length, expectedCounts[handle], `${handle}: unexpected paragraph word count`);
+  }
+});
+
+test('Slice 513: resolvePlotOverlayContent nested apiBase path is kept verbatim with no api dedup (D9)', async () => {
+  const urls = [];
+  const fetchFn = async (url) => {
+    urls.push(url);
+    return { status: 200, json: async () => ({ html: '<p>x</p>' }) };
+  };
+  const result = await resolvePlotOverlayContent('wick', { fetchFn, apiBase: 'https://x.example/api' });
+  assert.deepEqual(result, { kind: 'api', html: '<p>x</p>' });
+  assert.deepEqual(urls, ['https://x.example/api/api/town/plot?handle=wick']);
+});
+
+test('Slice 513: desk notes and sources contain no cross-path leak strings (D10)', async () => {
+  for (const handle of SEED_HANDLES) {
+    const destPath = path.join(PLOTS_DIR, handle, 'index.html');
+    const srcPath = path.join(SOURCE_PLOTS_DIR, handle, 'desk-note.html');
+    const [destHtml, srcHtml] = await Promise.all([
+      fs.readFile(destPath, 'utf8'),
+      fs.readFile(srcPath, 'utf8'),
+    ]);
+    assert.ok(!destHtml.includes('town-npc'), `${handle}/index.html must not mention town-npc`);
+    assert.ok(!destHtml.includes('plots/'), `${handle}/index.html must not mention plots/`);
+    assert.ok(!srcHtml.includes('town-3d'), `${handle}/desk-note.html must not mention town-3d`);
+    assert.ok(!srcHtml.includes('plots/'), `${handle}/desk-note.html must not mention plots/`);
+  }
 });
