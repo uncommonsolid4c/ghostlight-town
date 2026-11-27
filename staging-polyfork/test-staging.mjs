@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  INN_ROOM_KEYS,
   isInnOccupied,
+  collectTavernGlowMaterials,
   updateStagingInnOccupancy,
   splitNightlyCallLines,
   updateStagingNightlyCallCard,
@@ -1978,12 +1980,12 @@ test('G9: updateStagingNightlyCallCard guards malformed args and updates via dir
   assert.equal(card.material.map, calls[0]);
 });
 
-test('G10: test-staging.mjs hygiene — 48 unique names, 8 imports, pinned as-true counts', async () => {
+test('G10: test-staging.mjs hygiene — 58 unique names, 8 imports, pinned as-true counts', async () => {
   const self = await fs.readFile(SELF_PATH, 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48);
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58);
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -2000,4 +2002,514 @@ test('G10: test-staging.mjs hygiene — 48 unique names, 8 imports, pinned as-tr
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+});
+
+test('isInnOccupied returns null for missing or malformed state and INN_ROOM_KEYS pins the three room keys (G11)', () => {
+  assert.deepEqual(INN_ROOM_KEYS, ['lantern', 'window', 'quiet']);
+  assert.equal(isInnOccupied(null), null);
+  assert.equal(isInnOccupied(undefined), null);
+  assert.equal(isInnOccupied([]), null);
+  assert.equal(isInnOccupied('x'), null);
+  assert.equal(isInnOccupied(42), null);
+  assert.equal(isInnOccupied({}), false);
+  assert.equal(isInnOccupied({ stair: { handle: 'x' } }), false);
+});
+
+test('collectTavernGlowMaterials guards invalid targets, dedupes shared materials, handles arrays, and memoizes intensity (G12)', () => {
+  assert.deepEqual(collectTavernGlowMaterials(null), []);
+  assert.deepEqual(collectTavernGlowMaterials(undefined), []);
+  assert.deepEqual(collectTavernGlowMaterials({}), []);
+  assert.deepEqual(collectTavernGlowMaterials({ traverse: 'nope' }), []);
+
+  const shared = { emissiveIntensity: 0.7, userData: { glow: true } };
+  const otherGlow = { emissiveIntensity: 1.15, userData: { glow: true } };
+  const plain = { emissiveIntensity: 2, userData: {} };
+  const nodes = [
+    { isMesh: true, material: shared },
+    { isMesh: true, material: shared },
+    { isMesh: true, material: [otherGlow, plain] },
+    { isMesh: false, material: { emissiveIntensity: 1.5, userData: { glow: true } } },
+    { isMesh: true, material: null },
+  ];
+  const group = {
+    traverse(cb) {
+      for (const n of nodes) cb(n);
+    },
+  };
+
+  const mats = collectTavernGlowMaterials(group);
+  assert.equal(mats.length, 2);
+  assert.equal(mats[0], shared);
+  assert.equal(mats[1], otherGlow);
+  assert.equal(shared.userData.litEmissiveIntensity, 0.7);
+  assert.equal(otherGlow.userData.litEmissiveIntensity, 1.15);
+
+  shared.emissiveIntensity = 0.1;
+  collectTavernGlowMaterials(group);
+  assert.equal(shared.userData.litEmissiveIntensity, 0.7);
+
+  const defaultGlow = { userData: { glow: true } };
+  const groupDefault = {
+    traverse(cb) {
+      cb({ isMesh: true, material: defaultGlow });
+    },
+  };
+  const matsDefault = collectTavernGlowMaterials(groupDefault);
+  assert.equal(matsDefault.length, 1);
+  assert.equal(matsDefault[0], defaultGlow);
+  assert.equal(defaultGlow.userData.litEmissiveIntensity, 1.15);
+});
+
+test('updateStagingInnOccupancy classifies position-based zones, keeps stair dark, lights rest on any occupancy, and pins boundaries (G13)', () => {
+  const makePosMesh = (x, y, z) => ({
+    isMesh: true,
+    material: {
+      emissiveIntensity: 1.15,
+      userData: { glow: true },
+      clone() {
+        return {
+          emissiveIntensity: this.emissiveIntensity,
+          userData: { ...this.userData },
+          clone: this.clone,
+        };
+      },
+    },
+    position: { x, y, z },
+    userData: {},
+    children: [],
+  });
+  const makeGroup = (meshes) => ({
+    traverse(cb) {
+      cb(this);
+      for (const m of meshes) cb(m);
+    },
+  });
+
+  const lantern = makePosMesh(-3.6, 4.25, 2.94);
+  const windowMesh = makePosMesh(-1.9, 4.25, 2.94);
+  const quiet = makePosMesh(1.9, 4.25, 2.94);
+  const stair = makePosMesh(3.6, 4.25, 2.94);
+  const rest = makePosMesh(0, 1, 0);
+  const group = makeGroup([lantern, windowMesh, quiet, stair, rest]);
+
+  assert.equal(updateStagingInnOccupancy(group, { lantern: { handle: 'a' }, window: null, quiet: null }), true);
+  assert.equal(lantern.userData.innZone, 'lantern');
+  assert.equal(windowMesh.userData.innZone, 'window');
+  assert.equal(quiet.userData.innZone, 'quiet');
+  assert.equal(stair.userData.innZone, 'stair');
+  assert.equal(rest.userData.innZone, 'rest');
+  assert.equal(lantern.material.emissiveIntensity, 1.15);
+  assert.equal(rest.material.emissiveIntensity, 1.15);
+  assert.equal(windowMesh.material.emissiveIntensity, 0);
+  assert.equal(quiet.material.emissiveIntensity, 0);
+  assert.equal(stair.material.emissiveIntensity, 0);
+
+  assert.equal(
+    updateStagingInnOccupancy(group, { lantern: { handle: 'a' }, window: { handle: 'b' }, quiet: { handle: 'c' } }),
+    true
+  );
+  assert.equal(stair.material.emissiveIntensity, 0);
+  assert.equal(windowMesh.material.emissiveIntensity, 1.15);
+
+  assert.equal(updateStagingInnOccupancy(group, { lantern: null, window: null, quiet: null }), false);
+  assert.equal(lantern.material.emissiveIntensity, 0);
+  assert.equal(windowMesh.material.emissiveIntensity, 0);
+  assert.equal(quiet.material.emissiveIntensity, 0);
+  assert.equal(stair.material.emissiveIntensity, 0);
+  assert.equal(rest.material.emissiveIntensity, 0);
+
+  const boundaryCases = [
+    [-3.01, 4.25, 2.94, 'lantern'],
+    [-3.0, 4.25, 2.94, 'rest'],
+    [-2.99, 4.25, 2.94, 'rest'],
+    [-3.6, 4.25, 3.13, 'lantern'],
+    [-3.6, 4.25, 3.14, 'rest'],
+    [-3.6, 4.25, 3.15, 'rest'],
+    [-3.6, 4.84, 2.94, 'lantern'],
+    [-3.6, 4.85, 2.94, 'lantern'],
+    [-3.6, 4.86, 2.94, 'rest'],
+    [3.6, 4.25, 2.94, 'stair'],
+  ];
+  for (const [x, y, z, expectedZone] of boundaryCases) {
+    const m = makePosMesh(x, y, z);
+    updateStagingInnOccupancy(makeGroup([m]), { lantern: { handle: 'a' } });
+    assert.equal(m.userData.innZone, expectedZone);
+  }
+
+  assert.equal(updateStagingInnOccupancy(group, null), null);
+  assert.equal(updateStagingInnOccupancy(null, { lantern: { handle: 'a' } }), null);
+  assert.equal(updateStagingInnOccupancy({}, { lantern: { handle: 'a' } }), null);
+});
+
+test('updateStagingInnOccupancy clones shared materials per mesh and leaves plain array entries untouched (G14)', () => {
+  const sharedMat = {
+    emissiveIntensity: 1.15,
+    userData: { glow: true },
+    clone() {
+      return {
+        emissiveIntensity: this.emissiveIntensity,
+        userData: { ...this.userData },
+        clone: this.clone,
+      };
+    },
+  };
+  const m1 = { isMesh: true, material: sharedMat, position: { x: -3.6, y: 4.25, z: 2.94 }, userData: {}, children: [] };
+  const m2 = { isMesh: true, material: sharedMat, position: { x: -1.9, y: 4.25, z: 2.94 }, userData: {}, children: [] };
+  const sharedGroup = {
+    traverse(cb) {
+      cb(this);
+      cb(m1);
+      cb(m2);
+    },
+  };
+
+  assert.equal(updateStagingInnOccupancy(sharedGroup, { lantern: { handle: 'a' }, window: null, quiet: null }), true);
+  assert.equal(m1.material, sharedMat);
+  assert.notEqual(m2.material, sharedMat);
+  assert.equal(m1.material.emissiveIntensity, 1.15);
+  assert.equal(m2.material.emissiveIntensity, 0);
+  assert.equal(m2.material.userData.glow, true);
+  assert.equal(m2.material.userData.litEmissiveIntensity, 1.15);
+
+  const glowMat = {
+    emissiveIntensity: 1.15,
+    userData: { glow: true },
+    clone() {
+      return { emissiveIntensity: this.emissiveIntensity, userData: { ...this.userData }, clone: this.clone };
+    },
+  };
+  const plainMat = { emissiveIntensity: 2, userData: {} };
+  const arrMesh = { isMesh: true, material: [glowMat, plainMat], position: { x: 0, y: 1, z: 0 }, userData: {}, children: [] };
+  const arrGroup = {
+    traverse(cb) {
+      cb(this);
+      cb(arrMesh);
+    },
+  };
+
+  assert.equal(updateStagingInnOccupancy(arrGroup, { lantern: { handle: 'a' }, window: null, quiet: null }), true);
+  assert.equal(Array.isArray(arrMesh.material), true);
+  assert.equal(arrMesh.material[0].emissiveIntensity, 1.15);
+  assert.equal(arrMesh.material[1], plainMat);
+  assert.equal(arrMesh.material[1].emissiveIntensity, 2);
+});
+
+test('updateStagingNightlyCallCard trims and dedupes topic, finds card via group.children, sets needsUpdate, and guards missing material (G15)', () => {
+  const calls = [];
+  const makeTextTexture = (THREE, lines, opts) => {
+    const tex = { lines, opts };
+    calls.push(tex);
+    return tex;
+  };
+  const fakeTHREE = { CanvasTexture: function FakeTex() {} };
+  const card = { name: 'nightly_call_card', material: { map: null, needsUpdate: false } };
+  const liveStore = { nightlyCallTopic: null };
+  const ctx = {
+    THREE: fakeTHREE,
+    bandstandBuilt: { group: { children: [card] } },
+    liveStore,
+    makeTextTexture,
+  };
+
+  assert.equal(updateStagingNightlyCallCard(ctx, { topic: '  Hello town  ' }), true);
+  assert.equal(liveStore.nightlyCallTopic, 'Hello town');
+  assert.deepEqual(calls[0].lines, ['THE NIGHTLY CALL', 'Hello town']);
+  assert.equal(card.material.map, calls[0]);
+  assert.equal(card.material.needsUpdate, true);
+
+  assert.equal(updateStagingNightlyCallCard(ctx, { topic: 'Hello town' }), false);
+  assert.equal(updateStagingNightlyCallCard(ctx, { topic: '  Hello town  ' }), false);
+  assert.equal(calls.length, 1);
+
+  const noMatCard = { name: 'nightly_call_card' };
+  const noMatStore = { nightlyCallTopic: null };
+  assert.equal(
+    updateStagingNightlyCallCard(
+      { THREE: fakeTHREE, bandstandBuilt: { group: { children: [noMatCard] } }, liveStore: noMatStore, makeTextTexture },
+      { topic: 'New topic' }
+    ),
+    false
+  );
+  assert.equal(noMatStore.nightlyCallTopic, null);
+});
+
+test('updateStagingNightlyCallCard passes exact texture opts and wraps the 2026-11-27 topic at 22 columns (G16)', () => {
+  const topic = 'Which chair in your place is the best for thinking?';
+  assert.deepEqual(splitNightlyCallLines(topic, 22), [
+    'Which chair in your',
+    'place is the best for',
+    'thinking?',
+  ]);
+
+  const calls = [];
+  const makeTextTexture = (THREE, lines, opts) => {
+    const tex = { lines, opts };
+    calls.push(tex);
+    return tex;
+  };
+  const card = { name: 'nightly_call_card', material: { map: null, needsUpdate: false } };
+  const liveStore = { nightlyCallTopic: null };
+
+  assert.equal(
+    updateStagingNightlyCallCard(
+      {
+        THREE: { CanvasTexture: function FakeTex() {} },
+        bandstandBuilt: { nightlyCallCard: card },
+        liveStore,
+        makeTextTexture,
+      },
+      { topic }
+    ),
+    true
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].lines, [
+    'THE NIGHTLY CALL',
+    'Which chair in your',
+    'place is the best for',
+    'thinking?',
+  ]);
+  assert.deepEqual(calls[0].opts, {
+    width: 1024,
+    height: 512,
+    titleSize: 80,
+    subSize: 68,
+    borderWidth: 16,
+    bg: '#f2e6cf',
+    border: '#b59449',
+    fg: '#2b1e14',
+  });
+});
+
+test('getPlotTargetPosition computes exact positions on plots 2, 3, and 6 across indices 0, 1, 5, and 6 (G17)', () => {
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[1], 0), { x: 14.3627, y: 0, z: -3.9642, rotY: -1.3015 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[1], 1), { x: 14.6022, y: 0, z: -3.0966, rotY: -1.3015 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[1], 5), { x: 15.0811, y: 0, z: -1.3615, rotY: -1.3015 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[1], 6), { x: 13.6444, y: 0, z: -6.5669, rotY: -1.3015 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[2], 0), { x: 10.4889, y: 0, z: -10.583, rotY: -0.7809 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[2], 1), { x: 11.1281, y: 0, z: -9.9495, rotY: -0.7809 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[5], 0), { x: -10.4889, y: 0, z: -10.583, rotY: 0.7809 });
+  assert.deepEqual(getPlotTargetPosition(TOWN_LAYOUT.plots[5], 5), { x: -8.5711, y: 0, z: -12.4836, rotY: 0.7809 });
+});
+
+test('pickBandstandSpot computes overflow ring slots 10, 11, 12, 20 and falls back on non-integer preferred (G18)', () => {
+  const spots = Array.from({ length: 10 }, (_, i) => ({ x: i, y: 0, z: -i || 0, rotY: 0.1 * i }));
+  const used = new Set();
+  for (let i = 0; i < 10; i++) pickBandstandSpot(spots, used);
+
+  assert.deepEqual(pickBandstandSpot(spots, used), { x: 0.9863, y: 0, z: 6.5259, rotY: -2.9916, slot: 10, nametagLift: 0 });
+  assert.deepEqual(pickBandstandSpot(spots, used), { x: 4.6337, y: 0, z: 4.6998, rotY: -2.3633, slot: 11, nametagLift: 0.5 });
+  assert.deepEqual(pickBandstandSpot(spots, used), { x: 6.5113, y: 0, z: 1.0786, rotY: -1.735, slot: 12, nametagLift: 0 });
+  assert.equal(used.size, 13);
+
+  for (let i = 13; i < 20; i++) pickBandstandSpot(spots, used);
+  assert.deepEqual(pickBandstandSpot(spots, used), { x: 1.1208, y: 0, z: 7.4158, rotY: -2.9916, slot: 20, nametagLift: 0 });
+
+  const used2 = new Set([0]);
+  assert.equal(pickBandstandSpot(spots, used2, '3').slot, 1);
+  assert.equal(pickBandstandSpot(spots, new Set(), null).slot, 0);
+});
+
+test('buildStagingSignpost handles three-part text, empty second part, and pins material and texture properties (G19)', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function buildStagingSignpost(');
+  assert.ok(fnStart !== -1, 'Expected buildStagingSignpost in staging.js');
+  const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+  const buildFn = new Function('THREE', 'document', `${fnBody}\nreturn buildStagingSignpost;`);
+
+  withRecordingCanvas(({ fakeTHREE, draws }) => {
+    fakeTHREE.Group = class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+      }
+      add(c) { this.children.push(c); }
+    };
+    fakeTHREE.Mesh = class Mesh {
+      constructor(geometry, material) {
+        this.geometry = geometry;
+        this.material = material;
+        this.position = { x: 0, y: 0, z: 0, set: (x, y, z) => { this.position.x = x; this.position.y = y; this.position.z = z; } };
+      }
+    };
+    fakeTHREE.BoxGeometry = class BoxGeometry {
+      constructor(...args) { this.args = args; }
+    };
+    fakeTHREE.MeshStandardMaterial = class MeshStandardMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    };
+    fakeTHREE.CanvasTexture = class CanvasTexture {
+      constructor(canvas) { this.canvas = canvas; }
+    };
+    fakeTHREE.SRGBColorSpace = 'srgb';
+
+    const buildStagingSignpost = buildFn(fakeTHREE, globalThis.document);
+    const group = buildStagingSignpost('Milo — Ghost — Light');
+    const [post, board] = group.children;
+
+    assert.equal(draws.length, 1);
+    assert.equal(draws[0].text, 'Milo — Ghost — Light');
+    assert.equal(draws[0].y, 80);
+    assert.equal(draws[0].width, 512);
+    assert.equal(draws[0].height, 160);
+    assert.equal(post.material.roughness, 0.9);
+    assert.equal(board.material.roughness, 0.85);
+    assert.equal(board.material.map.colorSpace, 'srgb');
+    assert.equal(board.material.map.canvas.width, 512);
+
+    draws.length = 0;
+    buildStagingSignpost('Wick — ');
+    assert.equal(draws.length, 2);
+    assert.equal(draws[0].text, 'Wick —');
+    assert.equal(draws[0].y, 58);
+    assert.equal(draws[1].text, '');
+    assert.equal(draws[1].y, 104);
+  });
+});
+
+test('buildNewsstand builds 7 children with exact geometry, sign texture call, and 8-stripe awning texture (G20)', async () => {
+  const src = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const fnStart = src.indexOf('function makeAwningTexture(');
+  const fnEnd = src.indexOf('\nconst NOTICE_BOARD_PAPERS', fnStart + 1);
+  assert.ok(fnStart !== -1 && fnEnd !== -1, 'Expected makeAwningTexture and buildNewsstand in staging.js');
+  const fnBody = src.slice(fnStart, fnEnd);
+
+  const buildFn = new Function(
+    'THREE',
+    'TOWN_LAYOUT',
+    'document',
+    'makeBandstandTextTexture',
+    `${fnBody}\nreturn buildNewsstand;`
+  );
+
+  const vec3 = (x = 0, y = 0, z = 0) => Object.defineProperty({ x, y, z }, 'set', {
+    value(nx, ny, nz) { this.x = nx; this.y = ny; this.z = nz; },
+    enumerable: false,
+  });
+  const fakeTHREE = {
+    Group: class Group {
+      constructor() {
+        this.name = '';
+        this.children = [];
+        this.position = vec3();
+        this.rotation = { x: 0, y: 0, z: 0 };
+        this.userData = {};
+      }
+      add(c) { this.children.push(c); }
+    },
+    Mesh: class Mesh {
+      constructor(geometry, material) {
+        this.name = '';
+        this.geometry = geometry;
+        this.material = material;
+        this.position = vec3();
+        this.rotation = { x: 0, y: 0, z: 0 };
+      }
+    },
+    BoxGeometry: class BoxGeometry {
+      constructor(...args) { this.args = args; }
+    },
+    MeshStandardMaterial: class MeshStandardMaterial {
+      constructor(opts = {}) { Object.assign(this, opts); }
+    },
+    CanvasTexture: class CanvasTexture {
+      constructor(canvas) { this.canvas = canvas; this.needsUpdate = false; }
+    },
+  };
+
+  const rects = [];
+  const recDoc = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      const ctx = {
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        fillRect(x, y, w, h) {
+          rects.push({ kind: 'fillRect', x, y, w, h, fillStyle: ctx.fillStyle });
+        },
+        strokeRect(x, y, w, h) {
+          rects.push({ kind: 'strokeRect', x, y, w, h, strokeStyle: ctx.strokeStyle, lineWidth: ctx.lineWidth });
+        },
+      };
+      return { width: 0, height: 0, getContext: () => ctx };
+    },
+  };
+
+  const texCalls = [];
+  const makeBandstandTextTexture = (THREE, lines, opts) => {
+    const tex = { THREE, lines, opts };
+    texCalls.push(tex);
+    return tex;
+  };
+
+  const buildNewsstand = buildFn(fakeTHREE, TOWN_LAYOUT, recDoc, makeBandstandTextTexture);
+  const group = buildNewsstand(fakeTHREE);
+
+  assert.equal(group.name, 'gazette_newsstand');
+  assert.deepEqual(group.position, { x: 6, y: 0, z: 14 });
+  assert.equal(group.rotation.y, Math.atan2(-6, -14));
+  assert.deepEqual(group.userData, {
+    clickable: true,
+    kind: 'newsstand',
+    label: 'The Ghostlight Gazette Newsstand',
+  });
+
+  assert.equal(group.children.length, 7);
+  const [booth, awning, papers, shelf, bracketL, bracketR, sign] = group.children;
+  assert.deepEqual(booth.geometry.args, [2.2, 2.1, 1.4]);
+  assert.deepEqual(booth.position, { x: 0, y: 1.05, z: 0 });
+  assert.equal(booth.material.color, '#6b492b');
+
+  assert.deepEqual(awning.geometry.args, [2.5, 0.16, 1.9]);
+  assert.deepEqual(awning.position, { x: 0, y: 2.08, z: 0.15 });
+  assert.equal(awning.rotation.x, 0.15);
+
+  assert.deepEqual(papers.geometry.args, [0.65, 0.25, 0.45]);
+  assert.deepEqual(papers.position, { x: -0.5, y: 1.15, z: 0.78 });
+
+  assert.equal(shelf.name, 'newsstand_papers_shelf');
+  assert.deepEqual(shelf.geometry.args, [0.78, 0.06, 0.52]);
+  assert.deepEqual(shelf.position, { x: -0.5, y: 0.995, z: 0.8 });
+
+  assert.equal(bracketL.name, 'newsstand_papers_bracket_l');
+  assert.deepEqual(bracketL.geometry.args, [0.06, 0.16, 0.28]);
+  assert.deepEqual(bracketL.position, { x: -0.8, y: 0.885, z: 0.84 });
+
+  assert.equal(bracketR.name, 'newsstand_papers_bracket_r');
+  assert.deepEqual(bracketR.geometry.args, [0.06, 0.16, 0.28]);
+  assert.deepEqual(bracketR.position, { x: -0.2, y: 0.885, z: 0.84 });
+
+  assert.deepEqual(sign.geometry.args, [2.0, 0.45, 0.08]);
+  assert.deepEqual(sign.position, { x: 0, y: 2.55, z: 0.4 });
+  assert.equal(sign.material.roughness, 0.8);
+
+  assert.equal(texCalls.length, 1);
+  assert.deepEqual(texCalls[0].lines, ['THE GHOSTLIGHT GAZETTE']);
+  assert.deepEqual(texCalls[0].opts, {
+    width: 512,
+    height: 128,
+    titleSize: 28,
+    bg: '#231b14',
+    border: '#c7a463',
+  });
+
+  const fillRects = rects.filter((r) => r.kind === 'fillRect');
+  assert.equal(fillRects.length, 8);
+  assert.deepEqual(
+    fillRects.map((r) => r.fillStyle),
+    ['#b84a39', '#f2e6d0', '#b84a39', '#f2e6d0', '#b84a39', '#f2e6d0', '#b84a39', '#f2e6d0']
+  );
+  assert.deepEqual(
+    fillRects.map((r) => r.x),
+    [0, 32, 64, 96, 128, 160, 192, 224]
+  );
+  for (const r of fillRects) {
+    assert.equal(r.w, 32);
+    assert.equal(r.y, 0);
+    assert.equal(r.h, 128);
+  }
 });
