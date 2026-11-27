@@ -2198,13 +2198,13 @@ test('trimming, exact limits, and unicode name handling (G19)', async () => {
   }
 });
 
-test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G20)', () => {
+test('file hygiene: 58 unique names, 8 imports, pinned as-true counts (G20)', () => {
   const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
   const lines = src.split('\n');
 
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48);
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58);
 
   const imports = lines.filter((l) => l.startsWith('import '));
   assert.deepEqual(imports, [
@@ -2219,10 +2219,10 @@ test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G20)', ()
   ]);
 
   const fetchNeedle = 'fet' + 'ch(';
-  assert.equal(lines.filter((l) => l.includes(fetchNeedle)).length, 23);
+  assert.equal(lines.filter((l) => l.includes(fetchNeedle)).length, 27);
 
   const dateNowRe = new RegExp('Date' + '.now');
-  assert.equal(lines.filter((l) => dateNowRe.test(l)).length, 2);
+  assert.equal(lines.filter((l) => dateNowRe.test(l)).length, 3);
 
   const randNeedle = 'Math' + '.random';
   assert.equal(lines.filter((l) => l.includes(randNeedle)).length, 0);
@@ -2235,4 +2235,327 @@ test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G20)', ()
 
   const bannedNeedle = 'camp' + 'fire';
   assert.equal(src.toLowerCase().split(bannedNeedle).length - 1, 0);
+});
+
+test('non-string field types are rejected with matching error (G21)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const cases = [
+      [{ kind: 123, name: 'Ada', body: 'Hello' }, '203.0.113.201', 'invalid_kind'],
+      [{ kind: 'guestbook', name: 123, body: 'Hello' }, '203.0.113.202', 'invalid_name'],
+      [{ kind: 'guestbook', name: 'Ada', body: 123 }, '203.0.113.203', 'invalid_body'],
+      [{ kind: true, name: 'Ada', body: 'Hello' }, '203.0.113.204', 'invalid_kind'],
+      [{ kind: 'guestbook', name: ['Ada'], body: 'Hello' }, '203.0.113.205', 'invalid_name'],
+      [{ kind: 'guestbook', name: 'Ada', body: { x: 1 } }, '203.0.113.206', 'invalid_body'],
+    ];
+    for (const [payload, ip, expectedError] of cases) {
+      const res = await rawPost(ctx.baseUrl, '/api/town/guestbook', payload, { 'X-Forwarded-For': ip });
+      assert.equal(res.status, 400);
+      if (expectedError === 'invalid_kind') {
+        assert.deepEqual(res.data, { error: 'invalid_kind' });
+      } else {
+        assert.equal(res.data.error, expectedError);
+      }
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('fresh-DB exact shapes for guestbook and state (G22)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+
+    const gb = await visitor.getGuestbook();
+    assert.equal(gb.status, 200);
+    assert.deepEqual(gb.data, { entries: [] });
+
+    const letters = await visitor.getGuestbook('letter');
+    assert.equal(letters.status, 200);
+    assert.deepEqual(letters.data, { entries: [] });
+
+    const st = await visitor.state();
+    assert.equal(st.status, 200);
+    assert.deepEqual(st.data.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(st.data.guestbook_by_plot, {});
+    assert.equal(st.data.guestbook_pending, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('created_at drives GET order with DB-seeded entries (G23)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const stmt = ctx.db.prepare(
+      "INSERT INTO guestbook (kind, name, body, status, plot, created_at) VALUES ('guestbook', ?, ?, 'approved', NULL, ?)"
+    );
+    stmt.run('Guest A', 'Message A', 1700000000);
+    stmt.run('Guest B', 'Message B', 1700000010);
+
+    const gb = await visitor.getGuestbook();
+    assert.equal(gb.status, 200);
+    assert.equal(gb.data.entries.length, 2);
+    assert.equal(gb.data.entries[0].id, 2);
+    assert.equal(gb.data.entries[0].name, 'Guest B');
+    assert.equal(gb.data.entries[0].body, 'Message B');
+    assert.equal(gb.data.entries[0].created_at, 1700000010);
+    assert.equal(gb.data.entries[1].id, 1);
+    assert.equal(gb.data.entries[1].name, 'Guest A');
+    assert.equal(gb.data.entries[1].created_at, 1700000000);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('scheme-less text is allowed by URL filter (G24)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const bodies = [
+      ['visit www.example.com', '203.0.113.211'],
+      ['mail ada@example.com', '203.0.113.212'],
+      ['try ftp://files', '203.0.113.213'],
+      ['say http loudly', '203.0.113.214'],
+    ];
+    for (const [body, ip] of bodies) {
+      const res = await rawPost(
+        ctx.baseUrl,
+        '/api/town/guestbook',
+        { kind: 'guestbook', name: 'Ada', body },
+        { 'X-Forwarded-For': ip }
+      );
+      assert.equal(res.status, 201);
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot signs share gate rate-limit bucket with retry_after 3600 (G25)', async () => {
+  const base = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => base });
+  try {
+    await registerResident(ctx, 'wick');
+    const ip = { 'X-Forwarded-For': '203.0.113.215' };
+
+    const g0 = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'G0', body: 'gate 0' }, ip);
+    assert.equal(g0.status, 201);
+    const g1 = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'G1', body: 'gate 1' }, ip);
+    assert.equal(g1.status, 201);
+    const p1 = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'P', body: 'porch', plot: 'wick' },
+      ip
+    );
+    assert.equal(p1.status, 201);
+
+    const g2 = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'G2', body: 'gate 2' }, ip);
+    assert.equal(g2.status, 429);
+    assert.equal(g2.data.error, 'rate_limited');
+    assert.equal(g2.data.retry_after, 3600);
+
+    const p2 = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'P2', body: 'porch 2', plot: 'wick' },
+      ip
+    );
+    assert.equal(p2.status, 429);
+    assert.equal(p2.data.error, 'rate_limited');
+    assert.equal(p2.data.retry_after, 3600);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rate-limit bucket is per-IP (G26)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const ipA = { 'X-Forwarded-For': '203.0.113.231' };
+    const ipB = { 'X-Forwarded-For': '203.0.113.232' };
+
+    for (let i = 0; i < 3; i++) {
+      const r = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: `A${i}`, body: `msg ${i}` }, ipA);
+      assert.equal(r.status, 201);
+    }
+    const blocked = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'A3', body: 'msg 3' }, ipA);
+    assert.equal(blocked.status, 429);
+    assert.equal(blocked.data.error, 'rate_limited');
+
+    const okB = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'B0', body: 'msg B' }, ipB);
+    assert.equal(okB.status, 201);
+    assert.equal(okB.data.status, 'pending');
+
+    const st = await visitor.state();
+    assert.equal(st.data.guestbook_pending, 4);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('exact 400 error bodies across guestbook endpoints (G27)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const badKind = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'note', name: 'A', body: 'x' },
+      { 'X-Forwarded-For': '203.0.113.221' }
+    );
+    assert.equal(badKind.status, 400);
+    assert.deepEqual(badKind.data, { error: 'invalid_kind' });
+
+    const badUrl = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'A', body: 'see http://x.co' },
+      { 'X-Forwarded-For': '203.0.113.222' }
+    );
+    assert.equal(badUrl.status, 400);
+    assert.deepEqual(badUrl.data, { error: 'urls_not_allowed' });
+
+    const badPlot = await rawPost(
+      ctx.baseUrl,
+      '/api/town/guestbook',
+      { kind: 'guestbook', name: 'A', body: 'x', plot: 'nobody' },
+      { 'X-Forwarded-For': '203.0.113.223' }
+    );
+    assert.equal(badPlot.status, 400);
+    assert.deepEqual(badPlot.data, { error: 'unknown_plot' });
+
+    const badLim = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=0`);
+    assert.equal(badLim.status, 400);
+    assert.deepEqual(await badLim.json(), { error: 'invalid_limit' });
+
+    const letter = await visitor.signGuestbook('letter', 'Reader', 'Hello');
+    assert.equal(letter.status, 201);
+    const badAction = await admin.moderateGuestbook(letter.data.id, 'delete');
+    assert.equal(badAction.status, 400);
+    assert.deepEqual(badAction.data, { error: 'invalid_action' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('letter-only state counts and approved-letter list (G28)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const l1 = await visitor.signGuestbook('letter', 'Reader One', 'First letter.');
+    assert.equal(l1.status, 201);
+    const l2 = await visitor.signGuestbook('letter', 'Reader Two', 'Second letter.');
+    assert.equal(l2.status, 201);
+
+    const app = await admin.moderateGuestbook(l1.data.id, 'approve');
+    assert.equal(app.status, 200);
+    const rej = await admin.moderateGuestbook(l2.data.id, 'reject');
+    assert.equal(rej.status, 200);
+
+    const st = await visitor.state();
+    assert.deepEqual(st.data.guestbook, { signed: 0, letters: 1 });
+    assert.equal(st.data.guestbook_pending, 0);
+
+    const onlyLetters = await visitor.getGuestbook('letter');
+    assert.equal(onlyLetters.status, 200);
+    assert.equal(onlyLetters.data.entries.length, 1);
+    assert.equal(onlyLetters.data.entries[0].id, l1.data.id);
+    assert.equal(onlyLetters.data.entries[0].name, 'Reader One');
+    assert.equal(onlyLetters.data.entries[0].body, 'First letter.');
+
+    const allGb = await visitor.getGuestbook();
+    assert.equal(allGb.status, 200);
+    assert.equal(allGb.data.entries.length, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('gate re-reject 409 carries rejected status (G29)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor', privateKeyPem: '' });
+    const admin = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'milo-op',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+
+    const seq0 = (await visitor.state()).data.state_seq;
+    const signed = await visitor.signGuestbook('guestbook', 'Guest', 'Gate note.');
+    assert.equal(signed.status, 201);
+    const id = signed.data.id;
+
+    const rej = await admin.moderateGuestbook(id, 'reject');
+    assert.equal(rej.status, 200);
+    assert.deepEqual(rej.data, { id, status: 'rejected' });
+
+    const reRej = await admin.moderateGuestbook(id, 'reject');
+    assert.equal(reRej.status, 409);
+    assert.deepEqual(reRej.data, { error: 'already_decided', status: 'rejected' });
+
+    const appAfterRej = await admin.moderateGuestbook(id, 'approve');
+    assert.equal(appAfterRej.status, 409);
+    assert.deepEqual(appAfterRej.data, { error: 'already_decided', status: 'rejected' });
+
+    const st = await visitor.state();
+    assert.equal(st.data.state_seq, seq0);
+    assert.deepEqual(st.data.guestbook, { signed: 0, letters: 0 });
+    assert.equal(st.data.guestbook_pending, 0);
+
+    const gb = await visitor.getGuestbook();
+    assert.equal(gb.status, 200);
+    assert.deepEqual(gb.data, { entries: [] });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET limit Number quirks with 12 seeded rows (G30)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const baseTime = ctx.nowSec() - 100;
+    const stmt = ctx.db.prepare(
+      "INSERT INTO guestbook (kind, name, body, status, plot, created_at) VALUES ('guestbook', ?, ?, 'approved', NULL, ?)"
+    );
+    for (let i = 1; i <= 12; i++) {
+      stmt.run(`Guest ${i}`, `Message ${i}`, baseTime + i);
+    }
+
+    const r007 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=007`);
+    assert.equal(r007.status, 200);
+    const d007 = await r007.json();
+    assert.equal(d007.entries.length, 7);
+    assert.deepEqual(d007.entries.map((e) => e.id), [12, 11, 10, 9, 8, 7, 6]);
+
+    const rPlus5 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=+5`);
+    assert.equal(rPlus5.status, 200);
+    const dPlus5 = await rPlus5.json();
+    assert.equal(dPlus5.entries.length, 5);
+    assert.deepEqual(dPlus5.entries.map((e) => e.id), [12, 11, 10, 9, 8]);
+
+    const r12 = await fetch(`${ctx.baseUrl}/api/town/guestbook?limit=12`);
+    assert.equal(r12.status, 200);
+    const d12 = await r12.json();
+    assert.equal(d12.entries.length, 12);
+    assert.equal(d12.entries[11].id, 1);
+  } finally {
+    await ctx.close();
+  }
 });
