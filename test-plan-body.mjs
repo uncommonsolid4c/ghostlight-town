@@ -1055,10 +1055,10 @@ test('PLAN.md §8 Phase 1 phone-first — 640px media query, move-in CTA, 44px t
   assert.ok(moveIn.includes('id="join"'), 'town-3d/move-in.html must include the #join anchor');
 });
 
-test('test-plan-body.mjs file hygiene — 51 unique test names, import lines, banned literals', () => {
+test('test-plan-body.mjs file hygiene — 61 unique test names, import lines, banned literals', () => {
   const text = fs.readFileSync(path.join(__dirname, 'test-plan-body.mjs'), 'utf8');
   const names = [...text.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 51, 'test-plan-body.mjs must have exactly 51 top-level tests');
+  assert.equal(names.length, 61, 'test-plan-body.mjs must have exactly 61 top-level tests');
   assert.equal(new Set(names).size, names.length, 'test-plan-body.mjs test names must be unique');
   for (const name of names) {
     assert.equal(name.includes("'"), false, `test-plan-body.mjs test name must not contain an apostrophe: ${name}`);
@@ -1070,4 +1070,138 @@ test('test-plan-body.mjs file hygiene — 51 unique test names, import lines, ba
     const hits = text.split('\n').filter((line) => line.includes(needle)).length;
     assert.equal(hits, 0, 'test-plan-body.mjs must have 0 lines containing a banned literal (split-needle check)');
   }
+});
+
+test('Slice 503: §1 founding lesson 280 Musebucks per day in PLAN and both Milo desk notes (P1)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes("existence there was a recurring bill (~280 Musebucks/day) and Milo's income\ndried up to zero"),
+    'PLAN.md §1 must record the ~280 Musebucks/day recurring bill'
+  );
+  const npcNote = fs.readFileSync(path.join(__dirname, 'town-npc', 'plots', 'milo', 'desk-note.html'), 'utf8');
+  const staticNote = fs.readFileSync(path.join(__dirname, 'town-3d', 'plots', 'milo', 'index.html'), 'utf8');
+  assert.ok(npcNote.includes('about 280 Musebucks a day'), 'town-npc Milo desk-note.html must mention about 280 Musebucks a day');
+  assert.ok(staticNote.includes('about 280 Musebucks a day'), 'town-3d Milo index.html must mention about 280 Musebucks a day');
+});
+
+test('Slice 503: §4 presence zones gate, bandstand, and plot handle in PLAN and schema (P2)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes("`presence`: `handle` PK, `zone` (`'gate'`, `'bandstand'`, or\n  `'plot:<handle>'`), `updated_at`"),
+    'PLAN.md §4 must document presence zones gate, bandstand, or plot:<handle>'
+  );
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(
+    schemaText.includes("-- 'gate', 'bandstand', or 'plot:<handle>'"),
+    'town-api/schema.sql must document presence zone comment'
+  );
+});
+
+test('Slice 503: §4 key_history actions register, rotate, revoke in PLAN and schema (P3)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('`key_history`: `id`, `handle`, `pubkey`, `action`\n  (`register|rotate|revoke`), `created_at`, `note`'),
+    'PLAN.md §4 must document key_history actions register|rotate|revoke'
+  );
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(
+    schemaText.includes("CHECK (action IN ('register', 'rotate', 'revoke'))"),
+    'town-api/schema.sql must enforce key_history action CHECK constraint'
+  );
+});
+
+test('Slice 503: §4 meta holds monotonic state_seq in PLAN, schema, and server (P4)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('`meta`: `key` PK, `value` (holds monotonic `state_seq`)'),
+    'PLAN.md §4 must document meta holding monotonic state_seq'
+  );
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(schemaText.includes('CREATE TABLE IF NOT EXISTS meta ('), 'town-api/schema.sql must define meta table');
+  assert.ok(schemaText.includes('key             TEXT PRIMARY KEY,'), 'town-api/schema.sql meta must have key TEXT PRIMARY KEY');
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(
+    serverText.includes("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'state_seq'"),
+    'town-api/server.mjs must increment state_seq in meta'
+  );
+});
+
+test('Slice 503: §4 fishing endpoints in WRITE_ROUTES and GET log handler (P5)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('`POST /api/town/fish/{cast,reel}` (resident), `POST /api/town/fish/guest/{cast,reel}` (guest), and `GET /api/town/fish/log?handle=<handle>` (public) — fishing at the lake; catches are a personal collection to show, not a leaderboard.'),
+    'PLAN.md §4 must document fishing endpoints'
+  );
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  const wr = serverText.match(/const WRITE_ROUTES = new Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(wr, 'town-api/server.mjs must define WRITE_ROUTES Map');
+  for (const route of [
+    'POST /api/town/fish/cast',
+    'POST /api/town/fish/reel',
+    'POST /api/town/fish/guest/cast',
+    'POST /api/town/fish/guest/reel',
+  ]) {
+    assert.ok(wr[1].includes(`'${route}'`), `WRITE_ROUTES must include ${route}`);
+  }
+  assert.ok(
+    serverText.includes("if (req.method === 'GET' && pathname === '/api/town/fish/log')"),
+    'town-api/server.mjs must handle GET /api/town/fish/log'
+  );
+});
+
+test('Slice 503: §5 NPC footlights amber brass vs ice-blue muse in PLAN and town.js (P6)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('amber/brass footlights (real muses carry ice-blue /\nwarm-white)'),
+    'PLAN.md §5 must distinguish NPC amber/brass footlights from muse ice-blue/warm-white'
+  );
+  const townJs = fs.readFileSync(path.join(__dirname, 'town-3d', 'town.js'), 'utf8');
+  assert.ok(
+    townJs.includes("muse: { color: '#bfeaff', emissive: '#9be0ff', emissiveIntensity: 0.9 }"),
+    'town-3d/town.js must define muse footlight colors'
+  );
+  assert.ok(
+    townJs.includes("npc: { color: '#ffbe55', emissive: '#ffaa33', emissiveIntensity: 1.0 }"),
+    'town-3d/town.js must define npc footlight colors'
+  );
+});
+
+test('Slice 503: §7 town directory last painted and per-plot guestbook in PLAN and schema (P7)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('town directory with "last painted" timestamps; optional per-plot\nguestbook; small static CSS/image allowance per plot.'),
+    'PLAN.md §7 must document last painted timestamps and per-plot guestbook'
+  );
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(schemaText.includes('plot_updated_at INTEGER,'), 'town-api/schema.sql residents must include plot_updated_at');
+  assert.ok(schemaText.includes('plot            TEXT,'), 'town-api/schema.sql guestbook must include nullable plot column');
+});
+
+test('Slice 503: §8 Phase 1 inn 12-char keys and 1 to 7 nights in PLAN, server, and schema (P8)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(body.includes('claim/extend/vacate, 12-char keys, 1–7\nnights;'), 'PLAN.md §8 Phase 1 must document 12-char keys and 1–7 nights');
+  const serverText = fs.readFileSync(SERVER_PATH, 'utf8');
+  assert.ok(serverText.includes('const INN_KEY_LEN = 12;'), 'town-api/server.mjs must define INN_KEY_LEN = 12');
+  assert.ok(serverText.includes('while (out.length < INN_KEY_LEN)'), 'town-api/server.mjs must loop up to INN_KEY_LEN');
+  const schemaText = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  assert.ok(
+    schemaText.includes('nights          INTEGER NOT NULL CHECK (nights >= 1 AND nights <= 7),'),
+    'town-api/schema.sql inn_claims must constrain nights between 1 and 7'
+  );
+});
+
+test('Slice 503: §8 Phase 2 serves 15 to 30 residents and two-week activity gate (P9)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('Serves 15–30 residents wanting hosted gatherings and richer rooms.\n**Gate:** two consecutive weeks of unprompted resident activity (not\njust Milo tending the Bandstand alone).'),
+    'PLAN.md §8 Phase 2 must document 15–30 residents and two-week gate'
+  );
+});
+
+test('Slice 503: §8 Phase 3 serves 30 to 50 plus residents and 80 lines per day gate (P10)', () => {
+  const { body } = readPlanBodySections();
+  assert.ok(
+    body.includes('Serves 30–50+ residents.\n**Gate:** Prompt Book regularly exceeds ~80 lines/day, or manual join\napprovals become a bottleneck.'),
+    'PLAN.md §8 Phase 3 must document 30–50+ residents and ~80 lines/day gate'
+  );
 });
