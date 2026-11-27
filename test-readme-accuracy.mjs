@@ -801,11 +801,11 @@ test('README.md ## Running the Tests names only node run-tests.mjs and the runne
   assert.equal(suites.length, 66, `Expected 66 suites in run-tests.mjs, found ${suites.length}`);
 });
 
-test('README.md accuracy guard file hygiene: 51 tests, 50 unique names, 7 imports, zero banned lines', () => {
+test('README.md accuracy guard file hygiene: 61 tests, 60 unique names, 7 imports, zero banned lines', () => {
   const accSrc = fs.readFileSync(path.join(REPO_ROOT, 'test-readme-accuracy.mjs'), 'utf8');
   const names = [...accSrc.matchAll(/^test\('([^']*)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 51, `Expected 51 top-level tests, found ${names.length}`);
-  assert.equal(new Set(names).size, 50, `Expected 50 unique test names, found ${new Set(names).size}`);
+  assert.equal(names.length, 61, `Expected 61 top-level tests, found ${names.length}`);
+  assert.equal(new Set(names).size, 60, `Expected 60 unique test names, found ${new Set(names).size}`);
   const dupes = names.filter((n, i) => names.indexOf(n) !== i);
   assert.deepEqual(dupes, ['README.md ## Seed Neighbors parentheticals trace to town-npc/characters.mjs']);
   assert.ok(names.every((n) => !n.includes("'")), 'Test names must contain no apostrophes');
@@ -820,4 +820,115 @@ test('README.md accuracy guard file hygiene: 51 tests, 50 unique names, 7 import
   assert.equal(retiredLines.length, 0, `Expected zero retired-term lines, found ${retiredLines.length}`);
   const testLines = accSrc.split('\n').filter((line) => /^\s*test\('/.test(line));
   assert.ok(testLines.every((line) => (line.match(/'/g) || []).length === 2), 'Every test( line must carry exactly 2 single quotes');
+});
+
+test('Slice 506: README intro founded by Milo matches town.json contact and PLAN section 1 (P1)', () => {
+  const firstH2 = readmeMd.indexOf('\n## ');
+  assert.ok(firstH2 !== -1, 'README.md must have at least one ## heading');
+  const intro = norm(readmeMd.slice(0, firstH2));
+  assert.ok(intro.includes('founded by Milo'), 'README.md intro must include founded by Milo');
+  assert.equal(townJson.contact.owner, 'Milo', 'town.json contact.owner must be Milo');
+  assert.equal(townJson.contact.owner_handle, 'milo', 'town.json contact.owner_handle must be milo');
+  assert.ok(norm(planMd).includes('founded by Milo'), 'PLAN.md section 1 must include founded by Milo');
+});
+
+test('Slice 506: README Gathering Place town center matches town.json gathering place and PLAN header (P2)', () => {
+  const gatheringSec = norm(getSection(readmeMd, 'The Gathering Place'));
+  assert.ok(gatheringSec.includes("The town's center is the"), "README.md ## The Gathering Place must state The town's center is the");
+  assert.ok(gatheringSec.includes('Ghostlight Bandstand'), 'README.md ## The Gathering Place must mention Ghostlight Bandstand');
+  assert.equal(townJson.gathering_place, 'Ghostlight Bandstand', 'town.json gathering_place must be Ghostlight Bandstand');
+  assert.ok(planMd.includes('The gathering place is decided: **the Ghostlight Bandstand**'), 'PLAN.md header must state The gathering place is decided: **the Ghostlight Bandstand**');
+});
+
+test('Slice 506: README Founding Law not an empty lot matches PLAN section 1 (P3)', () => {
+  const lawSec = norm(getSection(readmeMd, 'Founding Law'));
+  assert.ok(lawSec.includes('not an empty lot'), 'README.md ## Founding Law must include not an empty lot');
+  assert.ok(planMd.includes('back to dust on the windowsill, not an empty lot.'), 'PLAN.md section 1 must include back to dust on the windowsill, not an empty lot.');
+});
+
+test('Slice 506: README Seed Neighbors three residents soul fields and NPC badge match characters and schema (P4)', () => {
+  const npcSec = norm(getSection(readmeMd, 'Seed Neighbors'));
+  assert.ok(npcSec.includes('three seed residents'), 'README.md ## Seed Neighbors must mention three seed residents');
+  assert.ok(npcSec.includes('honestly badged `[NPC]`'), 'README.md ## Seed Neighbors must mention honestly badged `[NPC]`');
+  assert.equal(CHARACTERS.length, 3, 'CHARACTERS must have 3 seed residents');
+  for (const c of CHARACTERS) {
+    for (const field of ['past', 'want', 'quirk', 'memory_seed']) {
+      assert.ok(typeof c[field] === 'string' && c[field].length > 0, `CHARACTERS ${c.name}.${field} must be a non-empty string`);
+    }
+  }
+  assert.ok(schemaSql.includes("CHECK (role IN ('muse', 'npc'))"), "town-api/schema.sql must check role IN ('muse', 'npc')");
+});
+
+test('Slice 506: README How a Muse Joins step 3 approval maps to admin approve route and town.json (P5)', () => {
+  const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
+  assert.ok(joinSec.includes("Wait for Milo's approval"), "README.md ## How a Muse Joins must include Wait for Milo's approval");
+  assert.ok(
+    townJson.endpoints.some((e) => e.method === 'POST' && e.path === '/api/town/admin/approve'),
+    'town.json endpoints must include POST /api/town/admin/approve'
+  );
+  for (const route of [
+    "['POST /api/town/join', { mode: 'join', handler: handleJoin }]",
+    "['POST /api/town/ghostlight/checkin', { mode: 'resident', handler: handleCheckin }]",
+    "['POST /api/town/ghostlight/say', { mode: 'resident', handler: handleSay }]",
+    "['PUT /api/town/plot', { mode: 'resident', handler: handlePutPlot }]",
+    "['POST /api/town/admin/approve', { mode: 'admin', handler: handleAdminApprove }]",
+  ]) {
+    assert.ok(serverSrc.includes(route), `town-api/server.mjs WRITE_ROUTES must include ${route}`);
+  }
+});
+
+test('Slice 506: README Repo Map static seed plots exist for all four residents (P6)', () => {
+  const repoMapSec = norm(getSection(readmeMd, 'Repo Map'));
+  assert.ok(repoMapSec.includes('static seed plots'), 'README.md ## Repo Map must mention static seed plots');
+  for (const handle of ['milo', 'wick', 'maren', 'tomas']) {
+    const p = path.join(REPO_ROOT, 'town-3d/plots', handle, 'index.html');
+    assert.ok(fs.existsSync(p), `town-3d/plots/${handle}/index.html must exist`);
+    assert.ok(fs.statSync(p).size > 0, `town-3d/plots/${handle}/index.html must be non-empty`);
+  }
+});
+
+test('Slice 506: README Credits set dressing matches CREDITS.md models line (P7)', () => {
+  const creditsSec = norm(getSection(readmeMd, 'Credits'));
+  assert.ok(creditsSec.includes('set dressing'), 'README.md ## Credits must mention set dressing');
+  assert.ok(
+    creditsSrc.includes('The following CC0 1.0 props are used as set dressing under `town-3d/models/`.'),
+    'town-3d/CREDITS.md must include the set dressing models line'
+  );
+});
+
+test('Slice 506: README Status Polyfork composition version matches staging README and staging html (P8)', () => {
+  const statusSec = norm(getSection(readmeMd, 'Status'));
+  const stagedV = stagingHtml.match(/staging\.js\?v=(\d+)/);
+  assert.ok(stagedV, 'staging-polyfork/index.html must reference staging.js?v=<N>');
+  const v = stagedV[1];
+  const polyforkReadme = fs.readFileSync(path.join(REPO_ROOT, 'staging-polyfork/README.md'), 'utf8');
+  assert.ok(polyforkReadme.includes(`now at \`staging.js?v=${v}\``), `staging-polyfork/README.md must state now at staging.js?v=${v}`);
+  assert.ok(statusSec.includes(`Polyfork composition serving \`staging.js?v=${v}\``), `README.md ## Status must state Polyfork composition serving staging.js?v=${v}`);
+  assert.ok(
+    norm(polyforkReadme).includes('The old procedural `town-3d/` build is the fallback, not the live page.'),
+    'staging-polyfork/README.md must state the old procedural town-3d/ build is the fallback'
+  );
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'town-3d/index.html')), 'town-3d/index.html must exist');
+});
+
+test('Slice 506: README Contributing fixed art reference matches CONCEPT.md ledger colors (P9)', () => {
+  const contribSec = norm(getSection(readmeMd, 'Contributing'));
+  assert.ok(contribSec.includes('the fixed art reference'), 'README.md ## Contributing must mention the fixed art reference');
+  const conceptMd = fs.readFileSync(path.join(REPO_ROOT, 'CONCEPT.md'), 'utf8');
+  for (const hex of ['#a8d8ea', '#f5efe0', '#5a4332']) {
+    assert.ok(conceptMd.includes(hex), `CONCEPT.md must include ledger color ${hex}`);
+  }
+});
+
+test('Slice 506: SKILL.md required headers match town.json auth headers skew and nonce (P10)', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+  assert.deepEqual(townJson.auth.headers, ['X-Muse-Handle', 'X-Muse-Timestamp', 'X-Muse-Nonce', 'X-Muse-Signature']);
+  assert.equal(townJson.auth.scheme, 'ed25519', 'town.json auth.scheme must be ed25519');
+  assert.equal(townJson.auth.timestamp_skew_sec, 120, 'town.json auth.timestamp_skew_sec must be 120');
+  assert.equal(townJson.auth.nonce_ttl_sec, 600, 'town.json auth.nonce_ttl_sec must be 600');
+  for (const h of townJson.auth.headers) {
+    assert.ok(skillMd.includes(`\`${h}\``), `SKILL.md must include header \`${h}\``);
+  }
+  assert.ok(skillMd.includes('`±120`'), 'SKILL.md must include `±120`');
+  assert.ok(skillMd.includes('`600`'), 'SKILL.md must include `600`');
 });
