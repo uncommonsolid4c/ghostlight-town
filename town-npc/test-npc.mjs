@@ -2149,8 +2149,8 @@ test('file hygiene: 46 unique names, 13 imports, zero banned terms, pinned as-tr
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 46);
-  assert.equal(new Set(names).size, 46);
+  assert.equal(names.length, 56);
+  assert.equal(new Set(names).size, 56);
 
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 13);
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
@@ -2158,4 +2158,333 @@ test('file hygiene: 46 unique names, 13 imports, zero banned terms, pinned as-tr
   assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
   assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 3);
   assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
+});
+
+test('Slice 480 G1: decideTurn ambient rollover, string count, omitted state, cap control', () => {
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+  const today = localDateString(now);
+  const yesterday = localDateString(now - 86400);
+  const quiet = { footlights: [], prompt_book: [], presence: [] };
+
+  const rolled = decideTurn({ npc: wick, state: quiet, npcState: { ambient_today: 2, ambient_date: yesterday }, now });
+  assert.equal(rolled.action, 'initiate');
+  assert.equal(rolled.reason, 'no real muse spoke in 6h; ambient observation allowed (0/2 today)');
+
+  const stringCount = decideTurn({ npc: wick, state: quiet, npcState: { ambient_today: '1', ambient_date: today }, now });
+  assert.equal(stringCount.action, 'initiate');
+  assert.equal(stringCount.reason, 'no real muse spoke in 6h; ambient observation allowed (1/2 today)');
+
+  const omitted = decideTurn({ npc: wick, state: quiet, now });
+  assert.equal(omitted.action, 'initiate');
+  assert.equal(omitted.reason, 'no real muse spoke in 6h; ambient observation allowed (0/2 today)');
+
+  const capped = decideTurn({ npc: wick, state: quiet, npcState: { ambient_today: 2, ambient_date: today }, now });
+  assert.equal(capped.action, 'silent');
+  assert.equal(capped.reason, 'no real muse spoke in 6h and ambient cap (2/day) reached');
+});
+
+test('Slice 480 G2: selectReplierForLine tie-break, null id, zero and negative ids', () => {
+  const C = 1770000000;
+
+  const tie = selectReplierForLine({
+    state: {
+      prompt_book: [
+        { id: 1, handle: 'alice', role: 'muse', kind: 'say', body: 'first', created_at: C },
+        { id: 2, handle: 'alice', role: 'muse', kind: 'say', body: 'second', created_at: C },
+      ],
+      presence: [],
+    },
+    now: C + 60,
+  });
+  assert.equal(tie.line.id, 2);
+  assert.equal(tie.designatedHandle, 'tomas');
+  assert.equal(tie.method, 'rotation');
+
+  const nullId = selectReplierForLine({
+    state: { prompt_book: [{ id: null, handle: 'alice', role: 'muse', kind: 'say', body: 'hi', created_at: C }], presence: [] },
+    now: C + 60,
+  });
+  assert.equal(nullId.designatedHandle, 'wick');
+  assert.equal(nullId.method, 'rotation');
+
+  for (const id of [0, -3]) {
+    const r = selectReplierForLine({
+      state: { prompt_book: [{ id, handle: 'alice', role: 'muse', kind: 'say', body: 'hi', created_at: C }], presence: [] },
+      now: C + 60,
+    });
+    assert.equal(r.designatedHandle, 'wick');
+    assert.equal(r.method, 'rotation');
+  }
+});
+
+test('Slice 480 G3: findAddressedLines name-only match, NPC-authored line, no-name fallback', async () => {
+  const { findAddressedLines } = await import('./stepback.mjs');
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+  const lampman = { handle: 'wick', name: 'Lampman' };
+
+  assert.equal(
+    findAddressedLines({ npc: lampman, promptBook: [{ handle: 'alice', body: 'Lampman, is the bulb warm?', created_at: now - 60 }], now }).length,
+    1
+  );
+  assert.equal(
+    findAddressedLines({ npc: lampman, promptBook: [{ handle: 'alice', body: 'wick, hello', created_at: now - 60 }], now }).length,
+    1
+  );
+  assert.equal(
+    findAddressedLines({ npc: wick, promptBook: [{ handle: 'maren', role: 'npc', body: 'wick, the steps are swept', created_at: now - 60 }], now }).length,
+    1
+  );
+  assert.equal(
+    findAddressedLines({ npc: { handle: 'wick' }, promptBook: [{ handle: 'alice', body: 'Lampman, hello', created_at: now - 60 }], now }).length,
+    0
+  );
+});
+
+test('Slice 480 G4: checkHonesty verified attribution punctuation, case, dash forms', () => {
+  const maren = CHARACTERS[1];
+
+  assert.deepEqual(
+    checkHonesty({ text: '"Swept the steps," says WICK', npc: maren, promptBook: [{ handle: 'wick', body: 'Swept the steps clean tonight' }] }),
+    { ok: true, reasons: [] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: '"The bulb is bright" -- wick', npc: maren, promptBook: [] }),
+    { ok: false, reasons: ['unverified_attribution: wick'] }
+  );
+  assert.deepEqual(
+    checkHonesty({ text: '"The bulb is bright" wick said', npc: maren, promptBook: [] }),
+    { ok: false, reasons: ['unverified_attribution: wick'] }
+  );
+
+  assert.deepEqual(
+    checkHonesty({ text: 'wick: Swept the steps clean tonight', npc: maren, promptBook: [{ handle: 'wick', body: 'Swept the steps clean tonight' }] }),
+    { ok: true, reasons: [] }
+  );
+});
+
+test('Slice 480 G5: runTurn designated reply for 2h-old line posts with reply_to', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc480-g5-'));
+  const origFetch = globalThis.fetch;
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const posted = [];
+    let brainCalls = 0;
+    const state = {
+      footlights: [],
+      prompt_book: [{ id: 3, handle: 'alice', role: 'muse', kind: 'say', body: 'quiet evening', created_at: now - 7200 }],
+      presence: [],
+    };
+    const fakeFetch = async (url, init) => {
+      if (init && init.method === 'POST') {
+        posted.push({ url, body: JSON.parse(init.body) });
+        return { ok: true, status: 201, json: async () => ({ id: 8 }) };
+      }
+      return { ok: true, status: 200, json: async () => state };
+    };
+    globalThis.fetch = fakeFetch;
+    const res = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmp,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => { brainCalls++; return 'The steps are swept and the bulb is warm.'; },
+      logger: () => {},
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.action, 'reply');
+    assert.equal(res.posted, true);
+    assert.equal(brainCalls, 1);
+    assert.deepEqual(res.decision.replyLine, { id: 3, handle: 'alice' });
+    const say = posted.find((p) => p.url.endsWith('/api/town/ghostlight/say'));
+    assert.ok(say);
+    assert.equal(say.body.reply_to, 3);
+    const st = JSON.parse(fs.readFileSync(path.join(tmp, 'wick', 'state.json'), 'utf8'));
+    assert.equal(st.turns, 1);
+    assert.equal(st.ambient_today, 0);
+    assert.equal(fs.readFileSync(path.join(tmp, 'wick', 'memory.md'), 'utf8'), '2026-11-13: The steps are swept and the bulb is warm.\n');
+  } finally {
+    globalThis.fetch = origFetch;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Slice 480 G6: runTurn skips checkin when lit and carries status_text when unlit', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const runOnce = async (lit) => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc480-g6-'));
+      const posted = [];
+      const state = {
+        footlights: lit ? [{ handle: 'wick', slot: 2, lit_at: now - 60, expires_at: now + 2000 }] : [],
+        prompt_book: [],
+        presence: [],
+      };
+      const fakeFetch = async (url, init) => {
+        if (init && init.method === 'POST') {
+          posted.push({ url, body: JSON.parse(init.body) });
+          return { ok: true, status: 201, json: async () => ({ id: 1 }) };
+        }
+        return { ok: true, status: 200, json: async () => state };
+      };
+      globalThis.fetch = fakeFetch;
+      const res = await runTurn({
+        npcHandle: 'wick',
+        apiBase: 'http://fake.local',
+        stateDir: tmp,
+        dryRun: false,
+        now,
+        fetchImpl: fakeFetch,
+        brainImpl: async () => 'Swept the top step before the sun hit.',
+        logger: () => {},
+      });
+      fs.rmSync(tmp, { recursive: true, force: true });
+      return { res, posted };
+    };
+
+    const litRun = await runOnce(true);
+    assert.equal(litRun.res.posted, true);
+    assert.equal(litRun.posted.filter((p) => p.url.endsWith('/api/town/ghostlight/checkin')).length, 0);
+    assert.equal(litRun.posted.filter((p) => p.url.endsWith('/api/town/ghostlight/say')).length, 1);
+
+    const unlitRun = await runOnce(false);
+    assert.equal(unlitRun.res.posted, true);
+    const checkins = unlitRun.posted.filter((p) => p.url.endsWith('/api/town/ghostlight/checkin'));
+    assert.equal(checkins.length, 1);
+    assert.equal(checkins[0].body.status_text, 'Sweeping the bandstand steps');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Slice 480 G7: buildSystemPrompt and getStatusText unknown partOfDay fallbacks', () => {
+  const wick = CHARACTERS[0];
+
+  const prompt = buildSystemPrompt(wick, 'night');
+  assert.ok(prompt.includes('Current night routine: tend the Ghostlight bulb at the Bandstand.'));
+  assert.ok(prompt.includes('currently night by the town clock'));
+
+  assert.equal(getStatusText(wick, 'night'), 'Stagehand / Lamp-Trimmer');
+  assert.equal(getStatusText(null, 'morning'), '');
+  assert.equal(getStatusText({ title: 'Only Title' }, 'morning'), 'Only Title');
+});
+
+test('Slice 480 G8: runTurn state fetch failure still creates files and keypair', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc480-g8-'));
+  const origFetch = globalThis.fetch;
+  try {
+    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    let brainCalls = 0;
+    const fakeFetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'boom' }) });
+    globalThis.fetch = fakeFetch;
+    const res = await runTurn({
+      npcHandle: 'wick',
+      apiBase: 'http://fake.local',
+      stateDir: tmp,
+      dryRun: false,
+      now,
+      fetchImpl: fakeFetch,
+      brainImpl: async () => { brainCalls++; return 'hello'; },
+      logger: () => {},
+    });
+    assert.deepEqual(res, { ok: false, exitCode: 1, action: 'error' });
+    assert.equal(brainCalls, 0);
+    assert.equal(fs.readFileSync(path.join(tmp, 'wick', 'memory.md'), 'utf8'), '');
+    const st = JSON.parse(fs.readFileSync(path.join(tmp, 'wick', 'state.json'), 'utf8'));
+    assert.equal(st.turns, 0);
+    assert.equal(st.ambient_today, 0);
+    assert.equal(st.last_turn_at, null);
+    assert.equal(fs.existsSync(path.join(tmp, 'wick', 'key.pem')), true);
+    assert.equal(fs.existsSync(path.join(tmp, 'wick', 'pubkey.txt')), true);
+  } finally {
+    globalThis.fetch = origFetch;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Slice 480 G9: decideTurn day-cutoff counting, dedupe, handle-less lit rows', () => {
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+  const today = localDateString(now);
+  const npcState = { ambient_today: 0, ambient_date: today };
+  const oldLine = { id: 1, handle: 'm0', role: 'muse', body: 'quiet night here', created_at: now - 4 * 3600 };
+
+  const atCutoff = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [],
+      prompt_book: [oldLine],
+      presence: Array.from({ length: 5 }, (_, i) => ({ handle: `m${i}`, role: 'muse', updated_at: now - 86400 })),
+    },
+    npcState,
+    now,
+  });
+  assert.equal(atCutoff.action, 'silent');
+  assert.equal(atCutoff.reason, '5 real muses active in 24h (>= 5, reply-only) and not addressed');
+
+  const pastCutoff = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [],
+      prompt_book: [oldLine],
+      presence: [
+        ...Array.from({ length: 4 }, (_, i) => ({ handle: `m${i}`, role: 'muse', updated_at: now - 86400 })),
+        { handle: 'm4', role: 'muse', updated_at: now - 86401 },
+      ],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(pastCutoff.action, 'initiate');
+  assert.equal(pastCutoff.reason, 'routine turn; real muse spoke within 6h and fewer than 2 lit');
+
+  const deduped = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [{ handle: 'alice', role: 'muse' }],
+      prompt_book: [{ id: 1, handle: 'alice', role: 'muse', body: 'quiet night here', created_at: now - 4 * 3600 }],
+      presence: [
+        { handle: 'alice', role: 'muse', updated_at: now - 60 },
+        { role: 'muse', updated_at: now - 60 },
+        { handle: 'b', role: 'muse', updated_at: now - 60 },
+        { handle: 'c', role: 'muse', updated_at: now - 60 },
+        { handle: 'd', role: 'muse', updated_at: now - 60 },
+      ],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(deduped.action, 'initiate');
+  assert.equal(deduped.reason, 'routine turn; real muse spoke within 6h and fewer than 2 lit');
+
+  const handlelessLit = decideTurn({
+    npc: wick,
+    state: {
+      footlights: [{ role: 'muse' }, { role: 'muse' }],
+      prompt_book: [oldLine],
+      presence: [],
+    },
+    npcState,
+    now,
+  });
+  assert.equal(handlelessLit.action, 'silent');
+  assert.equal(handlelessLit.reason, '2 real muses lit (>= 2, reply-only) and not addressed');
+});
+
+test('Slice 480 G10: buildTurnPrompt reply guidance with null and zero reply-line id', () => {
+  const wick = CHARACTERS[0];
+  const now = 1_760_000_000;
+  const base = { npc: wick, partOfDay: 'morning', promptBook: [], presence: [], memoryText: '', now };
+
+  const pNull = buildTurnPrompt({ ...base, decision: { action: 'reply', replyLine: { id: null, handle: 'alice' } } });
+  assert.ok(pNull.includes("Answer alice's line briefly in character."));
+  assert.ok(!pNull.includes('line #'));
+
+  const pZero = buildTurnPrompt({ ...base, decision: { action: 'reply', replyLine: { id: 0, handle: 'alice' } } });
+  assert.ok(pZero.includes("Answer alice's line #0 briefly in character."));
 });
