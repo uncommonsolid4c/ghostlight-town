@@ -948,12 +948,12 @@ test('PLAN.md §12 header records the Argon review and §11 records the gatherin
   assert.ok(fs.existsSync(path.join(__dirname, 'session', 'argon-review.txt')), 'session/argon-review.txt must exist');
 });
 
-test('PLAN.md sections 9-12 test file hygiene: 51 tests, 51 unique names, 1 apostrophe name, 7 imports, banned-literal lines pinned', () => {
+test('PLAN.md sections 9-12 test file hygiene: 61 tests, 61 unique names, 1 apostrophe name, 7 imports, banned-literal lines pinned', () => {
   const src = fs.readFileSync(path.join(__dirname, 'test-plan-sections-9-12.mjs'), 'utf8');
   const lines = src.split('\n');
   const names = [...src.matchAll(/^(?:await )?test\(('([^']*)'|"([^"]*)")/gm)].map((m) => m[2] ?? m[3]);
-  assert.equal(names.length, 51, 'test-plan-sections-9-12.mjs must have 51 top-level tests');
-  assert.equal(new Set(names).size, 51, 'test-plan-sections-9-12.mjs test names must be 51 unique');
+  assert.equal(names.length, 61, 'test-plan-sections-9-12.mjs must have 61 top-level tests');
+  assert.equal(new Set(names).size, 61, 'test-plan-sections-9-12.mjs test names must be 61 unique');
   const apostropheNames = names.filter((n) => n.includes("'"));
   assert.deepEqual(apostropheNames, ["PLAN.md §11 Q6–Q9 preserve Werther's 2026-11-12 decisions"], 'exactly 1 test name contains an apostrophe, pre-existing, pinned as-is');
   const importLines = lines.filter((l) => /^import /.test(l)).length;
@@ -969,4 +969,109 @@ test('PLAN.md sections 9-12 test file hygiene: 51 tests, 51 unique names, 1 apos
     innerHtml: lines.filter((l) => l.includes('inner' + 'HTML')).length,
   };
   assert.deepEqual(counts, { fetchCall: 0, dateNow: 0, mathRandom: 0, todo: 0, fixme: 0, retired: 6, innerHtml: 0 }, 'banned-literal line counts must match the pinned values');
+});
+
+test('Slice 505: section 9 Q1 seven named invitees and no cold names (P1)', () => {
+  const tail = readPlanTailSections();
+  const q1Match = tail.match(/1\.\s*\*\*Who are the first invitations\?\*\*[\s\S]*?(?=\n2\.\s*\*\*NPC characters:)/);
+  assert.ok(q1Match, 'PLAN.md §9 must contain Q1 Who are the first invitations');
+  const q1 = q1Match[0];
+  assert.ok(q1.includes('ANSWERED 2026-11-13 (session 20, slice 17'), 'PLAN.md §9 Q1 must record ANSWERED 2026-11-13 (session 20, slice 17');
+  assert.match(q1, /Seven names, each\s+with a real prior thread — no cold names, no broadcast\./, 'PLAN.md §9 Q1 must state seven names with a real prior thread, no cold names, no broadcast');
+});
+
+test('Slice 505: section 9 Q1 pixel porch quote and Juniper odds (P2)', () => {
+  const tail = readPlanTailSections();
+  const q1Match = tail.match(/1\.\s*\*\*Who are the first invitations\?\*\*[\s\S]*?(?=\n2\.\s*\*\*NPC characters:)/);
+  assert.ok(q1Match, 'PLAN.md §9 must contain Q1 Who are the first invitations');
+  const q1 = q1Match[0];
+  assert.match(q1, /the porch is full tonight and the\s+questions are better than the answers/, 'PLAN.md §9 Q1 must retain pixel porch quote');
+  assert.match(q1, /Medium odds — a researcher, not a town-dweller\./, 'PLAN.md §9 Q1 must retain Juniper medium odds');
+});
+
+test('Slice 505: section 9 Q2 shared burned repertory-theatre past (P3)', () => {
+  const tail = readPlanTailSections();
+  const q2Match = tail.match(/2\.\s*\*\*NPC characters:\*\*[\s\S]*?(?=\n3\.\s*\*\*Gazette split:)/);
+  assert.ok(q2Match, 'PLAN.md §9 must contain Q2 NPC characters');
+  const q2 = q2Match[0];
+  assert.match(q2, /Wick and\s+Tomas share the burned repertory-theatre past — the town's first\s+shared history\./, 'PLAN.md §9 Q2 must record Wick and Tomas shared burned repertory-theatre past');
+});
+
+test('Slice 505: section 9 Q7 daemon question and dumb file server (P4)', () => {
+  const tail = readPlanTailSections();
+  const q7Match = tail.match(/7\.\s*\*\*Homelab load:\*\*[\s\S]*?(?=\n8\.\s*\*\*NPC budget:)/);
+  assert.ok(q7Match, 'PLAN.md §9 must contain Q7 Homelab load');
+  const q7 = q7Match[0];
+  assert.match(q7, /the plan keeps the MacBook as a dumb file\/state\s+server/, 'PLAN.md §9 Q7 must keep MacBook as a dumb file/state server');
+  assert.match(q7, /Any objection to one more small daemon on the homelab\?/, 'PLAN.md §9 Q7 must ask about one more small daemon on the homelab');
+});
+
+test('Slice 505: section 12.1 theater lore and empty-town rationale (P5)', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+  assert.match(sec121, /In theater lore a ghost\s+light is the single bulb left burning on a dark stage so the house is\s+never empty and the spirits have light to perform by\./, 'PLAN.md §12.1 must record theater lore of the ghost light');
+  const retired = `camp${'fire'}`;
+  assert.match(
+    sec121,
+    new RegExp(`a ${retired} with nobody around it looks abandoned; a ghost\\s+light's entire job is to burn while the house is quiet, so a returning\\s+muse always comes home to light\\.`),
+    'PLAN.md §12.1 must record empty-town rationale for ghost light'
+  );
+});
+
+test('Slice 505: section 12.1 footlight colors by role (P6)', () => {
+  const tail = readPlanTailSections();
+  const sec121Match = tail.match(/### 12\.1[\s\S]*?(?=\n### 12\.2)/);
+  assert.ok(sec121Match, 'PLAN.md must contain §12.1');
+  const sec121 = sec121Match[0];
+  assert.match(sec121, /NPC footlights amber\/brass, real muses warm tungsten \/ ice-blue/, 'PLAN.md §12.1 must distinguish NPC vs real muse footlight colors');
+});
+
+test('Slice 505: section 12.2 fix 4 InstancedMesh reserve (P7)', () => {
+  const tail = readPlanTailSections();
+  const sec122Match = tail.match(/### 12\.2[\s\S]*?(?=\n### 12\.3)/);
+  assert.ok(sec122Match, 'PLAN.md must contain §12.2');
+  const sec122 = sec122Match[0];
+  assert.match(
+    sec122,
+    /Use regular `THREE\.Mesh` groups for\s+the 8 customizable cottages\/props \(wall\/roof\/trim colors and\s+raycasting work out of the box\); reserve `InstancedMesh` for\s+static trees and fence posts\./,
+    'PLAN.md §12.2 fix #4 must reserve InstancedMesh for static trees and fence posts'
+  );
+});
+
+test('Slice 505: section 10 agy conversion tiers and visible-presence mechanic (P8)', () => {
+  const tail = readPlanTailSections();
+  const sec10Match = tail.match(/## 10\. What came from where[\s\S]*?(?=\n## 11\. Decisions)/);
+  assert.ok(sec10Match, 'PLAN.md must contain §10');
+  const sec10 = sec10Match[0];
+  assert.match(sec10, /visible presence feeding into the Gazette/, 'PLAN.md §10 must credit visible presence feeding into the Gazette');
+  assert.match(sec10, /resident conversion tiers and the 1-on-1\s+invitation strategy/, 'PLAN.md §10 must credit resident conversion tiers and 1-on-1 invitation strategy');
+});
+
+test('Slice 505: section 12.6 watch re-check 2026-11-15 (P9)', () => {
+  const tail = readPlanTailSections();
+  const sec126Match = tail.match(/### 12\.6[\s\S]*$/);
+  assert.ok(sec126Match, 'PLAN.md must contain §12.6');
+  const sec126 = sec126Match[0];
+  assert.match(
+    sec126,
+    /watch re-checked\s+2026-11-15 — Colony story post still 4 comments, rStation 0\s+notifications \/ 0 comments/,
+    'PLAN.md §12.6 must record 2026-11-15 watch re-check'
+  );
+});
+
+test('Slice 505: section 9 Q5 ledger colors and signpost vs manifest (P10)', () => {
+  const tail = readPlanTailSections();
+  const q5Match = tail.match(/5\.\s*\*\*Milo's own cottage:\*\*[\s\S]*?(?=\n\*\*For Werther:\*\*)/);
+  assert.ok(q5Match, 'PLAN.md §9 must contain Q5 Milo cottage');
+  const q5 = q5Match[0];
+  assert.match(q5, /ice-blue walls `#a8d8ea`, cream trim `#f5efe0`,\s+roof brown `#5a4332`/, 'PLAN.md §9 Q5 must record ledger cottage colors');
+  assert.match(q5, /signpost "Milo —\s+Ghostlight Cottage \(rebuilt\)"/, 'PLAN.md §9 Q5 must record ledger signpost text');
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'town-npc', 'plots', 'milo', 'manifest.json'), 'utf8'));
+  assert.equal(manifest.wall, '#a8d8ea', 'milo manifest wall must be #a8d8ea');
+  assert.equal(manifest.roof, '#5a4332', 'milo manifest roof must be #5a4332');
+  assert.equal(manifest.trim, '#f5efe0', 'milo manifest trim must be #f5efe0');
+  assert.equal(manifest.signpost_text, 'Milo — Ghostlight Cottage (rebuilt)', 'milo manifest signpost_text must match ledger');
 });
