@@ -1249,12 +1249,12 @@ test('index.html tap hints swap script HUD paragraph and controls hint style', a
   assert.ok(hintBlock.includes('font-size: 11px;'), 'mobile controls-hint font size');
 });
 
-test('file hygiene 48 unique names 6 imports pinned counts', async () => {
+test('file hygiene 58 unique names 6 imports pinned counts', async () => {
   const self = await fs.readFile(path.join(__dirname, 'test-tap-glide.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^test\((['"])(.*?)\1, /gm)].map((m) => m[2]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -1283,4 +1283,163 @@ test('file hygiene 48 unique names 6 imports pinned counts', async () => {
   assert.equal(occ('FIX' + 'ME'), 0);
   assert.equal(occ('camp' + 'fire'), 0);
   assert.equal(occ('inner' + 'HTML'), 0);
+});
+
+test('P1 stepGlide dist-vs-maxStep vs rem-vs-arriveDist interplay', () => {
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 0.75, z: 0 }, 0.1, { speed: 7.5 }),
+    { x: 0.75, z: 0, arrived: true }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 0.76, z: 0 }, 0.1, { speed: 7.5 }),
+    { x: 0.76, z: 0, arrived: true }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 1.1, z: 0 }, 0.1, { speed: 7.5 }),
+    { x: 0.75, z: 0, arrived: false }
+  );
+});
+
+test('P2 stepGlide custom maxRadius smaller than the target distance', () => {
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 10, z: 0 }, 1, { speed: 7.5, maxRadius: 5 }),
+    { x: 5, z: 0, arrived: true }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 0.5, { speed: 7.5, maxRadius: 5 }),
+    { x: 3.75, z: 0, arrived: false }
+  );
+  assert.deepEqual(
+    stepGlide({ x: 8, z: 0 }, { x: 0, z: 0 }, 1, { speed: 7.5, maxRadius: 5 }),
+    { x: 0.5, z: 0, arrived: false }
+  );
+});
+
+test('P3 deriveGlideMaxRadius more linear-middle widths', () => {
+  assert.equal(deriveGlideMaxRadius({ width: 114 }), 31);
+  assert.equal(deriveGlideMaxRadius({ width: 117 }), 32.5);
+  assert.equal(deriveGlideMaxRadius({ width: 124 }), 36);
+  assert.ok(Math.abs(deriveGlideMaxRadius({ width: 110.5 }) - 29.25) < 1e-9);
+  assert.equal(deriveGlideMaxRadius({ width: -0 }), 38);
+  assert.equal(deriveGlideMaxRadius({ width: 0.5 }), 28.5);
+});
+
+test('P4 clampGlideTarget custom 28.5 radius', () => {
+  assert.deepEqual(clampGlideTarget(30, 0, 28.5), { x: 28.5, z: 0 });
+  assert.deepEqual(clampGlideTarget(0, 40, 28.5), { x: 0, z: 28.5 });
+  assert.deepEqual(clampGlideTarget(20, 20, 28.5), { x: 20, z: 20 });
+  const diag = clampGlideTarget(21, 21, 28.5);
+  assert.ok(Math.abs(diag.x - 20.152543263816604) < 1e-9);
+  assert.ok(Math.abs(diag.z - 20.152543263816604) < 1e-9);
+});
+
+test('P5 stepOrbitGlide out-of-bounds start clamps and camera follows delta', () => {
+  assert.deepEqual(
+    stepOrbitGlide({ x: 60, z: 0 }, { x: 100, z: -50 }, { x: 0, z: 0 }, 1, { speed: 14 }),
+    { targetX: 38, targetZ: 0, cameraX: 78, cameraZ: -50, arrived: false }
+  );
+  const small = stepOrbitGlide({ x: 0, z: 0 }, { x: 0, z: 58 }, { x: 14, z: 0 }, 0.1, { speed: 14 });
+  assert.ok(Math.abs(small.targetX - 1.4) < 1e-9);
+  assert.ok(Math.abs(small.cameraX - 1.4) < 1e-9);
+  assert.equal(small.targetZ, 0);
+  assert.equal(small.cameraZ, 58);
+  assert.equal(small.arrived, false);
+});
+
+test('P6 pointerup is judged against downPos even with no move event', () => {
+  const dragNoMove = createPointerTracker();
+  dragNoMove.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(dragNoMove.onPointerUp(1, 120, 100), { ended: true, shouldClick: false });
+
+  const tapNoMove = createPointerTracker();
+  tapNoMove.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(tapNoMove.onPointerUp(1, 103, 104), { ended: true, shouldClick: true });
+
+  const bothOff = createPointerTracker();
+  bothOff.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(
+    bothOff.onPointerUp(1, 100, 100, { overlayHidden: false, allowTap: false }),
+    { ended: true, shouldClick: false }
+  );
+
+  const pinchUnknown = createPointerTracker();
+  pinchUnknown.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  pinchUnknown.onPointerDown(2, 150, 100, { pointerType: 'touch' });
+  assert.deepEqual(pinchUnknown.onPointerMove(999, 120, 100), {
+    moved: false,
+    isPinch: false,
+    cancelGlide: false,
+  });
+  assert.equal(pinchUnknown.size, 2);
+});
+
+test('P7 staging.js animation-loop glide call-site source lines', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const sl = stagingSrc.split('\n');
+  assert.equal(
+    sl[1512],
+    '    if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden) && !interiorVisit.isInside()) {'
+  );
+  assert.equal(sl[1513], '      const next = stepOrbitGlide(');
+  assert.equal(sl[1514], '        controls.target,');
+  assert.equal(sl[1515], '        camera.position,');
+  assert.equal(sl[1516], '        glideTarget,');
+  assert.equal(sl[1517], '        dt,');
+  assert.equal(sl[1518], '        { speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }');
+  assert.equal(sl[1519], '      );');
+  assert.equal(sl[1520], '      controls.target.x = next.targetX;');
+  assert.equal(sl[1521], '      controls.target.z = next.targetZ;');
+  assert.equal(sl[1522], '      camera.position.x = next.cameraX;');
+  assert.equal(sl[1523], '      camera.position.z = next.cameraZ;');
+  assert.equal(sl[1524], '      if (next.arrived) {');
+  assert.equal(sl[1525], '        glideTarget = null;');
+});
+
+test('P8 stepGlide Infinity / NaN speed and a tiny dt', () => {
+  assert.deepEqual(
+    stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 1, { speed: Infinity }),
+    { x: 20, z: 0, arrived: true }
+  );
+  const nanSpeed = stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 1, { speed: NaN });
+  assert.ok(Number.isNaN(nanSpeed.x));
+  assert.ok(Number.isNaN(nanSpeed.z));
+  assert.equal(nanSpeed.arrived, false);
+
+  const tinyDt = stepGlide({ x: 0, z: 0 }, { x: 20, z: 0 }, 1e-9, { speed: 7.5 });
+  assert.ok(Math.abs(tinyDt.x - 7.5e-9) < 1e-15);
+  assert.equal(tinyDt.z, 0);
+  assert.equal(tinyDt.arrived, false);
+});
+
+test('P9 createPointerTracker negative dragThreshold', () => {
+  const negMove = createPointerTracker({ dragThreshold: -1 });
+  negMove.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(negMove.onPointerMove(1, 100, 100), {
+    moved: true,
+    isPinch: false,
+    cancelGlide: true,
+  });
+  assert.deepEqual(negMove.onPointerUp(1, 100, 100), { ended: true, shouldClick: false });
+
+  const negUpOnly = createPointerTracker({ dragThreshold: -1 });
+  negUpOnly.onPointerDown(1, 100, 100, { pointerType: 'touch' });
+  assert.deepEqual(negUpOnly.onPointerUp(1, 100, 100), { ended: true, shouldClick: false });
+});
+
+test('P10 stepOrbitGlide diagonal clamp + snap with negative camera offset and partial diagonal step', () => {
+  assert.deepEqual(
+    stepOrbitGlide({ x: 0, z: 0 }, { x: -100, z: 200 }, { x: 30, z: 40 }, 0.1, {
+      speed: 14,
+      arriveDist: 50,
+    }),
+    { targetX: 22.8, targetZ: 30.4, cameraX: -77.2, cameraZ: 230.4, arrived: true }
+  );
+  const partialDiag = stepOrbitGlide({ x: 0, z: 0 }, { x: 0, z: 0 }, { x: 30, z: 40 }, 0.5, {
+    speed: 14,
+  });
+  assert.ok(Math.abs(partialDiag.targetX - 4.2) < 1e-9);
+  assert.ok(Math.abs(partialDiag.cameraX - 4.2) < 1e-9);
+  assert.ok(Math.abs(partialDiag.targetZ - 5.6) < 1e-9);
+  assert.ok(Math.abs(partialDiag.cameraZ - 5.6) < 1e-9);
+  assert.equal(partialDiag.arrived, false);
 });
