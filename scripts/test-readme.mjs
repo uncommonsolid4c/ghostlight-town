@@ -1476,13 +1476,13 @@ test('scripts/README.md check-live imports and getExpectedFiles unknown-bundle r
   );
 });
 
-test('scripts/README.md and test-readme.mjs hygiene counts hold at 52 tests', () => {
+test('scripts/README.md and test-readme.mjs hygiene counts hold at 62 tests', () => {
   const testSrc = fs.readFileSync(path.join(__dirname, 'test-readme.mjs'), 'utf8');
   const readme = readReadme();
 
   const testNames = [...testSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(testNames.length, 52, 'test file must hold 52 top-level tests');
-  assert.equal(new Set(testNames).size, 52, 'test names must be unique');
+  assert.equal(testNames.length, 62, 'test file must hold 52 top-level tests');
+  assert.equal(new Set(testNames).size, 62, 'test names must be unique');
 
   const importLines = [...testSrc.matchAll(/^import .+$/gm)].map((m) => m[0]);
   assert.deepEqual(importLines, [
@@ -1509,4 +1509,457 @@ test('scripts/README.md and test-readme.mjs hygiene counts hold at 52 tests', ()
   assert.equal(todoCount, 0, 'test file must not contain ' + 'TO' + 'DO');
   const fixmeCount = (testSrc.match(new RegExp('FIX' + 'ME', 'g')) || []).length;
   assert.equal(fixmeCount, 0, 'test file must not contain ' + 'FIX' + 'ME');
+});
+
+test('Slice 510: collectSourceFiles validates nothing itself, bogus falls through to town-3d (P1)', async () => {
+  const { collectSourceFiles } = await import('./stage-deploy.mjs');
+  const bogus = await collectSourceFiles(ROOT_DIR, 'bogus');
+  const fallback = await collectSourceFiles(ROOT_DIR);
+  assert.deepEqual(
+    bogus.files.map((entry) => entry.relPath),
+    fallback.files.map((entry) => entry.relPath),
+    'an unknown bundle must fall through to the town-3d file list (the CLI parseArgs guard is the only bundle check)'
+  );
+  assert.equal(bogus.files.length, 25);
+  assert.equal(bogus.files[0].relPath, 'CREDITS.md');
+  assert.equal(bogus.files[bogus.files.length - 1].relPath, 'town.js');
+  for (const entry of bogus.files) {
+    assert.deepEqual(Object.keys(entry).sort(), ['relPath', 'srcPath']);
+  }
+});
+
+test('Slice 510: check-live missing flag values fail with exact JSON errors (P2)', () => {
+  const cases = [
+    ['--base', '--base requires a URL argument'],
+    ['--root', '--root requires a directory argument'],
+    ['--bundle', '--bundle requires a bundle name argument'],
+    ['--api-base', '--api-base requires a URL argument'],
+  ];
+  for (const [flag, message] of cases) {
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'check-live.mjs'), flag],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), { error: message });
+        return true;
+      }
+    );
+  }
+});
+
+test('Slice 510: check-live invalid --root fails with exact JSON errors (P3)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme510-root-'));
+  try {
+    const missing = path.join(tmpDir, 'no-such-root');
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'check-live.mjs'), '--root', missing],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          error: `Invalid --root directory: ${missing} (ENOENT: no such file or directory, stat '${missing}')`,
+        });
+        return true;
+      }
+    );
+
+    const filePath = path.join(tmpDir, 'not-a-dir.txt');
+    fs.writeFileSync(filePath, 'x');
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'check-live.mjs'), '--root', filePath],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          error: `--root is not a directory: ${filePath}`,
+        });
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 510: check-live normalizes trailing slashes on base and api-base (P4)', () => {
+  const started = process.hrtime.bigint();
+  let summary = null;
+  let exitCode = null;
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [
+        path.join(__dirname, 'check-live.mjs'),
+        '--bundle',
+        'town-3d',
+        '--base',
+        'http://127.0.0.1:9///',
+        '--api-base',
+        'http://127.0.0.1:9//',
+      ],
+      { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    summary = JSON.parse(stdout.trim());
+    exitCode = 0;
+  } catch (err) {
+    exitCode = err.status;
+    summary = JSON.parse(String(err.stdout || '').trim());
+  }
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(exitCode, 1);
+  assert.deepEqual(Object.keys(summary), [
+    'status',
+    'bundle',
+    'base',
+    'town_js_v',
+    'checked',
+    'ok',
+    'failures',
+    'api',
+  ]);
+  assert.equal(summary.base, 'http://127.0.0.1:9');
+  assert.equal(summary.status, 'fail');
+  assert.equal(summary.bundle, 'town-3d');
+  assert.equal(summary.town_js_v, 16);
+  assert.equal(summary.checked, 25);
+  assert.equal(summary.ok, 0);
+  assert.equal(summary.api, 'not-live');
+  assert.equal(summary.failures.length, 25);
+  assert.equal(
+    summary.failures.every((failure) => failure.problem === 'bad-status'),
+    true,
+    'every refused file must record bad-status'
+  );
+  assert.equal(elapsedMs < 15000, true, `refused connections must fail fast, took ${elapsedMs}ms`);
+});
+
+test('Slice 510: stage-deploy --verify success JSON exact keys and values for staging-polyfork (P5)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme510-verify-sp-'));
+  const stagedDir = path.join(tmpDir, 'ghostlight-town');
+  try {
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'staging-polyfork', '--out', tmpDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const verifyOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--verify', stagedDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const result = JSON.parse(verifyOut.trim());
+    assert.deepEqual(Object.keys(result), [
+      'status',
+      'bundle',
+      'checked',
+      'ok',
+      'mismatch',
+      'missing',
+      'extra',
+      'town_js_v',
+      'staging_js_v',
+    ]);
+    assert.equal(result.status, 'ok');
+    assert.equal(result.bundle, 'staging-polyfork');
+    assert.equal(result.checked, 195);
+    assert.equal(result.ok, 195);
+    assert.deepEqual(result.mismatch, []);
+    assert.deepEqual(result.missing, []);
+    assert.deepEqual(result.extra, []);
+    assert.equal(result.town_js_v, null);
+    assert.equal(result.staging_js_v, '41');
+    assert.equal('staged_town_js_v' in result, false, 'clean verify must not carry staged_town_js_v');
+    assert.equal('staged_staging_js_v' in result, false, 'clean verify must not carry staged_staging_js_v');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 510: stage-deploy defaults --out to <root>/staging (P6)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme510-default-out-'));
+  try {
+    const rootDir = path.join(tmpDir, 'root');
+    fs.mkdirSync(rootDir);
+    fs.cpSync(path.join(ROOT_DIR, 'town-3d'), path.join(rootDir, 'town-3d'), { recursive: true });
+    const stageOut = execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--root', rootDir],
+      { cwd: ROOT_DIR, encoding: 'utf8' }
+    );
+    const summary = JSON.parse(stageOut.trim());
+    assert.equal(summary.ok, true);
+    assert.equal(summary.out, path.join(rootDir, 'staging'));
+    assert.equal(summary.file_count, 25);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(summary.out, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
+    );
+    assert.equal(manifest.file_count, 25);
+    assert.equal(manifest.bundle, 'town-3d');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 510: stage-deploy exact refusal messages for --out into town-npc and bad --verify targets (P7)', () => {
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--out', path.join(ROOT_DIR, 'town-npc')],
+        { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    },
+    (err) => {
+      assert.equal(err.status, 1);
+      assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+        ok: false,
+        error: `Refusing to stage into inside town-npc/: ${path.join(ROOT_DIR, 'town-npc')}`,
+      });
+      return true;
+    }
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme510-refuse-'));
+  try {
+    const filePath = path.join(tmpDir, 'not-a-dir.txt');
+    fs.writeFileSync(filePath, 'x');
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', filePath],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: `Expected directory for --verify: ${filePath}`,
+        });
+        return true;
+      }
+    );
+
+    const realDir = path.join(tmpDir, 'real-dir');
+    fs.mkdirSync(realDir);
+    const linkDir = path.join(tmpDir, 'link-dir');
+    fs.symlinkSync(realDir, linkDir);
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', linkDir],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: `Refusing symlink verify directory: ${linkDir}`,
+        });
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 510: stage-deploy --verify missing directory and manifest errors (P8)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme510-manifest-'));
+  try {
+    const missingDir = path.join(tmpDir, 'no-such-dir');
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', missingDir],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: `Missing verify directory: ${missingDir}`,
+        });
+        return true;
+      }
+    );
+
+    const emptyDir = path.join(tmpDir, 'empty');
+    fs.mkdirSync(emptyDir);
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', emptyDir],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: `Missing MANIFEST.json in ${emptyDir}`,
+        });
+        return true;
+      }
+    );
+
+    fs.writeFileSync(path.join(emptyDir, 'MANIFEST.json'), '{not json');
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', emptyDir],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        const parsed = JSON.parse(String(err.stderr || '').trim());
+        assert.equal(parsed.ok, false);
+        assert.match(parsed.error, /^Unparseable MANIFEST\.json: /);
+        return true;
+      }
+    );
+
+    fs.unlinkSync(path.join(emptyDir, 'MANIFEST.json'));
+    fs.writeFileSync(path.join(emptyDir, 'real-manifest.json'), '{"bundle":"town-3d","files":[]}');
+    fs.symlinkSync(path.join(emptyDir, 'real-manifest.json'), path.join(emptyDir, 'MANIFEST.json'));
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--verify', emptyDir],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: `Refusing symlink MANIFEST.json in ${emptyDir}`,
+        });
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 510: staging-polyfork collector splits 195 files into 183 native plus 12 shared (P9)', async () => {
+  const { collectSourceFilesFromStagingPolyfork } = await import('./stage-deploy.mjs');
+  const { files, excluded } = await collectSourceFilesFromStagingPolyfork(
+    path.join(ROOT_DIR, 'staging-polyfork'),
+    path.join(ROOT_DIR, 'town-3d')
+  );
+  const shared = [
+    'gazette/feed.xml',
+    'gazette/issue-001.html',
+    'gazette/issue-002.html',
+    'gazette/issue-003.html',
+    'gazette/latest.json',
+    'plots/milo/index.html',
+    'plots/wick/index.html',
+    'plots/maren/index.html',
+    'plots/tomas/index.html',
+    'inn/index.html',
+    'guestbook/index.html',
+    'move-in.html',
+  ];
+  assert.equal(files.length, 195);
+  const rels = files.map((entry) => entry.relPath);
+  for (const sharedFile of shared) {
+    assert.ok(rels.includes(sharedFile), `staging-polyfork files must include shared ${sharedFile}`);
+  }
+  assert.equal(
+    rels.filter((rel) => !shared.includes(rel)).length,
+    183,
+    'staging-polyfork native files must number 183'
+  );
+  const byPath = new Map(excluded.map((entry) => [entry.path, entry.reason]));
+  assert.equal(
+    excluded.filter((entry) => entry.reason === 'test suite, not served content').length,
+    20,
+    'staging-polyfork must exclude exactly 20 test suites'
+  );
+  assert.equal(byPath.get('README.md'), 'documentation, not served content');
+  assert.equal(excluded.length, 21);
+  const paths = excluded.map((entry) => entry.path);
+  assert.deepEqual(paths, [...paths].sort(), 'excluded entries must be sorted by path');
+});
+
+test('Slice 510: stage-deploy collect-time guards refuse symlinked models and empty model sets (P10)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme510-guards-'));
+  try {
+    const rootDir = path.join(tmpDir, 'root');
+    fs.mkdirSync(rootDir);
+    fs.cpSync(path.join(ROOT_DIR, 'town-3d'), path.join(rootDir, 'town-3d'), { recursive: true });
+    const modelsDir = path.join(rootDir, 'town-3d', 'models');
+    const models = fs.readdirSync(modelsDir).filter((name) => name.endsWith('.glb')).sort();
+    const victim = models[0];
+    fs.unlinkSync(path.join(modelsDir, victim));
+    fs.symlinkSync(path.join(ROOT_DIR, 'town-3d', 'models', victim), path.join(modelsDir, victim));
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--root', rootDir, '--out', path.join(tmpDir, 'out')],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: `Refusing symlink source: town-3d/models/${victim}`,
+        });
+        return true;
+      }
+    );
+
+    for (const name of models) {
+      fs.unlinkSync(path.join(modelsDir, name));
+    }
+    assert.throws(
+      () => {
+        execFileSync(
+          process.execPath,
+          [path.join(__dirname, 'stage-deploy.mjs'), '--bundle', 'town-3d', '--root', rootDir, '--out', path.join(tmpDir, 'out')],
+          { cwd: ROOT_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      },
+      (err) => {
+        assert.equal(err.status, 1);
+        assert.deepEqual(JSON.parse(String(err.stderr || '').trim()), {
+          ok: false,
+          error: 'Missing required source files: town-3d/models/*.glb',
+        });
+        return true;
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
