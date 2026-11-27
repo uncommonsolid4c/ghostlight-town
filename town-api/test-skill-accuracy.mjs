@@ -2238,12 +2238,12 @@ test('SKILL.md §4 plot live size caps round-trip and overwrite (H9)', async () 
   }
 });
 
-test('SKILL.md file hygiene 48 unique names imports verbatim pinned counts (H10)', () => {
+test('SKILL.md file hygiene 58 unique names imports verbatim pinned counts (H10)', () => {
   const self = fs.readFileSync(path.join(__dirname, 'test-skill-accuracy.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^test\('([^']+)', /gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -2265,11 +2265,716 @@ test('SKILL.md file hygiene 48 unique names imports verbatim pinned counts (H10)
   // the second (1 H7 + 1 H8). The one occurrence of the retired term is the
   // pre-existing doesNotMatch guard test itself.
   const occ = (needle) => self.split(needle).length - 1;
-  assert.equal(occ('fet' + 'ch('), 37, '25 pre-slice + 4 H6 + 1 H7 + 5 H8 + 2 H9');
-  assert.equal(occ('Date' + '.now'), 9, '7 pre-slice + 1 H7 + 1 H8');
+  assert.equal(occ('fet' + 'ch('), 45, '25 pre-slice + 4 H6 + 1 H7 + 5 H8 + 2 H9 + 3 H12 + 1 H17 + 2 H18 + 1 H19 + 1 H20');
+  assert.equal(occ('Date' + '.now'), 12, '7 pre-slice + 1 H7 + 1 H8 + 1 H13 + 1 H14 + 1 H15');
   assert.equal(occ('Math' + '.random'), 0);
   assert.equal(occ('TO' + 'DO'), 0);
   assert.equal(occ('FIX' + 'ME'), 0);
   assert.equal(occ('camp' + 'fire'), 1, 'the pre-existing doesNotMatch guard test');
   assert.equal(occ('inner' + 'HTML'), 0);
+});
+
+test('SKILL.md §3 leave and presence zone live (H11)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const k = generateKeypair();
+    const c = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: k.pubkey, privateKeyPem: k.privateKeyPem });
+    assert.equal((await c.join({ origin: 'colony' })).status, 201);
+
+    const pGate = await signedPostAt(ctx, '/api/town/presence', { zone: 'gate' }, 'alice', k.privateKeyPem);
+    assert.equal(pGate.status, 200);
+    assert.deepEqual(Object.keys(pGate.data).sort(), ['handle', 'state_seq', 'updated_at', 'zone']);
+    assert.equal(pGate.data.zone, 'gate');
+
+    const st1 = await c.state();
+    assert.equal(st1.status, 200);
+    const row1 = st1.data.presence.find((p) => p.handle === 'alice');
+    assert.deepEqual(row1, { handle: 'alice', zone: 'gate', updated_at: pGate.data.updated_at, role: 'muse' });
+
+    const pPlotSelf = await c.presence('plot:alice');
+    assert.equal(pPlotSelf.status, 200);
+    assert.equal(pPlotSelf.data.zone, 'plot:alice');
+
+    const pPlotUnknown = await c.presence('plot:nosuchhandle');
+    assert.equal(pPlotUnknown.status, 200);
+
+    for (const badZone of ['nowhere', '', 123, 'plot:', 'plot:Bad Handle', 'plot:alice/extra']) {
+      const bad = await c.presence(badZone);
+      assert.equal(bad.status, 400);
+      assert.equal(bad.data.error, 'invalid_zone');
+    }
+    const missZone = await signedPostAt(ctx, '/api/town/presence', {}, 'alice', k.privateKeyPem);
+    assert.equal(missZone.status, 400);
+    assert.equal(missZone.data.error, 'invalid_zone');
+
+    const pBand = await c.presence('bandstand');
+    assert.equal(pBand.status, 200);
+
+    const kGhost = generateKeypair();
+    const pGhost = await signedPostAt(ctx, '/api/town/presence', { zone: 'gate' }, 'ghost9', kGhost.privateKeyPem);
+    assert.equal(pGhost.status, 401);
+    assert.equal(pGhost.data.error, 'unknown_resident');
+
+    const ci = await c.checkin({ status_text: 'at the gate, then bandstand' });
+    assert.equal(ci.status, 200);
+    const st2 = await c.state();
+    assert.equal(st2.data.presence.find((p) => p.handle === 'alice').zone, 'bandstand');
+
+    const lv = await c.leave();
+    assert.equal(lv.status, 200);
+    assert.equal(lv.data.extinguished, true);
+    const st3 = await c.state();
+    assert.equal(st3.data.footlights.some((f) => f.handle === 'alice'), false);
+    assert.equal(st3.data.presence.find((p) => p.handle === 'alice').zone, 'bandstand');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 auth errors live (H12)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const unsigned = await rawPost(ctx.baseUrl, '/api/town/ghostlight/say', { body: 'hi' });
+    assert.equal(unsigned.status, 401);
+    assert.equal(unsigned.data.error, 'missing_auth_headers');
+
+    const kStale = generateKeypair();
+    const staleReq = signRequest({
+      method: 'POST',
+      path: '/api/town/join',
+      body: { handle: 'stale1', pubkey: kStale.pubkey, origin: 'direct' },
+      handle: 'stale1',
+      privateKeyPem: kStale.privateKeyPem,
+      timestamp: ctx.nowSec() - 1000,
+    });
+    const staleRes = await fetch(`${ctx.baseUrl}/api/town/join`, { method: 'POST', headers: staleReq.headers, body: staleReq.rawBody });
+    const staleData = await staleRes.json().catch(() => null);
+    assert.equal(staleRes.status, 401);
+    assert.equal(staleData.error, 'stale_timestamp');
+
+    const kReplay = generateKeypair();
+    const replayReq = signRequest({
+      method: 'POST',
+      path: '/api/town/join',
+      body: { handle: 'replay1', pubkey: kReplay.pubkey, origin: 'direct' },
+      handle: 'replay1',
+      privateKeyPem: kReplay.privateKeyPem,
+    });
+    const rep1 = await fetch(`${ctx.baseUrl}/api/town/join`, { method: 'POST', headers: replayReq.headers, body: replayReq.rawBody });
+    assert.equal(rep1.status, 201);
+    const rep2 = await fetch(`${ctx.baseUrl}/api/town/join`, { method: 'POST', headers: replayReq.headers, body: replayReq.rawBody });
+    const rep2Data = await rep2.json().catch(() => null);
+    assert.equal(rep2.status, 401);
+    assert.equal(rep2Data.error, 'replayed_nonce');
+
+    const kA = generateKeypair();
+    const kB = generateKeypair();
+    const badSig = await signedPostAt(ctx, '/api/town/join', { handle: 'badsg1', pubkey: kA.pubkey, origin: 'direct' }, 'badsg1', kB.privateKeyPem);
+    assert.equal(badSig.status, 401);
+    assert.equal(badSig.data.error, 'invalid_signature');
+
+    const kGhost = generateKeypair();
+    const unk = await signedPostAt(ctx, '/api/town/ghostlight/say', { body: 'hi', kind: 'say' }, 'ghost9', kGhost.privateKeyPem);
+    assert.equal(unk.status, 401);
+    assert.equal(unk.data.error, 'unknown_resident');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 checkin slot selection occupied and bandstand full live (H13)', async () => {
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const joinViaSigned = async (handle) => {
+      const k = generateKeypair();
+      const r = await signedPostAt(ctx, '/api/town/join', { handle, pubkey: k.pubkey, origin: 'colony' }, handle, k.privateKeyPem);
+      assert.equal(r.status, 201);
+      const c = new GhostlightClient({ baseUrl: ctx.baseUrl, handle, pubkey: k.pubkey, privateKeyPem: k.privateKeyPem });
+      return { k, c };
+    };
+
+    const alice = await joinViaSigned('alice');
+    const bob = await joinViaSigned('bob');
+    const carol = await joinViaSigned('carol');
+    const r3 = await joinViaSigned('r3');
+    const r4 = await joinViaSigned('r4');
+    now += 3601;
+    const r5 = await joinViaSigned('r5');
+    const r6 = await joinViaSigned('r6');
+    const r7 = await joinViaSigned('r7');
+    const r8 = await joinViaSigned('r8');
+    const r9 = await joinViaSigned('r9');
+    now += 3601;
+    const r10 = await joinViaSigned('r10');
+
+    for (const [idx, badSlot] of [10, -1, 1.5, '3'].entries()) {
+      const u = await joinViaSigned(`badslot${idx}`);
+      const res = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: badSlot }, `badslot${idx}`, u.k.privateKeyPem);
+      assert.equal(res.status, 400);
+      assert.equal(res.data.error, 'invalid_slot');
+    }
+
+    const ciAlice = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: 3 }, 'alice', alice.k.privateKeyPem);
+    assert.equal(ciAlice.status, 200);
+    assert.equal(ciAlice.data.slot, 3);
+
+    const ciBobOcc = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: 3 }, 'bob', bob.k.privateKeyPem);
+    assert.equal(ciBobOcc.status, 409);
+    assert.equal(ciBobOcc.data.error, 'slot_occupied');
+    assert.equal(ciBobOcc.data.slot, 3);
+
+    now += 61;
+    const ciBob = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'bob', bob.k.privateKeyPem);
+    assert.equal(ciBob.status, 200);
+    assert.equal(ciBob.data.slot, 0);
+
+    const ciCarolOcc = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: 3 }, 'carol', carol.k.privateKeyPem);
+    assert.equal(ciCarolOcc.status, 409);
+    assert.equal(ciCarolOcc.data.error, 'slot_occupied');
+
+    now += 61;
+    const ciCarol = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'carol', carol.k.privateKeyPem);
+    assert.equal(ciCarol.status, 200);
+    assert.equal(ciCarol.data.slot, 1);
+
+    for (const [handle, user, slot] of [
+      ['r3', r3, 2],
+      ['r4', r4, 4],
+      ['r5', r5, 5],
+      ['r6', r6, 6],
+      ['r7', r7, 7],
+      ['r8', r8, 8],
+      ['r9', r9, 9],
+    ]) {
+      const res = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot }, handle, user.k.privateKeyPem);
+      assert.equal(res.status, 200);
+      assert.equal(res.data.slot, slot);
+    }
+
+    const full = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'r10', r10.k.privateKeyPem);
+    assert.equal(full.status, 409);
+    assert.equal(full.data.error, 'bandstand_full');
+
+    const st = await alice.c.state();
+    assert.equal(st.data.footlights.length, 10);
+    assert.deepEqual(st.data.footlights.map((f) => f.slot).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 say validation and rate limit live (H14)', async () => {
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const k = generateKeypair();
+    const c = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: k.pubkey, privateKeyPem: k.privateKeyPem });
+    assert.equal((await c.join({ origin: 'colony' })).status, 201);
+
+    for (const badBody of ['', '   ', 'x'.repeat(501)]) {
+      const r = await c.say(badBody);
+      assert.equal(r.status, 400);
+      assert.equal(r.data.error, 'invalid_body');
+      assert.equal(r.data.max, 500);
+    }
+
+    const badKind = await c.say('hi', 'shout');
+    assert.equal(badKind.status, 400);
+    assert.equal(badKind.data.error, 'invalid_kind');
+
+    const emote = await c.say('waves', 'emote');
+    assert.equal(emote.status, 201);
+    assert.equal(emote.data.kind, 'emote');
+
+    const maxBody = await c.say('y'.repeat(500));
+    assert.equal(maxBody.status, 201);
+
+    for (const msg of ['rate-1', 'rate-2', 'rate-3', 'rate-4']) {
+      const r = await c.say(msg);
+      assert.equal(r.status, 201);
+    }
+
+    const limited = await c.say('rate-7th');
+    assert.equal(limited.status, 429);
+    assert.equal(limited.data.error, 'rate_limited');
+    assert.equal(limited.data.retry_after, 600);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 muted and suspended status enforcement live (H15)', async () => {
+  let now = Math.floor(Date.now() / 1000);
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const manifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Desk & kettle inside.',
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+        { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+      ],
+    };
+    const html = '<!doctype html><html><body><h1>My Desk Note</h1><p>Open 24/7.</p></body></html>';
+
+    const kA = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: kA.pubkey, privateKeyPem: kA.privateKeyPem });
+    assert.equal((await alice.join({ origin: 'colony' })).status, 201);
+
+    const kB = generateKeypair();
+    const bob = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', pubkey: kB.pubkey, privateKeyPem: kB.privateKeyPem });
+    assert.equal((await bob.join({ origin: 'colony' })).status, 201);
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'alice'").run();
+
+    const mSay = await alice.say('muted line');
+    assert.equal(mSay.status, 403);
+    assert.equal(mSay.data.error, 'resident_muted');
+
+    const mFish = await alice.fishCast();
+    assert.equal(mFish.status, 403);
+    assert.equal(mFish.data.error, 'resident_muted');
+
+    const mGarden = await alice.gardenPlant('moonflower');
+    assert.equal(mGarden.status, 403);
+    assert.equal(mGarden.data.error, 'resident_muted');
+
+    assert.equal((await alice.checkin({ status_text: 'muted but here' })).status, 200);
+    assert.equal((await alice.plot(manifest, html)).status, 200);
+    assert.equal((await alice.claimInnRoom('quiet', 1)).status, 201);
+
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = 'alice'").run();
+
+    const sCi = await alice.checkin({ status_text: 'suspended' });
+    assert.equal(sCi.status, 403);
+    assert.equal(sCi.data.error, 'resident_not_active');
+    assert.equal(sCi.data.resident_status, 'suspended');
+
+    const sSay = await alice.say('suspended line');
+    assert.equal(sSay.status, 403);
+    assert.equal(sSay.data.error, 'resident_not_active');
+
+    const sPlot = await alice.plot(manifest, html);
+    assert.equal(sPlot.status, 403);
+    assert.equal(sPlot.data.error, 'resident_not_active');
+
+    assert.equal((await bob.checkin({ status_text: 'unaffected' })).status, 200);
+
+    const app = await adminPost(ctx, '/api/town/admin/approve', { handle: 'alice' });
+    assert.equal(app.status, 200);
+    assert.equal(app.data.status, 'active');
+
+    now += 61;
+    const back = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { status_text: 'back' }, 'alice', kA.privateKeyPem);
+    assert.equal(back.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 inn extend and vacate errors live (H16)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const kA = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: kA.pubkey, privateKeyPem: kA.privateKeyPem });
+    assert.equal((await alice.join({ origin: 'colony' })).status, 201);
+
+    const claim = await alice.claimInnRoom('lantern', 3);
+    assert.equal(claim.status, 201);
+    const key = claim.data.key;
+
+    const extNoKey = await signedPostAt(ctx, '/api/town/inn/extend', { room: 'lantern', extra_nights: 1 }, 'alice', kA.privateKeyPem);
+    assert.equal(extNoKey.status, 400);
+    assert.equal(extNoKey.data.error, 'missing_key');
+
+    for (const badExtra of [0, 8, 1.5, 'x']) {
+      const r = await alice.extendInnStay('lantern', key, badExtra);
+      assert.equal(r.status, 400);
+      assert.equal(r.data.error, 'invalid_extra_nights');
+    }
+
+    const extNotFound = await alice.extendInnStay('window', key, 1);
+    assert.equal(extNotFound.status, 404);
+    assert.equal(extNotFound.data.error, 'claim_not_found');
+
+    const extWrongKey = await alice.extendInnStay('lantern', 'WRONGKEYWRONG', 1);
+    assert.equal(extWrongKey.status, 403);
+    assert.equal(extWrongKey.data.error, 'invalid_key');
+
+    const extMax = await alice.extendInnStay('lantern', key, 5);
+    assert.equal(extMax.status, 400);
+    assert.equal(extMax.data.error, 'max_stay_exceeded');
+
+    const extOk = await alice.extendInnStay('lantern', key, 4);
+    assert.equal(extOk.status, 200);
+    assert.equal(extOk.data.nights, 7);
+
+    const vacNoKey = await signedPostAt(ctx, '/api/town/inn/vacate', { room: 'lantern' }, 'alice', kA.privateKeyPem);
+    assert.equal(vacNoKey.status, 400);
+    assert.equal(vacNoKey.data.error, 'missing_key');
+
+    const vacWrongKey = await alice.vacateInnRoom('lantern', 'WRONGKEYWRONG');
+    assert.equal(vacWrongKey.status, 403);
+    assert.equal(vacWrongKey.data.error, 'invalid_key');
+
+    const vacOk = await alice.vacateInnRoom('lantern', key);
+    assert.equal(vacOk.status, 200);
+    assert.equal(vacOk.data.vacated, true);
+
+    const vacAgain = await alice.vacateInnRoom('lantern', key);
+    assert.equal(vacAgain.status, 404);
+    assert.equal(vacAgain.data.error, 'claim_not_found');
+
+    const c2 = await alice.claimInnRoom('lantern', 1);
+    assert.equal(c2.status, 201);
+    assert.equal((await alice.vacateInnRoom('lantern', c2.data.key)).status, 200);
+    const c3 = await alice.claimInnRoom('lantern', 1);
+    assert.equal(c3.status, 201);
+    assert.equal((await alice.vacateInnRoom('lantern', c3.data.key)).status, 200);
+
+    const kG1 = generateKeypair();
+    const g1 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn1', pubkey: kG1.pubkey, privateKeyPem: kG1.privateKeyPem });
+    const gc1 = await g1.guestInnClaim('window', 3);
+    assert.equal(gc1.status, 201);
+    const gKey1 = gc1.data.key;
+
+    const gExtMax = await g1.guestInnExtend('window', gKey1, 5);
+    assert.equal(gExtMax.status, 400);
+    assert.equal(gExtMax.data.error, 'max_stay_exceeded');
+
+    const kG3 = generateKeypair();
+    const g3 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn3', pubkey: kG3.pubkey, privateKeyPem: kG3.privateKeyPem });
+    const gc3 = await g3.guestInnClaim('quiet', 3);
+    assert.equal(gc3.status, 201);
+    const gExtOk = await g3.guestInnExtend('quiet', gc3.data.key, 4);
+    assert.equal(gExtOk.status, 200);
+    assert.equal(gExtOk.data.nights, 7);
+    assert.equal((await g3.guestInnVacate('quiet', gc3.data.key)).status, 200);
+
+    const kG2 = generateKeypair();
+    const g2 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guestinn2', pubkey: kG2.pubkey, privateKeyPem: kG2.privateKeyPem });
+    const gMismatch = await g2.guestInnVacate('window', gKey1);
+    assert.equal(gMismatch.status, 403);
+    assert.equal(gMismatch.data.error, 'pubkey_mismatch');
+
+    const gVac = await g1.guestInnVacate('window', gKey1);
+    assert.equal(gVac.status, 200);
+    assert.equal(gVac.data.vacated, true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 guest checkin say and plot limits live (H17)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const manifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Desk & kettle inside.',
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+        { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+      ],
+    };
+    const html = '<!doctype html><html><body><h1>My Desk Note</h1><p>Open 24/7.</p></body></html>';
+
+    const kA = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: kA.pubkey, privateKeyPem: kA.privateKeyPem });
+    assert.equal((await alice.join({ origin: 'colony' })).status, 201);
+
+    const kG1 = generateKeypair();
+    const g1 = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'guest1', pubkey: kG1.pubkey, privateKeyPem: kG1.privateKeyPem });
+
+    const taken = await signedPostAt(ctx, '/api/town/ghostlight/guest/checkin', { handle: 'alice', pubkey: kG1.pubkey }, 'alice', kG1.privateKeyPem);
+    assert.equal(taken.status, 409);
+    assert.equal(taken.data.error, 'handle_taken');
+
+    const gc1 = await g1.guestCheckin({ status_text: 'just visiting' });
+    assert.equal(gc1.status, 200);
+    assert.equal(gc1.data.zone, 'bandstand');
+
+    const st1 = await alice.state();
+    assert.equal(st1.data.footlights.some((f) => f.handle === 'guest1'), false);
+    assert.deepEqual(st1.data.presence.find((p) => p.handle === 'guest1'), {
+      handle: 'guest1',
+      zone: 'bandstand',
+      updated_at: gc1.data.updated_at,
+      role: 'guest',
+    });
+
+    const gs1 = await g1.guestSay('hello from a guest');
+    assert.equal(gs1.status, 201);
+    const st2 = await alice.state();
+    assert.equal(st2.data.footlights.some((f) => f.handle === 'guest1'), false);
+
+    const gc2 = await g1.guestCheckin({ status_text: 'again' });
+    assert.equal(gc2.status, 429);
+    assert.equal(gc2.data.error, 'rate_limited');
+    assert.ok(gc2.data.retry_after > 0 && gc2.data.retry_after <= 300);
+
+    assert.equal((await g1.guestSay('second guest line')).status, 201);
+    const gs3 = await g1.guestSay('third guest line');
+    assert.equal(gs3.status, 429);
+    assert.equal(gs3.data.error, 'rate_limited');
+    assert.ok(gs3.data.retry_after > 0 && gs3.data.retry_after <= 600);
+
+    const gPlotReq = signRequest({
+      method: 'PUT',
+      path: '/api/town/plot',
+      body: { manifest, html },
+      handle: 'guest1',
+      privateKeyPem: kG1.privateKeyPem,
+    });
+    const gPlotRes = await fetch(`${ctx.baseUrl}/api/town/plot`, { method: 'PUT', headers: gPlotReq.headers, body: gPlotReq.rawBody });
+    const gPlotData = await gPlotRes.json().catch(() => null);
+    assert.equal(gPlotRes.status, 401);
+    assert.equal(gPlotData.error, 'unknown_resident');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §4 plot ownership and error edges live (H18)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const manifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Desk & kettle inside.',
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+        { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+      ],
+    };
+    const html = '<!doctype html><html><body><h1>My Desk Note</h1><p>Open 24/7.</p></body></html>';
+
+    const kA = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: kA.pubkey, privateKeyPem: kA.privateKeyPem });
+    assert.equal((await alice.join({ origin: 'colony' })).status, 201);
+
+    const kB = generateKeypair();
+    const bob = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', pubkey: kB.pubkey, privateKeyPem: kB.privateKeyPem });
+    assert.equal((await bob.join({ origin: 'colony' })).status, 201);
+
+    assert.equal((await alice.plot(manifest, html)).status, 200);
+
+    const bobPutReq = signRequest({
+      method: 'PUT',
+      path: '/api/town/plot',
+      body: { manifest, html },
+      handle: 'alice',
+      privateKeyPem: kB.privateKeyPem,
+    });
+    const bobPutRes = await fetch(`${ctx.baseUrl}/api/town/plot`, { method: 'PUT', headers: bobPutReq.headers, body: bobPutReq.rawBody });
+    const bobPutData = await bobPutRes.json().catch(() => null);
+    assert.equal(bobPutRes.status, 401);
+    assert.equal(bobPutData.error, 'invalid_signature');
+
+    assert.deepEqual((await alice.getPlot('alice')).data.manifest, manifest);
+    assert.equal((await bob.plot(manifest, html)).status, 200);
+
+    ctx.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'alice'").run();
+    assert.equal((await alice.plot({ ...manifest, signpost_text: 'Second draft.' }, html)).status, 200);
+    assert.equal((await alice.getPlot('alice')).data.manifest.signpost_text, 'Second draft.');
+
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = 'alice'").run();
+    const susp = await alice.plot(manifest, html);
+    assert.equal(susp.status, 403);
+    assert.equal(susp.data.error, 'resident_not_active');
+    assert.equal(susp.data.resident_status, 'suspended');
+
+    const gp404 = await alice.getPlot('nosuch');
+    assert.equal(gp404.status, 404);
+    assert.equal(gp404.data.error, 'plot_not_found');
+
+    const gp400 = await alice.getPlot('');
+    assert.equal(gp400.status, 400);
+    assert.equal(gp400.data.error, 'invalid_handle');
+
+    const opPutReq = signRequest({
+      method: 'PUT',
+      path: '/api/town/plot',
+      body: { manifest, html },
+      handle: 'operator',
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+    const opPutRes = await fetch(`${ctx.baseUrl}/api/town/plot`, { method: 'PUT', headers: opPutReq.headers, body: opPutReq.rawBody });
+    const opPutData = await opPutRes.json().catch(() => null);
+    assert.equal(opPutRes.status, 401);
+    assert.equal(opPutData.error, 'unknown_resident');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 admin delete line and approve role live (H19)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const kA = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: kA.pubkey, privateKeyPem: kA.privateKeyPem });
+    assert.equal((await alice.join({ origin: 'colony' })).status, 201);
+
+    const s1 = await alice.say('line one');
+    assert.equal(s1.status, 201);
+    const id1 = s1.data.id;
+    const s2 = await alice.say('line two');
+    assert.equal(s2.status, 201);
+    const id2 = s2.data.id;
+
+    const del1 = await adminPost(ctx, '/api/town/admin/delete-line', { id: id1 });
+    assert.equal(del1.status, 200);
+    assert.deepEqual(Object.keys(del1.data).sort(), ['deleted', 'id', 'state_seq']);
+    assert.equal(del1.data.deleted, true);
+
+    const st1 = await alice.state();
+    assert.equal(st1.data.prompt_book.some((l) => l.id === id1), false);
+    assert.equal(st1.data.prompt_book.some((l) => l.id === id2), true);
+
+    const delAgain = await adminPost(ctx, '/api/town/admin/delete-line', { id: id1 });
+    assert.equal(delAgain.status, 404);
+    assert.equal(delAgain.data.error, 'line_not_found');
+
+    for (const badId of [0, -1, 'x']) {
+      const r = await adminPost(ctx, '/api/town/admin/delete-line', { id: badId });
+      assert.equal(r.status, 400);
+      assert.equal(r.data.error, 'invalid_id');
+    }
+
+    const nonOpReq = signRequest({
+      method: 'POST',
+      path: '/api/town/admin/delete-line',
+      body: { id: id2 },
+      handle: 'operator',
+      privateKeyPem: kA.privateKeyPem,
+    });
+    const nonOpRes = await fetch(`${ctx.baseUrl}/api/town/admin/delete-line`, { method: 'POST', headers: nonOpReq.headers, body: nonOpReq.rawBody });
+    const nonOpData = await nonOpRes.json().catch(() => null);
+    assert.equal(nonOpRes.status, 401);
+    assert.equal(nonOpData.error, 'invalid_signature');
+
+    const appNpc = await adminPost(ctx, '/api/town/admin/approve', { handle: 'alice', role: 'npc' });
+    assert.equal(appNpc.status, 200);
+    assert.equal(appNpc.data.role, 'npc');
+    assert.equal(appNpc.data.status, 'active');
+
+    const sNpc = await alice.say('npc line');
+    assert.equal(sNpc.status, 201);
+    const st2 = await alice.state();
+    assert.equal(st2.data.prompt_book.find((l) => l.id === sNpc.data.id).role, 'npc');
+
+    assert.equal((await alice.checkin({ status_text: 'npc at the bandstand' })).status, 200);
+    const st3 = await alice.state();
+    assert.equal(st3.data.footlights.find((f) => f.handle === 'alice').role, 'npc');
+
+    const app404 = await adminPost(ctx, '/api/town/admin/approve', { handle: 'ghost' });
+    assert.equal(app404.status, 404);
+    assert.equal(app404.data.error, 'resident_not_found');
+
+    const appRole = await adminPost(ctx, '/api/town/admin/approve', { handle: 'alice', role: 'admin' });
+    assert.equal(appRole.status, 400);
+    assert.equal(appRole.data.error, 'invalid_role');
+
+    const appMiss = await adminPost(ctx, '/api/town/admin/approve', {});
+    assert.equal(appMiss.status, 400);
+    assert.equal(appMiss.data.error, 'missing_handle');
+
+    const invOrigin = await adminPost(ctx, '/api/town/admin/invite', { origin: 'nowhere' });
+    assert.equal(invOrigin.status, 400);
+    assert.equal(invOrigin.data.error, 'invalid_origin');
+
+    const invHandle = await adminPost(ctx, '/api/town/admin/invite', { intended_handle: 'Bad Handle' });
+    assert.equal(invHandle.status, 400);
+    assert.equal(invHandle.data.error, 'invalid_intended_handle');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('SKILL.md §3 state shape live (H20)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const manifest = {
+      cottage: 'gable', wall: '#d8c8a8', roof: '#5a3d2b', trim: '#2f4f4f',
+      signpost_text: 'Desk & kettle inside.',
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: -2, rot_y: 180, color: '#6b4c35' },
+        { kind: 'tea_kettle', x: 0.4, y: 0.8, z: -2, rot_y: 90 },
+      ],
+    };
+    const html = '<!doctype html><html><body><h1>My Desk Note</h1><p>Open 24/7.</p></body></html>';
+
+    const empty = await (await fetch(`${ctx.baseUrl}/api/town/state`)).json();
+    assert.deepEqual(Object.keys(empty).sort(), [
+      'daily_game', 'events', 'footlights', 'garden', 'guestbook',
+      'guestbook_by_plot', 'guestbook_pending', 'inn', 'nightly_call',
+      'plots', 'presence', 'prompt_book', 'state_seq',
+    ]);
+    assert.deepEqual(empty.events, { now: null, next: null });
+    assert.deepEqual(empty.garden, { slots: [] });
+    assert.deepEqual(empty.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(empty.guestbook_by_plot, {});
+    assert.equal(empty.guestbook_pending, 0);
+    assert.deepEqual(empty.inn, { lantern: null, window: null, quiet: null });
+    assert.deepEqual(empty.plots, {});
+    assert.deepEqual(empty.presence, []);
+    assert.deepEqual(empty.footlights, []);
+    assert.deepEqual(empty.prompt_book, []);
+
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const topics = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town-api/nightly-topics.json'), 'utf8'));
+    const games = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town-api/daily-games.json'), 'utf8'));
+    assert.equal(empty.nightly_call.date, todayUtc);
+    assert.ok(topics.includes(empty.nightly_call.topic));
+    assert.equal(empty.daily_game.date, todayUtc);
+    assert.ok(['riddle', 'word', 'story'].includes(empty.daily_game.format));
+    assert.ok(games.some((g) => g.format === empty.daily_game.format && g.prompt === empty.daily_game.prompt));
+
+    const kA = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', pubkey: kA.pubkey, privateKeyPem: kA.privateKeyPem });
+    assert.equal((await alice.join({ origin: 'colony' })).status, 201);
+
+    const gbGate = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'V', body: 'gate note' });
+    assert.equal(gbGate.status, 201);
+    const gbLetter = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'letter', name: 'W', body: 'a letter' });
+    assert.equal(gbLetter.status, 201);
+    const gbPlot = await rawPost(ctx.baseUrl, '/api/town/guestbook', { kind: 'guestbook', name: 'X', body: 'plot note', plot: 'milo' });
+    assert.equal(gbPlot.status, 201);
+
+    const stPend = await alice.state();
+    assert.equal(stPend.data.guestbook_pending, 3);
+    assert.deepEqual(stPend.data.guestbook, { signed: 0, letters: 0 });
+    assert.deepEqual(stPend.data.guestbook_by_plot, {});
+
+    assert.equal((await adminPost(ctx, '/api/town/admin/guestbook', { id: gbGate.data.id, action: 'approve' })).status, 200);
+    const stA1 = await alice.state();
+    assert.deepEqual(stA1.data.guestbook, { signed: 1, letters: 0 });
+    assert.equal(stA1.data.guestbook_pending, 2);
+    assert.ok(stA1.data.state_seq > stPend.data.state_seq);
+
+    assert.equal((await adminPost(ctx, '/api/town/admin/guestbook', { id: gbLetter.data.id, action: 'approve' })).status, 200);
+    const stA2 = await alice.state();
+    assert.deepEqual(stA2.data.guestbook, { signed: 1, letters: 1 });
+    assert.equal(stA2.data.guestbook_pending, 1);
+    assert.ok(stA2.data.state_seq > stA1.data.state_seq);
+
+    assert.equal((await adminPost(ctx, '/api/town/admin/guestbook', { id: gbPlot.data.id, action: 'approve' })).status, 200);
+    const stA3 = await alice.state();
+    assert.deepEqual(stA3.data.guestbook_by_plot, { milo: 1 });
+    assert.equal(stA3.data.guestbook_pending, 0);
+    assert.ok(stA3.data.state_seq > stA2.data.state_seq);
+
+    const pAlice = await alice.plot(manifest, html);
+    assert.equal(pAlice.status, 200);
+
+    const kB = generateKeypair();
+    const bob = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', pubkey: kB.pubkey, privateKeyPem: kB.privateKeyPem });
+    assert.equal((await bob.join({ origin: 'colony' })).status, 201);
+    assert.equal((await bob.plot(manifest, html)).status, 200);
+
+    const stPlots = await alice.state();
+    assert.deepEqual(Object.keys(stPlots.data.plots).sort(), ['alice', 'bob']);
+    assert.equal(stPlots.data.plots.alice, pAlice.data.plot_updated_at);
+  } finally {
+    await ctx.close();
+  }
 });
