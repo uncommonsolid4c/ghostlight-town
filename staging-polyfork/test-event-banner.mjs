@@ -1147,12 +1147,12 @@ test('staging.js event-banner wiring pins import, store key, applyStagingState, 
   assert.equal(sl.filter((l) => l.includes('loadEvents()')).length, 1);
 });
 
-test('test-event-banner.mjs file hygiene pins 48 unique names, 7 imports, and forbidden-literal counts', async () => {
+test('test-event-banner.mjs file hygiene pins 58 unique names, 7 imports, and forbidden-literal counts', async () => {
   const self = await fs.readFile(path.join(HERE, 'test-event-banner.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -1169,4 +1169,197 @@ test('test-event-banner.mjs file hygiene pins 48 unique names, 7 imports, and fo
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
   assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 0);
+});
+
+test('P1 — loadEvents fail-opens on a non-Error throw, undefined JSON, and missing ok', async () => {
+  assert.deepEqual(
+    await loadEvents(async () => {
+      throw 'boom';
+    }),
+    { events: [] }
+  );
+  assert.deepEqual(
+    await loadEvents(async () => ({
+      ok: true,
+      async json() {
+        return undefined;
+      },
+    })),
+    { events: [] }
+  );
+  assert.deepEqual(
+    await loadEvents(async () => ({
+      async json() {
+        return { events: [VALID_EVENT] };
+      },
+    })),
+    { events: [] }
+  );
+});
+
+test('P2 — millisecond-precision and offset start_at pass through verbatim, and select on exact boundaries', async () => {
+  const ms = { ...VALID_EVENT, start_at: '2026-11-15T20:00:00.500Z' };
+  const loaded = await loadEvents(async () => ({
+    ok: true,
+    async json() {
+      return { events: [ms] };
+    },
+  }));
+  assert.deepEqual(loaded.events, [ms]);
+  assert.equal(
+    selectCurrentEvent([ms], Date.parse('2026-11-15T20:00:00.250Z'))?.status,
+    'next'
+  );
+  assert.equal(
+    selectCurrentEvent([ms], Date.parse('2026-11-15T20:00:00.500Z'))?.status,
+    'now'
+  );
+  const off = { ...VALID_EVENT, start_at: '2026-11-15T22:00:00+02:00' };
+  assert.equal(
+    selectCurrentEvent([off], Date.parse('2026-11-15T20:00:00Z'))?.status,
+    'now'
+  );
+});
+
+test('P3 — updateEventBanner guard failure preserves a stale key and leaves the card untouched', () => {
+  const card = {
+    name: 'event_banner',
+    visible: false,
+    material: { map: null, needsUpdate: false },
+  };
+  const liveStore = { eventBannerKey: 'stale-key' };
+  assert.equal(
+    updateEventBanner(
+      { THREE: null, bandstandBuilt: { eventBanner: card }, liveStore, makeTextTexture: () => ({}) },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(liveStore.eventBannerKey, 'stale-key');
+  assert.equal(card.visible, false);
+
+  const card2 = { name: 'event_banner', visible: true, material: null };
+  const liveStore2 = { eventBannerKey: 'k2' };
+  assert.equal(
+    updateEventBanner(
+      { THREE: {}, bandstandBuilt: { eventBanner: card2 }, liveStore: liveStore2, makeTextTexture: () => ({}) },
+      VALID_EVENT,
+      'next'
+    ),
+    false
+  );
+  assert.equal(card2.visible, true);
+  assert.equal(liveStore2.eventBannerKey, 'k2');
+});
+
+test('P4 — formatEventWhen future pins in Pacific Time', () => {
+  assert.equal(formatEventWhen(Date.parse('2030-06-15T20:00:00Z')), 'Jun 15, 1:00 PM');
+  assert.equal(formatEventWhen(Date.parse('2027-02-14T20:00:00Z')), 'Feb 14, 12:00 PM');
+});
+
+test('P5 — renderEventBannerHeader handles undefined title, null event with now, and newline title verbatim', () => {
+  const el = { hidden: true, textContent: '' };
+  assert.equal(
+    renderEventBannerHeader(el, { title: undefined, host_handle: 'milo' }, 'now'),
+    true
+  );
+  assert.equal(el.textContent, 'Now: undefined — hosted by @milo');
+  assert.equal(renderEventBannerHeader(el, null, 'now'), false);
+  assert.equal(el.hidden, true);
+  assert.equal(el.textContent, '');
+
+  const el2 = { hidden: true, textContent: '' };
+  assert.equal(
+    renderEventBannerHeader(el2, { ...VALID_EVENT, title: 'Line one\nLine two' }, 'now'),
+    true
+  );
+  assert.equal(el2.textContent, 'Now: Line one\nLine two — hosted by @milo');
+});
+
+test('P6 — eventBannerLines wraps a 30-char word plus trailing words', () => {
+  assert.deepEqual(
+    eventBannerLines({ ...VALID_EVENT, title: 'a'.repeat(30) + ' b c' }, 'now'),
+    ['EVENTS', 'a'.repeat(30), 'b c']
+  );
+});
+
+test('P7 — staging.js applyStagingState event block source lines', async () => {
+  const sl = (await fs.readFile(path.join(HERE, 'staging.js'), 'utf8')).split('\n');
+  assert.equal(sl[838], '    {');
+  assert.equal(sl[839], '      THREE,');
+  assert.equal(sl[840], '      bandstandBuilt,');
+  assert.equal(sl[841], '      liveStore,');
+  assert.equal(sl[842], '      makeTextTexture: makeBandstandTextTexture,');
+  assert.equal(sl[843], '    },');
+  assert.equal(sl[844], '    selectedEvent?.event || null,');
+  assert.equal(sl[845], '    selectedEvent?.status || null');
+  assert.equal(sl[846], '  );');
+  assert.equal(sl[848], '    eventBannerEl,');
+  assert.equal(sl[849], '    selectedEvent?.event || null,');
+  assert.equal(sl[850], '    selectedEvent?.status || null');
+  assert.equal(sl[851], '  );');
+});
+
+test('P8 — staging.js loadEvents().then block source lines', async () => {
+  const sl = (await fs.readFile(path.join(HERE, 'staging.js'), 'utf8')).split('\n');
+  assert.equal(sl[1232], '    .then(({ events }) => {');
+  assert.equal(sl[1233], '      liveStore.events = Array.isArray(events) ? events : [];');
+  assert.equal(sl[1234], '      if (liveStore.lastState) {');
+  assert.equal(sl[1236], '        updateEventBanner(');
+  assert.equal(sl[1237], '          {');
+  assert.equal(sl[1238], '            THREE,');
+  assert.equal(sl[1239], '            bandstandBuilt,');
+  assert.equal(sl[1240], '            liveStore,');
+  assert.equal(sl[1241], '            makeTextTexture: makeBandstandTextTexture,');
+  assert.equal(sl[1242], '          },');
+  assert.equal(sl[1243], '          selectedEvent?.event || null,');
+  assert.equal(sl[1244], '          selectedEvent?.status || null');
+  assert.equal(sl[1245], '        );');
+  assert.equal(sl[1246], '        renderEventBannerHeader(');
+  assert.equal(sl[1247], '          eventBannerEl,');
+  assert.equal(sl[1248], '          selectedEvent?.event || null,');
+  assert.equal(sl[1249], '          selectedEvent?.status || null');
+  assert.equal(sl[1250], '        );');
+});
+
+test('P9 — selectCurrentEvent returns the normalized event for next too', () => {
+  const padded = {
+    ...VALID_EVENT,
+    title: '  Midnight Reading on the Bandstand  ',
+    host_handle: '  milo ',
+    start_at: ' 2026-11-15T20:00:00Z ',
+    extra: 'drop me',
+  };
+  const res = selectCurrentEvent([padded], Date.parse('2026-11-15T19:00:00Z'));
+  assert.equal(res?.status, 'next');
+  assert.deepEqual(res?.event, VALID_EVENT);
+});
+
+test('P10 — updateEventBanner cache hit leaves the map object untouched', () => {
+  const oldMap = { old: true };
+  const card = {
+    name: 'event_banner',
+    visible: true,
+    material: { map: oldMap, needsUpdate: false },
+  };
+  const liveStore = { eventBannerKey: null };
+  let calls = 0;
+  const ctx = {
+    THREE: {},
+    bandstandBuilt: { eventBanner: card },
+    liveStore,
+    makeTextTexture: () => {
+      calls += 1;
+      return { fresh: true };
+    },
+  };
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), true);
+  assert.notEqual(card.material.map, oldMap);
+  const drawnMap = card.material.map;
+  card.material.needsUpdate = false;
+  assert.equal(updateEventBanner(ctx, VALID_EVENT, 'next'), false);
+  assert.equal(card.material.map, drawnMap);
+  assert.equal(card.material.needsUpdate, false);
+  assert.equal(calls, 1);
 });
