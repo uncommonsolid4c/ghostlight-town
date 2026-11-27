@@ -1978,8 +1978,8 @@ test('G20: file hygiene 48 unique names 8 imports pinned as-true counts', () => 
   const lines = src.split('\n');
 
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48);
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58);
 
   const imports = lines.filter((l) => l.startsWith('import '));
   assert.deepEqual(imports, [
@@ -1999,4 +1999,267 @@ test('G20: file hygiene 48 unique names 8 imports pinned as-true counts', () => 
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
+});
+
+test('join rejects bad handles and accepts a two-char handle (G21)', async () => {
+  const ctx = await startTestServer();
+  try {
+    for (const badHandle of ['a', 'Bad Handle', '-ab']) {
+      const res = await signedJoinRaw(ctx, badHandle, generateKeypair());
+      assert.equal(res.status, 400);
+      assert.equal(res.data.error, 'invalid_handle');
+    }
+
+    const ok = await signedJoinRaw(ctx, 'ab', generateKeypair());
+    assert.equal(ok.status, 201);
+    assert.equal(ok.data.handle, 'ab');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('admin approve with the wrong operator key is rejected (G22)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...generateKeypair(),
+    });
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+
+    const wrongKeyRes = await adminPost(ctx.baseUrl, generateKeypair(), '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(wrongKeyRes.status, 401);
+    assert.equal(wrongKeyRes.data.error, 'invalid_signature');
+
+    const okRes = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', {
+      handle: 'gatekeeper',
+    });
+    assert.equal(okRes.status, 200);
+    assert.equal(okRes.data.status, 'active');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('leave does not reset checkin rate limiter and re-checkin after 61s re-lights slot 0 (G23)', async () => {
+  const ctx = await startClockTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const c1 = await client.checkin({ status_text: 'first watch' });
+    assert.equal(c1.status, 200);
+    assert.equal(c1.data.slot, 0);
+    const t0 = c1.data.lit_at;
+
+    const lv = await client.leave();
+    assert.equal(lv.status, 200);
+    assert.equal(lv.data.extinguished, true);
+
+    const sAfterLeave = await client.state();
+    assert.equal(sAfterLeave.status, 200);
+    assert.equal(sAfterLeave.data.footlights.find((f) => f.handle === 'gatekeeper'), undefined);
+
+    const tooSoon = await client.checkin({ status_text: 'too soon' });
+    assert.equal(tooSoon.status, 429);
+    assert.equal(tooSoon.data.error, 'rate_limited');
+    assert.equal(tooSoon.data.retry_after, 60);
+
+    ctx.advanceClock(61);
+
+    const tBefore = ctx.nowSec();
+    const c2 = await signedCheckinAtServerTime(ctx, 'gatekeeper', client.privateKeyPem, 'back again');
+    const tAfter = ctx.nowSec();
+    assert.equal(c2.status, 200);
+    assert.equal(c2.data.slot, 0);
+    assert.ok(c2.data.lit_at >= tBefore && c2.data.lit_at <= tAfter);
+    assert.equal(c2.data.expires_at, c2.data.lit_at + 2700);
+    assert.ok(c2.data.lit_at > t0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('suspended resident say is rejected (G24)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'suspended-muse');
+    ctx.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = ?").run('suspended-muse');
+
+    const res = await client.say('trying to speak');
+    assert.equal(res.status, 403);
+    assert.equal(res.data.error, 'resident_not_active');
+    assert.equal(res.data.resident_status, 'suspended');
+
+    const s = await client.state();
+    assert.equal(s.status, 200);
+    assert.equal(s.data.prompt_book.length, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('presence and leave by an unknown resident are rejected (G25)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const ghost = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'ghost',
+      ...generateKeypair(),
+    });
+
+    const pRes = await ghost.presence('gate');
+    assert.equal(pRes.status, 401);
+    assert.equal(pRes.data.error, 'unknown_resident');
+
+    const lRes = await ghost.leave();
+    assert.equal(lRes.status, 401);
+    assert.equal(lRes.data.error, 'unknown_resident');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot PUT HTML sanitizer returns named reasons (G26)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+    const cases = [
+      ['<iframe src="https://example.com"></iframe>', 'forbidden_tag:iframe'],
+      ['<p onclick="alert(1)">x</p>', 'forbidden_attr:onclick'],
+      ['<a href="javascript:alert(1)">x</a>', 'javascript_uri'],
+      ['<p style="width: expression(alert(1))">x</p>', 'css_expression'],
+    ];
+
+    for (const [snippet, expectedReason] of cases) {
+      const html = DESK_NOTE_HTML.replace('</body>', `${snippet}</body>`);
+      const res = await client.plot(VALID_MANIFEST, html);
+      assert.equal(res.status, 400);
+      assert.equal(res.data.error, 'unsafe_html');
+      assert.equal(res.data.reason, expectedReason);
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot PUT manifest validation returns named errors and details (G27)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = await createApprovedClient(ctx, 'gatekeeper');
+
+    const r1 = await client.plot({ ...VALID_MANIFEST, surprise: 1 }, DESK_NOTE_HTML);
+    assert.equal(r1.status, 400);
+    assert.equal(r1.data.error, 'unknown_manifest_key');
+    assert.equal(r1.data.key, 'surprise');
+
+    const r2 = await client.plot(
+      { ...VALID_MANIFEST, props: [{ kind: 'cat', x: 0, y: 0, z: 0, rot_y: 0, weight: 1 }] },
+      DESK_NOTE_HTML
+    );
+    assert.equal(r2.status, 400);
+    assert.equal(r2.data.error, 'unknown_prop_key');
+    assert.equal(r2.data.key, 'weight');
+    assert.equal(r2.data.index, 0);
+
+    const r3 = await client.plot(
+      { ...VALID_MANIFEST, props: [{ kind: 'cat', x: 13, y: 0, z: 0, rot_y: 0 }] },
+      DESK_NOTE_HTML
+    );
+    assert.equal(r3.status, 400);
+    assert.equal(r3.data.error, 'prop_coord_out_of_range');
+    assert.equal(r3.data.axis, 'x');
+    assert.equal(r3.data.index, 0);
+
+    const r4 = await client.plot(
+      { ...VALID_MANIFEST, props: [{ kind: 'cat', x: 0, y: 0, z: 0, rot_y: 360 }] },
+      DESK_NOTE_HTML
+    );
+    assert.equal(r4.status, 400);
+    assert.equal(r4.data.error, 'invalid_prop_rotation');
+    assert.equal(r4.data.index, 0);
+
+    const r5 = await client.plot(
+      { ...VALID_MANIFEST, props: [{ kind: 'cat', x: 0, y: 0, z: 0, rot_y: 0, color: '#zzz' }] },
+      DESK_NOTE_HTML
+    );
+    assert.equal(r5.status, 400);
+    assert.equal(r5.data.error, 'invalid_prop_color');
+    assert.equal(r5.data.index, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('consecutive state polls do not bump state_seq (G28)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const client = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'gatekeeper',
+      ...generateKeypair(),
+    });
+
+    const s1 = await client.state();
+    assert.equal(s1.status, 200);
+    const s2 = await client.state();
+    assert.equal(s2.status, 200);
+    assert.equal(s2.data.state_seq, s1.data.state_seq);
+
+    const joinRes = await client.join({ origin: 'musebook' });
+    assert.equal(joinRes.status, 201);
+
+    const s3 = await client.state();
+    assert.equal(s3.status, 200);
+    const s4 = await client.state();
+    assert.equal(s4.status, 200);
+    assert.equal(s3.data.state_seq, s1.data.state_seq + 1);
+    assert.equal(s4.data.state_seq, s3.data.state_seq);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join invite code edges reject unknown and non-string codes (G29)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const r1 = await signedJoinRaw(ctx, 'invited-one', generateKeypair(), {
+      invite_code: 'no-such-code',
+    });
+    assert.equal(r1.status, 403);
+    assert.equal(r1.data.error, 'invalid_invite');
+
+    const r2 = await signedJoinRaw(ctx, 'invited-two', generateKeypair(), {
+      invite_code: 123,
+    });
+    assert.equal(r2.status, 400);
+    assert.equal(r2.data.error, 'invalid_invite');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('non-integer checkin slot is rejected (G30)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const cStr = await createApprovedClient(ctx, 'slot-string');
+    const rStr = await cStr.checkin({ slot: '3', status_text: 'string slot' });
+    assert.equal(rStr.status, 400);
+    assert.equal(rStr.data.error, 'invalid_slot');
+
+    const cFloat = await createApprovedClient(ctx, 'slot-float');
+    const rFloat = await cFloat.checkin({ slot: 1.5, status_text: 'float slot' });
+    assert.equal(rFloat.status, 400);
+    assert.equal(rFloat.data.error, 'invalid_slot');
+
+    const s = await cStr.state();
+    assert.equal(s.status, 200);
+    assert.equal(s.data.footlights.find((f) => f.handle === 'slot-string'), undefined);
+    assert.equal(s.data.footlights.find((f) => f.handle === 'slot-float'), undefined);
+  } finally {
+    await ctx.close();
+  }
 });
