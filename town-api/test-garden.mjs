@@ -2129,8 +2129,8 @@ test('file hygiene: 46 unique names, 8 imports, zero banned terms, pinned as-tru
     .map((l) => l.match(/^test\('([^']+)'/))
     .filter(Boolean)
     .map((m) => m[1]);
-  assert.equal(names.length, 46);
-  assert.equal(new Set(names).size, 46);
+  assert.equal(names.length, 56);
+  assert.equal(new Set(names).size, 56);
 
   const importLines = lines.filter((l) => l.startsWith('import '));
   assert.equal(importLines.length, 8);
@@ -2138,6 +2138,417 @@ test('file hygiene: 46 unique names, 8 imports, zero banned terms, pinned as-tru
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 1);
-  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 3);
   assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 2);
+});
+
+test('Slice 477 G1: resident plant with non-string seeds is 400 invalid_seed and state_seq does not move', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const seqBefore = (await alice.state()).data.state_seq;
+    for (const badSeed of [123, null, true, ['moonflower'], { kind: 'moonflower' }]) {
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: badSeed },
+        'alice',
+        aliceKeys.privateKeyPem
+      );
+      assert.equal(r.status, 400);
+      assert.deepEqual(r.data, { error: 'invalid_seed' });
+    }
+    assert.equal((await alice.state()).data.state_seq, seqBefore);
+    const ok = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(ok.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G2: guest plant with non-string seeds is 400 invalid_seed and the bucket stays open', async () => {
+  const ctx = await startTestServer();
+  try {
+    for (const badSeed of [123, null, true, ['moonflower'], { kind: 'moonflower' }]) {
+      const keys = generateKeypair();
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/garden/guest/plant',
+        { handle: 'guest_typed', pubkey: keys.pubkey, seed: badSeed },
+        'guest_typed',
+        keys.privateKeyPem
+      );
+      assert.equal(r.status, 400);
+      assert.deepEqual(r.data, { error: 'invalid_seed' });
+    }
+    const keysA = generateKeypair();
+    const okA = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_typed', pubkey: keysA.pubkey, seed: 'moonflower' },
+      'guest_typed',
+      keysA.privateKeyPem
+    );
+    assert.equal(okA.status, 201);
+    assert.equal(okA.data.slot, 0);
+    const keysB = generateKeypair();
+    const okB = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_two', pubkey: keysB.pubkey, seed: 'tea_mint' },
+      'guest_two',
+      keysB.privateKeyPem
+    );
+    assert.equal(okB.status, 201);
+    assert.equal(okB.data.slot, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G3: duplicate echo keeps the original planted_at after the clock advances two days', async () => {
+  let now = 1795000000;
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const { client: alice, keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const p1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'starwort' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(p1.status, 201);
+    assert.equal(p1.data.planted_at, 1795000000);
+    now += 2 * DAY_SEC;
+    const dup = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(dup.status, 409);
+    assert.deepEqual(dup.data, {
+      error: 'already_planted',
+      slot: 0,
+      seed: 'starwort',
+      planted_at: 1795000000,
+    });
+    const st = await alice.state();
+    assert.equal(st.data.garden.slots[0].stage, 'leaf');
+    assert.equal(st.data.garden.slots[0].planted_at, 1795000000);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G4: the same seed plants in many slots for residents and guests', async () => {
+  const ctx = await startTestServer();
+  try {
+    for (let i = 0; i < 3; i++) {
+      const { keys } = await joinResident(ctx, `res_${i}`);
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: 'moonflower' },
+        `res_${i}`,
+        keys.privateKeyPem
+      );
+      assert.equal(r.status, 201);
+      assert.equal(r.data.slot, i);
+    }
+    const keysA = generateKeypair();
+    const g1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_a', pubkey: keysA.pubkey, seed: 'moonflower' },
+      'guest_a',
+      keysA.privateKeyPem
+    );
+    assert.equal(g1.status, 201);
+    assert.equal(g1.data.slot, 3);
+    const keysB = generateKeypair();
+    const g2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_b', pubkey: keysB.pubkey, seed: 'moonflower' },
+      'guest_b',
+      keysB.privateKeyPem
+    );
+    assert.equal(g2.status, 201);
+    assert.equal(g2.data.slot, 4);
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    const st = await watcher.state();
+    assert.equal(st.data.garden.slots.length, 5);
+    assert.deepEqual(st.data.garden.slots.map((s) => s.seed), [
+      'moonflower',
+      'moonflower',
+      'moonflower',
+      'moonflower',
+      'moonflower',
+    ]);
+    assert.deepEqual(st.data.garden.slots.map((s) => s.slot), [0, 1, 2, 3, 4]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G5: a resident plant leaves footlights, presence, and the Prompt Book untouched', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice, keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    const ci = await alice.checkin({ status_text: 'Tending the beds.' });
+    assert.equal(ci.status, 200);
+    const say = await alice.say('The moonflowers are up.');
+    assert.equal(say.status, 201);
+    const before = await watcher.state();
+    assert.equal(before.status, 200);
+    assert.equal(before.data.footlights.length, 1);
+    assert.equal(before.data.presence.length, 1);
+    assert.equal(before.data.prompt_book.length, 1);
+    const footBefore = JSON.parse(JSON.stringify(before.data.footlights));
+    const presBefore = JSON.parse(JSON.stringify(before.data.presence));
+    const bookBefore = JSON.parse(JSON.stringify(before.data.prompt_book));
+    const seqBefore = before.data.state_seq;
+    const p = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(p.status, 201);
+    assert.equal(p.data.state_seq, seqBefore + 1);
+    const after = await watcher.state();
+    assert.deepEqual(after.data.footlights, footBefore);
+    assert.deepEqual(after.data.presence, presBefore);
+    assert.deepEqual(after.data.prompt_book, bookBefore);
+    assert.equal(after.data.garden.slots.length, 1);
+    assert.equal(after.data.state_seq, seqBefore + 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G6: a guest plant blocks the later resident plant for the same handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const guestKeys = generateKeypair();
+    const g = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_rose', pubkey: guestKeys.pubkey, seed: 'starwort' },
+      'guest_rose',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(g.status, 201);
+    assert.equal(g.data.slot, 0);
+    const plantedAt = g.data.planted_at;
+    const { keys: resKeys } = await joinResident(ctx, 'guest_rose');
+    const p = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'guest_rose',
+      resKeys.privateKeyPem
+    );
+    assert.equal(p.status, 409);
+    assert.deepEqual(p.data, {
+      error: 'already_planted',
+      slot: 0,
+      seed: 'starwort',
+      planted_at: plantedAt,
+    });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G7: a guest plant response carries the exact keys and planted_at is server now', async () => {
+  let now = 1795000000;
+  const ctx = await startTestServer({ nowFn: () => now });
+  try {
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    const seqBefore = (await watcher.state()).data.state_seq;
+    const guestKeys = generateKeypair();
+    const g = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'guest_timed', pubkey: guestKeys.pubkey, seed: 'ghost_bell' },
+      'guest_timed',
+      guestKeys.privateKeyPem
+    );
+    assert.equal(g.status, 201);
+    assert.deepEqual(Object.keys(g.data).sort(), [
+      'handle',
+      'planted_at',
+      'seed',
+      'slot',
+      'stage',
+      'state_seq',
+    ]);
+    assert.equal(g.data.planted_at, 1795000000);
+    assert.equal(g.data.stage, 'sprout');
+    assert.equal(g.data.state_seq, seqBefore + 1);
+    const st = await watcher.state();
+    assert.equal(st.data.garden.slots[0].planted_at, 1795000000);
+    assert.equal(st.data.garden.slots[0].stage, 'sprout');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G8: growth stage keeps deriving from the clock after a server restart', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-garden477-restart-'));
+  const dbPath = path.join(tmpDir, 'town.db');
+  const plotsDir = path.join(tmpDir, 'plots');
+  const operatorKeys = generateKeypair();
+  let now = 1795000000;
+  const nowFn = () => now;
+  let s1 = null;
+  let s2 = null;
+  try {
+    s1 = createTownServer({ dbPath, plotsDir, operatorPubkey: operatorKeys.pubkey, nowFn });
+    await new Promise((resolve) => s1.server.listen(0, '127.0.0.1', resolve));
+    const ctx1 = { baseUrl: `http://127.0.0.1:${s1.server.address().port}`, nowSec: nowFn };
+    const { keys: aliceKeys } = await joinResident(ctx1, 'alice');
+    const p = await signedPostAt(
+      ctx1,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      aliceKeys.privateKeyPem
+    );
+    assert.equal(p.status, 201);
+    await new Promise((resolve) => s1.server.close(resolve));
+    s1 = null;
+    now += 2 * DAY_SEC;
+    s2 = createTownServer({ dbPath, plotsDir, operatorPubkey: operatorKeys.pubkey, nowFn });
+    await new Promise((resolve) => s2.server.listen(0, '127.0.0.1', resolve));
+    const alice2 = new GhostlightClient({
+      baseUrl: `http://127.0.0.1:${s2.server.address().port}`,
+      handle: 'alice',
+      ...aliceKeys,
+    });
+    const st2 = await alice2.state();
+    assert.equal(st2.data.garden.slots[0].stage, 'leaf');
+    now += 2 * DAY_SEC;
+    const st3 = await alice2.state();
+    assert.equal(st3.data.garden.slots[0].stage, 'bloom');
+    assert.equal(st3.data.garden.slots[0].planted_at, 1795000000);
+  } finally {
+    if (s1) await new Promise((resolve) => s1.server.close(resolve));
+    if (s2) await new Promise((resolve) => s2.server.close(resolve));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 477 G9: a mixed resident and guest fill reaches bed_full on both endpoints', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: watcher } = await joinResident(ctx, 'watcher');
+    const seeds = ['moonflower', 'lantern_poppy', 'tea_mint'];
+    for (let i = 0; i < 3; i++) {
+      const { keys } = await joinResident(ctx, `mix_res_${i}`);
+      const r = await signedPostAt(
+        ctx,
+        '/api/town/garden/plant',
+        { seed: seeds[i] },
+        `mix_res_${i}`,
+        keys.privateKeyPem
+      );
+      assert.equal(r.status, 201);
+      assert.equal(r.data.slot, i);
+    }
+    const keysA = generateKeypair();
+    const g1 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'mix_guest_a', pubkey: keysA.pubkey, seed: 'starwort' },
+      'mix_guest_a',
+      keysA.privateKeyPem
+    );
+    assert.equal(g1.status, 201);
+    assert.equal(g1.data.slot, 3);
+    const keysB = generateKeypair();
+    const g2 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'mix_guest_b', pubkey: keysB.pubkey, seed: 'ghost_bell' },
+      'mix_guest_b',
+      keysB.privateKeyPem
+    );
+    assert.equal(g2.status, 201);
+    assert.equal(g2.data.slot, 4);
+    ctx.advanceClock(3601);
+    const keysC = generateKeypair();
+    const g3 = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'mix_guest_c', pubkey: keysC.pubkey, seed: 'silver_thyme' },
+      'mix_guest_c',
+      keysC.privateKeyPem
+    );
+    assert.equal(g3.status, 201);
+    assert.equal(g3.data.slot, 5);
+    const { keys: lateKeys } = await joinResident(ctx, 'mix_late');
+    const seqBefore = (await watcher.state()).data.state_seq;
+    const lateRes = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'mix_late',
+      lateKeys.privateKeyPem
+    );
+    assert.equal(lateRes.status, 409);
+    assert.deepEqual(lateRes.data, { error: 'bed_full' });
+    const lateGuestKeys = generateKeypair();
+    const lateGuest = await signedPostAt(
+      ctx,
+      '/api/town/garden/guest/plant',
+      { handle: 'mix_guest_late', pubkey: lateGuestKeys.pubkey, seed: 'moonflower' },
+      'mix_guest_late',
+      lateGuestKeys.privateKeyPem
+    );
+    assert.equal(lateGuest.status, 409);
+    assert.deepEqual(lateGuest.data, { error: 'bed_full' });
+    assert.equal((await watcher.state()).data.state_seq, seqBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 477 G10: resident wrong-key plant is 401 invalid_signature and unsigned guest plant is 401', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { keys: aliceKeys } = await joinResident(ctx, 'alice');
+    const { keys: bobKeys } = await joinResident(ctx, 'bob');
+    const wrongKey = await signedPostAt(
+      ctx,
+      '/api/town/garden/plant',
+      { seed: 'moonflower' },
+      'alice',
+      bobKeys.privateKeyPem
+    );
+    assert.equal(wrongKey.status, 401);
+    assert.equal(wrongKey.data.error, 'invalid_signature');
+    const unsignedRes = await fetch(`${ctx.baseUrl}/api/town/garden/guest/plant`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ handle: 'guest_nosig', pubkey: generateKeypair().pubkey, seed: 'moonflower' }),
+    });
+    const unsignedData = await unsignedRes.json();
+    assert.equal(unsignedRes.status, 401);
+    assert.equal(unsignedData.error, 'missing_auth_headers');
+  } finally {
+    await ctx.close();
+  }
 });
