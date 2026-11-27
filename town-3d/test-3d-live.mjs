@@ -27,6 +27,11 @@ import {
   resolvePlotGuestbookOverlayContent,
   formatPlotGuestbookTabLabel,
   TownLive,
+  pinchFov,
+  stepGlide,
+  getPlotTargetPosition,
+  buildNoticeBoardOverlayHtml,
+  updateInnOccupancy,
 } from './town.js';
 import { lightFootlightSlot, buildConceptBandstand } from './concept-bandstand.js';
 import { createTownServer } from '../town-api/server.mjs';
@@ -2195,11 +2200,11 @@ test('Slice 439: TownLive start and stop, backoff cap, invalid state, no-fetch, 
   assert.equal(live6.apiBase, 'https://x.example');
 });
 
-test('Slice 439: file hygiene - 50 unique test names, 11 import lines, and pinned literal counts (G10)', () => {
+test('Slice 501: file hygiene - 60 unique test names, 11 import lines, and pinned literal counts (G10)', () => {
   const src = fsSync.readFileSync(path.join(__dirname, 'test-3d-live.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 50);
-  assert.equal(new Set(names).size, 50);
+  assert.equal(names.length, 60);
+  assert.equal(new Set(names).size, 60);
   for (const name of names) {
     assert.equal(name.includes("'"), false, 'test names must contain no apostrophes');
   }
@@ -2213,4 +2218,123 @@ test('Slice 439: file hygiene - 50 unique test names, 11 import lines, and pinne
   assert.equal(countLines('FIX' + 'ME'), 0);
   assert.equal(countLines('inner' + 'HTML'), 3);
   assert.equal(lines.filter((l) => new RegExp('camp' + 'fire', 'i').test(l)).length, 3);
+});
+
+test('Slice 501: pinchFov clamps to [40, 85] and passes through mid values (P1)', () => {
+  assert.equal(pinchFov(60, 100, 50), 85);
+  assert.equal(pinchFov(60, 100, 200), 40);
+  assert.equal(pinchFov(60, 100, 100), 60);
+  assert.equal(pinchFov(60, 100, 150), 40);
+  assert.equal(pinchFov(60, 100, 80), 75);
+});
+
+test('Slice 501: pinchFov invalid inputs return startFov unchanged (P2)', () => {
+  assert.ok(Number.isNaN(pinchFov(NaN, 100, 100)));
+  assert.equal(pinchFov(60, 0, 100), 60);
+  assert.equal(pinchFov(60, 100, -5), 60);
+  assert.equal(pinchFov(60, 100, Infinity), 60);
+  assert.equal(pinchFov(60, Infinity, 100), 60);
+});
+
+test('Slice 501: stepGlide with invalid dt returns the position, never arrived (P3)', () => {
+  assert.deepEqual(stepGlide({ x: 1, z: 2 }, { x: 5, z: 6 }, 0), { x: 1, z: 2, arrived: false });
+  assert.deepEqual(stepGlide({ x: 1, z: 2 }, { x: 5, z: 6 }, -1), { x: 1, z: 2, arrived: false });
+  assert.deepEqual(stepGlide({ x: 1, z: 2 }, { x: 5, z: 6 }, NaN), { x: 1, z: 2, arrived: false });
+  assert.deepEqual(stepGlide({ x: 5, z: 6 }, { x: 5, z: 6 }, 1), { x: 5, z: 6, arrived: true });
+});
+
+test('Slice 501: stepGlide clamps far targets and far positions to maxRadius 28.5 (P4)', () => {
+  assert.deepEqual(stepGlide({ x: 0, z: 0 }, { x: 40, z: 0 }, 10), { x: 28.5, z: 0, arrived: true });
+  const r = stepGlide({ x: 40, z: 0 }, { x: 0, z: 0 }, 0.1);
+  assert.ok(Math.abs(r.x - 28.5) < 1e-9, `x ${r.x} is ~28.5`);
+  assert.equal(r.z, 0);
+  assert.equal(r.arrived, false);
+});
+
+test('Slice 501: getPlotTargetPosition lateral offsets mirror across the forward axis (P5)', () => {
+  const layout = TOWN_LAYOUT.plots[0];
+  const p0 = getPlotTargetPosition(layout, 0);
+  const p1 = getPlotTargetPosition(layout, 1);
+  const p2 = getPlotTargetPosition(layout, 2);
+  const p3 = getPlotTargetPosition(layout, 3);
+  const p4 = getPlotTargetPosition(layout, 4);
+  assert.equal(p0.rotY, layout.rotY);
+  assert.equal(p0.y, 0);
+  assert.ok(Math.abs(Math.hypot(p0.x - layout.x, p0.z - layout.z) - 3.6) < 1e-3);
+  assert.ok(Math.abs((p1.x + p2.x) / 2 - p0.x) < 1e-3);
+  assert.ok(Math.abs((p1.z + p2.z) / 2 - p0.z) < 1e-3);
+  assert.ok(Math.abs(Math.hypot(p1.x - p2.x, p1.z - p2.z) - 1.8) < 1e-3);
+  assert.ok(Math.abs((p3.x + p4.x) / 2 - p0.x) < 1e-3);
+  assert.ok(Math.abs((p3.z + p4.z) / 2 - p0.z) < 1e-3);
+  assert.ok(Math.abs(Math.hypot(p3.x - p4.x, p3.z - p4.z) - 3.6) < 1e-3);
+  assert.ok(Math.abs(Math.hypot(p3.x - p1.x, p3.z - p1.z) - 0.9) < 1e-3);
+});
+
+test('Slice 501: buildNoticeBoardOverlayHtml renders the three papers in order, no script (P6)', () => {
+  const html = buildNoticeBoardOverlayHtml();
+  assert.equal((html.match(/<section class="notice">/g) || []).length, 3);
+  assert.ok(html.includes('<h1>Notice Board</h1>'));
+  const titles = [...html.matchAll(/<h2>([^<]+)<\/h2>/g)].map((m) => m[1]);
+  assert.deepEqual(titles, ['GAZETTE #2', 'THE INN', 'SOCIAL GATE']);
+  assert.ok(html.includes('<p>Issue #2 is out — read it at the newsstand.</p>'));
+  assert.ok(html.includes('<p>Rooms for short stays — ask at the tavern.</p>'));
+  assert.ok(!html.includes('<script'));
+  assert.ok(!html.includes('http'));
+});
+
+test('Slice 501: updateInnOccupancy direct claim shape decides palette and non-objects are no-ops (P7)', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  updateInnOccupancy(town, { lantern: { handle: 'wick' }, window: [], quiet: 'x' });
+  assert.equal(getInnWindow(town, 4).material.emissiveIntensity, 1.4);
+  assert.equal(getInnWindow(town, 4).material.color, '#ffbe5c');
+  assert.equal(getInnWindow(town, 5).material.emissiveIntensity, 0.15);
+  assert.equal(getInnWindow(town, 6).material.emissiveIntensity, 0.15);
+  assert.equal(getInnWindow(town, 0).material.emissiveIntensity, 1.4);
+  updateInnOccupancy(town, { lantern: null, window: null, quiet: null });
+  for (let idx = 0; idx < 8; idx++) {
+    assert.equal(getInnWindow(town, idx).material.emissiveIntensity, 0.15);
+  }
+  const before = getInnWindow(town, 4).material.emissiveIntensity;
+  updateInnOccupancy(town, null);
+  updateInnOccupancy(town, 'x');
+  updateInnOccupancy(town, []);
+  assert.equal(getInnWindow(town, 4).material.emissiveIntensity, before);
+});
+
+test('Slice 501: applyState trusts a slot-0 row for a non-milo handle (P8)', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  const fl0 = town.parts.footlights[0];
+  assert.equal(fl0.userData.handle, 'milo');
+  assert.equal(fl0.userData.lit, true);
+  assert.equal(fl0.userData.permanent, true);
+  applyState(town, { footlights: [{ handle: 'wick', slot: 0, role: 'npc' }], presence: [] });
+  assert.equal(fl0.userData.handle, 'wick');
+  assert.equal(fl0.userData.lit, true);
+  assert.equal(fl0.userData.role, 'npc');
+  assert.equal(fl0.userData.permanent, true);
+  assert.equal(fl0.userData.shell.material.emissiveIntensity, 1.0);
+});
+
+test('Slice 501: permanent flag is sticky so slot 0 stays lit as wick after row disappears (P9)', () => {
+  const town = buildTown(createThreeStub(), { loadProps: false });
+  applyState(town, { footlights: [{ handle: 'wick', slot: 0, role: 'npc' }], presence: [] });
+  applyState(town, { footlights: [], presence: [] });
+  const fl0 = town.parts.footlights[0];
+  assert.equal(fl0.userData.lit, true);
+  assert.equal(fl0.userData.handle, 'wick');
+});
+
+test('Slice 501: handle-less footlight row lights slot with muse palette and milo placard (P10)', () => {
+  withRecordingCanvas((draws) => {
+    const town = buildTown(createThreeStub(), { loadProps: false });
+    draws.length = 0;
+    applyState(town, { footlights: [{ slot: 3 }], presence: [] });
+    const fl3 = town.parts.footlights[3];
+    assert.equal(fl3.userData.lit, true);
+    assert.equal(fl3.userData.handle, undefined);
+    assert.equal(fl3.userData.statusText, null);
+    assert.equal(fl3.userData.role, 'muse');
+    assert.equal(fl3.userData.shell.material.emissiveIntensity, 0.9);
+    assert.deepEqual(draws.map((d) => d.text), ['milo']);
+  });
 });
