@@ -1652,8 +1652,8 @@ test('prompt_book AUTOINCREMENT: deleted max id is never reused', async () => {
 test('test-say-reply.mjs hygiene: 45 unique tests, 11 imports, and pinned literal counts', () => {
   const src = fs.readFileSync(path.join(__dirname, 'test-say-reply.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 45);
-  assert.equal(new Set(names).size, 45);
+  assert.equal(names.length, 55);
+  assert.equal(new Set(names).size, 55);
 
   const imports = src.split('\n').filter((line) => line.startsWith('import '));
   assert.equal(imports.length, 11);
@@ -1664,4 +1664,285 @@ test('test-say-reply.mjs hygiene: 45 unique tests, 11 imports, and pinned litera
   assert.equal(countOf('Math.' + 'random'), 0);
   assert.equal(countOf('Date.' + 'now'), 9);
   assert.equal(countOf('fet' + 'ch('), 1);
+});
+
+test('Slice 474 G1: say 500-char cap counts UTF-16 units, 250 emoji pass and 251 fail', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const emoji250 = '😀'.repeat(250);
+    assert.equal(emoji250.length, 500);
+
+    const r250 = await alice.say(emoji250);
+    assert.equal(r250.status, 201);
+    assert.equal(r250.data.body, emoji250);
+    assert.equal(r250.data.body.length, 500);
+
+    const r251 = await alice.say('😀'.repeat(251));
+    assert.equal(r251.status, 400);
+    assert.equal(r251.data.error, 'invalid_body');
+    assert.equal(r251.data.max, 500);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G2: say kind null coerces to say and omitted kind defaults to say', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+
+    const nullKind = await maren.say('Null kind.', null);
+    assert.equal(nullKind.status, 201);
+    assert.equal(nullKind.data.kind, 'say');
+
+    const defaultKind = await maren.say('Default kind.');
+    assert.equal(defaultKind.status, 201);
+    assert.equal(defaultKind.data.kind, 'say');
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const kinds = stateRes.data.prompt_book.map((e) => e.kind);
+    assert.deepEqual(kinds, ['say', 'say']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G3: say refreshes footlight to created_at + 2700 and leaves presence untouched', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+
+    const checkin = await maren.checkin('Testing the lamps.');
+    assert.equal(checkin.status, 200);
+    const litAt = checkin.data.lit_at;
+
+    const say = await maren.say('A word by lamplight.');
+    assert.equal(say.status, 201);
+
+    const footlight = ctx.db.prepare('SELECT expires_at FROM footlights WHERE handle = ?').get('maren');
+    assert.ok(footlight);
+    assert.equal(footlight.expires_at, say.data.created_at + 2700);
+
+    const presence = ctx.db.prepare('SELECT zone, updated_at FROM presence WHERE handle = ?').get('maren');
+    assert.ok(presence);
+    assert.equal(presence.zone, 'bandstand');
+    assert.equal(presence.updated_at, litAt);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G4: guest body and kind failures do not consume the guest say quota', async () => {
+  const ctx = await startTestServer();
+  try {
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'visitor4', ...generateKeypair() });
+
+    const emptyRes = await visitor.guestSay('');
+    assert.equal(emptyRes.status, 400);
+    assert.equal(emptyRes.data.error, 'invalid_body');
+
+    const overRes = await visitor.guestSay('x'.repeat(501));
+    assert.equal(overRes.status, 400);
+    assert.equal(overRes.data.error, 'invalid_body');
+
+    const kindRes = await visitor.guestSay('Loud guest.', 'shout');
+    assert.equal(kindRes.status, 400);
+    assert.equal(kindRes.data.error, 'invalid_kind');
+
+    const g1 = await visitor.guestSay('Guest one.');
+    assert.equal(g1.status, 201);
+    const g2 = await visitor.guestSay('Guest two.');
+    assert.equal(g2.status, 201);
+
+    const g3 = await visitor.guestSay('Guest three.');
+    assert.equal(g3.status, 429);
+    assert.equal(g3.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G5: reply_to string, boolean, array, and object shapes are 400 invalid_reply_to', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+
+    const stringRes = await maren.say('Bad reply shape.', 'say', '1');
+    assert.equal(stringRes.status, 400);
+    assert.equal(stringRes.data.error, 'invalid_reply_to');
+
+    const boolRes = await maren.say('Bad reply shape.', 'say', true);
+    assert.equal(boolRes.status, 400);
+    assert.equal(boolRes.data.error, 'invalid_reply_to');
+
+    const arrayRes = await maren.say('Bad reply shape.', 'say', []);
+    assert.equal(arrayRes.status, 400);
+    assert.equal(arrayRes.data.error, 'invalid_reply_to');
+
+    const objectRes = await maren.say('Bad reply shape.', 'say', {});
+    assert.equal(objectRes.status, 400);
+    assert.equal(objectRes.data.error, 'invalid_reply_to');
+
+    const okRes = await maren.say('Valid after bad reply shapes.');
+    assert.equal(okRes.status, 201);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G6: interleaved four-line thread surfaces in id order with reply chain', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const { client: lampmoth } = await createResident(ctx, 'lampmoth');
+    const { client: tomas } = await createResident(ctx, 'tomas');
+    const { client: wick } = await createResident(ctx, 'wick');
+
+    const top1 = await maren.say('Top line one.');
+    assert.equal(top1.status, 201);
+    const reply1 = await lampmoth.say('Reply to one.', 'say', top1.data.id);
+    assert.equal(reply1.status, 201);
+    const reply2 = await tomas.say('Reply to the reply.', 'say', reply1.data.id);
+    assert.equal(reply2.status, 201);
+    const top2 = await wick.say('Top line two.');
+    assert.equal(top2.status, 201);
+
+    assert.deepEqual(
+      [top1.data.id, reply1.data.id, reply2.data.id, top2.data.id],
+      [1, 2, 3, 4]
+    );
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const pb = stateRes.data.prompt_book;
+    assert.deepEqual(pb.map((e) => e.id), [1, 2, 3, 4]);
+    assert.deepEqual(pb.map((e) => e.handle), ['maren', 'lampmoth', 'tomas', 'wick']);
+    assert.deepEqual(pb.map((e) => e.reply_to), [null, 1, 2, null]);
+    assert.ok(pb.every((e) => e.role === 'muse'));
+    assert.ok(pb.every((e) => e.kind === 'say'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G7: admin delete-line on a guest line blocks replies and keeps other lines', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+    const va = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'va7', ...generateKeypair() });
+    const vb = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'vb7', ...generateKeypair() });
+
+    const guestTop = await va.guestSay('Guest opener to delete.');
+    assert.equal(guestTop.status, 201);
+    const resTop = await maren.say('Resident line stays.');
+    assert.equal(resTop.status, 201);
+
+    const del = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/delete-line', {
+      id: guestTop.data.id,
+    });
+    assert.equal(del.status, 200);
+
+    const resReply = await maren.say('Reply to deleted guest line.', 'say', guestTop.data.id);
+    assert.equal(resReply.status, 400);
+    assert.equal(resReply.data.error, 'invalid_reply_to');
+
+    const guestReply = await vb.guestSay('Guest reply to deleted guest line.', 'say', guestTop.data.id);
+    assert.equal(guestReply.status, 400);
+    assert.equal(guestReply.data.error, 'invalid_reply_to');
+
+    const stateRes = await maren.state();
+    assert.equal(stateRes.status, 200);
+    const ids = stateRes.data.prompt_book.map((e) => e.id);
+    assert.equal(ids.includes(resTop.data.id), true);
+    assert.equal(ids.includes(guestTop.data.id), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G8: newline and tab body is stored verbatim in response, state, and DB', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+
+    const body = '\n\thello\nworld\t\n';
+    const res = await alice.say(body);
+    assert.equal(res.status, 201);
+    assert.equal(res.data.body, body);
+
+    const stateRes = await alice.state();
+    assert.equal(stateRes.status, 200);
+    const entry = stateRes.data.prompt_book.find((e) => e.id === res.data.id);
+    assert.ok(entry);
+    assert.equal(entry.body, body);
+
+    const row = ctx.db.prepare('SELECT body FROM prompt_book WHERE id = ?').get(res.data.id);
+    assert.ok(row);
+    assert.equal(row.body, body);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G9: leave, say, and immediate re-checkin leave no footlight and say survives', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: maren } = await createResident(ctx, 'maren');
+
+    const firstCheckin = await maren.checkin('First light.');
+    assert.equal(firstCheckin.status, 200);
+
+    const leave = await maren.leave();
+    assert.equal(leave.status, 200);
+    assert.equal(leave.data.extinguished, true);
+
+    const say = await maren.say('Speaking after leaving.');
+    assert.equal(say.status, 201);
+
+    const afterLeave = await maren.state();
+    assert.equal(afterLeave.status, 200);
+    assert.equal((afterLeave.data.footlights || []).find((f) => f.handle === 'maren'), undefined);
+
+    const secondCheckin = await maren.checkin('Lit again.');
+    assert.equal(secondCheckin.status, 429);
+    assert.equal(secondCheckin.data.error, 'rate_limited');
+    assert.equal(Number.isInteger(secondCheckin.data.retry_after), true);
+    assert.equal(secondCheckin.data.retry_after >= 1 && secondCheckin.data.retry_after <= 60, true);
+
+    const afterRetry = await maren.state();
+    assert.equal(afterRetry.status, 200);
+    assert.equal((afterRetry.data.footlights || []).find((f) => f.handle === 'maren'), undefined);
+    assert.equal(afterRetry.data.prompt_book.some((e) => e.id === say.data.id), true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Slice 474 G10: resident say rate-limit budgets are per handle', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    const { client: bob } = await createResident(ctx, 'bob');
+
+    for (let i = 1; i <= 6; i++) {
+      const r = await alice.say(`Alice line ${i}`);
+      assert.equal(r.status, 201);
+    }
+    const aliceSeventh = await alice.say('Alice seventh.');
+    assert.equal(aliceSeventh.status, 429);
+    assert.equal(aliceSeventh.data.error, 'rate_limited');
+
+    for (let i = 1; i <= 6; i++) {
+      const r = await bob.say(`Bob line ${i}`);
+      assert.equal(r.status, 201);
+    }
+    const bobSeventh = await bob.say('Bob seventh.');
+    assert.equal(bobSeventh.status, 429);
+    assert.equal(bobSeventh.data.error, 'rate_limited');
+  } finally {
+    await ctx.close();
+  }
 });
