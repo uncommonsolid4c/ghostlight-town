@@ -1991,8 +1991,8 @@ test('file hygiene: 47 unique names, 9 imports, zero banned terms, pinned as-tru
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 47);
-  assert.equal(new Set(names).size, 47);
+  assert.equal(names.length, 57);
+  assert.equal(new Set(names).size, 57);
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 9);
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
@@ -2000,4 +2000,283 @@ test('file hygiene: 47 unique names, 9 imports, zero banned terms, pinned as-tru
   assert.ok(lines.filter((l) => l.includes('fet' + 'ch(')).length >= 35);
   assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
   assert.equal(lines.filter((l) => l.includes('camp' + 'fire')).length, 0);
+});
+
+test('Slice 481 G1: selectCurrentEvent return strips extra keys to the six validated fields', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  const res = apiSelectCurrentEvent([ev({ extra: 1, another: 'x' })], T0);
+  assert.equal(res?.status, 'now');
+  assert.deepEqual(res.event, {
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+  });
+  assert.equal('extra' in res.event, false);
+  assert.equal('another' in res.event, false);
+});
+
+test('Slice 481 G2: date-only start_at is midnight UTC with a 15-minute window', () => {
+  const T0 = Date.parse('2026-11-20');
+  assert.equal(T0, Date.parse('2026-11-20T00:00:00Z'));
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20',
+    duration_min: 15,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  const res = apiSelectCurrentEvent([ev()], T0);
+  assert.equal(res?.status, 'now');
+  assert.equal(res.event.start_at, '2026-11-20');
+  assert.equal(apiSelectCurrentEvent([ev()], T0 - 1)?.status, 'next');
+  assert.equal(apiSelectCurrentEvent([ev()], T0 + 15 * 60_000), null);
+  assert.equal(apiSelectCurrentEvent([ev()], T0 + 15 * 60_000 - 1)?.status, 'now');
+});
+
+test('Slice 481 G3: millis start_at boundary at 500 ms', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00.500Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00.500Z',
+    duration_min: 30,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  assert.equal(apiSelectCurrentEvent([ev()], T0)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev()], T0 - 1)?.status, 'next');
+  assert.equal(apiSelectCurrentEvent([ev()], T0 + 30 * 60_000), null);
+  assert.equal(apiSelectCurrentEvent([ev()], T0 + 30 * 60_000 - 1)?.status, 'now');
+  assert.equal(apiSelectCurrentEvent([ev()], T0)?.event.start_at, '2026-11-20T18:00:00.500Z');
+});
+
+test('Slice 481 G4: host_handle trim-then-length 32 accepted 33 rejected', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  const ok32 = apiSelectCurrentEvent([ev({ host_handle: '  ' + 'a'.repeat(32) + '  ' })], T0);
+  assert.equal(ok32?.status, 'now');
+  assert.equal(ok32.event.host_handle, 'a'.repeat(32));
+  assert.equal(apiSelectCurrentEvent([ev({ host_handle: '  ' + 'a'.repeat(33) + '  ' })], T0), null);
+});
+
+test('Slice 481 G5: each required field missing rejects the entry', () => {
+  const T0 = Date.parse('2026-11-20T18:00:00Z');
+  const ev = (overrides = {}) => ({
+    title: 'Reading',
+    host_handle: 'milo',
+    start_at: '2026-11-20T18:00:00Z',
+    duration_min: 60,
+    location: 'Bandstand',
+    blurb: 'A reading.',
+    ...overrides,
+  });
+
+  assert.equal(apiSelectCurrentEvent([ev()], T0)?.status, 'now');
+  for (const field of ['title', 'host_handle', 'start_at', 'duration_min', 'location', 'blurb']) {
+    const clone = ev();
+    delete clone[field];
+    assert.equal(apiSelectCurrentEvent([clone], T0), null);
+  }
+});
+
+test('Slice 481 G6: eventStateKey concatenates raw without trimming', () => {
+  // Pinned as design, not a bug: the key is stable because the server only
+  // ever passes validated (already trimmed) events; the function itself
+  // concatenates whatever it is given.
+  assert.equal(
+    eventStateKey({ title: '  Spaced  ', start_at: ' 2026-11-20T18:00:00Z ' }, null),
+    'now|  Spaced  | 2026-11-20T18:00:00Z '
+  );
+  assert.equal(
+    eventStateKey(null, { title: '  Next  ', start_at: ' 2026-11-20T20:00:00Z ' }),
+    'next|  Next  | 2026-11-20T20:00:00Z '
+  );
+});
+
+test('Slice 481 G7: loadEventsFile trailing newlines and CRLF load fine', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-trailing-'));
+  try {
+    const ev = {
+      title: 'Tea',
+      host_handle: 'host',
+      start_at: '2026-11-20T18:00:00Z',
+      duration_min: 60,
+      location: 'bandstand',
+      blurb: '',
+    };
+    const nlPath = path.join(tmpDir, 'nl.json');
+    fs.writeFileSync(nlPath, JSON.stringify({ events: [ev] }) + '\n\n', 'utf8');
+    assert.equal(loadEventsFile(nlPath).events.length, 1);
+    assert.equal(loadEventsFile(nlPath).events[0].title, 'Tea');
+
+    const crlfPath = path.join(tmpDir, 'crlf.json');
+    fs.writeFileSync(crlfPath, JSON.stringify({ events: [ev] }) + '\r\n', 'utf8');
+    assert.equal(loadEventsFile(crlfPath).events.length, 1);
+    assert.equal(loadEventsFile(crlfPath).events[0].title, 'Tea');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 481 G8: server next-only state carries the full trimmed next object', async () => {
+  const baseNow = 1793000000;
+  const startIso = new Date((baseNow + 3600) * 1000).toISOString();
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-nextonly-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  fs.writeFileSync(
+    eventsPath,
+    JSON.stringify({
+      events: [
+        {
+          title: '  Future Salon  ',
+          host_handle: '  host  ',
+          start_at: startIso,
+          duration_min: 30,
+          location: '  bandstand  ',
+          blurb: '  tea  ',
+        },
+      ],
+    }),
+    'utf8'
+  );
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const res = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res.status, 200);
+    const s = await res.json();
+    assert.deepEqual(Object.keys(s.events).sort(), ['next', 'now']);
+    assert.equal(s.events.now, null);
+    assert.deepEqual(s.events.next, {
+      title: 'Future Salon',
+      host_handle: 'host',
+      start_at: startIso,
+      duration_min: 30,
+      location: 'bandstand',
+      blurb: 'tea',
+    });
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 481 G9: server next-title edit while now is live does not bump state_seq', async () => {
+  const baseNow = 1793000000;
+  const nowIso = new Date((baseNow - 60) * 1000).toISOString();
+  const nextIso = new Date((baseNow + 3600) * 1000).toISOString();
+  const nowEv = {
+    title: 'Now',
+    host_handle: 'host',
+    start_at: nowIso,
+    duration_min: 30,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const nextEv = {
+    title: 'Later',
+    host_handle: 'host',
+    start_at: nextIso,
+    duration_min: 30,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const tmpEventsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-events-nextedit-'));
+  const eventsPath = path.join(tmpEventsDir, 'events.json');
+  fs.writeFileSync(eventsPath, JSON.stringify({ events: [nowEv, nextEv] }), 'utf8');
+  const t1 = new Date('2026-11-15T17:00:00Z');
+  fs.utimesSync(eventsPath, t1, t1);
+
+  const ctx = await startTestServer({ baseNow, eventsPath });
+  try {
+    const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res1.status, 200);
+    const s1 = await res1.json();
+    assert.equal(s1.events.now?.title, 'Now');
+    assert.equal(s1.events.next?.title, 'Later');
+    const seq1 = s1.state_seq;
+
+    fs.writeFileSync(
+      eventsPath,
+      JSON.stringify({ events: [nowEv, { ...nextEv, title: 'Later Renamed' }] }),
+      'utf8'
+    );
+    const t2 = new Date('2026-11-15T17:05:00Z');
+    fs.utimesSync(eventsPath, t2, t2);
+    const sinceRes = await fetch(`${ctx.baseUrl}/api/town/state?since=${seq1}`);
+    assert.equal(sinceRes.status, 304);
+
+    const res2 = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(res2.status, 200);
+    const s2 = await res2.json();
+    assert.equal(s2.state_seq, seq1);
+    assert.equal(s2.events.now?.title, 'Now');
+    assert.equal(s2.events.next?.title, 'Later Renamed');
+  } finally {
+    await ctx.close();
+    fs.rmSync(tmpEventsDir, { recursive: true, force: true });
+  }
+});
+
+test('Slice 481 G10: selectNowNext ignores invalid earlier future when now is live', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00Z');
+  const nowEv = {
+    title: 'Now',
+    host_handle: 'host',
+    start_at: new Date(NOW - 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const bad = {
+    title: 'Bad',
+    host_handle: 'host',
+    start_at: new Date(NOW + 1 * 60 * 1000).toISOString(),
+    duration_min: 5,
+    location: 'bandstand',
+    blurb: '',
+  };
+  const good = {
+    title: 'Good',
+    host_handle: 'host',
+    start_at: new Date(NOW + 10 * 60 * 1000).toISOString(),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: '',
+  };
+
+  const res = selectNowNext([bad, good, nowEv], NOW);
+  assert.equal(res.now?.title, 'Now');
+  assert.equal(res.next?.title, 'Good');
+
+  const control = selectNowNext([bad, nowEv], NOW);
+  assert.equal(control.now?.title, 'Now');
+  assert.equal(control.next, null);
 });
