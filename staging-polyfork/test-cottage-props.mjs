@@ -1317,8 +1317,8 @@ test('file hygiene: 47 unique names, 6 imports, zero banned terms, pinned as-tru
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 47);
-  assert.equal(new Set(names).size, 47);
+  assert.equal(names.length, 57);
+  assert.equal(new Set(names).size, 57);
 
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 6);
   assert.deepEqual(lines.slice(6, 14), [
@@ -1339,4 +1339,167 @@ test('file hygiene: 47 unique names, 6 imports, zero banned terms, pinned as-tru
   assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 0);
   assert.equal(lines.filter((l) => new RegExp('Math' + '\\.random').test(l)).length, 0);
   assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
+});
+
+test('tea_kettle, cat, and poster_frame geometry, y-offset, color, and rot_y=0 at z=2.2', () => {
+  const THREE = makeFakeThree();
+  const cases = [
+    { kind: 'tea_kettle', type: 'CylinderGeometry', args: [0.14, 0.18, 0.24, 8], y: 0.30, name: 'prop_tea_kettle', color: '#b87333' },
+    { kind: 'cat', type: 'ConeGeometry', args: [0.16, 0.36, 6], y: 0.36, name: 'prop_cat', color: '#2b2b2b' },
+    { kind: 'poster_frame', type: 'BoxGeometry', args: [0.7, 0.9, 0.06], y: 1.08, name: 'prop_poster_frame', color: '#c8922e' },
+  ];
+
+  for (const c of cases) {
+    const built = buildProp(THREE, { kind: c.kind, x: 0, y: 0, z: 2.2, rot_y: 0, color: c.color });
+    assert.ok(built, c.kind);
+    assert.equal(built.name, c.name);
+    assert.equal(built.geometry.type, c.type);
+    assert.deepEqual(built.geometry.args, c.args);
+    assert.ok(Math.abs(built.position.y - c.y) < 1e-12, `${c.kind} y`);
+    assert.equal(built.material.color, c.color);
+    assert.equal(built.rotation.y, 0);
+  }
+});
+
+test('buildProp rot_y degree-to-radian table at 45-degree increments', () => {
+  const THREE = makeFakeThree();
+  for (const deg of [0, 45, 90, 135, 180, 225, 270, 315]) {
+    const built = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: deg, color: '#ffffff' });
+    assert.ok(built, `deg=${deg}`);
+    assert.ok(Math.abs(built.rotation.y - (deg * Math.PI) / 180) < 1e-12, `deg=${deg}`);
+  }
+});
+
+test('buildProp coordinate boundary edges at +-12 and +-12.0001', () => {
+  const THREE = makeFakeThree();
+  const base = { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' };
+
+  assert.ok(buildProp(THREE, { ...base, x: -12 }) !== null);
+  assert.ok(buildProp(THREE, { ...base, z: -12 }) !== null);
+  const zMax = buildProp(THREE, { ...base, z: 12 });
+  assert.ok(zMax !== null);
+  assert.equal(zMax.position.z, 12);
+  assert.ok(buildProp(THREE, { ...base, y: 12 }) !== null);
+
+  assert.equal(buildProp(THREE, { ...base, x: 12.0001 }), null);
+  assert.equal(buildProp(THREE, { ...base, z: -12.0001 }), null);
+  assert.equal(buildProp(THREE, { ...base, y: -12.0001 }), null);
+  assert.equal(buildProp(THREE, { ...base, x: -12.0001 }), null);
+});
+
+test('group-prop children keep identical local positions across placements', () => {
+  const THREE = makeFakeThree();
+  const snapshot = (grp) => grp.children.map((c) => [c.name, c.position.x, c.position.y, c.position.z]);
+
+  const lanternA = buildProp(THREE, { kind: 'lantern', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffcc66' });
+  const lanternB = buildProp(THREE, { kind: 'lantern', x: 1.5, y: 0.7, z: -1, rot_y: 200, color: '#ffcc66' });
+  assert.deepEqual(snapshot(lanternA), snapshot(lanternB));
+
+  const planterA = buildProp(THREE, { kind: 'planter', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#448844' });
+  const planterB = buildProp(THREE, { kind: 'planter', x: -1, y: 1.2, z: 0.5, rot_y: 90, color: '#448844' });
+  assert.deepEqual(snapshot(planterA), snapshot(planterB));
+});
+
+test('attachPlotProps return value equals children added for all-invalid and mixed lists', () => {
+  const THREE = makeFakeThree();
+
+  const invalidGroup = new THREE.Group();
+  const invalidCount = attachPlotProps(THREE, invalidGroup, [
+    { kind: 'nope', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' },
+    null,
+    undefined,
+  ]);
+  assert.equal(invalidCount, 0);
+  assert.equal(invalidGroup.children.length, 0);
+
+  const mixedGroup = new THREE.Group();
+  const mixedCount = attachPlotProps(THREE, mixedGroup, [
+    MILO_PLOT_PROPS[1],
+    { kind: 'nope', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' },
+  ]);
+  assert.equal(mixedCount, 1);
+  assert.equal(mixedGroup.children.length, 1);
+});
+
+test('attachPorchDeck and attachPorchTrim constants, material, rotation, and position', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+
+  const deck = attachPorchDeck(THREE, cottage);
+  assert.equal(deck.position.x, 0);
+  assert.equal(deck.position.y, 0.09);
+  assert.equal(deck.position.z, 2.9);
+  assert.equal(deck.material.color, '#6b492b');
+  assert.equal(deck.material.opts.roughness, 0.9);
+
+  const trim = attachPorchTrim(THREE, cottage);
+  assert.equal(trim.name, 'cottage_porch_trim');
+  assert.equal(trim.children.length, 7);
+  assert.deepEqual(trim.rotation, { x: 0, y: 0, z: 0 });
+  assert.equal(trim.position.x, 0);
+  assert.equal(trim.position.y, 0);
+  assert.equal(trim.position.z, 0);
+});
+
+test('NPC manifest props on disk have expected counts, valid hex colors, and in-bounds coordinates', async () => {
+  const expectedCounts = { wick: 3, maren: 4, tomas: 4 };
+  for (const [handle, count] of Object.entries(expectedCounts)) {
+    const manifestPath = path.join(REPO_ROOT, 'town-npc', 'plots', handle, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    assert.equal(manifest.props.length, count, `${handle} count`);
+    for (const p of manifest.props) {
+      assert.match(p.color, /^#[0-9a-fA-F]{6}$/);
+      for (const axis of ['x', 'y', 'z']) {
+        assert.equal(typeof p[axis], 'number');
+        assert.ok(Math.abs(p[axis]) <= 12, `${handle} ${axis}`);
+      }
+      assert.equal(typeof p.rot_y, 'number');
+      assert.ok(p.rot_y >= 0 && p.rot_y < 360, `${handle} rot_y`);
+    }
+  }
+});
+
+test('staging.js wires attachPorchDeck, attachPorchTrim, and attachPlotProps with exact occurrence counts', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const snippets = [
+    'attachPorchDeck(THREE, cottage);',
+    'attachPorchDeck(THREE, milosCottage);',
+    'attachPorchTrim(THREE, cottage);',
+    'attachPorchTrim(THREE, milosCottage);',
+    'attachPlotProps(THREE, cottage,',
+    'attachPlotProps(THREE, milosCottage, MILO_PLOT_PROPS);',
+  ];
+  for (const s of snippets) {
+    assert.equal(stagingSrc.split(s).length - 1, 1, s);
+  }
+});
+
+test('buildProp pass-through z table and z=2.049 clamp to 2.05', () => {
+  const THREE = makeFakeThree();
+  for (const z of [2.05, 2.5, 3.45, 3.5, 5, 12]) {
+    const built = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z, rot_y: 0, color: '#ffffff' });
+    assert.ok(built, `z=${z}`);
+    assert.equal(built.position.z, z);
+    assert.ok(Math.abs(built.position.y - 0.54) < 1e-12, `z=${z} y`);
+  }
+  const clamped = buildProp(THREE, { kind: 'desk', x: 0, y: 0, z: 2.049, rot_y: 0, color: '#ffffff' });
+  assert.ok(clamped);
+  assert.ok(Math.abs(clamped.position.z - 2.05) < 1e-12);
+});
+
+test('buildProp creates fresh geometry and material per call and attachPlotProps attaches duplicate props twice', () => {
+  const THREE = makeFakeThree();
+  const deskProp = { kind: 'desk', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#7a5230' };
+  const a = buildProp(THREE, deskProp);
+  const b = buildProp(THREE, deskProp);
+  assert.notEqual(a.geometry, b.geometry);
+  assert.notEqual(a.material, b.material);
+  assert.equal(a.material.color, b.material.color);
+
+  const catProp = { kind: 'cat', x: 0, y: 0, z: 2.2, rot_y: 0, color: '#2b2b2b' };
+  const group = new THREE.Group();
+  const count = attachPlotProps(THREE, group, [catProp, catProp]);
+  assert.equal(count, 2);
+  assert.equal(group.children.length, 2);
+  assert.notEqual(group.children[0], group.children[1]);
 });
