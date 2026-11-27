@@ -1401,14 +1401,14 @@ test('result key list: exact 12 keys, update deep-equals daylightAt(phase)', () 
   assert.ok(Math.abs(drift.phase - 0.623) < 1e-12);
 });
 
-test('file hygiene: 53 tests, unique names, import lines verbatim, banned-literal counts', async () => {
+test('file hygiene: 63 tests, unique names, import lines verbatim, banned-literal counts', async () => {
   const src = await fs.promises.readFile(
     path.join(__dirname, 'test-daylight-drift.mjs'),
     'utf8'
   );
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53);
-  assert.equal(new Set(names).size, 53);
+  assert.equal(names.length, 63);
+  assert.equal(new Set(names).size, 63);
 
   const importLines = src.split(/\r?\n/).filter((line) => line.startsWith('import '));
   assert.deepEqual(importLines, [
@@ -1438,4 +1438,324 @@ test('file hygiene: 53 tests, unique names, import lines verbatim, banned-litera
   assert.equal(count('81' + '23'), 0);
   assert.equal(count('81' + '24'), 0);
   assert.equal(count('81' + '25'), 7);
+});
+
+test('exact interpolated values at f=0.5625 and f=0.71875 (overcast-to-dawn leg)', () => {
+  assert.equal(
+    JSON.stringify(daylightAt(0.5625)),
+    JSON.stringify({
+      sky: 0xafbccc,
+      horizon: 0xdfdadc,
+      hemiSky: 0xfafbff,
+      hemiGround: 0xa9aaaf,
+      hemi: 1.39375,
+      key: 0xf1edee,
+      keyI: 1.021875,
+      rim: 0xd5ddf1,
+      rimI: 0.5046875000000001,
+      elev: 50.65625,
+      fog: 0.7324999999999999,
+      night: 0.0546875,
+    })
+  );
+
+  const f71875 = daylightAt(0.71875);
+  assert.equal(
+    JSON.stringify(f71875),
+    JSON.stringify({
+      sky: 0x91aad7,
+      horizon: 0xfdcab6,
+      hemiSky: 0xe1e7ff,
+      hemiGround: 0x8f899d,
+      hemi: 0.8492187499999999,
+      key: 0xfecfbb,
+      keyI: 1.902734375,
+      rim: 0xa7b6fe,
+      rimI: 0.7849609375000001,
+      elev: 13.01953125,
+      fog: 0.7965625000000001,
+      night: 0.3349609375,
+    })
+  );
+
+  const mirror = daylightAt(9 / 32);
+  for (const k of ['sky', 'horizon', 'hemiSky', 'hemiGround', 'key', 'rim']) {
+    assert.equal(f71875[k], mirror[k], `mirror hex key ${k}`);
+  }
+  for (const k of ['hemi', 'keyI', 'rimI', 'elev', 'fog', 'night']) {
+    assert.ok(Math.abs(f71875[k] - mirror[k]) < 1e-12, `mirror numeric key ${k}`);
+  }
+});
+
+test('exact interpolated values at f=0.03125 and f=0.96875 (near the night seam)', () => {
+  const expected = JSON.stringify({
+    sky: 0x1f2739,
+    horizon: 0x413c51,
+    hemiSky: 0x5f6fa4,
+    hemiGround: 0x292b3c,
+    hemi: 0.7051562499999999,
+    key: 0xb3c6fc,
+    keyI: 0.8015625,
+    rim: 0x5f70c3,
+    rimI: 0.4650390625,
+    elev: 38.75390625,
+    fog: 0.7521484375,
+    night: 0.9720703125,
+  });
+  assert.equal(JSON.stringify(daylightAt(0.03125)), expected);
+  assert.equal(JSON.stringify(daylightAt(0.96875)), expected);
+  assert.deepEqual(daylightAt(0.03125), daylightAt(0.96875));
+});
+
+test('night quantization boundary at non-endpoints (dawn 0.35, mid-leg 0.175)', () => {
+  const countingLook = (initialNight) => {
+    let stored = initialNight;
+    let writes = 0;
+    const look = {};
+    Object.defineProperty(look, 'night', {
+      configurable: true,
+      get() {
+        return stored;
+      },
+      set(v) {
+        writes++;
+        stored = v;
+      },
+    });
+    return {
+      look,
+      get stored() {
+        return stored;
+      },
+      get writes() {
+        return writes;
+      },
+    };
+  };
+
+  const a = countingLook(0.355);
+  buildDaylightDrift(a.look).update(450);
+  assert.equal(a.writes, 0);
+  assert.equal(a.stored, 0.355);
+
+  const b = countingLook(0.33);
+  buildDaylightDrift(b.look).update(450);
+  assert.equal(b.writes, 1);
+  assert.equal(b.stored, 0.35);
+
+  const c = countingLook(0.36);
+  buildDaylightDrift(c.look).update(450);
+  assert.equal(c.writes, 1);
+  assert.equal(c.stored, 0.35);
+
+  assert.equal(daylightAt(0.375).night, 0.175);
+
+  const d = countingLook(0.18);
+  buildDaylightDrift(d.look).update(675);
+  assert.equal(d.writes, 0);
+  assert.equal(d.stored, 0.18);
+
+  const e = countingLook(0.16);
+  buildDaylightDrift(e.look).update(675);
+  assert.equal(e.writes, 1);
+  assert.equal(e.stored, 0.175);
+});
+
+test('two drift controllers keep independent clocks', () => {
+  const dA = buildDaylightDrift({ night: 1 });
+  const dB = buildDaylightDrift({ night: 1 });
+
+  const rA = dA.update(450);
+  assert.deepEqual(rA, daylightAt(0.25));
+  assert.equal(dA.phase, 0.25);
+  assert.equal(dB.phase, 0);
+
+  const rB = dB.update(900);
+  assert.deepEqual(rB, daylightAt(0.5));
+  assert.equal(dB.phase, 0.5);
+  assert.equal(dA.phase, 0.25);
+});
+
+test('stars partial shapes: no material, empty material, preset opacity', () => {
+  const s1 = { visible: false };
+  buildDaylightDrift({ night: 1 }, { stars: s1 }).update(0);
+  assert.equal(s1.visible, true);
+  assert.equal(s1.material, undefined);
+
+  const s2 = { visible: false, material: {} };
+  buildDaylightDrift({ night: 1 }, { stars: s2 }).update(0);
+  assert.equal(s2.material.opacity, 1);
+  assert.equal(s2.visible, true);
+
+  const s3 = { visible: true, material: { opacity: 0.5 } };
+  buildDaylightDrift({ night: 1 }, { stars: s3 }).update(900);
+  assert.equal(s3.material.opacity, 0);
+  assert.equal(s3.visible, false);
+
+  const s4 = { visible: true, material: { opacity: -1 } };
+  buildDaylightDrift({ night: 1 }, { stars: s4 }).update(450);
+  assert.equal(s4.material.opacity, 0.35);
+  assert.equal(s4.visible, true);
+});
+
+test('lights with missing or null color objects never throw', () => {
+  const look = {
+    night: 1,
+    hemi: { color: {}, intensity: 0 },
+    key: { color: null, intensity: 0 },
+    rim: {},
+  };
+  buildDaylightDrift(look).update(0);
+  assert.equal(look.hemi.intensity, 0.70);
+  assert.equal(look.key.intensity, 0.75);
+  assert.equal(look.rim.intensity, 0.45);
+  assert.equal(look.elevation, 40);
+  assert.equal(look.night, 1);
+
+  const bare = { night: 1, hemi: null, key: undefined, rim: false };
+  buildDaylightDrift(bare).update(0);
+  assert.equal(bare.elevation, 40);
+  assert.equal(bare.night, 1);
+  assert.equal(bare.hemi, null);
+});
+
+test('sky dome degenerate geometry never throws', () => {
+  const col0 = {
+    array: new Float32Array(0),
+    needsUpdate: false,
+    setXYZ() {
+      throw new Error('must not be called');
+    },
+  };
+  const look0 = {
+    night: 1,
+    sky: {
+      geometry: {
+        attributes: {
+          position: {
+            count: 0,
+            getY() {
+              throw new Error('must not be called');
+            },
+          },
+          color: col0,
+        },
+      },
+    },
+  };
+  buildDaylightDrift(look0).update(0);
+  assert.equal(col0.needsUpdate, true);
+
+  const look1 = { night: 1, sky: { geometry: {} } };
+  buildDaylightDrift(look1).update(0);
+  assert.equal(look1.night, 1);
+
+  const look2 = { night: 1, sky: { geometry: { attributes: {} } } };
+  buildDaylightDrift(look2).update(0);
+  assert.equal(look2.night, 1);
+
+  const look3 = { night: 1, sky: null };
+  buildDaylightDrift(look3).update(0);
+  assert.equal(look3.night, 1);
+});
+
+test('sky-dome gradient at y=60 (dome top) and y=30 at overcast', () => {
+  const srgbToLin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const hexToLin = (hex) =>
+    [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255].map(srgbToLin);
+
+  const ys = [60, 30];
+  const colorArr = new Float32Array(ys.length * 3);
+  const look = {
+    night: 1,
+    sky: {
+      geometry: {
+        attributes: {
+          position: {
+            count: ys.length,
+            getY(i) {
+              return ys[i];
+            },
+          },
+          color: {
+            array: colorArr,
+            needsUpdate: false,
+            setXYZ(i, r, g, b) {
+              colorArr[i * 3] = r;
+              colorArr[i * 3 + 1] = g;
+              colorArr[i * 3 + 2] = b;
+            },
+          },
+        },
+      },
+    },
+  };
+
+  buildDaylightDrift(look).update(900);
+
+  const top = hexToLin(0xb4bfca);
+  const hor = hexToLin(0xd8dde2);
+  const k = Math.pow(0.5, 0.55);
+  const litTop = [0.4564110338687897, 0.520995557308197, 0.5906188488006592];
+  const litMid = [0.5294033288955688, 0.5850443840026855, 0.644475519657135];
+
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(colorArr[c] - top[c]) < 1e-6, `y=60 formula channel ${c}`);
+    assert.ok(Math.abs(colorArr[c] - litTop[c]) < 1e-6, `y=60 literal channel ${c}`);
+    const mid = hor[c] + (top[c] - hor[c]) * k;
+    assert.ok(Math.abs(colorArr[3 + c] - mid) < 1e-6, `y=30 formula channel ${c}`);
+    assert.ok(Math.abs(colorArr[3 + c] - litMid[c]) < 1e-6, `y=30 literal channel ${c}`);
+  }
+  assert.equal(look.sky.geometry.attributes.color.needsUpdate, true);
+});
+
+test('fog custom far at dawn and night, ratio at far=1 across keyframes', () => {
+  const fog200 = mkFog();
+  buildDaylightDrift({ night: 1 }, { fog: fog200, far: 200 }).update(450);
+  assert.equal(fog200.near, 64);
+  assert.ok(Math.abs(fog200.far - 176) < 1e-9);
+  assert.equal(fog200.color.hex, 0xffc9b4);
+
+  const fog1000 = mkFog();
+  buildDaylightDrift({ night: 1 }, { fog: fog1000, far: 1000 }).update(0);
+  assert.equal(fog1000.near, 300);
+  assert.ok(Math.abs(fog1000.far - 825) < 1e-9);
+  assert.equal(fog1000.color.hex, 0x1b2748);
+
+  for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+    const fog1 = mkFog();
+    buildDaylightDrift({ night: 1 }, { fog: fog1, far: 1 }).update(1800 * f);
+    const p = daylightAt(f);
+    assert.ok(Math.abs(fog1.near - 0.4 * p.fog) < 1e-12, `far=1 near at f=${f}`);
+    assert.ok(Math.abs(fog1.far - 1.1 * p.fog) < 1e-12, `far=1 far at f=${f}`);
+    assert.ok(Math.abs(fog1.far / fog1.near - 2.75) < 1e-9, `far=1 ratio at f=${f}`);
+  }
+});
+
+test('keyI, fog, hemi monotonic per leg with directions', () => {
+  const legs = [
+    { start: 0.00, end: 0.25, keyI: 1, fog: 1, hemi: 1 },
+    { start: 0.25, end: 0.50, keyI: -1, fog: -1, hemi: 1 },
+    { start: 0.50, end: 0.75, keyI: 1, fog: 1, hemi: -1 },
+    { start: 0.75, end: 1.00, keyI: -1, fog: -1, hemi: -1 },
+  ];
+  for (const leg of legs) {
+    let prev = daylightAt(leg.start);
+    for (let step = 1; step <= 25; step++) {
+      const f = leg.start + ((leg.end - leg.start) * step) / 25;
+      const cur = daylightAt(f);
+      for (const k of ['keyI', 'fog', 'hemi']) {
+        if (leg[k] > 0) {
+          assert.ok(cur[k] >= prev[k] - 1e-12, `${k} non-decreasing on [${leg.start}, ${leg.end}] at step ${step}`);
+        } else {
+          assert.ok(cur[k] <= prev[k] + 1e-12, `${k} non-increasing on [${leg.start}, ${leg.end}] at step ${step}`);
+        }
+      }
+      prev = cur;
+    }
+  }
+
+  assert.deepEqual([0, 0.25, 0.5, 0.75, 1].map((f) => daylightAt(f).keyI), [0.75, 1.95, 0.85, 1.95, 0.75]);
+  assert.deepEqual([0, 0.25, 0.5, 0.75, 1].map((f) => daylightAt(f).fog), [0.75, 0.8, 0.72, 0.8, 0.75]);
+  assert.deepEqual([0, 0.25, 0.5, 0.75, 1].map((f) => daylightAt(f).hemi), [0.7, 0.82, 1.5, 0.82, 0.7]);
 });
