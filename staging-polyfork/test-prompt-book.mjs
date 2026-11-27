@@ -10,6 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PROMPT_BOOK_PATH = path.join(__dirname, 'prompt-book.mjs');
 const TOWN_JS_PATH = path.join(REPO_ROOT, 'town-3d', 'town.js');
+const STAGING_JS_PATH = path.join(__dirname, 'staging.js');
+const INDEX_HTML_PATH = path.join(__dirname, 'index.html');
 
 function createFakeDoc() {
   const created = [];
@@ -1044,12 +1046,12 @@ test('prompt-book.mjs source pins header, JSDoc, clearing loop, and no scroll ha
   assert.equal(lines.filter((l) => l.includes('globalThis.document')).length, 1);
 });
 
-test('test-prompt-book.mjs hygiene pins 48 unique tests, 6 imports, and clean literals', async () => {
+test('test-prompt-book.mjs hygiene pins 58 unique tests, 6 imports, and clean literals', async () => {
   const self = await fs.readFile(path.join(__dirname, 'test-prompt-book.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -1065,4 +1067,220 @@ test('test-prompt-book.mjs hygiene pins 48 unique tests, 6 imports, and clean li
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal(lines.filter((l) => l.toLowerCase().includes('camp' + 'fire')).length, 0);
   assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 4); // lines 125, 128, 887, 891
+});
+
+test('formatPromptBookEntries caps positionally at 200 and 1000 entries (P11)', () => {
+  const entries200 = Array.from({ length: 200 }, (_, i) => ({
+    id: i + 1,
+    handle: `m${i + 1}`,
+    kind: 'say',
+    body: `n${i + 1}`,
+    role: 'muse',
+  }));
+  const f200 = formatPromptBookEntries(entries200);
+  assert.equal(f200.length, 100);
+  assert.equal(f200[0].id, 101);
+  assert.equal(f200[99].id, 200);
+  assert.equal(f200[0].handle, 'm101');
+  assert.equal(entries200.length, 200);
+  assert.equal(entries200[0].id, 1);
+
+  const entries1000 = Array.from({ length: 1000 }, (_, i) => ({
+    id: i + 1,
+    handle: `m${i + 1}`,
+    kind: 'say',
+    body: `n${i + 1}`,
+    role: 'muse',
+  }));
+  const f1000 = formatPromptBookEntries(entries1000);
+  assert.equal(f1000.length, 100);
+  assert.equal(f1000[0].id, 901);
+  assert.equal(f1000[99].id, 1000);
+});
+
+test('formatPromptBookEntries and renderPromptBook normalize non-object entries to unknown lines (P12)', () => {
+  const raw = [42, 'text', true, undefined, false, [1, 2]];
+  const expectedItem = {
+    id: null,
+    handle: 'unknown',
+    kind: 'say',
+    body: '',
+    reply_to: null,
+    created_at: 0,
+    role: 'muse',
+  };
+  assert.deepEqual(formatPromptBookEntries(raw), Array.from({ length: 6 }, () => ({ ...expectedItem })));
+
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  renderPromptBook(container, raw, doc);
+  assert.equal(container.children.length, 6);
+  for (const child of container.children) {
+    assert.equal(child.textContent, 'unknown: ');
+  }
+});
+
+test('renderPromptBook preserves whitespace-only handles and bodies verbatim (P13)', () => {
+  const entries = [
+    { id: 1, handle: ' ada ', kind: 'say', body: '   ', role: 'muse' },
+    { id: 2, handle: 'b', kind: 'emote', body: '  ', role: 'muse' },
+    { id: 3, handle: ' ', kind: 'say', body: '\t', role: 'muse' },
+  ];
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  renderPromptBook(container, entries, doc);
+
+  assert.equal(container.children[0].children.find((e) => e.className === 'pb-handle').textContent, ' ada ');
+  assert.equal(container.children[0].children.find((e) => e.className === 'pb-body').textContent, ':    ');
+  assert.equal(container.children[0].textContent, ' ada :    ');
+  assert.equal(container.children[1].children.find((e) => e.className === 'pb-body').textContent, '   ');
+  assert.equal(container.children[2].children.find((e) => e.className === 'pb-handle').textContent, ' ');
+  assert.equal(container.children[2].children.find((e) => e.className === 'pb-body').textContent, ': \t');
+
+  const formatted0 = formatPromptBookEntries([{ id: 1, handle: ' ada ', kind: 'say', body: '   ', role: 'muse' }])[0];
+  assert.equal(formatted0.handle, ' ada ');
+  assert.equal(formatted0.body, '   ');
+});
+
+test('renderPromptBook resolves several replies to same target and guest-to-guest reply (P14)', () => {
+  const entries = [
+    { id: 10, handle: 'wick', kind: 'say', body: 'lanterns lit', role: 'npc' },
+    { id: 11, handle: 'vis', kind: 'say', body: 'noted', role: 'guest', reply_to: 10 },
+    { id: 12, handle: 'sol', kind: 'say', body: 'same here', role: 'muse', reply_to: 10 },
+    { id: 13, handle: 'ada', kind: 'say', body: 'welcome', role: 'guest', reply_to: 11 },
+  ];
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  renderPromptBook(container, entries, doc);
+
+  assert.equal(container.children[1].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #10 @wick');
+  assert.equal(container.children[2].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #10 @wick');
+  assert.equal(container.children[3].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #11 @vis');
+  assert.equal(container.children[3].textContent, '[guest]\u21a9 #11 @visada: welcome');
+  assert.equal(container.children[1].textContent, '[guest]\u21a9 #10 @wickvis: noted');
+});
+
+test('renderPromptBook doc.created tag accounting for single-entry renders (P15)', () => {
+  const doc1 = createFakeDoc();
+  renderPromptBook(doc1.makeContainer(), [{ id: 1, handle: 'a', kind: 'say', body: 'hi', role: 'muse' }], doc1);
+  assert.deepEqual(doc1.created.map((e) => e.tagName), ['div', 'span', 'span']);
+
+  const doc2 = createFakeDoc();
+  renderPromptBook(doc2.makeContainer(), [{ id: 2, handle: 'wick', kind: 'emote', body: 'nods', role: 'npc', reply_to: 9 }], doc2);
+  assert.deepEqual(doc2.created.map((e) => e.tagName), ['div', 'span', 'span', 'span', 'span']);
+  assert.deepEqual(doc2.created.map((e) => e.className), [
+    'pb-line pb-kind-emote',
+    'pb-npc-pill',
+    'pb-reply-to',
+    'pb-handle',
+    'pb-body',
+  ]);
+  assert.equal(doc2.created[2].textContent, '\u21a9 #9');
+
+  const doc3 = createFakeDoc();
+  renderPromptBook(doc3.makeContainer(), [], doc3);
+  assert.deepEqual(doc3.created.map((e) => e.tagName), ['p']);
+});
+
+test('town.js internal line pins for formatPromptBookEntries and renderPromptBook (P16)', async () => {
+  const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
+  const L = townSrc.split('\n');
+  assert.equal(L[1813], '  if (!Array.isArray(promptBook)) return [];');
+  assert.equal(L[1814], '  const sliced = promptBook.length > 100 ? promptBook.slice(promptBook.length - 100) : promptBook;');
+  assert.equal(L[1815], '  return sliced.map((entry) => ({');
+  assert.equal(L[1816], '    id: entry?.id ?? null,');
+  assert.equal(L[1818], "    kind: entry?.kind === 'emote' || entry?.kind === 'system' ? entry.kind : 'say',");
+  assert.equal(L[1822], "    role: entry?.role === 'npc' ? 'npc' : entry?.role === 'guest' ? 'guest' : 'muse',");
+  assert.equal(L[1823], '  }));');
+  assert.equal(L[1830], '  if (!containerEl || !doc) return;');
+  assert.equal(L[1831], '  while (containerEl.firstChild) {');
+  assert.equal(L[1836], "    const empty = doc.createElement('p');");
+  assert.equal(L[1837], "    empty.className = 'pb-empty';");
+  assert.equal(L[1838], "    empty.textContent = 'No remarks yet in the last 24h.';");
+  assert.equal(L[1843], '  const handleById = new Map();');
+  assert.equal(L[1845], '    if (entry.id != null) {');
+  assert.equal(L[1846], '      handleById.set(entry.id, entry.handle);');
+  assert.equal(L[1867], "      const replyEl = doc.createElement('span');");
+  assert.equal(L[1868], "      replyEl.className = 'pb-reply-to';");
+  assert.equal(L[1869], '      const targetHandle = handleById.get(entry.reply_to);');
+  assert.ok(townSrc.includes('        ? \`\\u21a9 #${entry.reply_to} @${targetHandle}\`\n        : \`\\u21a9 #${entry.reply_to}\`;'));
+});
+
+test('staging-polyfork index.html prompt-book markup exact lines (P17)', async () => {
+  const htmlSrc = await fs.readFile(INDEX_HTML_PATH, 'utf8');
+  const lines = htmlSrc.split('\n');
+  assert.equal(lines[288], '<button id="prompt-book-toggle" type="button" aria-expanded="true" aria-controls="prompt-book">Prompt Book</button>');
+  assert.equal(lines[289], '<aside id="prompt-book" class="panel">');
+  assert.equal(lines[290], '  <h2>The Prompt Book &mdash; last 24h</h2>');
+  assert.equal(lines[291], '  <div id="prompt-book-event" hidden></div>');
+  assert.equal(lines[292], '  <div id="prompt-book-lines"><p class="pb-empty">Waiting for the town API&hellip;</p></div>');
+  assert.equal(lines[293], '</aside>');
+  assert.equal(lines.filter((l) => l.includes('id="prompt-book"')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('id="prompt-book-lines"')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('id="prompt-book-toggle"')).length, 1);
+  assert.equal(lines.filter((l) => l.includes('id="prompt-book-event"')).length, 1);
+});
+
+test('formatPromptBookEntries and renderPromptBook float reply_to handling (P18)', () => {
+  const formatted = formatPromptBookEntries([
+    { id: 1, handle: 'a', kind: 'say', body: 'x', reply_to: 1.5 },
+    { id: 2, handle: 'b', kind: 'say', body: 'y', reply_to: 2.0 },
+    { id: 2.0, handle: 'two', kind: 'say', body: 'target', role: 'muse' },
+  ]);
+  assert.equal(formatted[0].reply_to, null);
+  assert.equal(formatted[1].reply_to, 2);
+  assert.equal(formatted[2].id, 2);
+
+  const doc = createFakeDoc();
+  const container = doc.makeContainer();
+  renderPromptBook(container, [
+    { id: 1, handle: 'a', kind: 'say', body: 'x', role: 'muse', reply_to: 1.5 },
+    { id: 2, handle: 'two', kind: 'say', body: 'target', role: 'muse' },
+    { id: 3, handle: 'b', kind: 'say', body: 'y', role: 'muse', reply_to: 2.0 },
+  ], doc);
+  assert.equal(container.children[0].children.find((e) => e.className === 'pb-reply-to'), undefined);
+  assert.equal(container.children[0].children.map((e) => e.className).join(','), 'pb-handle,pb-body');
+  assert.equal(container.children[2].children.find((e) => e.className === 'pb-reply-to').textContent, '\u21a9 #2 @two');
+});
+
+test('formatPromptBookEntries deep-equals role and kind matrix (P19)', () => {
+  const input = [
+    { id: 1, handle: 'w', kind: 'system', body: 'lamps', created_at: 10, role: 'npc' },
+    { id: 2, handle: 'v', kind: 'emote', body: 'waves', reply_to: 1, created_at: 20, role: 'guest' },
+    { id: 3, handle: 'b', kind: 'say', body: 'chimes', reply_to: 2, created_at: 30, role: 'muse' },
+    { id: 4, handle: 'w', kind: 'system', body: 'arrived', created_at: 40, role: 'guest' },
+    { id: 5, handle: 'v', kind: 'emote', body: 'trims', reply_to: 4, created_at: 50, role: 'npc' },
+    { id: 6, handle: 'b', kind: 'system', body: 'dawn', reply_to: 5, created_at: 60, role: 'muse' },
+  ];
+  assert.deepEqual(formatPromptBookEntries(input), [
+    { id: 1, handle: 'w', kind: 'system', body: 'lamps', reply_to: null, created_at: 10, role: 'npc' },
+    { id: 2, handle: 'v', kind: 'emote', body: 'waves', reply_to: 1, created_at: 20, role: 'guest' },
+    { id: 3, handle: 'b', kind: 'say', body: 'chimes', reply_to: 2, created_at: 30, role: 'muse' },
+    { id: 4, handle: 'w', kind: 'system', body: 'arrived', reply_to: null, created_at: 40, role: 'guest' },
+    { id: 5, handle: 'v', kind: 'emote', body: 'trims', reply_to: 4, created_at: 50, role: 'npc' },
+    { id: 6, handle: 'b', kind: 'system', body: 'dawn', reply_to: 5, created_at: 60, role: 'muse' },
+  ]);
+});
+
+test('staging.js applyStagingState call site and town.js ensureLiveStore init (P20)', async () => {
+  const stagingSrc = await fs.readFile(STAGING_JS_PATH, 'utf8');
+  const S = stagingSrc.split('\n');
+  assert.equal(S[1264], '      const footlightSlotByHandle = applyStagingState(');
+  assert.equal(S[1265], '        liveStore,');
+  assert.equal(S[1266], '        bandstandBuilt,');
+  assert.equal(S[1267], '        npcStandIns,');
+  assert.equal(S[1268], '        state,');
+  assert.equal(S[1269], '        promptBookLinesEl,');
+  assert.equal(S[1270], '        tavernGroup,');
+  assert.equal(S[1271], '        eventBannerEl');
+  assert.equal(S[1272], '      );');
+  assert.equal(S.filter((l) => l.includes('applyStagingState(')).length, 2);
+  assert.equal(S.filter((l) => l.includes('promptBookLinesEl,')).length, 2);
+
+  const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
+  const T = townSrc.split('\n');
+  assert.equal(T[1795], 'function ensureLiveStore(town) {');
+  assert.equal(T[1801], '      promptBook: [],');
+  assert.equal(T[1802], '      nightlyCallTopic: null,');
+  assert.equal(T.filter((l) => l.includes('promptBook: []')).length, 1);
 });
