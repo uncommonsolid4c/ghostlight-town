@@ -1027,11 +1027,11 @@ test('Slice 440: buildFishingSpot creates fresh rod, box, and materials on every
   assert.equal(g2.getObjectByName('bobber').material.color, '#f5efe0');
 });
 
-test('Slice 440: file hygiene - 51 unique test names, 6 import lines, and pinned literal counts (G10)', () => {
+test('Slice 440: file hygiene - 61 unique test names, 6 import lines, and pinned literal counts (G10)', () => {
   const src = fs.readFileSync(path.join(__dirname, 'test-fishing.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 51);
-  assert.equal(new Set(names).size, 51);
+  assert.equal(names.length, 61);
+  assert.equal(new Set(names).size, 61);
   for (const name of names) {
     assert.equal(name.includes("'"), false, 'test names must contain no apostrophes');
   }
@@ -1045,4 +1045,173 @@ test('Slice 440: file hygiene - 51 unique test names, 6 import lines, and pinned
   assert.equal(countLines('FIX' + 'ME'), 0);
   assert.equal(countLines('inner' + 'HTML'), 0);
   assert.equal(lines.filter((l) => new RegExp('camp' + 'fire', 'i').test(l)).length, 0);
+});
+
+test('Slice 509: findFishingSpot propagates a throwing groundAt (P1)', () => {
+  assert.throws(
+    () => findFishingSpot({
+      groundAt: () => { throw new Error('ground boom'); },
+      waterY: 0,
+      groundY: -3,
+    }),
+    /ground boom/
+  );
+});
+
+test('Slice 509: findFishingSpot samples exactly along the 45-degree bearing (P2)', () => {
+  const points = [];
+  const recordingGroundAt = (x, z) => {
+    points.push([x, z]);
+    return coneIslandGroundAt(x, z);
+  };
+  const spot = findFishingSpot({ groundAt: recordingGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+  assert.equal(points.length, 115);
+  for (const [x, z] of points) {
+    assert.ok(Math.abs(x - z) < 1e-14);
+  }
+  for (let k = 1; k < 114; k++) {
+    assert.ok(points[k][0] > points[k - 1][0]);
+  }
+  assert.ok(Math.abs(Math.hypot(...points[113]) - 38.25) < 1e-9);
+  assert.ok(Math.abs(Math.hypot(...points[114]) - 36.5) < 1e-9);
+  assert.equal(points[0][0], Math.sin(Math.PI / 4) * 10);
+});
+
+test('Slice 509: findFishingSpot and buildFishingSpot do not mutate frozen inputs (P3)', () => {
+  const opts = Object.freeze({ groundAt: coneIslandGroundAt, waterY: 0, groundY: -3 });
+  const spot = findFishingSpot(opts);
+  assert.ok(spot);
+  assert.equal(spot.r, 36.5);
+  const frozenSpot = Object.freeze({
+    x: 1, y: 0.4, z: 2, r: 36.5, shoreR: 38,
+    bearingRad: Math.PI / 4, dirX: Math.sin(Math.PI / 4), dirZ: Math.cos(Math.PI / 4),
+  });
+  const THREE = makeFakeThree();
+  const group = buildFishingSpot(THREE, frozenSpot, { waterY: 0 });
+  assert.equal(group.name, 'fishing-spot');
+  assert.equal(group.children.length, 7);
+  assert.equal(frozenSpot.x, 1);
+});
+
+test('Slice 509: findFishingSpot returns null for boolean or null waterY (P4)', () => {
+  for (const waterY of [true, false, null]) {
+    assert.equal(findFishingSpot({ groundAt: coneIslandGroundAt, waterY, groundY: -3 }), null);
+  }
+});
+
+test('Slice 509: buildFishingSpot with waterY equal to spot.y puts the bobber just above the spot (P5)', () => {
+  const THREE = makeFakeThree();
+  const spot = {
+    x: 1, y: 0.4, z: 2, r: 36.5, shoreR: 38,
+    bearingRad: Math.PI / 4, dirX: Math.sin(Math.PI / 4), dirZ: Math.cos(Math.PI / 4),
+  };
+  const group = buildFishingSpot(THREE, spot, { waterY: 0.4 });
+  const bobber = group.getObjectByName('bobber');
+  assert.ok(bobber);
+  assert.ok(Math.abs(bobber.position.y - 0.05) < 1e-9);
+  const ripple0 = group.getObjectByName('ripple-0');
+  assert.ok(ripple0);
+  assert.ok(Math.abs(ripple0.position.y - 0.02) < 1e-9);
+  const line = group.getObjectByName('fishing-line');
+  assert.ok(line);
+  assert.ok(Math.abs(line.geometry.args[2] - Math.hypot(0.9, 1.75)) < 1e-9);
+  assert.ok(Math.abs(line.rotation.x - Math.atan2(1.75, -0.9)) < 1e-9);
+  assert.ok(Math.abs(line.position.y - 0.5) < 1e-9);
+  assert.equal(line.position.z, 1.625);
+});
+
+test('Slice 509: findFishingSpot makes exactly 122 groundAt calls on a flat-shore stub (P6)', () => {
+  const radii = [];
+  const flatGroundAt = (x, z) => {
+    radii.push(Math.hypot(x, z));
+    return Math.hypot(x, z) < 40 ? 2.0 : -1.0;
+  };
+  const spot = findFishingSpot({ groundAt: flatGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+  assert.equal(radii.length, 122);
+  assert.ok(Math.abs(radii[120] - 40) < 1e-9);
+  assert.ok(Math.abs(radii[121] - 38.25) < 1e-9);
+  assert.equal(spot.r, 38.25);
+  assert.equal(spot.shoreR, 39.75);
+});
+
+test('Slice 509: buildFishingSpot line material is distinct from the bobber and ripple material (P7)', () => {
+  const THREE = makeFakeThree();
+  const spot = findFishingSpot({ groundAt: coneIslandGroundAt, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+  const group = buildFishingSpot(THREE, spot, { waterY: 0 });
+  const line = group.getObjectByName('fishing-line');
+  const bobber = group.getObjectByName('bobber');
+  const ripple1 = group.getObjectByName('ripple-1');
+  assert.ok(line);
+  assert.ok(bobber);
+  assert.ok(ripple1);
+  assert.notEqual(line.material, bobber.material);
+  assert.notEqual(line.material, ripple1.material);
+  assert.equal(line.material.type, 'MeshStandardMaterial');
+  assert.equal(line.material.color, '#6b492b');
+  assert.equal(line.material.opts.roughness, 0.9);
+  assert.equal(bobber.material.type, 'MeshStandardMaterial');
+  assert.equal(bobber.material.color, '#f5efe0');
+});
+
+test('Slice 509: buildFishingSpot ignores spot.dirX and dirZ and uses only bearingRad (P8)', () => {
+  const THREE = makeFakeThree();
+  for (const [dirX, dirZ] of [[0, 0], [1, 0]]) {
+    const spot = {
+      x: 1, y: 0.4, z: 2, r: 36.5, shoreR: 38,
+      bearingRad: Math.PI / 3, dirX, dirZ,
+    };
+    const group = buildFishingSpot(THREE, spot, { waterY: 0 });
+    assert.equal(group.rotation.y, Math.PI / 3);
+    assert.deepEqual([group.position.x, group.position.y, group.position.z], [1, 0.4, 2]);
+    const bobber = group.getObjectByName('bobber');
+    assert.ok(bobber);
+    assert.equal(bobber.position.z, 2.5);
+    assert.equal(bobber.position.x, 0);
+  }
+});
+
+test('Slice 509: findFishingSpot dry-feet reads the ground at spotR, not at the shore (P9)', () => {
+  const shoreHighSpotLow = (x, z) => {
+    const r = Math.hypot(x, z);
+    if (r < 36.5) return 0.2;
+    if (r < 38) return 2.0;
+    return -1.0;
+  };
+  assert.equal(findFishingSpot({ groundAt: shoreHighSpotLow, waterY: 0, groundY: -3 }), null);
+
+  const shoreLowSpotHigh = (x, z) => {
+    const r = Math.hypot(x, z);
+    if (r < 36.5) return 2.0;
+    if (r < 38) return 0.35;
+    return -1.0;
+  };
+  const spot = findFishingSpot({ groundAt: shoreLowSpotHigh, waterY: 0, groundY: -3 });
+  assert.ok(spot);
+  assert.equal(spot.r, 36.25);
+  assert.equal(spot.shoreR, 37.75);
+  assert.equal(spot.y, 2.0);
+});
+
+test('Slice 509: buildFishingSpot coerces a numeric-string waterY (P10)', () => {
+  const THREE = makeFakeThree();
+  const spot = {
+    x: 1, y: 0.4, z: 2, r: 36.5, shoreR: 38,
+    bearingRad: Math.PI / 4, dirX: Math.sin(Math.PI / 4), dirZ: Math.cos(Math.PI / 4),
+  };
+  const group = buildFishingSpot(THREE, spot, { waterY: '0.5' });
+  const bobber = group.getObjectByName('bobber');
+  assert.ok(bobber);
+  assert.ok(Math.abs(bobber.position.y - 0.15) < 1e-9);
+  const ripple2 = group.getObjectByName('ripple-2');
+  assert.ok(ripple2);
+  assert.ok(Math.abs(ripple2.position.y - 0.12) < 1e-9);
+  const line = group.getObjectByName('fishing-line');
+  assert.ok(line);
+  assert.ok(Math.abs(line.geometry.args[2] - Math.hypot(0.8, 1.75)) < 1e-9);
+  assert.ok(Math.abs(line.rotation.x - Math.atan2(1.75, -0.8)) < 1e-9);
+  assert.ok(Math.abs(line.position.y - 0.55) < 1e-9);
+  assert.equal(line.position.z, 1.625);
 });
