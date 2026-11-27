@@ -2128,7 +2128,7 @@ test('GET /api/town/state leaves both future-event hosts unflagged when there is
   }
 });
 
-test('file hygiene: 49 unique names, 7 imports, pinned literal counts (G10)', () => {
+test('file hygiene: 59 unique names, 7 imports, pinned literal counts (G10)', () => {
   const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
   const lines = src.split('\n');
   const names = [];
@@ -2136,8 +2136,8 @@ test('file hygiene: 49 unique names, 7 imports, pinned literal counts (G10)', ()
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 49);
-  assert.equal(new Set(names).size, 49);
+  assert.equal(names.length, 59);
+  assert.equal(new Set(names).size, 59);
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 7);
   assert.deepEqual(
     lines.filter((l) => l.startsWith('import ')),
@@ -2153,9 +2153,343 @@ test('file hygiene: 49 unique names, 7 imports, pinned literal counts (G10)', ()
   );
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
-  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 45);
+  assert.equal(lines.filter((l) => l.includes('Date' + '.now')).length, 47);
   assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 2);
   assert.equal(lines.filter((l) => new RegExp('Math' + '.random').test(l)).length, 0);
   assert.equal(lines.filter((l) => l.includes('camp' + 'fire')).length, 0);
   assert.equal(lines.filter((l) => l.includes('inner' + 'HTML')).length, 0);
+});
+
+test('GET /api/town/state guestbook_by_plot omits a registered plot with zero approved entries (P1)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({ baseNow });
+
+  try {
+    await registerResident(ctx, 'wick');
+    await registerResident(ctx, 'maren');
+    const visitor = new GhostlightClient({ baseUrl: ctx.baseUrl });
+
+    ctx.advanceClock(-3601);
+    const w1 = await visitor.signGuestbook('guestbook', 'Guest A', 'wick note', 'wick');
+    const m1 = await visitor.signGuestbook('guestbook', 'Guest B', 'maren note', 'maren');
+    ctx.advanceClock(3601);
+    assert.equal(w1.status, 201);
+    assert.equal(m1.status, 201);
+
+    const mod = await ctx.admin.moderateGuestbook(w1.data.id, 'approve');
+    assert.equal(mod.status, 200);
+
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.deepEqual(body.guestbook_by_plot, { wick: 1 });
+    assert.equal(Object.hasOwn(body.guestbook_by_plot, 'maren'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state ignores top-level extra keys in the events file (P2)', async () => {
+  const baseNow = 1795000000;
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Keyed Show',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+      version: 2,
+      meta: { source: 'test' },
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Keyed Show');
+    assert.deepEqual(Object.keys(body.events.now).sort(), EVENT_KEYS);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state drops entries missing any one required field (P3)', async () => {
+  const baseNow = 1795000000;
+  const makeEvent = (over = {}) => ({
+    title: 'Valid Event',
+    host_handle: 'milo',
+    start_at: isoAt(baseNow, -900),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: 'b',
+    ...over,
+  });
+  const noTitle = makeEvent({ title: 'Missing Title' });
+  delete noTitle.title;
+  const noHost = makeEvent({ title: 'Missing Host' });
+  delete noHost.host_handle;
+  const noStart = makeEvent({ title: 'Missing Start' });
+  delete noStart.start_at;
+  const noDur = makeEvent({ title: 'Missing Duration' });
+  delete noDur.duration_min;
+  const noLoc = makeEvent({ title: 'Missing Location' });
+  delete noLoc.location;
+  const noBlurb = makeEvent({ title: 'Missing Blurb' });
+  delete noBlurb.blurb;
+
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [noTitle, noHost, noStart, noDur, noLoc, noBlurb, makeEvent({ title: 'Survivor' })],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Survivor');
+    assert.equal(body.events.next, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state drops duration_min 0 and -30 and keeps 15 (P4)', async () => {
+  const baseNow = 1795000000;
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Zero Duration',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -3600),
+          duration_min: 0,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Negative Duration',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -1800),
+          duration_min: -30,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+        {
+          title: 'Floor Fifteen',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -899),
+          duration_min: 15,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Floor Fifteen');
+    assert.equal(body.events.now.duration_min, 15);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state accepts digits-only and trailing dash or underscore handles (P5)', async () => {
+  const baseNow = 1795000000;
+  for (const handle of ['12', 'a-', 'a_']) {
+    const ctx = await startStateServer({
+      baseNow,
+      eventsContent: {
+        events: [
+          {
+            title: 'Valid Event',
+            host_handle: handle,
+            start_at: isoAt(baseNow, -900),
+            duration_min: 60,
+            location: 'bandstand',
+            blurb: 'b',
+          },
+        ],
+      },
+    });
+    try {
+      const { status, body } = await ctx.getState();
+      assert.equal(status, 200);
+      assert.equal(body.events.now.title, 'Valid Event');
+      assert.equal(body.events.now.host_handle, handle);
+    } finally {
+      await ctx.close();
+    }
+  }
+});
+
+test('GET /api/town/state accepts a 501-char location with no length cap (P6)', async () => {
+  const baseNow = 1795000000;
+  const loc501 = 'L'.repeat(501);
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Valid Event',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, -900),
+          duration_min: 60,
+          location: loc501,
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const { status, body } = await ctx.getState();
+    assert.equal(status, 200);
+    assert.equal(body.events.now.title, 'Valid Event');
+    assert.equal(body.events.now.location, loc501);
+    assert.equal(body.events.now.location.length, 501);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state fails open when eventsPath points at a directory (P7)', async () => {
+  const baseNow = 1795000000;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-state-events-dir-'));
+  const dirPath = path.join(tmpDir, 'events-dir');
+  fs.mkdirSync(dirPath);
+  const operatorKeys = generateKeypair();
+
+  const { server } = createTownServer({
+    dbPath: path.join(tmpDir, 'town.db'),
+    plotsDir: path.join(tmpDir, 'plots'),
+    operatorPubkey: operatorKeys.pubkey,
+    eventsPath: dirPath,
+    topicsPath: path.join(tmpDir, 'missing-topics.json'),
+    nowFn: () => baseNow,
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = server.address();
+    const reader = new GhostlightClient({ baseUrl: `http://127.0.0.1:${port}` });
+    const { status, data: body } = await reader.state();
+    assert.equal(status, 200);
+    assert.equal(body.events.now, null);
+    assert.equal(body.events.next, null);
+    assert.deepEqual(Object.keys(body.events).sort(), ['next', 'now']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/town/state clock advance across an event start bumps state_seq by 1 (P8)', async () => {
+  const baseNow = 1795000000;
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: {
+      events: [
+        {
+          title: 'Soon Show',
+          host_handle: 'milo',
+          start_at: isoAt(baseNow, 60),
+          duration_min: 15,
+          location: 'bandstand',
+          blurb: 'b',
+        },
+      ],
+    },
+  });
+
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    assert.equal(first.body.events.now, null);
+    assert.equal(first.body.events.next.title, 'Soon Show');
+    const seq = first.body.state_seq;
+
+    ctx.advanceClock(61);
+    const second = await ctx.getState();
+    assert.equal(second.status, 200);
+    assert.equal(second.body.state_seq, seq + 1);
+    assert.equal(second.body.events.now.title, 'Soon Show');
+    assert.equal(second.body.events.next, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state footlight TTL boundary is lit at +2699 and gone at +2700 (P9)', async () => {
+  const baseNow = Math.floor(Date.now() / 1000);
+  const ctx = await startStateServer({ baseNow });
+
+  try {
+    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    ctx.advanceClock(2699);
+    const lit = await ctx.getState();
+    assert.equal(lit.status, 200);
+    assert.equal(lit.body.footlights.length, 1);
+    assert.equal(lit.body.footlights[0].handle, 'host');
+
+    ctx.advanceClock(1);
+    const gone = await ctx.getState();
+    assert.equal(gone.status, 200);
+    assert.equal(gone.body.footlights.length, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('GET /api/town/state bumps state_seq by 1 on each of two consecutive title flips (P10)', async () => {
+  const baseNow = 1795000000;
+  const makeEvent = (title) => ({
+    title,
+    host_handle: 'milo',
+    start_at: isoAt(baseNow, -900),
+    duration_min: 60,
+    location: 'bandstand',
+    blurb: 'b',
+  });
+  const ctx = await startStateServer({
+    baseNow,
+    eventsContent: { events: [makeEvent('First Title')] },
+  });
+
+  try {
+    const first = await ctx.getState();
+    assert.equal(first.status, 200);
+    assert.equal(first.body.events.now.title, 'First Title');
+    const seq0 = first.body.state_seq;
+
+    const bumpMtime = () => {
+      const m = fs.statSync(ctx.eventsPath).mtimeMs;
+      fs.utimesSync(ctx.eventsPath, new Date(m + 5000), new Date(m + 5000));
+    };
+
+    fs.writeFileSync(ctx.eventsPath, JSON.stringify({ events: [makeEvent('Second Title')] }), 'utf8');
+    bumpMtime();
+    const second = await ctx.getState(seq0);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.state_seq, seq0 + 1);
+    assert.equal(second.body.events.now.title, 'Second Title');
+
+    fs.writeFileSync(ctx.eventsPath, JSON.stringify({ events: [makeEvent('Third Title')] }), 'utf8');
+    bumpMtime();
+    const third = await ctx.getState(seq0 + 1);
+    assert.equal(third.status, 200);
+    assert.equal(third.body.state_seq, seq0 + 2);
+    assert.equal(third.body.events.now.title, 'Third Title');
+  } finally {
+    await ctx.close();
+  }
 });
