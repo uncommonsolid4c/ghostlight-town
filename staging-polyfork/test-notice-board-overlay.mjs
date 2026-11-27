@@ -941,9 +941,9 @@ test('file hygiene: 47 unique names, 6 imports, pinned as-true counts', async ()
 
   const singleQuoted = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
   const doubleQuoted = [...src.matchAll(/^test\("([^"]+)",/gm)].map((m) => m[1]);
-  assert.equal(singleQuoted.length, 46);
+  assert.equal(singleQuoted.length, 56);
   assert.equal(doubleQuoted.length, 1);
-  assert.equal(new Set([...singleQuoted, ...doubleQuoted]).size, 47);
+  assert.equal(new Set([...singleQuoted, ...doubleQuoted]).size, 57);
 
   const importLines = lines.filter((line) => line.startsWith('import '));
   assert.equal(importLines.length, 6);
@@ -974,4 +974,213 @@ test('file hygiene: 47 unique names, 6 imports, pinned as-true counts', async ()
   assert.equal(lines.filter((l) => dateNowRe.test(l)).length, 0);
   assert.equal(lines.filter((l) => mathRandomRe.test(l)).length, 0);
   assert.equal(lines.filter((l) => l.includes(fetchNeedle)).length, 0);
+});
+
+test('town-3d/town.js and staging.js buildNoticeBoard agree on placement and diverge only on the texture helper', async () => {
+  const [townSrc, stagingSrc] = await Promise.all([
+    fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+  ]);
+  const bodyRe = /function buildNoticeBoard\(THREE\) \{([\s\S]*?)\n  return group;\n\}/;
+  const townBody = townSrc.match(bodyRe);
+  const stagingBody = stagingSrc.match(bodyRe);
+  assert.ok(townBody, 'town-3d/town.js must define buildNoticeBoard');
+  assert.ok(stagingBody, 'staging.js must define buildNoticeBoard');
+  assert.ok(townBody[1].includes('  group.position.set(x, 0, z);'));
+  assert.ok(stagingBody[1].includes('  group.position.set(x, 0, z);'));
+  assert.ok(townBody[1].includes('  group.rotation.y = Math.atan2(-x, -z);'));
+  assert.ok(stagingBody[1].includes('  group.rotation.y = Math.atan2(-x, -z);'));
+  assert.ok(townBody[1].includes("  const panelTex = makeTextTexture(THREE, ['NOTICE BOARD'], {"));
+  assert.equal(townBody[1].includes('makeBandstandTextTexture'), false);
+  assert.ok(stagingBody[1].includes("  const panelTex = makeBandstandTextTexture(THREE, ['NOTICE BOARD'], {"));
+  assert.equal(stagingBody[1].includes('makeTextTexture('), false);
+});
+
+test('town-3d/town.js buildNoticeBoard paper and panel texture blocks stay verbatim', async () => {
+  const townSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8');
+  const body = townSrc.match(/function buildNoticeBoard\(THREE\) \{([\s\S]*?)\n  return group;\n\}/);
+  assert.ok(body, 'town-3d/town.js must define buildNoticeBoard');
+  assert.ok(body[1].includes([
+    "  const panelTex = makeTextTexture(THREE, ['NOTICE BOARD'], {",
+    '    width: 512,',
+    '    height: 304,',
+    '    titleSize: 44,',
+    "    bg: '#3b2b1d',",
+    "    border: '#7d5a3c',",
+    '  });',
+  ].join('\n')));
+  assert.ok(body[1].includes([
+    '    const paperTex = makeTextTexture(THREE, lines, {',
+    '      width: 256,',
+    '      height: 358,',
+    '      titleSize: 30,',
+    '      subSize: 20,',
+    "      bg: '#f5efe0',",
+    "      fg: '#2e2218',",
+    "      border: '#8b6a4b',",
+    '    });',
+    '    const paper = new THREE.Mesh(',
+    '      paperGeo,',
+    '      new THREE.MeshStandardMaterial({ map: paperTex, roughness: 0.9 })',
+    '    );',
+    '    paper.name = name;',
+    '    paper.position.set(paperX, 1.35, 0.06);',
+    '    group.add(paper);',
+  ].join('\n')));
+});
+
+test('staging.js buildNoticeBoard paper and panel texture blocks stay verbatim with makeBandstandTextTexture', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  const body = stagingSrc.match(/function buildNoticeBoard\(THREE\) \{([\s\S]*?)\n  return group;\n\}/);
+  assert.ok(body, 'staging.js must define buildNoticeBoard');
+  assert.ok(body[1].includes([
+    "  const panelTex = makeBandstandTextTexture(THREE, ['NOTICE BOARD'], {",
+    '    width: 512,',
+    '    height: 304,',
+    '    titleSize: 44,',
+    "    bg: '#3b2b1d',",
+    "    border: '#7d5a3c',",
+    '  });',
+  ].join('\n')));
+  assert.ok(body[1].includes([
+    '    const paperTex = makeBandstandTextTexture(THREE, lines, {',
+    '      width: 256,',
+    '      height: 358,',
+    '      titleSize: 30,',
+    '      subSize: 20,',
+    "      bg: '#f5efe0',",
+    "      fg: '#2e2218',",
+    "      border: '#8b6a4b',",
+    '    });',
+    '    const paper = new THREE.Mesh(',
+    '      paperGeo,',
+    '      new THREE.MeshStandardMaterial({ map: paperTex, roughness: 0.9 })',
+    '    );',
+    '    paper.name = name;',
+    '    paper.position.set(paperX, 1.35, 0.06);',
+    '    group.add(paper);',
+  ].join('\n')));
+});
+
+test('town-3d/town.js buildTown wires the notice board between the newsstand and the inn', async () => {
+  const townSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'town.js'), 'utf8');
+  const block = [
+    '  // Town Notice Board',
+    '  const noticeBoard = buildNoticeBoard(THREE);',
+    '  scene.add(noticeBoard);',
+  ].join('\n');
+  assert.ok(townSrc.includes(block));
+  assert.ok(townSrc.indexOf('  scene.add(newsstand);') < townSrc.indexOf(block));
+  assert.ok(townSrc.indexOf(block) < townSrc.indexOf('  // Ghostlight Inn (southwest clearing near the gate)'));
+});
+
+test('staging.js positions the notice board with camp.groundAt and adds it to the scene', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(stagingSrc.includes([
+    '  const noticeBoard = buildNoticeBoard(THREE);',
+    '  noticeBoard.position.set(',
+    '    TOWN_LAYOUT.noticeBoard.x,',
+    '    camp.groundAt(TOWN_LAYOUT.noticeBoard.x, TOWN_LAYOUT.noticeBoard.z),',
+    '    TOWN_LAYOUT.noticeBoard.z',
+    '  );',
+    '  scene.add(noticeBoard);',
+  ].join('\n')));
+});
+
+test('staging.js notice board layout, terrain pad, and pine keepClear entry agree on (-6, 14)', async () => {
+  const [avatarSrc, stagingSrc] = await Promise.all([
+    fs.readFile(path.join(__dirname, 'avatar.mjs'), 'utf8'),
+    fs.readFile(path.join(__dirname, 'staging.js'), 'utf8'),
+  ]);
+  assert.ok(avatarSrc.includes([
+    '  noticeBoard: {',
+    '    x: -6,',
+    '    y: 0,',
+    '    z: 14,',
+    '  },',
+  ].join('\n')));
+  const avatarImport = stagingSrc.match(/import \{[^}]*\} from '\.\/avatar\.mjs\?v=28';/);
+  assert.ok(avatarImport, 'staging.js must import from avatar.mjs');
+  assert.ok(avatarImport[0].includes('  TOWN_LAYOUT,'));
+  assert.ok(stagingSrc.includes([
+    '    { x: -186, z: 398, w: 4, d: 4 },   // newsstand (6, 14)',
+    '    { x: -198, z: 398, w: 4, d: 4 },   // notice board (-6, 14)',
+  ].join('\n')));
+  assert.ok(stagingSrc.includes('    [0, 27, 8], [6, 8, 7], [TOWN_LAYOUT.newsstand.x, TOWN_LAYOUT.newsstand.z, 5], [-6, 14, 5], [-22, -20, 11],'));
+  assert.equal((stagingSrc.match(/\[-6, 14, 5\]/g) || []).length, 1);
+});
+
+test('town-3d/index.html openNoticeBoardOverlay resets input state and opens the board without a callback', async () => {
+  const indexHtml = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'index.html'), 'utf8');
+  assert.ok(indexHtml.includes([
+    '    function openNoticeBoardOverlay() {',
+    '      keys.clear();',
+    '      glideTarget = null;',
+    '      activePointers.clear();',
+    '      isDragging = false;',
+    "      canvas.classList.remove('dragging');",
+    '      currentPlotHandle = null;',
+    '      setPlotTabs(null);',
+    '      infoStrip.hidden = true;',
+    "      plotOverlayTitle.textContent = 'Notice Board';",
+    "      plotIframe.setAttribute('sandbox', '');",
+    "      plotIframe.removeAttribute('src');",
+    '      plotIframe.srcdoc = buildNoticeBoardOverlayHtml();',
+    '      plotOverlay.hidden = false;',
+    '    }',
+  ].join('\n')));
+  const fnStart = indexHtml.indexOf('    function openNoticeBoardOverlay() {');
+  const fnEnd = indexHtml.indexOf('\n    }', fnStart);
+  const fnBody = indexHtml.slice(fnStart, fnEnd);
+  assert.equal(fnBody.includes('onBeforeOpen'), false);
+  assert.equal(fnBody.includes('return'), false);
+  assert.equal((indexHtml.match(/buildNoticeBoardOverlayHtml/g) || []).length, 2);
+  assert.equal((indexHtml.match(/openNoticeBoardOverlay/g) || []).length, 2);
+});
+
+test('town-3d/index.html notice_board click branch opens the overlay between the newsstand and inn branches', async () => {
+  const indexHtml = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'index.html'), 'utf8');
+  const block = [
+    "          if (kind === 'notice_board') {",
+    '            infoStrip.hidden = true;',
+    '            openNoticeBoardOverlay();',
+    '            return true;',
+    '          }',
+  ].join('\n');
+  assert.ok(indexHtml.includes(block));
+  assert.ok(indexHtml.indexOf("if (kind === 'newsstand')") < indexHtml.indexOf(block));
+  assert.ok(indexHtml.indexOf(block) < indexHtml.indexOf("if (kind === 'inn')"));
+});
+
+test('openNoticeBoardOverlay overwrites onBeforeOpen mutations and touches nothing else on the title or overlay', () => {
+  const els = makeFakeOverlayElements();
+  const expected = buildNoticeBoardOverlayHtml();
+  const html = openNoticeBoardOverlay({
+    ...els,
+    onBeforeOpen: () => {
+      els.overlayEl.hidden = true;
+      els.titleEl.textContent = 'Stale title';
+      els.iframeEl.srcdoc = 'stale doc';
+      els.iframeEl.src = 'stale-src';
+    },
+  });
+  assert.equal(html, expected);
+  assert.equal(els.overlayEl.hidden, false);
+  assert.equal(els.titleEl.textContent, 'Notice Board');
+  assert.equal(els.iframeEl.srcdoc, expected);
+  assert.equal(els.iframeEl.src, undefined);
+  assert.equal(els.titleEl.hidden, true);
+  assert.equal(els.overlayEl.getAttribute('sandbox'), null);
+});
+
+test('notice-board-overlay.mjs exports exactly the two overlay functions and keeps its data private', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'notice-board-overlay.mjs'), 'utf8');
+  assert.deepEqual(src.match(/^export function (\w+)/gm), [
+    'export function buildNoticeBoardOverlayHtml',
+    'export function openNoticeBoardOverlay',
+  ]);
+  assert.equal(src.includes('export default'), false);
+  assert.equal(src.includes('export const NOTICE_BOARD_PAPERS'), false);
+  assert.equal(src.includes('export function escapeHtml'), false);
+  assert.equal(src.includes('export {'), false);
 });
