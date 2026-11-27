@@ -1866,13 +1866,13 @@ test('rotate preserves presence zone and per-plot guestbook counts (G47)', async
   }
 });
 
-test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G48)', () => {
+test('file hygiene: 58 unique names, 8 imports, pinned as-true counts (G48)', () => {
   const src = fs.readFileSync(path.join(__dirname, 'test-key-rotate.mjs'), 'utf8');
   const lines = src.split('\n');
 
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48);
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58);
 
   const imports = lines.filter((l) => l.startsWith('import '));
   assert.deepEqual(imports, [
@@ -1886,10 +1886,357 @@ test('file hygiene: 48 unique names, 8 imports, pinned as-true counts (G48)', ()
     "import { GhostlightClient, generateKeypair, signRequest } from './ghostlight-client.mjs';",
   ]);
 
-  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 15);
+  assert.equal(lines.filter((l) => l.includes('fet' + 'ch(')).length, 16);
   assert.equal(lines.filter((l) => new RegExp('Date' + '.now').test(l)).length, 1);
   assert.equal(lines.filter((l) => l.includes('Math' + '.random')).length, 0);
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
   assert.equal(lines.filter((l) => l.includes('FIX' + 'ME')).length, 0);
   assert.equal((src.match(new RegExp('camp' + 'fire', 'gi')) || []).length, 0);
+});
+
+test('non-canonical base64 spelling of same key rotates and both spellings authenticate (G49)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client, keys } = await createResident(ctx, 'alice');
+    const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const i = 42;
+    const v = B64.indexOf(keys.pubkey[i]);
+    const variant = keys.pubkey.slice(0, i) + B64[(v & ~3) | ((v + 1) & 3)] + keys.pubkey.slice(i + 1);
+
+    assert.notEqual(variant, keys.pubkey);
+    assert.equal(Buffer.from(variant, 'base64').equals(Buffer.from(keys.pubkey, 'base64')), true);
+
+    const rot = await client.rotateKey(variant);
+    assert.equal(rot.status, 200);
+    assert.deepEqual(Object.keys(rot.data).sort(), ['handle', 'rotated', 'state_seq']);
+
+    const row = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    assert.equal(row.pubkey, variant);
+    const hist = ctx.db
+      .prepare("SELECT pubkey FROM key_history WHERE handle = 'alice' AND action = 'rotate'")
+      .get();
+    assert.equal(hist.pubkey, variant);
+
+    const oldSpellingClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await oldSpellingClient.checkin({ status_text: 'old spelling' })).status, 200);
+
+    ctx.advanceClock(61);
+
+    const variantClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      pubkey: variant,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await variantClient.checkin({ status_text: 'new spelling' })).status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('non-canonical spelling of another resident key does not 409 (G50)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createResident(ctx, 'alice');
+    const bob = await createResident(ctx, 'bob');
+    const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const i = 42;
+    const v = B64.indexOf(alice.keys.pubkey[i]);
+    const variant = alice.keys.pubkey.slice(0, i) + B64[(v & ~3) | ((v + 1) & 3)] + alice.keys.pubkey.slice(i + 1);
+
+    const rot = await bob.client.rotateKey(variant);
+    assert.equal(rot.status, 200);
+
+    const bobOldCheckin = await bob.client.checkin({ status_text: 'bob old' });
+    assert.equal(bobOldCheckin.status, 401);
+    assert.equal(bobOldCheckin.data.error, 'invalid_signature');
+
+    const bobSharedClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'bob',
+      pubkey: variant,
+      privateKeyPem: alice.keys.privateKeyPem,
+    });
+    assert.equal((await bobSharedClient.checkin({ status_text: 'bob on shared bytes' })).status, 200);
+    assert.equal((await alice.client.checkin({ status_text: 'alice still home' })).status, 200);
+
+    const aliceRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice');
+    const bobRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('bob');
+    assert.notEqual(aliceRow.pubkey, bobRow.pubkey);
+    assert.equal(Buffer.from(aliceRow.pubkey, 'base64').equals(Buffer.from(bobRow.pubkey, 'base64')), true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('junk-tolerant base64 with embedded junk and surrounding whitespace rotates and stores verbatim (G51)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createResident(ctx, 'alice');
+    const fresh = generateKeypair();
+    const junkedFresh = fresh.pubkey.slice(0, 10) + '!' + fresh.pubkey.slice(10);
+
+    assert.equal((await client.rotateKey(junkedFresh)).status, 200);
+    assert.equal(ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice').pubkey, junkedFresh);
+
+    const junkedClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      pubkey: junkedFresh,
+      privateKeyPem: fresh.privateKeyPem,
+    });
+    assert.equal((await junkedClient.checkin({ status_text: 'junk stored' })).status, 200);
+
+    const fresh2 = generateKeypair();
+    const spaced = ' ' + fresh2.pubkey + ' ';
+    ctx.advanceClock(61);
+
+    assert.equal((await junkedClient.rotateKey(spaced)).status, 200);
+    assert.equal(ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice').pubkey, spaced);
+
+    const spacedClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      pubkey: spaced,
+      privateKeyPem: fresh2.privateKeyPem,
+    });
+    assert.equal((await spacedClient.checkin({ status_text: 'spaced stored' })).status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate budget and guestbook budget are independent (G52)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createResident(ctx, 'alice');
+    let activeClient = alice.client;
+    for (let k = 0; k < 3; k++) {
+      const nk = generateKeypair();
+      assert.equal((await activeClient.rotateKey(nk.pubkey)).status, 200);
+      activeClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nk });
+    }
+    assert.equal((await activeClient.rotateKey(generateKeypair().pubkey)).status, 429);
+
+    assert.equal((await activeClient.plot(KR235_MANIFEST, KR235_HTML)).status, 200);
+    assert.equal((await activeClient.signGuestbook('guestbook', 'Alice', 'still here after rotates')).status, 201);
+    assert.equal((await activeClient.checkin({ status_text: 'still me' })).status, 200);
+
+    const bob = await createResident(ctx, 'bob');
+    assert.equal((await bob.client.signGuestbook('guestbook', 'Bob', 'note 1')).status, 201);
+    assert.equal((await bob.client.signGuestbook('guestbook', 'Bob', 'note 2')).status, 201);
+    assert.equal((await bob.client.signGuestbook('guestbook', 'Bob', 'note 3')).status, 429);
+    assert.equal((await bob.client.rotateKey(generateKeypair().pubkey)).status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('old key fails every resident endpoint after rotate while new key works (G53)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: oldClient } = await createResident(ctx, 'alice');
+    const nk = generateKeypair();
+    assert.equal((await oldClient.rotateKey(nk.pubkey)).status, 200);
+
+    const calls = [
+      () => oldClient.checkin({ status_text: 'x' }),
+      () => oldClient.say('hello'),
+      () => oldClient.leave(),
+      () => oldClient.plot(KR235_MANIFEST, KR235_HTML),
+      () => oldClient.fishCast(),
+      () => oldClient.gardenPlant('moonflower'),
+      () => oldClient.claimInnRoom('lantern', 2),
+      () => oldClient.presence('bandstand'),
+    ];
+    for (const fn of calls) {
+      const res = await fn();
+      assert.equal(res.status, 401);
+      assert.equal(res.data.error, 'invalid_signature');
+    }
+
+    const newClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...nk });
+    assert.equal((await newClient.checkin({ status_text: 'new key home' })).status, 200);
+    assert.equal((await newClient.say('rotated and speaking')).status, 201);
+    assert.equal((await newClient.leave()).status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('extra rotate body fields are ignored (G54)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createResident(ctx, 'alice');
+    const before = ctx.db.prepare('SELECT role, status, origin, bio FROM residents WHERE handle = ?').get('alice');
+    const nk = generateKeypair();
+    const res = await client._signedPost('/api/town/key/rotate', {
+      pubkey: nk.pubkey,
+      role: 'npc',
+      status: 'suspended',
+      origin: 'rstation',
+      bio: 'pwned',
+    });
+    assert.equal(res.status, 200);
+    const after = ctx.db.prepare('SELECT role, status, origin, bio FROM residents WHERE handle = ?').get('alice');
+    assert.deepEqual(after, before);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotating to operator pubkey succeeds and operator auth still works (G55)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createResident(ctx, 'alice');
+    await createResident(ctx, 'bob');
+
+    assert.equal((await alice.client.rotateKey(ctx.operatorKeys.pubkey)).status, 200);
+    assert.equal(
+      ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice').pubkey,
+      ctx.operatorKeys.pubkey,
+    );
+    assert.equal((await alice.client.checkin({ status_text: 'old' })).status, 401);
+
+    const aliceAsOpClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      pubkey: ctx.operatorKeys.pubkey,
+      privateKeyPem: ctx.operatorKeys.privateKeyPem,
+    });
+    assert.equal((await aliceAsOpClient.checkin({ status_text: 'alice on operator bytes' })).status, 200);
+
+    const approveBob = await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'bob' });
+    assert.equal(approveBob.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('exact error bodies for all five rotate failures (G56)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createResident(ctx, 'alice');
+    const bob = await createResident(ctx, 'bob');
+    const t0 = ctx.nowSec();
+
+    const r1 = await kr235SignedRotate(ctx, { pubkey: undefined, privateKeyPem: alice.keys.privateKeyPem, timestamp: t0 });
+    assert.equal(r1.status, 400);
+    assert.deepEqual(r1.data, { error: 'missing_pubkey' });
+
+    const r2 = await kr235SignedRotate(ctx, { pubkey: 'not-a-valid-ed25519-key', privateKeyPem: alice.keys.privateKeyPem, timestamp: t0 });
+    assert.equal(r2.status, 400);
+    assert.deepEqual(r2.data, { error: 'invalid_pubkey' });
+
+    const r3 = await kr235SignedRotate(ctx, { pubkey: alice.keys.pubkey, privateKeyPem: alice.keys.privateKeyPem, timestamp: t0 });
+    assert.equal(r3.status, 400);
+    assert.deepEqual(r3.data, { error: 'same_pubkey' });
+
+    const r4 = await kr235SignedRotate(ctx, { pubkey: bob.keys.pubkey, privateKeyPem: alice.keys.privateKeyPem, timestamp: t0 });
+    assert.equal(r4.status, 409);
+    assert.deepEqual(r4.data, { error: 'pubkey_taken' });
+
+    let curKeys = alice.keys;
+    for (let k = 0; k < 3; k++) {
+      const nk = generateKeypair();
+      const ok = await kr235SignedRotate(ctx, { pubkey: nk.pubkey, privateKeyPem: curKeys.privateKeyPem, timestamp: t0 });
+      assert.equal(ok.status, 200);
+      curKeys = nk;
+    }
+
+    const r5 = await kr235SignedRotate(ctx, { pubkey: generateKeypair().pubkey, privateKeyPem: curKeys.privateKeyPem, timestamp: t0 });
+    assert.equal(r5.status, 429);
+    assert.deepEqual(r5.data, { error: 'rate_limited', retry_after: 3600 });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('key_history notes exact, ordered by id on tied created_at, and per-handle isolated (G57)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = await createResident(ctx, 'alice');
+    const bob = await createResident(ctx, 'bob');
+    const t0 = ctx.nowSec();
+
+    const nkA1 = generateKeypair();
+    const rA1 = await kr235SignedRotate(ctx, { pubkey: nkA1.pubkey, privateKeyPem: alice.keys.privateKeyPem, timestamp: t0 });
+    assert.equal(rA1.status, 200);
+
+    const nkA2 = generateKeypair();
+    const rA2 = await kr235SignedRotate(ctx, { pubkey: nkA2.pubkey, privateKeyPem: nkA1.privateKeyPem, timestamp: t0 });
+    assert.equal(rA2.status, 200);
+
+    const nkB = generateKeypair();
+    const signedB = signRequest({ method: 'POST', path: '/api/town/key/rotate', body: { pubkey: nkB.pubkey }, handle: 'bob', privateKeyPem: bob.keys.privateKeyPem, timestamp: t0 });
+    const resB = await fetch(`${ctx.baseUrl}/api/town/key/rotate`, { method: 'POST', headers: signedB.headers, body: signedB.rawBody });
+    const dataB = await resB.json().catch(() => null);
+    assert.equal(resB.status, 200);
+
+    const aliceRows = ctx.db
+      .prepare("SELECT action, note, created_at FROM key_history WHERE handle = 'alice' ORDER BY id ASC")
+      .all();
+    assert.deepEqual(
+      aliceRows.map((r) => [r.action, r.note]),
+      [
+        ['register', 'joined'],
+        ['rotate', 'self-service rotation'],
+        ['rotate', 'self-service rotation'],
+      ],
+    );
+    assert.equal(aliceRows[1].created_at, t0);
+    assert.equal(aliceRows[2].created_at, t0);
+
+    const bobRows = ctx.db
+      .prepare("SELECT action, note FROM key_history WHERE handle = 'bob' ORDER BY id ASC")
+      .all();
+    assert.deepEqual(
+      bobRows.map((r) => [r.action, r.note]),
+      [
+        ['register', 'joined'],
+        ['rotate', 'self-service rotation'],
+      ],
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('same_pubkey is a string comparison rather than a byte comparison (G58)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client, keys } = await createResident(ctx, 'alice');
+    const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const i = 42;
+    const v = B64.indexOf(keys.pubkey[i]);
+    const variant = keys.pubkey.slice(0, i) + B64[(v & ~3) | ((v + 1) & 3)] + keys.pubkey.slice(i + 1);
+
+    assert.equal((await client.rotateKey(variant)).status, 200);
+
+    const variantClient = new GhostlightClient({
+      baseUrl: ctx.baseUrl,
+      handle: 'alice',
+      pubkey: variant,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    const sameRes = await variantClient.rotateKey(variant);
+    assert.equal(sameRes.status, 400);
+    assert.deepEqual(sameRes.data, { error: 'same_pubkey' });
+
+    assert.equal((await variantClient.rotateKey(keys.pubkey)).status, 200);
+    assert.equal(ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('alice').pubkey, keys.pubkey);
+
+    const actions = ctx.db
+      .prepare("SELECT action FROM key_history WHERE handle = 'alice' ORDER BY id ASC")
+      .all()
+      .map((r) => r.action);
+    assert.deepEqual(actions, ['register', 'rotate', 'rotate']);
+  } finally {
+    await ctx.close();
+  }
 });
