@@ -2457,7 +2457,7 @@ test('leave round-trip and file hygiene', async () => {
   } finally {
     await ctx.close();
   }
-  // File hygiene: 48 unique names, 11 imports verbatim, pinned as-true counts.
+  // File hygiene: 58 unique names, 11 imports verbatim, pinned as-true counts.
   // NOTE the self-reference trap, handled exactly as slice 435 did: count
   // needles with concatenated strings so the assertions themselves never contain
   // the literal being counted. The G2d defaults check adds one line, so the count
@@ -2465,8 +2465,8 @@ test('leave round-trip and file hygiene', async () => {
   const self = fs.readFileSync(path.join(__dirname, 'test-ghostlight-client-cli.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^test\('([^']+)', /gm)].map((m) => m[1]);
-  assert.equal(names.length, 48);
-  assert.equal(new Set(names).size, 48); // every top-level test name unique
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -2488,4 +2488,400 @@ test('leave round-trip and file hygiene', async () => {
   assert.equal(occ('FIX' + 'ME'), 0);
   assert.equal(occ('camp' + 'fire'), 0);
   assert.equal(occ('inner' + 'HTML'), 0);
+});
+
+test('state --since equality is exact (same seq 304, future and negative 200)', async () => {
+  const ctx = await startTestServer();
+  try {
+    const initial = await runCli(['state', '--api-base', ctx.baseUrl]);
+    assert.equal(initial.code, 0, initial.stderr);
+    const initialOut = JSON.parse(initial.stdout.trim());
+    assert.equal(initialOut.ok, true);
+    assert.equal(initialOut.status, 200);
+    const seq = initialOut.data.state_seq;
+    assert.equal(typeof seq, 'number');
+
+    const exact = await runCli(['state', '--api-base', ctx.baseUrl, '--since', String(seq)]);
+    assert.equal(exact.code, 0, exact.stderr);
+    const exactOut = JSON.parse(exact.stdout.trim());
+    assert.equal(exactOut.ok, true);
+    assert.equal(exactOut.status, 304);
+    assert.equal(exactOut.data, null);
+
+    const future = await runCli(['state', '--api-base', ctx.baseUrl, '--since', String(seq + 100)]);
+    assert.equal(future.code, 0, future.stderr);
+    const futureOut = JSON.parse(future.stdout.trim());
+    assert.equal(futureOut.ok, true);
+    assert.equal(futureOut.status, 200);
+    assert.equal(futureOut.data.state_seq, seq);
+
+    const negative = await runCli(['state', '--api-base', ctx.baseUrl, '--since', '-5']);
+    assert.equal(negative.code, 0, negative.stderr);
+    const negativeOut = JSON.parse(negative.stdout.trim());
+    assert.equal(negativeOut.ok, true);
+    assert.equal(negativeOut.status, 200);
+    assert.equal(negativeOut.data.state_seq, seq);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('unknown-resident CLI calls exit 0 with 401 unknown_resident', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'ghost.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+
+    const calls = [
+      ['leave', '--api-base', ctx.baseUrl, '--handle', 'ghost', '--key', keyPath],
+      ['say', '--api-base', ctx.baseUrl, '--handle', 'ghost', '--key', keyPath, '--body', 'boo'],
+      ['presence', '--api-base', ctx.baseUrl, '--handle', 'ghost', '--key', keyPath, '--zone', 'gate'],
+      ['checkin', '--api-base', ctx.baseUrl, '--handle', 'ghost', '--key', keyPath],
+    ];
+    for (const args of calls) {
+      const res = await runCli(args);
+      assert.equal(res.code, 0, `${args[0]}: ${res.stderr}`);
+      const out = JSON.parse(res.stdout.trim());
+      assert.equal(out.ok, false);
+      assert.equal(out.status, 401);
+      assert.equal(out.data.error, 'unknown_resident');
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('guest-say needs no checkin and guest-checkin is rate-limited', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'g1.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+
+    const said = await runCli([
+      'guest-say', '--api-base', ctx.baseUrl, '--handle', 'g1', '--key', keyPath,
+      '--body', 'speaking before checkin',
+    ]);
+    assert.equal(said.code, 0, said.stderr);
+    const saidOut = JSON.parse(said.stdout.trim());
+    assert.equal(saidOut.ok, true);
+    assert.equal(saidOut.status, 201);
+
+    const first = await runCli([
+      'guest-checkin', '--api-base', ctx.baseUrl, '--handle', 'g1', '--key', keyPath,
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+    const firstOut = JSON.parse(first.stdout.trim());
+    assert.equal(firstOut.ok, true);
+    assert.equal(firstOut.status, 200);
+    assert.equal(firstOut.data.zone, 'bandstand');
+
+    const second = await runCli([
+      'guest-checkin', '--api-base', ctx.baseUrl, '--handle', 'g1', '--key', keyPath,
+    ]);
+    assert.equal(second.code, 0, second.stderr);
+    const secondOut = JSON.parse(second.stdout.trim());
+    assert.equal(secondOut.ok, false);
+    assert.equal(secondOut.status, 429);
+    assert.equal(secondOut.data.error, 'rate_limited');
+    assert.equal(typeof secondOut.data.retry_after, 'number');
+    assert.ok(secondOut.data.retry_after > 0 && secondOut.data.retry_after <= 300);
+
+    const st = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const rows = st.presence.filter((p) => p.handle === 'g1');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].zone, 'bandstand');
+    assert.equal(rows[0].role, 'guest');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('presence zone gate accepted and bare plot: rejected 400 invalid_zone', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'zoner.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    assert.equal(
+      JSON.parse((await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', 'zoner', '--key', keyPath, '--origin', 'colony',
+      ])).stdout.trim()).status,
+      201,
+    );
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'zoner' })).status,
+      200,
+    );
+
+    const gateRes = await runCli([
+      'presence', '--api-base', ctx.baseUrl, '--handle', 'zoner', '--key', keyPath, '--zone', 'gate',
+    ]);
+    assert.equal(gateRes.code, 0, gateRes.stderr);
+    const gateOut = JSON.parse(gateRes.stdout.trim());
+    assert.equal(gateOut.ok, true);
+    assert.equal(gateOut.status, 200);
+    assert.equal(gateOut.data.zone, 'gate');
+
+    const badRes = await runCli([
+      'presence', '--api-base', ctx.baseUrl, '--handle', 'zoner', '--key', keyPath, '--zone', 'plot:',
+    ]);
+    assert.equal(badRes.code, 0, badRes.stderr);
+    const badOut = JSON.parse(badRes.stdout.trim());
+    assert.equal(badOut.ok, false);
+    assert.equal(badOut.status, 400);
+    assert.equal(badOut.data.error, 'invalid_zone');
+
+    const st = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const row = st.presence.find((p) => p.handle === 'zoner');
+    assert.ok(row);
+    assert.equal(row.zone, 'gate');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('getplot for an existing resident with no plot returns 404 plot_not_found', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'plotless.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    assert.equal(
+      JSON.parse((await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', 'plotless', '--key', keyPath, '--origin', 'colony',
+      ])).stdout.trim()).status,
+      201,
+    );
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'plotless' })).status,
+      200,
+    );
+
+    const getRes = await runCli(['getplot', '--api-base', ctx.baseUrl, '--handle', 'plotless']);
+    assert.equal(getRes.code, 0, getRes.stderr);
+    const getOut = JSON.parse(getRes.stdout.trim());
+    assert.equal(getOut.ok, false);
+    assert.equal(getOut.status, 404);
+    assert.equal(getOut.data.error, 'plot_not_found');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('plot manifest edges: string manifest, invalid prop kind, and 13 props', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'edgeplot.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    assert.equal(
+      JSON.parse((await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', 'edgeplot', '--key', keyPath, '--origin', 'colony',
+      ])).stdout.trim()).status,
+      201,
+    );
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'edgeplot' })).status,
+      200,
+    );
+
+    const htmlPath = path.join(ctx.tmpDir, 'desk.html');
+    fs.writeFileSync(htmlPath, DESK_NOTE_HTML, 'utf8');
+    const base = ['plot', '--api-base', ctx.baseUrl, '--handle', 'edgeplot', '--key', keyPath, '--html', htmlPath];
+
+    const strManifestPath = path.join(ctx.tmpDir, 'str.json');
+    fs.writeFileSync(strManifestPath, JSON.stringify('hello'), 'utf8');
+    const strRes = await runCli([...base, '--manifest', strManifestPath]);
+    assert.equal(strRes.code, 0, strRes.stderr);
+    const strOut = JSON.parse(strRes.stdout.trim());
+    assert.equal(strOut.ok, false);
+    assert.equal(strOut.status, 400);
+    assert.equal(strOut.data.error, 'invalid_manifest');
+
+    const dragonPath = path.join(ctx.tmpDir, 'dragon.json');
+    fs.writeFileSync(
+      dragonPath,
+      JSON.stringify({ ...VALID_MANIFEST, props: [{ kind: 'dragon', x: 0, y: 0, z: 0, rot_y: 0 }] }),
+      'utf8',
+    );
+    const dragonRes = await runCli([...base, '--manifest', dragonPath]);
+    assert.equal(dragonRes.code, 0, dragonRes.stderr);
+    const dragonOut = JSON.parse(dragonRes.stdout.trim());
+    assert.equal(dragonOut.ok, false);
+    assert.equal(dragonOut.status, 400);
+    assert.equal(dragonOut.data.error, 'invalid_prop_kind');
+    assert.equal(dragonOut.data.index, 0);
+
+    const catsPath = path.join(ctx.tmpDir, 'cats13.json');
+    fs.writeFileSync(
+      catsPath,
+      JSON.stringify({
+        ...VALID_MANIFEST,
+        props: Array.from({ length: 13 }, (_, i) => ({ kind: 'cat', x: i * 0.1, y: 0, z: 0, rot_y: 0 })),
+      }),
+      'utf8',
+    );
+    const catsRes = await runCli([...base, '--manifest', catsPath]);
+    assert.equal(catsRes.code, 0, catsRes.stderr);
+    const catsOut = JSON.parse(catsRes.stdout.trim());
+    assert.equal(catsOut.ok, false);
+    assert.equal(catsOut.status, 400);
+    assert.equal(catsOut.data.error, 'too_many_props');
+    assert.equal(catsOut.data.max, 12);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join origins guestbook, rstation, and case-sensitive Colony rejected 400', async () => {
+  const ctx = await startTestServer();
+  try {
+    const gbKey = path.join(ctx.tmpDir, 'gbjoin.pem');
+    assert.equal((await runCli(['keygen', '--out', gbKey])).code, 0);
+    const gbRes = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'gbjoin', '--key', gbKey, '--origin', 'guestbook',
+    ]);
+    assert.equal(gbRes.code, 0, gbRes.stderr);
+    const gbOut = JSON.parse(gbRes.stdout.trim());
+    assert.equal(gbOut.ok, true);
+    assert.equal(gbOut.status, 201);
+    assert.equal(gbOut.data.origin, 'guestbook');
+
+    const rsKey = path.join(ctx.tmpDir, 'rsjoin.pem');
+    assert.equal((await runCli(['keygen', '--out', rsKey])).code, 0);
+    const rsRes = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'rsjoin', '--key', rsKey, '--origin', 'rstation',
+    ]);
+    assert.equal(rsRes.code, 0, rsRes.stderr);
+    const rsOut = JSON.parse(rsRes.stdout.trim());
+    assert.equal(rsOut.ok, true);
+    assert.equal(rsOut.status, 201);
+    assert.equal(rsOut.data.origin, 'rstation');
+
+    const caseKey = path.join(ctx.tmpDir, 'casejoin.pem');
+    assert.equal((await runCli(['keygen', '--out', caseKey])).code, 0);
+    const caseRes = await runCli([
+      'join', '--api-base', ctx.baseUrl, '--handle', 'casejoin', '--key', caseKey, '--origin', 'Colony',
+    ]);
+    assert.equal(caseRes.code, 0, caseRes.stderr);
+    const caseOut = JSON.parse(caseRes.stdout.trim());
+    assert.equal(caseOut.ok, false);
+    assert.equal(caseOut.status, 400);
+    assert.equal(caseOut.data.error, 'invalid_origin');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('keygen --out where a parent component is a file exits 1 with EEXIST', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-cli-blocker-'));
+  try {
+    const blocker = path.join(tmpDir, 'blocker');
+    fs.writeFileSync(blocker, 'not a dir', 'utf8');
+    const res = await runCli(['keygen', '--out', path.join(blocker, 'key.pem')]);
+    assert.equal(res.code, 1);
+    const errJson = JSON.parse(res.stderr.trim());
+    assert.equal(errJson.ok, false);
+    assert.ok(errJson.error.includes('EEXIST'), errJson.error);
+    assert.ok(errJson.error.includes('file already exists'), errJson.error);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('checkin without --status-text and with empty --status-text both store empty string', async () => {
+  const ctx = await startTestServer();
+  try {
+    const k1 = path.join(ctx.tmpDir, 'nostatus.pem');
+    assert.equal((await runCli(['keygen', '--out', k1])).code, 0);
+    assert.equal(
+      JSON.parse((await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', 'nostatus', '--key', k1, '--origin', 'colony',
+      ])).stdout.trim()).status,
+      201,
+    );
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'nostatus' })).status,
+      200,
+    );
+    const c1 = await runCli(['checkin', '--api-base', ctx.baseUrl, '--handle', 'nostatus', '--key', k1]);
+    assert.equal(c1.code, 0, c1.stderr);
+    const c1Out = JSON.parse(c1.stdout.trim());
+    assert.equal(c1Out.ok, true);
+    assert.equal(c1Out.status, 200);
+    assert.equal(typeof c1Out.data.slot, 'number');
+
+    const k2 = path.join(ctx.tmpDir, 'emptytext.pem');
+    assert.equal((await runCli(['keygen', '--out', k2])).code, 0);
+    assert.equal(
+      JSON.parse((await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', 'emptytext', '--key', k2, '--origin', 'colony',
+      ])).stdout.trim()).status,
+      201,
+    );
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'emptytext' })).status,
+      200,
+    );
+    const c2 = await runCli([
+      'checkin', '--api-base', ctx.baseUrl, '--handle', 'emptytext', '--key', k2, '--status-text', '',
+    ]);
+    assert.equal(c2.code, 0, c2.stderr);
+    const c2Out = JSON.parse(c2.stdout.trim());
+    assert.equal(c2Out.ok, true);
+    assert.equal(c2Out.status, 200);
+
+    const st = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const f1 = st.footlights.find((f) => f.handle === 'nostatus');
+    const f2 = st.footlights.find((f) => f.handle === 'emptytext');
+    assert.ok(f1);
+    assert.ok(f2);
+    assert.equal(f1.status_text, '');
+    assert.equal(f2.status_text, '');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('say body preserves unicode, real newlines, and leading/trailing spaces verbatim', async () => {
+  const ctx = await startTestServer();
+  try {
+    const keyPath = path.join(ctx.tmpDir, 'unicoder.pem');
+    assert.equal((await runCli(['keygen', '--out', keyPath])).code, 0);
+    assert.equal(
+      JSON.parse((await runCli([
+        'join', '--api-base', ctx.baseUrl, '--handle', 'unicoder', '--key', keyPath, '--origin', 'colony',
+      ])).stdout.trim()).status,
+      201,
+    );
+    assert.equal(
+      (await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'unicoder' })).status,
+      200,
+    );
+
+    const body1 = 'héllo\nwörld — lantern';
+    const s1 = await runCli([
+      'say', '--api-base', ctx.baseUrl, '--handle', 'unicoder', '--key', keyPath, '--body', body1,
+    ]);
+    assert.equal(s1.code, 0, s1.stderr);
+    const s1Out = JSON.parse(s1.stdout.trim());
+    assert.equal(s1Out.ok, true);
+    assert.equal(s1Out.status, 201);
+
+    const body2 = '  padded  ';
+    const s2 = await runCli([
+      'say', '--api-base', ctx.baseUrl, '--handle', 'unicoder', '--key', keyPath, '--body', body2,
+    ]);
+    assert.equal(s2.code, 0, s2.stderr);
+    const s2Out = JSON.parse(s2.stdout.trim());
+    assert.equal(s2Out.ok, true);
+    assert.equal(s2Out.status, 201);
+
+    const st = JSON.parse((await runCli(['state', '--api-base', ctx.baseUrl])).stdout.trim()).data;
+    const line1 = st.prompt_book.find((l) => l.id === s1Out.data.id);
+    const line2 = st.prompt_book.find((l) => l.id === s2Out.data.id);
+    assert.ok(line1);
+    assert.ok(line2);
+    assert.equal(line1.body, body1);
+    assert.equal(line2.body, body2);
+  } finally {
+    await ctx.close();
+  }
 });
