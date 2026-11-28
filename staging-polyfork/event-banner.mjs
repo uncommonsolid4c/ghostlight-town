@@ -166,6 +166,7 @@ export function updateEventBanner(
 export function formatEventWhen(startMs) {
   if (!Number.isFinite(startMs)) return '';
   return new Date(startMs).toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
