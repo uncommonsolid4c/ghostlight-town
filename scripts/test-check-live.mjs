@@ -1191,7 +1191,7 @@ test('getExpectedFiles default bundle matches staging-polyfork and real-tree cou
   const town3d = await getExpectedFiles(REPO_ROOT, 'town-3d');
 
   assert.deepEqual(defaultList, staging);
-  assert.equal(staging.length, 195);
+  assert.equal(staging.length, 196);
   assert.equal(town3d.length, 25);
   assert.equal(staging.includes('staging.js'), true);
   assert.equal(town3d.includes('town.js'), true);
