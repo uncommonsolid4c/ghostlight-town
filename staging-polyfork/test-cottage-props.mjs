@@ -609,8 +609,8 @@ test('safeColor, HEX_COLOR_RE, and VALID_PROP_KINDS exact membership', async () 
   assert.equal(HEX_COLOR_RE.test('#gggggg'), false);
   assert.equal(HEX_COLOR_RE.test('#1234567'), false);
 
-  assert.equal(VALID_PROP_KINDS.size, 9);
-  for (const kind of ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter']) {
+  assert.equal(VALID_PROP_KINDS.size, 10);
+  for (const kind of ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter', 'boot_planter']) {
     assert.equal(VALID_PROP_KINDS.has(kind), true, `expected ${kind} in VALID_PROP_KINDS`);
   }
   assert.equal(VALID_PROP_KINDS.has('piano'), false);
@@ -861,7 +861,7 @@ test('attachPlotProps preserves order across skipped props; porch attach returns
 test('every VALID_PROP_KIND builds; attachPlotProps rejects non-array props; MILO props land on the porch band', () => {
   const THREE = makeFakeThree();
 
-  assert.equal(VALID_PROP_KINDS.size, 9);
+  assert.equal(VALID_PROP_KINDS.size, 10);
   for (const kind of [...VALID_PROP_KINDS].sort()) {
     const built = buildProp(THREE, { kind, x: 0, y: 0, z: 2.2, rot_y: 0, color: '#ffffff' });
     assert.ok(built, `expected ${kind} to build`);
@@ -1253,7 +1253,7 @@ test('staging.js cottage-props import line verbatim and minimal usage', async ()
 
   assert.equal(
     stagingSrc.includes(
-      "import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=36';"
+      "import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=41';"
     ),
     true
   );
@@ -1317,8 +1317,8 @@ test('file hygiene: 47 unique names, 6 imports, zero banned terms, pinned as-tru
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 57);
-  assert.equal(new Set(names).size, 57);
+  assert.equal(names.length, 58);
+  assert.equal(new Set(names).size, 58);
 
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 6);
   assert.deepEqual(lines.slice(6, 14), [
@@ -1502,4 +1502,66 @@ test('buildProp creates fresh geometry and material per call and attachPlotProps
   assert.equal(count, 2);
   assert.equal(group.children.length, 2);
   assert.notEqual(group.children[0], group.children[1]);
+});
+
+test('Slice 532: buildProp builds boot_planter with worked child geometry, porch remap, leather tint, and fallback', () => {
+  assert.equal(VALID_PROP_KINDS.has('boot_planter'), true);
+  const THREE = makeFakeThree();
+
+  const boot = buildProp(THREE, {
+    kind: 'boot_planter',
+    x: 1.1,
+    y: 0,
+    z: 0.9,
+    rot_y: 90,
+    color: '#5c3a21',
+  });
+  assert.ok(boot);
+  assert.equal(boot.name, 'prop_boot_planter');
+  assert.equal(boot.position.x, 1.1);
+  assert.ok(Math.abs(boot.position.y - 0.18) < 1e-12, 'interior z must lift by PORCH_FLOOR_Y 0.18');
+  assert.ok(boot.position.z >= 2.05 && boot.position.z <= 3.45, 'interior z must remap into [2.05, 3.45]');
+  assert.ok(Math.abs(boot.rotation.y - Math.PI / 2) < 1e-12);
+  assert.equal(boot.children.length, 6);
+
+  const byName = Object.fromEntries(boot.children.map((c) => [c.name, c]));
+
+  assert.equal(byName.prop_boot_planter_sole.geometry.type, 'BoxGeometry');
+  assert.deepEqual(byName.prop_boot_planter_sole.geometry.args, [0.42, 0.07, 0.17]);
+  assert.equal(byName.prop_boot_planter_sole.material.color, '#5c3a21');
+  assert.deepEqual([byName.prop_boot_planter_sole.position.x, byName.prop_boot_planter_sole.position.y, byName.prop_boot_planter_sole.position.z], [0, 0.035, 0]);
+
+  assert.equal(byName.prop_boot_planter_foot.geometry.type, 'BoxGeometry');
+  assert.deepEqual(byName.prop_boot_planter_foot.geometry.args, [0.3, 0.12, 0.16]);
+  assert.equal(byName.prop_boot_planter_foot.material.color, '#5c3a21');
+  assert.deepEqual([byName.prop_boot_planter_foot.position.x, byName.prop_boot_planter_foot.position.y, byName.prop_boot_planter_foot.position.z], [-0.04, 0.13, 0]);
+
+  assert.equal(byName.prop_boot_planter_shaft.geometry.type, 'BoxGeometry');
+  assert.deepEqual(byName.prop_boot_planter_shaft.geometry.args, [0.16, 0.34, 0.16]);
+  assert.equal(byName.prop_boot_planter_shaft.material.color, '#5c3a21');
+  assert.deepEqual([byName.prop_boot_planter_shaft.position.x, byName.prop_boot_planter_shaft.position.y, byName.prop_boot_planter_shaft.position.z], [0.12, 0.24, 0]);
+
+  assert.equal(byName.prop_boot_planter_soil.geometry.type, 'BoxGeometry');
+  assert.deepEqual(byName.prop_boot_planter_soil.geometry.args, [0.12, 0.03, 0.12]);
+  assert.equal(byName.prop_boot_planter_soil.material.color, '#4d3522');
+  assert.deepEqual([byName.prop_boot_planter_soil.position.x, byName.prop_boot_planter_soil.position.y, byName.prop_boot_planter_soil.position.z], [0.12, 0.41, 0]);
+
+  assert.equal(byName.prop_boot_planter_stem.geometry.type, 'CylinderGeometry');
+  assert.deepEqual(byName.prop_boot_planter_stem.geometry.args, [0.015, 0.015, 0.22, 6]);
+  assert.equal(byName.prop_boot_planter_stem.material.color, '#1f3f26');
+  assert.deepEqual([byName.prop_boot_planter_stem.position.x, byName.prop_boot_planter_stem.position.y, byName.prop_boot_planter_stem.position.z], [0.12, 0.53, 0]);
+
+  assert.equal(byName.prop_boot_planter_bloom.geometry.type, 'ConeGeometry');
+  assert.deepEqual(byName.prop_boot_planter_bloom.geometry.args, [0.09, 0.16, 6]);
+  assert.equal(byName.prop_boot_planter_bloom.material.color, '#ff9a3c');
+  assert.deepEqual([byName.prop_boot_planter_bloom.position.x, byName.prop_boot_planter_bloom.position.y, byName.prop_boot_planter_bloom.position.z], [0.12, 0.68, 0]);
+
+  const fallback = buildProp(THREE, { kind: 'boot_planter', x: 0, y: 0, z: 2.2, rot_y: 0, color: 'not-a-hex' });
+  const fbByName = Object.fromEntries(fallback.children.map((c) => [c.name, c]));
+  assert.equal(fbByName.prop_boot_planter_sole.material.color, '#8a6240');
+  assert.equal(fbByName.prop_boot_planter_foot.material.color, '#8a6240');
+  assert.equal(fbByName.prop_boot_planter_shaft.material.color, '#8a6240');
+  assert.equal(fbByName.prop_boot_planter_soil.material.color, '#4d3522');
+  assert.equal(fbByName.prop_boot_planter_stem.material.color, '#1f3f26');
+  assert.equal(fbByName.prop_boot_planter_bloom.material.color, '#ff9a3c');
 });
