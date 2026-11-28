@@ -2511,11 +2511,16 @@ export function applyState(town, state = {}, options = {}) {
   const litBySlot = new Map();
   const footlightSlotByHandle = new Map();
   for (const row of footlightRows) {
-    if (row && Number.isInteger(row.slot) && row.slot >= 0 && row.slot < town.parts.footlights.length) {
+    if (
+      row &&
+      typeof row.handle === 'string' &&
+      row.handle !== '' &&
+      Number.isInteger(row.slot) &&
+      row.slot >= 1 &&
+      row.slot < town.parts.footlights.length
+    ) {
       litBySlot.set(row.slot, row);
-      if (typeof row.handle === 'string') {
-        footlightSlotByHandle.set(row.handle, row.slot);
-      }
+      footlightSlotByHandle.set(row.handle, row.slot);
     }
   }
 
