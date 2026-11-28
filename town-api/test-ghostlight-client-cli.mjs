@@ -2141,7 +2141,7 @@ test('duplicate flags last-wins and flag equals forms', async () => {
     const fl = st.footlights.find((f) => f.handle === 'dupflag2');
     assert.ok(fl);
     assert.equal(fl.status_text, 'second');
-    assert.equal(fl.slot, 0);
+    assert.equal(fl.slot, 1);
 
     // Duplicate --api-base: bad first URL, real second — last wins, 200.
     const dupBase = await runCli(['state', '--api-base', 'http://127.0.0.1:1', '--api-base', ctx.baseUrl]);
@@ -2284,13 +2284,13 @@ test('checkin slot parsing edges trim hex whitespace-only 429 precedence', async
       (await adminPost(ctx2.baseUrl, ctx2.operatorKeys, '/api/town/admin/approve', { handle: 'spaceslot' })).status,
       200,
     );
-    // Whitespace-only parses via Number() to 0 — the CLI accepts it, slot 0 lights.
+    // Whitespace-only parses via Number() to 0 — the CLI sends it, and the server rejects slot 0 (Milo's permanent footlight) with 400 invalid_slot.
     const spaced = await runCli([
       'checkin', '--api-base', ctx2.baseUrl, '--handle', 'spaceslot', '--key', keyC, '--slot', ' ',
     ]);
     const spacedOut = JSON.parse(spaced.stdout.trim());
-    assert.equal(spacedOut.status, 200);
-    assert.equal(spacedOut.data.slot, 0);
+    assert.equal(spacedOut.status, 400);
+    assert.equal(spacedOut.data.error, 'invalid_slot');
   } finally {
     await ctx2.close();
   }
