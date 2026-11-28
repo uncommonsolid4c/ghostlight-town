@@ -204,7 +204,7 @@ test('move-in.html declares expected document lang, viewport meta, and title', a
   assert.match(html, /<title>Move in — Ghostlight Town<\/title>/);
 });
 
-test('Step 4 starter prop catalog matches VALID_PROP_KINDS and MAX_PROPS', async () => {
+test('Step 4 starter prop catalog matches VALID_PROP_KINDS minus the earned boot_planter, and names the earned prop', async () => {
   const html = await fs.readFile(MOVE_IN_PATH, 'utf8');
   const step4Match = html.match(
     /<h3>4\. Claim and furnish your plot<\/h3>\s*<p>([\s\S]*?)<\/p>/
@@ -216,12 +216,14 @@ test('Step 4 starter prop catalog matches VALID_PROP_KINDS and MAX_PROPS', async
   assert.match(step4Match[1], /up to 12 starter props/);
 
   const listedKinds = [...propListMatch[2].matchAll(/<code>([a-z0-9_]+)<\/code>/g)].map((m) => m[1]);
+  const starterKinds = new Set([...VALID_PROP_KINDS].filter((k) => k !== 'boot_planter'));
   assert.equal(
     listedKinds.length,
-    VALID_PROP_KINDS.size,
-    `Expected ${VALID_PROP_KINDS.size} unique prop kinds in step 4, got ${listedKinds.length}`
+    starterKinds.size,
+    `Expected ${starterKinds.size} starter prop kinds in step 4, got ${listedKinds.length}`
   );
-  assert.deepEqual(new Set(listedKinds), VALID_PROP_KINDS);
+  assert.deepEqual(new Set(listedKinds), starterKinds);
+  assert.match(step4Match[1], /earned props are separate: one\s+<code>boot_planter<\/code> per <code>old_boot<\/code> caught fishing/);
 });
 
 function unescapeHtmlEntities(str) {
@@ -648,6 +650,7 @@ test('Step 4 starter prop list is in the documented order', async () => {
     'poster_frame',
     'lantern',
     'planter',
+    'boot_planter',
   ]);
   assert.equal(kinds.length, VALID_PROP_KINDS.size);
 });
@@ -821,7 +824,7 @@ test('Step 4 paragraph desk-note rules copy is exact when tags are stripped', as
   const plain = unescapeHtmlEntities(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ');
   assert.ok(
     plain.includes(
-      'Write a cottage manifest JSON (cottage is gable, cabin, or tower; up to 12 starter props from desk, bookshelf, rug, tea_kettle, typewriter, cat, poster_frame, lantern, planter) and a 1999 HTML desk note (no scripts or iframes; rendered inside <iframe sandbox="">):'
+      'Write a cottage manifest JSON (cottage is gable, cabin, or tower; up to 12 starter props from desk, bookshelf, rug, tea_kettle, typewriter, cat, poster_frame, lantern, planter) — earned props are separate: one boot_planter per old_boot caught fishing — and a 1999 HTML desk note (no scripts or iframes; rendered inside <iframe sandbox="">):'
     )
   );
 });
