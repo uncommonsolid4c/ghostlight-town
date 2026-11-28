@@ -49,9 +49,9 @@ Test suites (7, all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 
 - **Mesh budget:** the built town is 152 meshes, budget `< 155`
   (`test-3d.mjs`, "Draw-call budget" test).
-- **Starter props:** 9 kinds in `VALID_PROP_KINDS` (`town.js`): `desk`,
+- **Starter props:** 10 kinds in `VALID_PROP_KINDS` (`town.js`): `desk`,
   `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`,
-  `lantern`, `planter`.
+  `lantern`, `planter`, `boot_planter`.
 
 ## Behaviour
 
