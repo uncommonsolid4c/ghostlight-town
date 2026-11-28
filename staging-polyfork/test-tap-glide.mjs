@@ -1169,7 +1169,7 @@ test('tap-glide source pins header signatures and pure JS claim', async () => {
   const src = await fs.readFile(path.join(__dirname, 'tap-glide.mjs'), 'utf8');
   for (const line of [
     '// Orbit tap-to-glide + multi-pointer suppression helpers for staging-polyfork.',
-    'lines 3076-3123',
+    'lines 3081-3128',
     'Pure JS (no THREE import, no top-level document/window access)',
     'export const DEFAULT_ORBIT_GLIDE_MAX_RADIUS = 38;',
     'export function stepGlide(',
@@ -1377,22 +1377,22 @@ test('P7 staging.js animation-loop glide call-site source lines', async () => {
   const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
   const sl = stagingSrc.split('\n');
   assert.equal(
-    sl[1539],
+    sl[1544],
     '    if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden) && !interiorVisit.isInside()) {'
   );
-  assert.equal(sl[1540], '      const next = stepOrbitGlide(');
-  assert.equal(sl[1541], '        controls.target,');
-  assert.equal(sl[1542], '        camera.position,');
-  assert.equal(sl[1543], '        glideTarget,');
-  assert.equal(sl[1544], '        dt,');
-  assert.equal(sl[1545], '        { speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }');
-  assert.equal(sl[1546], '      );');
-  assert.equal(sl[1547], '      controls.target.x = next.targetX;');
-  assert.equal(sl[1548], '      controls.target.z = next.targetZ;');
-  assert.equal(sl[1549], '      camera.position.x = next.cameraX;');
-  assert.equal(sl[1550], '      camera.position.z = next.cameraZ;');
-  assert.equal(sl[1551], '      if (next.arrived) {');
-  assert.equal(sl[1552], '        glideTarget = null;');
+  assert.equal(sl[1545], '      const next = stepOrbitGlide(');
+  assert.equal(sl[1546], '        controls.target,');
+  assert.equal(sl[1547], '        camera.position,');
+  assert.equal(sl[1548], '        glideTarget,');
+  assert.equal(sl[1549], '        dt,');
+  assert.equal(sl[1550], '        { speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }');
+  assert.equal(sl[1551], '      );');
+  assert.equal(sl[1552], '      controls.target.x = next.targetX;');
+  assert.equal(sl[1553], '      controls.target.z = next.targetZ;');
+  assert.equal(sl[1554], '      camera.position.x = next.cameraX;');
+  assert.equal(sl[1555], '      camera.position.z = next.cameraZ;');
+  assert.equal(sl[1556], '      if (next.arrived) {');
+  assert.equal(sl[1557], '        glideTarget = null;');
 });
 
 test('P8 stepGlide Infinity / NaN speed and a tiny dt', () => {
