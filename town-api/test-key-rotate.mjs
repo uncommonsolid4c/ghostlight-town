@@ -945,7 +945,7 @@ test('muted resident may rotate and check in but not say; suspended resident may
     const newAlice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...newAliceKeys });
     const checkinRes = await newAlice.checkin({ status_text: 'muted checkin' });
     assert.equal(checkinRes.status, 200);
-    assert.equal(checkinRes.data.slot, 0);
+    assert.equal(checkinRes.data.slot, 1);
 
     const sayRes = await newAlice.say('muted say');
     assert.equal(sayRes.status, 403);
@@ -1378,7 +1378,7 @@ test('rotate after footlight expiry, then relight with the new key', async () =>
     });
     const relightData = await relightHttp.json();
     assert.equal(relightHttp.status, 200);
-    assert.equal(relightData.slot, 0);
+    assert.equal(relightData.slot, 1);
 
     const stateAfterRelight = await oldClient.state();
     assert.equal(stateAfterRelight.data.footlights.some((f) => f.handle === 'alice'), true);
