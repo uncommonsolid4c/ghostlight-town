@@ -1428,11 +1428,12 @@ test('plot-validation constants pinned to literal values and catalog sets pinned
 
   assert.equal(VALID_COTTAGES.size, 3);
   assert.deepEqual([...VALID_COTTAGES].sort(), ['cabin', 'gable', 'tower']);
-  assert.equal(VALID_PROP_KINDS.size, 9);
+  assert.equal(VALID_PROP_KINDS.size, 10);
   assert.deepEqual(
     [...VALID_PROP_KINDS].sort(),
     [
       'bookshelf',
+      'boot_planter',
       'cat',
       'desk',
       'lantern',
