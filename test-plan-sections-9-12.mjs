@@ -28,7 +28,7 @@ test('PLAN.md §9 Q4 plot catalog matches VALID_PROP_KINDS count and additions i
   assert.ok(q4Match, 'PLAN.md §9 must contain Q4 Plot catalog');
   const q4 = q4Match[0];
 
-  assert.match(q4, new RegExp(`${VALID_PROP_KINDS.size} starter prop kinds`), `PLAN.md §9 Q4 must state ${VALID_PROP_KINDS.size} starter prop kinds`);
+  assert.match(q4, new RegExp(`${VALID_PROP_KINDS.size} prop kinds`), `PLAN.md §9 Q4 must state ${VALID_PROP_KINDS.size} prop kinds`);
   assert.doesNotMatch(q4, /seven starter prop kinds/i, 'PLAN.md §9 Q4 must not retain stale "seven starter prop kinds"');
   assert.match(q4, /\blantern\b/, 'PLAN.md §9 Q4 must name lantern');
   assert.match(q4, /\bplanter\b/, 'PLAN.md §9 Q4 must name planter');
