@@ -621,8 +621,8 @@ test('SKILL.md §2 signing headers and canonical string match client; guestbook 
 
 test('SKILL.md checkin slot range, 409s, and bandstand zone match server.mjs', () => {
   assert.ok(
-    serverSrc.includes('if (!Number.isInteger(body.slot) || body.slot < 0 || body.slot > 9)'),
-    'server.mjs must validate checkin slot 0..9'
+    serverSrc.includes('if (!Number.isInteger(body.slot) || body.slot < 1 || body.slot > 9)'),
+    'server.mjs must validate checkin slot 1..9'
   );
   assert.ok(serverSrc.includes("sendJson(res, 400, { error: 'invalid_slot' })"));
   assert.ok(serverSrc.includes("sendJson(res, 409, { error: 'slot_occupied', slot: body.slot })"));
@@ -630,7 +630,7 @@ test('SKILL.md checkin slot range, 409s, and bandstand zone match server.mjs', (
   assert.ok(serverSrc.includes("ON CONFLICT(handle) DO UPDATE SET zone = 'bandstand'"));
 
   const checkinSec = getEndpointSection('POST', '/api/town/ghostlight/checkin');
-  assert.ok(checkinSec.includes('`slot` optional `0..9`'));
+  assert.ok(checkinSec.includes('`slot` optional `1..9`'));
   assert.ok(checkinSec.includes('`slot_occupied`'));
   assert.ok(checkinSec.includes('`bandstand_full`'));
   assert.ok(checkinSec.includes('sets your zone to `bandstand`'));
@@ -1679,12 +1679,12 @@ test('SKILL.md checkin auto-slot, say TTL refresh, and leave doc and live behavi
 
     const cAlice = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'alice', aliceKeys.privateKeyPem);
     assert.equal(cAlice.status, 200);
-    assert.equal(cAlice.data.slot, 0);
+    assert.equal(cAlice.data.slot, 1);
     assert.equal(cAlice.data.expires_at, cAlice.data.lit_at + 2700);
 
     const cBob = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'bob', bobKeys.privateKeyPem);
     assert.equal(cBob.status, 200);
-    assert.equal(cBob.data.slot, 1);
+    assert.equal(cBob.data.slot, 2);
 
     const cCarol = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: 5 }, 'carol', carolKeys.privateKeyPem);
     assert.equal(cCarol.status, 200);
@@ -1861,7 +1861,7 @@ test('SKILL.md §1 quickstart client round-trip guest to resident to plot (H1)',
     assert.equal(c.status, 200);
     assert.equal(c.data.status_text, 'brought tea, unpacking');
     assert.deepEqual(Object.keys(c.data).sort(), ['expires_at', 'handle', 'lit_at', 'slot', 'state_seq', 'status_text']);
-    assert.ok(c.data.slot >= 0 && c.data.slot <= 9);
+    assert.ok(c.data.slot >= 1 && c.data.slot <= 9);
     assert.equal(c.data.expires_at, c.data.lit_at + 2700);
     const s = await client.say('Hello, Bandstand. Good to see the light on.');
     assert.equal(s.status, 201);
@@ -2405,10 +2405,9 @@ test('SKILL.md §3 checkin slot selection occupied and bandstand full live (H13)
     const r7 = await joinViaSigned('r7');
     const r8 = await joinViaSigned('r8');
     const r9 = await joinViaSigned('r9');
-    now += 3601;
-    const r10 = await joinViaSigned('r10');
+    now += 3601; // fresh join-rate window for the five badslot joins below
 
-    for (const [idx, badSlot] of [10, -1, 1.5, '3'].entries()) {
+    for (const [idx, badSlot] of [10, -1, 1.5, '3', 0].entries()) {
       const u = await joinViaSigned(`badslot${idx}`);
       const res = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: badSlot }, `badslot${idx}`, u.k.privateKeyPem);
       assert.equal(res.status, 400);
@@ -2427,7 +2426,7 @@ test('SKILL.md §3 checkin slot selection occupied and bandstand full live (H13)
     now += 61;
     const ciBob = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'bob', bob.k.privateKeyPem);
     assert.equal(ciBob.status, 200);
-    assert.equal(ciBob.data.slot, 0);
+    assert.equal(ciBob.data.slot, 1);
 
     const ciCarolOcc = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot: 3 }, 'carol', carol.k.privateKeyPem);
     assert.equal(ciCarolOcc.status, 409);
@@ -2436,29 +2435,28 @@ test('SKILL.md §3 checkin slot selection occupied and bandstand full live (H13)
     now += 61;
     const ciCarol = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'carol', carol.k.privateKeyPem);
     assert.equal(ciCarol.status, 200);
-    assert.equal(ciCarol.data.slot, 1);
+    assert.equal(ciCarol.data.slot, 2);
 
     for (const [handle, user, slot] of [
-      ['r3', r3, 2],
-      ['r4', r4, 4],
-      ['r5', r5, 5],
-      ['r6', r6, 6],
-      ['r7', r7, 7],
-      ['r8', r8, 8],
-      ['r9', r9, 9],
+      ['r3', r3, 4],
+      ['r4', r4, 5],
+      ['r5', r5, 6],
+      ['r6', r6, 7],
+      ['r7', r7, 8],
+      ['r8', r8, 9],
     ]) {
       const res = await signedPostAt(ctx, '/api/town/ghostlight/checkin', { slot }, handle, user.k.privateKeyPem);
       assert.equal(res.status, 200);
       assert.equal(res.data.slot, slot);
     }
 
-    const full = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'r10', r10.k.privateKeyPem);
+    const full = await signedPostAt(ctx, '/api/town/ghostlight/checkin', {}, 'r9', r9.k.privateKeyPem);
     assert.equal(full.status, 409);
     assert.equal(full.data.error, 'bandstand_full');
 
     const st = await alice.c.state();
-    assert.equal(st.data.footlights.length, 10);
-    assert.deepEqual(st.data.footlights.map((f) => f.slot).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert.equal(st.data.footlights.length, 9);
+    assert.deepEqual(st.data.footlights.map((f) => f.slot).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   } finally {
     await ctx.close();
   }
