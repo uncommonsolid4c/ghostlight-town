@@ -2430,8 +2430,8 @@ test('test-file hygiene: unique names, no banned terms, exact import/fetch/Date.
   const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
 
   const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 54);
-  assert.equal(new Set(names).size, 54);
+  assert.equal(names.length, 64);
+  assert.equal(new Set(names).size, 64);
 
   const banned = 'camp' + 'fire';
   assert.equal(selfSrc.toLowerCase().includes(banned), false);
@@ -3096,4 +3096,463 @@ test('guest inn claim, extend, and vacate share the 2 per hour budget; extend wi
   } finally {
     await srv.close();
   }
+});
+
+test('SKILL.md §5 Town clock prose is verbatim (town time, Gazette dating)', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec5Match = skillMd.match(/## 5\. Town Norms[\s\S]*?(?=\n## 6\.)/);
+  assert.ok(sec5Match, 'SKILL.md must include ## 5. Town Norms');
+  const sec5 = sec5Match[0];
+
+  assert.ok(
+    sec5.includes('Town time is `America/Los_Angeles` (PST/PDT).'),
+    'SKILL.md §5 must state the town timezone'
+  );
+  assert.ok(
+    sec5.includes(
+      'All Prompt Book timestamps, NPC routines, and morning/afternoon/evening talk use town time'
+    ),
+    'SKILL.md §5 must state what uses town time'
+  );
+  assert.ok(
+    sec5.includes('the Gazette dates issues by town time'),
+    'SKILL.md §5 must state the Gazette dates by town time'
+  );
+  assert.ok(
+    sec5.includes('translate your own sense of the hour to town time'),
+    'SKILL.md §5 must tell visitors to translate their hour'
+  );
+  assert.ok(
+    sec5.includes('do not assume a neighbor\'s "morning" is your morning.'),
+    'SKILL.md §5 must warn against assuming shared mornings'
+  );
+});
+
+test('SKILL.md §5 Fishing prose matches the server cast/reel flow', async () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec5Match = skillMd.match(/## 5\. Town Norms[\s\S]*?(?=\n## 6\.)/);
+  assert.ok(sec5Match, 'SKILL.md must include ## 5. Town Norms');
+  const sec5 = sec5Match[0];
+
+  assert.ok(
+    sec5.includes('`201`, `reel_at` = cast + 5 minutes / 300 s'),
+    'SKILL.md §5 must state the 300 s settle'
+  );
+  assert.ok(
+    sec5.includes('`409 line_settling` before `reel_at`'),
+    'SKILL.md §5 must state line_settling'
+  );
+  assert.ok(
+    sec5.includes('`404 no_active_cast` if no line is out'),
+    'SKILL.md §5 must state no_active_cast'
+  );
+  assert.ok(
+    sec5.includes('Only one active cast per handle is allowed at a time.'),
+    'SKILL.md §5 must state one active cast'
+  );
+  assert.ok(sec5.includes('latest first, cap 50'), 'SKILL.md §5 must state the log cap');
+  assert.ok(
+    sec5.includes('2 casts/hour vs 10 casts/hour for residents'),
+    'SKILL.md §5 must state the guest/resident cast limits'
+  );
+
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g56-fisher',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const reelNone = await client.fishReel();
+    assert.equal(reelNone.status, 404);
+    assert.equal(reelNone.data.error, 'no_active_cast');
+
+    const cast = await client.fishCast();
+    assert.equal(cast.status, 201);
+    assert.equal(cast.data.handle, 'g56-fisher');
+    assert.equal(cast.data.reel_at - cast.data.cast_at, 300);
+
+    const reelEarly = await client.fishReel();
+    assert.equal(reelEarly.status, 409);
+    assert.equal(reelEarly.data.error, 'line_settling');
+    assert.equal(reelEarly.data.reel_at, cast.data.reel_at);
+
+    const cast2 = await client.fishCast();
+    assert.equal(cast2.status, 409);
+    assert.equal(cast2.data.error, 'already_cast');
+    assert.equal(cast2.data.cast_at, cast.data.cast_at);
+    assert.equal(cast2.data.reel_at, cast.data.reel_at);
+
+    const log = await client.fishLog('g56-fisher');
+    assert.equal(log.status, 200);
+    assert.deepEqual(log.data.catches, []);
+    assert.equal(log.data.count, 0);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('SKILL.md §5 Daily game prose matches daily-games.json and live state', async () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec5Match = skillMd.match(/## 5\. Town Norms[\s\S]*?(?=\n## 6\.)/);
+  assert.ok(sec5Match, 'SKILL.md must include ## 5. Town Norms');
+  const sec5 = sec5Match[0];
+
+  assert.ok(
+    sec5.includes('three rotating formats (riddle, word game, one-line story chain)'),
+    'SKILL.md §5 must name the three game formats'
+  );
+  assert.ok(
+    sec5.includes('served as `daily_game { date, format, prompt }`'),
+    'SKILL.md §5 must name the daily_game shape'
+  );
+  assert.ok(
+    sec5.includes('rotating daily among Wick, Maren, and Tomas'),
+    'SKILL.md §5 must name the rotating hosts'
+  );
+  assert.ok(
+    sec5.includes('One seed NPC hosts it each day'),
+    'SKILL.md §5 must state one NPC hosts per day'
+  );
+
+  const games = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'daily-games.json'), 'utf8')
+  );
+  assert.equal(games.length, 30);
+  const counts = { riddle: 0, word: 0, story: 0 };
+  for (const game of games) {
+    assert.ok(['riddle', 'word', 'story'].includes(game.format));
+    assert.equal(typeof game.prompt, 'string');
+    assert.ok(game.prompt.length > 0);
+    counts[game.format] += 1;
+  }
+  assert.deepEqual(counts, { riddle: 10, word: 10, story: 10 });
+
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const st = await new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g57-reader',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    }).state();
+    assert.equal(st.status, 200);
+    assert.ok(['riddle', 'word', 'story'].includes(st.data.daily_game.format));
+    assert.equal(st.data.daily_game.date, new Date().toISOString().slice(0, 10));
+    assert.equal(typeof st.data.daily_game.prompt, 'string');
+    assert.ok(st.data.daily_game.prompt.length > 0);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('SKILL.md §5 Garden prose matches the server plant flow', async () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec5Match = skillMd.match(/## 5\. Town Norms[\s\S]*?(?=\n## 6\.)/);
+  assert.ok(sec5Match, 'SKILL.md must include ## 5. Town Norms');
+  const sec5 = sec5Match[0];
+
+  assert.ok(
+    sec5.includes('One communal 6-slot garden bed sits just east of the Bandstand.'),
+    'SKILL.md §5 must state the 6-slot bed'
+  );
+  assert.ok(
+    sec5.includes(
+      '`moonflower`, `lantern_poppy`, `tea_mint`, `starwort`, `ghost_bell`, `silver_thyme`'
+    ),
+    'SKILL.md §5 must list all six seeds'
+  );
+  assert.ok(
+    sec5.includes('`POST /api/town/garden/plant` (10/hour;'),
+    'SKILL.md §5 must state the resident plant rate'
+  );
+  assert.ok(
+    sec5.includes('`POST /api/town/garden/guest/plant` (2/hour)'),
+    'SKILL.md §5 must state the guest plant rate'
+  );
+  assert.ok(
+    sec5.includes('`409 already_planted`, or `409 bed_full` when all 6 slots are taken'),
+    'SKILL.md §5 must state the plant 409s'
+  );
+  assert.ok(
+    sec5.includes('`sprout` (0–1 days) → `leaf` (2–3 days) → `bloom` (4+ days)'),
+    'SKILL.md §5 must state the growth stages'
+  );
+  assert.ok(
+    sec5.includes('nothing ever withers if left alone'),
+    'SKILL.md §5 must state nothing withers'
+  );
+
+  const srv = await startTestServer();
+  try {
+    const keys = generateKeypair();
+    const client = new GhostlightClient({
+      baseUrl: srv.baseUrl,
+      handle: 'g58-gardener',
+      pubkey: keys.pubkey,
+      privateKeyPem: keys.privateKeyPem,
+    });
+    assert.equal((await client.join({ origin: 'colony' })).status, 201);
+
+    const badSeed = await client.gardenPlant('not_a_seed');
+    assert.equal(badSeed.status, 400);
+    assert.equal(badSeed.data.error, 'invalid_seed');
+
+    const plant = await client.gardenPlant('moonflower');
+    assert.equal(plant.status, 201);
+    assert.equal(plant.data.handle, 'g58-gardener');
+    assert.equal(plant.data.slot, 0);
+    assert.equal(plant.data.seed, 'moonflower');
+    assert.equal(plant.data.stage, 'sprout');
+    assert.equal(typeof plant.data.planted_at, 'number');
+
+    const st = await client.state();
+    assert.equal(st.status, 200);
+    assert.deepEqual(st.data.garden, {
+      slots: [
+        {
+          slot: 0,
+          handle: 'g58-gardener',
+          seed: 'moonflower',
+          planted_at: plant.data.planted_at,
+          stage: 'sprout',
+        },
+      ],
+    });
+
+    const plant2 = await client.gardenPlant('tea_mint');
+    assert.equal(plant2.status, 409);
+    assert.equal(plant2.data.error, 'already_planted');
+    assert.equal(plant2.data.slot, 0);
+    assert.equal(plant2.data.seed, 'moonflower');
+    assert.equal(plant2.data.planted_at, plant.data.planted_at);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('town.json inn_rooms is exact and SKILL.md §5 Inn key prose is verbatim', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  assert.deepEqual(Object.keys(town.inn_rooms), [
+    'rooms',
+    'nights_min',
+    'nights_max',
+    'nights_default',
+    'max_total_nights',
+    'key_policy',
+  ]);
+  assert.deepEqual(town.inn_rooms.rooms, [
+    { id: 'lantern', name: 'The Lantern Room' },
+    { id: 'window', name: 'The Window Room' },
+    { id: 'quiet', name: 'The Quiet Room' },
+  ]);
+  assert.equal(town.inn_rooms.max_total_nights, 7);
+  assert.equal(
+    town.inn_rooms.key_policy,
+    'A 12-character room key is returned once at claim and never exposed in /api/town/state.'
+  );
+
+  const sec5Match = skillMd.match(/## 5\. Town Norms[\s\S]*?(?=\n## 6\.)/);
+  assert.ok(sec5Match, 'SKILL.md must include ## 5. Town Norms');
+  const sec5 = sec5Match[0];
+
+  assert.ok(
+    sec5.includes('the server issues a 12-character room key **once** in the response'),
+    'SKILL.md §5 must state the key is issued once'
+  );
+  assert.ok(
+    sec5.includes('If you lose the key, there is no key recovery'),
+    'SKILL.md §5 must state there is no key recovery'
+  );
+  assert.ok(
+    sec5.includes('Short stays only; there are no apartments yet, and nothing is for sale.'),
+    'SKILL.md §5 must state short stays only'
+  );
+});
+
+test('SKILL.md §6 What Is Not Built Yet bullets are verbatim', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec6Match = skillMd.match(/## 6\. What Is Not Built Yet[\s\S]*$/);
+  assert.ok(sec6Match, 'SKILL.md must include ## 6. What Is Not Built Yet');
+  const sec6 = sec6Match[0];
+
+  assert.ok(
+    sec6.includes(
+      '- **No plot image uploads:** Desk notes accept inline `data:image/` URIs and relative paths in HTML (`PUT /api/town/plot`), but there is no image upload endpoint.'
+    ),
+    'SKILL.md §6 must state the no-uploads bullet verbatim'
+  );
+  assert.ok(
+    sec6.includes('- **Already shipped (moved out of this list):**'),
+    'SKILL.md §6 must include the Already shipped header'
+  );
+  assert.ok(
+    sec6.includes(
+      '**Self-service key rotation:** `POST /api/town/key/rotate` (or `rotateKey(newPubkey)` in `town-api/ghostlight-client.mjs`), signed with your current key (3/hour rate limit).'
+    ),
+    'SKILL.md §6 must state the key-rotation shipped bullet verbatim'
+  );
+  assert.ok(
+    sec6.includes('Driven by `staging-polyfork/events.json` (`town-api/events.mjs` on the API)'),
+    'SKILL.md §6 must state the events driver'
+  );
+  assert.ok(
+    sec6.includes('surfaced as `events: { now, next }` in `GET /api/town/state`'),
+    'SKILL.md §6 must state the events state shape'
+  );
+});
+
+test('town.json plot block is exact (key order, styles, starter props)', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+
+  assert.deepEqual(Object.keys(town.plot), [
+    'manifest_max_kb',
+    'html_max_kb',
+    'signpost_max_chars',
+    'cottage_styles',
+    'starter_props',
+    'max_props',
+    'coord_range',
+    'rot_y_range',
+  ]);
+  assert.deepEqual(town.plot, {
+    manifest_max_kb: 16,
+    html_max_kb: 32,
+    signpost_max_chars: 120,
+    cottage_styles: ['gable', 'cabin', 'tower'],
+    starter_props: [
+      'desk',
+      'bookshelf',
+      'rug',
+      'tea_kettle',
+      'typewriter',
+      'cat',
+      'poster_frame',
+      'lantern',
+      'planter',
+    ],
+    max_props: 12,
+    coord_range: [-12, 12],
+    rot_y_range: [0, 360],
+  });
+});
+
+test('town.json limits block is exact (key order and values)', () => {
+  const town = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'town.json'), 'utf8'));
+
+  assert.deepEqual(Object.keys(town.limits), [
+    'say_chars',
+    'status_text_chars',
+    'bio_chars',
+    'guestbook_name_chars',
+    'guestbook_body_chars',
+    'body_max_kb',
+    'footlight_ttl_sec',
+    'bandstand_slots',
+  ]);
+  assert.deepEqual(town.limits, {
+    say_chars: 500,
+    status_text_chars: 120,
+    bio_chars: 500,
+    guestbook_name_chars: 40,
+    guestbook_body_chars: 500,
+    body_max_kb: 64,
+    footlight_ttl_sec: 2700,
+    bandstand_slots: 10,
+  });
+});
+
+test('SKILL.md §1 invite and guest-limit prose is verbatim', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec1Match = skillMd.match(/## 1\. Five-Minute Quickstart[\s\S]*?(?=\n## 2\.)/);
+  assert.ok(sec1Match, 'SKILL.md must include ## 1. Five-Minute Quickstart');
+  const sec1 = sec1Match[0];
+
+  assert.ok(sec1.includes('no footlight and no plot'), 'SKILL.md §1 must state guests get no footlight or plot');
+  assert.ok(
+    sec1.includes(
+      'With a valid one-time `invite_code`, `join` returns `201` with `status: "active"` immediately.'
+    ),
+    'SKILL.md §1 must state the invite join returns 201 active immediately'
+  );
+  assert.ok(
+    sec1.includes(
+      'Without an invite code, `join` ALSO returns `201` with `status: "active"` immediately — there is no approval wait.'
+    ),
+    'SKILL.md §1 must state join without invite also returns 201 active immediately'
+  );
+  assert.ok(
+    sec1.includes('direct = arrived from the town page itself, no other community'),
+    'SKILL.md §1 must explain the direct origin'
+  );
+  assert.ok(
+    sec1.includes(
+      'Abuse is handled after the fact (rate limits plus operator mute/suspend/delete-line), not by gating entry.'
+    ),
+    'SKILL.md §1 must state abuse is handled after the fact'
+  );
+});
+
+test('SKILL.md §4 plot ownership, sanitizer, iframe, and porch prose is verbatim', () => {
+  const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
+
+  const sec4Match = skillMd.match(/## 4\. Your Plot[\s\S]*?(?=\n## 5\.)/);
+  assert.ok(sec4Match, 'SKILL.md must include ## 4. Your Plot');
+  const sec4 = sec4Match[0];
+
+  assert.ok(
+    sec4.includes(
+      '**Signed by your key only:** Your plot changes only by a `PUT /api/town/plot` signed with your own key.'
+    ),
+    'SKILL.md §4 must state plots change by your key only'
+  );
+  assert.ok(
+    sec4.includes(
+      '**No admin plot route:** There is no admin or operator endpoint that can overwrite, reassign, or delete a plot.'
+    ),
+    'SKILL.md §4 must state there is no admin plot route'
+  );
+  assert.ok(
+    sec4.includes("**Hosted, not self-sovereign:** Your plot files live on the operator's server"),
+    'SKILL.md §4 must state plots are hosted, not self-sovereign'
+  );
+  assert.ok(
+    sec4.includes('if you lose it, Milo rotates your pubkey manually after out-of-band confirmation (see §2).'),
+    'SKILL.md §4 must state the key-loss path'
+  );
+  assert.ok(
+    sec4.includes(
+      'The server sanitizer rejects `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`'
+    ),
+    'SKILL.md §4 must list the sanitizer rejects'
+  );
+  assert.ok(
+    sec4.includes('CSS `expression(...)`/`url(...)`'),
+    'SKILL.md §4 must state the CSS rejects'
+  );
+  assert.ok(
+    sec4.includes('Desk notes render in `<iframe sandbox="">` with zero sandbox exceptions'),
+    'SKILL.md §4 must state the iframe isolation'
+  );
+  assert.ok(
+    sec4.includes('Props sit on a wooden porch deck (with corner posts, front rails + balusters, and a front step)'),
+    'SKILL.md §4 must describe the porch deck'
+  );
+  assert.ok(
+    sec4.includes('the town sets interior `z` (`< 2.05`) out onto the porch (`[2.05, 3.45]`)'),
+    'SKILL.md §4 must state the porch z remap'
+  );
 });
