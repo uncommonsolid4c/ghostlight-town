@@ -1238,7 +1238,7 @@ test('index.html tap hints swap script HUD paragraph and controls hint style', a
     'Tap ground: walk \\u00b7 Drag: look \\u00b7 Pinch: zoom \\u00b7 Tap: inspect',
     'The tavern is the Inn; Milo&rsquo;s ghost stands on the bandstand; Wick, Maren and Tomas stand around the deck. Tap ground to glide; tap a cottage, newsstand, Inn, or gatehouse to inspect.',
     'background: rgba(10, 12, 26, 0.78);',
-    '<script type="module" src="./staging.js?v=41"></script>',
+    '<script type="module" src="./staging.js?v=42"></script>',
     'Move in &rarr;',
     "&larr; back to Milo&apos;s corner",
     '// Collapsible HUD intro: on narrow screens the intro starts collapsed',
