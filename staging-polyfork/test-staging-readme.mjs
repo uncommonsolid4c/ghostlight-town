@@ -1275,8 +1275,8 @@ test('staging-polyfork/README.md Contents bullets for uncovered modules match ex
   // (b) cottage-props.mjs
   const cpBullet = bulletFor('`cottage-props.mjs`');
   assert.ok(
-    cpBullet && cpBullet.replace(/\s+/g, ' ').includes('9 valid prop kinds matching `town-3d/town.js`'),
-    'cottage-props.mjs bullet must state 9 valid prop kinds matching town-3d/town.js'
+    cpBullet && cpBullet.replace(/\s+/g, ' ').includes('10 valid prop kinds matching `town-3d/town.js`'),
+    'cottage-props.mjs bullet must state 10 valid prop kinds matching town-3d/town.js'
   );
   const cpMod = await import(path.join(BUNDLE_DIR, 'cottage-props.mjs'));
   for (const name of ['attachPorchDeck', 'attachPorchTrim', 'attachPlotProps', 'MILO_PLOT_PROPS', 'VALID_PROP_KINDS']) {
@@ -1285,7 +1285,7 @@ test('staging-polyfork/README.md Contents bullets for uncovered modules match ex
   const townKindsMatch = townJs.match(/const VALID_PROP_KINDS = new Set\(\[([\s\S]*?)\]\)/);
   assert.ok(townKindsMatch, 'town-3d/town.js must define VALID_PROP_KINDS');
   const townKinds = [...townKindsMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
-  assert.equal(cpMod.VALID_PROP_KINDS.size, 9);
+  assert.equal(cpMod.VALID_PROP_KINDS.size, 10);
   assert.deepEqual([...cpMod.VALID_PROP_KINDS], townKinds);
 
   // (c) notice-board-overlay.mjs
