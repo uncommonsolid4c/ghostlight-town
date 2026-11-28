@@ -285,7 +285,7 @@
     "guestbook_body_chars": 500,
     "body_max_kb": 64,
     "footlight_ttl_sec": 2700,
-    "bandstand_slots": 10
+    "bandstand_slots": 9
   },
   "inn_rooms": {
     "rooms": [
