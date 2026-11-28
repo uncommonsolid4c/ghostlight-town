@@ -80,7 +80,7 @@ test('PLAN.md §4 Data model matches town-api/schema.sql tables and prompt_book.
 test('PLAN.md §5 plot catalog matches VALID_PROP_KINDS count and kinds in town-api/plot-validation.mjs', () => {
   const { body } = readPlanBodySections();
   const count = VALID_PROP_KINDS.size;
-  assert.match(body, new RegExp(`${count} starter kinds`), `PLAN.md §5 must state ${count} starter kinds`);
+  assert.match(body, new RegExp(`${count} prop kinds`), `PLAN.md §5 must state ${count} prop kinds`);
   for (const kind of VALID_PROP_KINDS) {
     assert.match(body, new RegExp(`\`${kind}\``), `PLAN.md §5 must list prop kind ${kind}`);
   }
@@ -735,7 +735,7 @@ test('PLAN.md §4 what breaks first at 50 — Bandstand room and Milo attention'
     'PLAN.md §4 must document second room fix later'
   );
   assert.ok(
-    body.includes('Second bottleneck: Milo manually vetting joins, recovering lost'),
+    body.includes('Second bottleneck: Milo manually recovering lost keys, and reading 50 plots to write a twice-weekly Gazette.'),
     'PLAN.md §4 must document second bottleneck'
   );
 });
@@ -954,23 +954,28 @@ test('PLAN.md §4 flat files — TOWN_PLOTS_DIR manifest + desk note served via 
   }
 });
 
-test('PLAN.md §5 plot manifest — exact 9 starter kinds, expanded from 7 in slice 93', () => {
+test('PLAN.md §5 plot manifest — exact 10 prop kinds, expanded from 7 in slice 93', () => {
   assert.deepEqual(
-    [...VALID_PROP_KINDS].sort(),
-    ['bookshelf', 'cat', 'desk', 'lantern', 'planter', 'poster_frame', 'rug', 'tea_kettle', 'typewriter'],
-    'VALID_PROP_KINDS must be exactly the 9 starter kinds'
+    [...VALID_PROP_KINDS],
+    ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter', 'boot_planter'],
+    'VALID_PROP_KINDS must be the 10 prop kinds in order'
   );
 
   const town = JSON.parse(fs.readFileSync(path.join(__dirname, 'town.json'), 'utf8'));
   assert.deepEqual(
-    town.plot.starter_props,
+    [...town.plot.starter_props, ...town.plot.earned_props],
     [...VALID_PROP_KINDS],
-    'town.json starter_props must equal VALID_PROP_KINDS in order'
+    'town.json starter_props + earned_props must equal VALID_PROP_KINDS in order'
   );
 
   const { body } = readPlanBodySections();
-  const manifestLine = body.match(/up to\n   12 props from 9 starter kinds \(`desk`[^)]+\)/);
-  assert.ok(manifestLine, 'PLAN.md §5 must list the 9 starter kinds in the manifest line');
+  const manifestLine = body.match(/up to\n   12 props from 10 prop kinds \(`desk`[^)]+\)/);
+  assert.ok(manifestLine, 'PLAN.md §5 must list the 10 prop kinds in the manifest line');
+  assert.equal(
+    manifestLine[0],
+    'up to\n   12 props from 10 prop kinds (`desk`, `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`, `lantern`, `planter`, `boot_planter`; expanded from 7 in slice 93)',
+    'PLAN.md §5 manifest line must match exact 10-kind listing and slice-93 expansion pin'
+  );
   for (const kind of VALID_PROP_KINDS) {
     assert.ok(manifestLine[0].includes(`\`${kind}\``), `PLAN.md §5 manifest line must list ${kind}`);
   }
