@@ -1064,11 +1064,11 @@ test('rotate back to a freed key taken by another resident returns 409 pubkey_ta
   }
 });
 
-test('all 54 top-level test names in this file are unique and include both renamed suspended-rotate tests', () => {
+test('all 64 top-level test names in this file are unique and include both renamed suspended-rotate tests', () => {
   const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 54);
-  assert.equal(new Set(names).size, 54);
+  assert.equal(names.length, 64);
+  assert.equal(new Set(names).size, 64);
   assert.ok(names.includes('suspended-at-join resident cannot rotate: 403 resident_not_active'));
   assert.ok(names.includes('suspended resident cannot rotate after DB status flip: 403 resident_not_active'));
 });
@@ -1695,6 +1695,302 @@ test('rotate budgets are per handle: alice 429s while bob still rotates 200', as
     const bobRow = ctx.db.prepare('SELECT pubkey FROM residents WHERE handle = ?').get('bob');
     assert.equal(aliceRow.pubkey, aliceKeys.pubkey);
     assert.equal(bobRow.pubkey, bobKeys.pubkey);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('handle length boundaries: 1-char 400, 2- and 32-char 201, 33-char 400', async () => {
+  const ctx = await startTestServer();
+  try {
+    const oneKeys = generateKeypair();
+    const oneClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'a', ...oneKeys });
+    const oneRes = await oneClient.join({ origin: 'musebook' });
+    assert.equal(oneRes.status, 400);
+    assert.deepEqual(oneRes.data, { error: 'invalid_handle' });
+    assert.deepEqual(Object.keys(oneRes.data), ['error']);
+
+    const twoKeys = generateKeypair();
+    const twoClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'ab', ...twoKeys });
+    const twoRes = await twoClient.join({ origin: 'musebook' });
+    assert.equal(twoRes.status, 201);
+    assert.deepEqual(Object.keys(twoRes.data), ['handle', 'status', 'origin', 'state_seq']);
+
+    const h32 = 'h'.repeat(32);
+    const maxKeys = generateKeypair();
+    const maxClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: h32, ...maxKeys });
+    const maxRes = await maxClient.join({ origin: 'musebook' });
+    assert.equal(maxRes.status, 201);
+    assert.equal(maxRes.data.handle, h32);
+
+    const h33 = 'h'.repeat(33);
+    const overKeys = generateKeypair();
+    const overClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: h33, ...overKeys });
+    const overRes = await overClient.join({ origin: 'musebook' });
+    assert.equal(overRes.status, 400);
+    assert.equal(overRes.data.error, 'invalid_handle');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('bio boundary: 500 chars joins 201 and stores, 501 is 400 bio_too_long', async () => {
+  const ctx = await startTestServer();
+  try {
+    const aliceKeys = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...aliceKeys });
+    const okRes = await alice.join({ origin: 'musebook', bio: 'x'.repeat(500) });
+    assert.equal(okRes.status, 201);
+    assert.deepEqual(Object.keys(okRes.data), ['handle', 'status', 'origin', 'state_seq']);
+
+    const row = ctx.db.prepare('SELECT bio FROM residents WHERE handle = ?').get('alice');
+    assert.equal(row.bio, 'x'.repeat(500));
+
+    const bobKeys = generateKeypair();
+    const bob = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...bobKeys });
+    const longRes = await bob.join({ origin: 'musebook', bio: 'y'.repeat(501) });
+    assert.equal(longRes.status, 400);
+    assert.deepEqual(longRes.data, { error: 'bio_too_long', max: 500 });
+    assert.deepEqual(Object.keys(longRes.data), ['error', 'max']);
+
+    const bobRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('bob');
+    assert.equal(bobRow, undefined);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join 429 exact keys with retry_after in {3599, 3600} and non-increasing on next attempt', async () => {
+  const ctx = await startTestServer();
+  try {
+    for (let i = 0; i < 5; i += 1) {
+      const keys = generateKeypair();
+      const res = await rawJoin(ctx.baseUrl, {
+        handle: 'BAD',
+        pubkey: keys.pubkey,
+        origin: 'musebook',
+        privateKeyPem: keys.privateKeyPem,
+      });
+      assert.equal(res.status, 400);
+      assert.equal(res.data.error, 'invalid_handle');
+    }
+
+    const graceKeys = generateKeypair();
+    const grace = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'grace', ...graceKeys });
+    const firstRes = await grace.join({ origin: 'musebook' });
+    assert.equal(firstRes.status, 429);
+    assert.deepEqual(Object.keys(firstRes.data), ['error', 'retry_after']);
+    assert.equal(firstRes.data.error, 'rate_limited');
+    assert.ok(
+      firstRes.data.retry_after === 3599 || firstRes.data.retry_after === 3600,
+      `expected retry_after 3599 or 3600, got ${firstRes.data.retry_after}`
+    );
+
+    const heidiKeys = generateKeypair();
+    const heidi = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'heidi', ...heidiKeys });
+    const secondRes = await heidi.join({ origin: 'musebook' });
+    assert.equal(secondRes.status, 429);
+    assert.deepEqual(Object.keys(secondRes.data), ['error', 'retry_after']);
+    assert.equal(secondRes.data.error, 'rate_limited');
+    assert.ok(secondRes.data.retry_after <= firstRes.data.retry_after);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('rotate 401 unknown_resident returns exact single-key body and writes nothing', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createResident(ctx, 'alice');
+    const seqBefore = (await alice.state()).data.state_seq;
+
+    const ghostKeys = generateKeypair();
+    const targetKeys = generateKeypair();
+    const ghost = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'ghost', ...ghostKeys });
+    const rotRes = await ghost.rotateKey(targetKeys.pubkey);
+    assert.equal(rotRes.status, 401);
+    assert.deepEqual(rotRes.data, { error: 'unknown_resident' });
+    assert.deepEqual(Object.keys(rotRes.data), ['error']);
+
+    const ghostRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('ghost');
+    assert.equal(ghostRow, undefined);
+    const ghostHistory = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('ghost');
+    assert.equal(ghostHistory.length, 0);
+
+    const seqAfter = (await alice.state()).data.state_seq;
+    assert.equal(seqAfter, seqBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join 401 invalid_pubkey returns exact single-key body and writes nothing', async () => {
+  const ctx = await startTestServer();
+  try {
+    const carolKeys = generateKeypair();
+    const probe = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'carol', ...carolKeys });
+    const seqBefore = (await probe.state()).data.state_seq;
+
+    const res = await rawJoin(ctx.baseUrl, {
+      handle: 'carol',
+      pubkey: 'not-a-key',
+      origin: 'musebook',
+      privateKeyPem: carolKeys.privateKeyPem,
+    });
+    assert.equal(res.status, 401);
+    assert.deepEqual(res.data, { error: 'invalid_pubkey' });
+    assert.deepEqual(Object.keys(res.data), ['error']);
+
+    const row = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('carol');
+    assert.equal(row, undefined);
+    const history = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('carol');
+    assert.equal(history.length, 0);
+
+    const seqAfter = (await probe.state()).data.state_seq;
+    assert.equal(seqAfter, seqBefore);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('handle_taken returns exact single-key body for fresh and same key and leaves seq and history untouched', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: bob, keys: bobKeys } = await createResident(ctx, 'bob');
+    const seqBefore = (await bob.state()).data.state_seq;
+
+    const freshClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...generateKeypair() });
+    const freshRes = await freshClient.join({ origin: 'musebook' });
+    assert.equal(freshRes.status, 409);
+    assert.deepEqual(freshRes.data, { error: 'handle_taken' });
+    assert.deepEqual(Object.keys(freshRes.data), ['error']);
+
+    const sameClient = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...bobKeys });
+    const sameRes = await sameClient.join({ origin: 'musebook' });
+    assert.equal(sameRes.status, 409);
+    assert.deepEqual(sameRes.data, { error: 'handle_taken' });
+    assert.deepEqual(Object.keys(sameRes.data), ['error']);
+
+    const seqAfter = (await bob.state()).data.state_seq;
+    assert.equal(seqAfter, seqBefore);
+    const bobHistory = ctx.db.prepare('SELECT * FROM key_history WHERE handle = ?').all('bob');
+    assert.equal(bobHistory.length, 1);
+    assert.equal(bobHistory[0].action, 'register');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join with origins direct and guestbook succeeds and stores the origin', async () => {
+  const ctx = await startTestServer();
+  try {
+    const danaKeys = generateKeypair();
+    const dana = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'dana', ...danaKeys });
+    const directRes = await dana.join({ origin: 'direct' });
+    assert.equal(directRes.status, 201);
+    assert.equal(directRes.data.origin, 'direct');
+    assert.deepEqual(Object.keys(directRes.data), ['handle', 'status', 'origin', 'state_seq']);
+    const danaRow = ctx.db.prepare('SELECT origin FROM residents WHERE handle = ?').get('dana');
+    assert.equal(danaRow.origin, 'direct');
+
+    const erinKeys = generateKeypair();
+    const erin = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'erin', ...erinKeys });
+    const guestbookRes = await erin.join({ origin: 'guestbook' });
+    assert.equal(guestbookRes.status, 201);
+    assert.equal(guestbookRes.data.origin, 'guestbook');
+    const erinRow = ctx.db.prepare('SELECT origin FROM residents WHERE handle = ?').get('erin');
+    assert.equal(erinRow.origin, 'guestbook');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('key_history ids order globally across residents: register, register, rotate, rotate', async () => {
+  const ctx = await startTestServer();
+  try {
+    let { client: alice } = await createResident(ctx, 'alice');
+    const { client: bob } = await createResident(ctx, 'bob');
+
+    const freshAlice = generateKeypair();
+    const aliceRot = await alice.rotateKey(freshAlice.pubkey);
+    assert.equal(aliceRot.status, 200);
+    alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...freshAlice });
+
+    const freshBob = generateKeypair();
+    const bobRot = await bob.rotateKey(freshBob.pubkey);
+    assert.equal(bobRot.status, 200);
+
+    const rows = ctx.db.prepare('SELECT id, handle, action FROM key_history ORDER BY id ASC').all();
+    assert.deepEqual(
+      rows.map((r) => `${r.handle}:${r.action}`),
+      ['alice:register', 'bob:register', 'alice:rotate', 'bob:rotate']
+    );
+    for (let i = 1; i < rows.length; i += 1) {
+      assert.ok(rows[i].id > rows[i - 1].id);
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join 400 invalid_origin consumes the per-IP budget: five then a valid join is 429', async () => {
+  const ctx = await startTestServer();
+  try {
+    for (let i = 0; i < 5; i += 1) {
+      const keys = generateKeypair();
+      const res = await rawJoin(ctx.baseUrl, {
+        handle: `probe${i}`,
+        pubkey: keys.pubkey,
+        origin: 'nowhere',
+        privateKeyPem: keys.privateKeyPem,
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.data, { error: 'invalid_origin' });
+      assert.deepEqual(Object.keys(res.data), ['error']);
+    }
+
+    const graceKeys = generateKeypair();
+    const grace = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'grace', ...graceKeys });
+    const graceRes = await grace.join({ origin: 'musebook' });
+    assert.equal(graceRes.status, 429);
+    assert.deepEqual(Object.keys(graceRes.data), ['error', 'retry_after']);
+    assert.equal(graceRes.data.error, 'rate_limited');
+    assert.ok(
+      graceRes.data.retry_after === 3599 || graceRes.data.retry_after === 3600,
+      `expected retry_after 3599 or 3600, got ${graceRes.data.retry_after}`
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('join invite_code errors: non-string 400 and unknown code 403, exact bodies, nothing written', async () => {
+  const ctx = await startTestServer();
+  try {
+    const probe = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'probe', ...generateKeypair() });
+    const seqBefore = (await probe.state()).data.state_seq;
+
+    const aliceKeys = generateKeypair();
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...aliceKeys });
+    const badTypeRes = await alice.join({ origin: 'musebook', invite_code: 123 });
+    assert.equal(badTypeRes.status, 400);
+    assert.deepEqual(badTypeRes.data, { error: 'invalid_invite' });
+    assert.deepEqual(Object.keys(badTypeRes.data), ['error']);
+
+    const bobKeys = generateKeypair();
+    const bob = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'bob', ...bobKeys });
+    const unknownRes = await bob.join({ origin: 'musebook', invite_code: 'no-such-code' });
+    assert.equal(unknownRes.status, 403);
+    assert.deepEqual(unknownRes.data, { error: 'invalid_invite' });
+    assert.deepEqual(Object.keys(unknownRes.data), ['error']);
+
+    const aliceRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('alice');
+    assert.equal(aliceRow, undefined);
+    const bobRow = ctx.db.prepare('SELECT * FROM residents WHERE handle = ?').get('bob');
+    assert.equal(bobRow, undefined);
+
+    const seqAfter = (await probe.state()).data.state_seq;
+    assert.equal(seqAfter, seqBefore);
   } finally {
     await ctx.close();
   }
