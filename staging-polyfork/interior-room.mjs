@@ -26,9 +26,9 @@
  *   all four dressing groups hidden at build and toggled by setInteriorDressing:
  *   - milo:  tea kettle + floor cat (1.35, 0.26, -0.9); also the fallback for
  *            unknown / null / undefined / empty handles.
- *   - wick:  oil lamp (vendored verbatim from town-3d/town.js:1417-1438).
- *   - maren: typewriter (vendored verbatim from town-3d/town.js:1440-1459).
- *   - tomas: teapot (vendored verbatim from town-3d/town.js:1461-1477).
+ *   - wick:  oil lamp (vendored verbatim from town-3d/town.js:1450-1471).
+ *   - maren: typewriter (vendored verbatim from town-3d/town.js:1473-1492).
+ *   - tomas: teapot (vendored verbatim from town-3d/town.js:1494-1510).
  *
  * Direct-child count: 19 (1 floor, 5 wall segments + 1 lintel, 2 window glows,
  *   4 open rafters, 2 shared furnishings [desk, rug], 4 dressing groups).
@@ -324,7 +324,7 @@ export function buildInteriorRoom(THREE, opts = {}) {
   return group;
 }
 
-// Vendored verbatim from town-3d/town.js:1417-1477.
+// Vendored verbatim from town-3d/town.js:1450-1510.
 export function buildProceduralOilLamp(THREE) {
   const group = new THREE.Group();
   const brassMat = new THREE.MeshStandardMaterial({ color: '#9a7b3e', roughness: 0.65 });
