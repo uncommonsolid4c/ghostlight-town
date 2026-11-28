@@ -264,6 +264,9 @@
       "lantern",
       "planter"
     ],
+    "earned_props": [
+      "boot_planter"
+    ],
     "max_props": 12,
     "coord_range": [
       -12,
