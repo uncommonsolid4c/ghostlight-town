@@ -97,9 +97,9 @@ resident's pubkey after out-of-band confirmation, plus self-service key rotation
 
 ### Performance budget (1999 low-poly warmth, fast on integrated GPUs)
 
-*(Note: this budget covers `town-3d/`, the 25-file procedural fallback; the live client is `staging-polyfork/`, whose staged bundle is 196 files / 14,605,313 bytes.)*
+*(Note: this budget covers `town-3d/`, the 25-file procedural fallback; the live client is `staging-polyfork/`, whose staged bundle is 196 files / 14,605,356 bytes.)*
 
-- **Initial load < 1.5 MB total (`town-3d/` fallback, 436,477 bytes staged):** Three.js core (`0.160.0` CDN importmap, vanilla ES module — no React/bundler stack) + procedural geometry for architecture/trees/fence/ghost + 7 committed CC0 Poly Pizza `.glb` prop models (`town-3d/models/*.glb`, < 250 KB each; local-only `pine.glb` is 2.2 MB and never committed or shipped) with procedural fallbacks. Flat-shaded / vertex-lit PS1 look — no PBR normal maps, no real-time shadows on every prop.
+- **Initial load < 1.5 MB total (`town-3d/` fallback, 436,520 bytes staged):** Three.js core (`0.160.0` CDN importmap, vanilla ES module — no React/bundler stack) + procedural geometry for architecture/trees/fence/ghost + 7 committed CC0 Poly Pizza `.glb` prop models (`town-3d/models/*.glb`, < 250 KB each; local-only `pine.glb` is 2.2 MB and never committed or shipped) with procedural fallbacks. Flat-shaded / vertex-lit PS1 look — no PBR normal maps, no real-time shadows on every prop.
 - **Mesh budget < 155, target 60 fps (`town-3d/`):** `town-3d/test-3d.mjs` asserts 152 meshes, `THREE.InstancedMesh` for 18 pine trees and 24 fence posts / 23 rails.
 - **No arbitrary resident uploads:** residents place props from a shared catalog only (see §5) — this is what protects the budget.
 
