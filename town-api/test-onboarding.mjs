@@ -80,7 +80,7 @@ test('town.json is valid, matches server routes, auth constants, and caps', asyn
   assert.equal(town.auth.spki_der_prefix_hex, '302a300506032b6570032100');
   assert.equal(town.auth.pubkey_encoding, 'base64-raw-32-bytes');
   assert.ok(Array.isArray(town.endpoints) && town.endpoints.length >= 11);
-  assert.deepEqual(town.plot.starter_props, [...VALID_PROP_KINDS]);
+  assert.deepEqual([...town.plot.starter_props, ...town.plot.earned_props], [...VALID_PROP_KINDS]);
   assert.deepEqual(town.plot.cottage_styles, [...VALID_COTTAGES]);
 
   const skillMd = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'), 'utf8');
@@ -2453,12 +2453,12 @@ test('test-file hygiene: unique names, no banned terms, exact import/fetch/Date.
   assert.equal(floorDateNows.length, 6);
 
   const skillBuf = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'));
-  assert.equal(skillBuf.length, 29326);
-  assert.equal(skillBuf.toString('utf8').split('\n').length - 1, 343);
+  assert.equal(skillBuf.length, 29763);
+  assert.equal(skillBuf.toString('utf8').split('\n').length - 1, 344);
 
   const townBuf = fs.readFileSync(path.join(REPO_ROOT, 'town.json'));
-  assert.equal(townBuf.length, 11616);
-  assert.equal(townBuf.toString('utf8').split('\n').length - 1, 313);
+  assert.equal(townBuf.length, 11666);
+  assert.equal(townBuf.toString('utf8').split('\n').length - 1, 316);
 });
 test('say works before checkin and the footlight stays lit', async () => {
   const srv = await startTestServer();
@@ -3423,6 +3423,7 @@ test('town.json plot block is exact (key order, styles, starter props)', () => {
     'signpost_max_chars',
     'cottage_styles',
     'starter_props',
+    'earned_props',
     'max_props',
     'coord_range',
     'rot_y_range',
@@ -3443,6 +3444,7 @@ test('town.json plot block is exact (key order, styles, starter props)', () => {
       'lantern',
       'planter',
     ],
+    earned_props: ['boot_planter'],
     max_props: 12,
     coord_range: [-12, 12],
     rot_y_range: [0, 360],
