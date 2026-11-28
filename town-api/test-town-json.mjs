@@ -163,7 +163,7 @@ test('limits block matches server.mjs constants and bandstand slots', () => {
   assert.equal(townJson.limits.body_max_kb, parseServerConstNumber('MAX_BODY_BYTES') / 1024);
   assert.equal(townJson.limits.footlight_ttl_sec, parseServerConstNumber('FOOTLIGHT_TTL_SEC'));
 
-  // Bandstand slots 0..9 in server.mjs:680,695
+  // Bandstand slots 1..9 in server.mjs:919,933
   const slotMatch = serverSrc.match(/body\.slot\s*<\s*(\d+)\s*\|\|\s*body\.slot\s*>\s*(\d+)/);
   assert.ok(slotMatch, 'Could not find bandstand slot bounds in server.mjs');
   const expectedSlots = Number(slotMatch[2]) - Number(slotMatch[1]) + 1;
@@ -964,7 +964,7 @@ test('literal limits block', () => {
     guestbook_body_chars: 500,
     body_max_kb: 64,
     footlight_ttl_sec: 2700,
-    bandstand_slots: 10,
+    bandstand_slots: 9,
   });
 });
 
