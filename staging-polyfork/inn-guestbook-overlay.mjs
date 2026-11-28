@@ -1,5 +1,5 @@
-// Copied verbatim from town-3d/town.js (INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent, lines 1839-2162)
-// and town-3d/index.html (openInnOverlay + openGuestbookOverlay + openPlotGuestbookOverlay).
+// Copied verbatim from town-3d/town.js (INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent);
+// openInnOverlay, openGuestbookOverlay, openPlotGuestbookOverlay are adapted from town-3d/index.html (explicit {overlayEl, titleEl, iframeEl, onBeforeOpen} args instead of page DOM globals).
 // Keep in step with town-3d/; no THREE dependency, no top-level document access.
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
