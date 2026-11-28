@@ -34,12 +34,12 @@ test('town-3d/README.md names every shipped .js file in town-3d/', () => {
   }
 });
 
-test('town-3d/README.md states the fallback-vs-staging role and shared 12-file / 195-file bundle split', () => {
+test('town-3d/README.md states the fallback-vs-staging role and shared 12-file / 196-file bundle split', () => {
   const readme = readReadme();
   assert.match(readme, /staging-polyfork/i);
   assert.match(readme, /fallback/i);
   assert.match(readme, /\b12\b.*(?:shared|town-3d)/i);
-  assert.match(readme, /\b195-file\b/);
+  assert.match(readme, /\b196-file\b/);
   assert.match(readme, /town\.js\?v=16/);
 });
 
@@ -1140,13 +1140,13 @@ test('Slice 508: town-3d/README.md fallback bundle literal is 25 files (P1)', as
   );
 });
 
-test('Slice 508: town-3d/README.md staging bundle literal is 195 files (P2)', async () => {
+test('Slice 508: town-3d/README.md staging bundle literal is 196 files (P2)', async () => {
   const readme = readReadme();
   const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
-  assert.equal(files.length, 195, 'staging-polyfork bundle must hold 195 files');
+  assert.equal(files.length, 196, 'staging-polyfork bundle must hold 196 files');
   assert.ok(
-    readme.includes('195-file `staging-polyfork`'),
-    'town-3d/README.md must state 195-file `staging-polyfork` bundle'
+    readme.includes('196-file `staging-polyfork`'),
+    'town-3d/README.md must state 196-file `staging-polyfork` bundle'
   );
 });
 
