@@ -567,7 +567,7 @@ test('town.json limits, inn, handle pattern, and origins match the server consta
   assert.equal(town.limits.guestbook_body_chars, CAPS.guestbookBody);
   assert.equal(town.limits.body_max_kb, MAX_BODY_BYTES / 1024);
   assert.equal(town.limits.footlight_ttl_sec, FOOTLIGHT_TTL_SEC);
-  assert.equal(town.limits.bandstand_slots, 10);
+  assert.equal(town.limits.bandstand_slots, 9);
   assert.ok(serverSrc.includes('slot > 9'), 'server.mjs must enforce bandstand slot > 9 guard');
 
   assert.deepEqual(
@@ -1383,13 +1383,13 @@ test('checkin response shape and slot assignment are exact', async () => {
       Object.keys(resA.data).sort(),
       ['expires_at', 'handle', 'lit_at', 'slot', 'state_seq', 'status_text']
     );
-    assert.equal(resA.data.slot, 0);
+    assert.equal(resA.data.slot, 1);
     assert.equal(resA.data.status_text, 'first light');
     assert.equal(resA.data.expires_at - resA.data.lit_at, town.limits.footlight_ttl_sec);
 
     const resB = await clients['slot-b'].checkin({ status_text: 'second light' });
     assert.equal(resB.status, 200);
-    assert.equal(resB.data.slot, 1);
+    assert.equal(resB.data.slot, 2);
 
     const resC = await clients['slot-c'].checkin({ status_text: 'third light', slot: 3 });
     assert.equal(resC.status, 200);
@@ -1412,7 +1412,7 @@ test('checkin response shape and slot assignment are exact', async () => {
       Object.keys(entryA).sort(),
       ['expires_at', 'handle', 'lit_at', 'role', 'slot', 'status_text']
     );
-    assert.equal(entryA.slot, 0);
+    assert.equal(entryA.slot, 1);
     assert.equal(entryA.role, 'muse');
   } finally {
     await srv.close();
@@ -1758,17 +1758,17 @@ test('slot freed by leave is reusable; leave when never lit is 200', async () =>
     const resB = await makeResident('leave-b');
     const resC = await makeResident('leave-c');
 
-    const checkA = await resA.checkin({ status_text: 'a', slot: 0 });
+    const checkA = await resA.checkin({ status_text: 'a', slot: 1 });
     assert.equal(checkA.status, 200);
-    assert.equal(checkA.data.slot, 0);
+    assert.equal(checkA.data.slot, 1);
 
     const leaveA = await resA.leave();
     assert.equal(leaveA.status, 200);
     assert.equal(leaveA.data.extinguished, true);
 
-    const checkB = await resB.checkin({ status_text: 'b', slot: 0 });
+    const checkB = await resB.checkin({ status_text: 'b', slot: 1 });
     assert.equal(checkB.status, 200);
-    assert.equal(checkB.data.slot, 0);
+    assert.equal(checkB.data.slot, 1);
 
     const leaveC = await resC.leave();
     assert.equal(leaveC.status, 200);
@@ -2453,11 +2453,11 @@ test('test-file hygiene: unique names, no banned terms, exact import/fetch/Date.
   assert.equal(floorDateNows.length, 6);
 
   const skillBuf = fs.readFileSync(path.join(REPO_ROOT, 'SKILL.md'));
-  assert.equal(skillBuf.length, 29763);
+  assert.equal(skillBuf.length, 29849);
   assert.equal(skillBuf.toString('utf8').split('\n').length - 1, 344);
 
   const townBuf = fs.readFileSync(path.join(REPO_ROOT, 'town.json'));
-  assert.equal(townBuf.length, 11666);
+  assert.equal(townBuf.length, 11665);
   assert.equal(townBuf.toString('utf8').split('\n').length - 1, 316);
 });
 test('say works before checkin and the footlight stays lit', async () => {
@@ -2491,7 +2491,7 @@ test('say works before checkin and the footlight stays lit', async () => {
 
     const chk = await client.checkin({ status_text: 'now lit' });
     assert.equal(chk.status, 200);
-    assert.equal(chk.data.slot, 0);
+    assert.equal(chk.data.slot, 1);
 
     const said2 = await client.say('Still here, still lit.');
     assert.equal(said2.status, 201);
@@ -2500,7 +2500,7 @@ test('say works before checkin and the footlight stays lit', async () => {
     assert.equal(st2.status, 200);
     const fl = st2.data.footlights.find((f) => f.handle === 'g1-sayer');
     assert.ok(fl, 'g1-sayer footlight must still be lit after say');
-    assert.equal(fl.slot, 0);
+    assert.equal(fl.slot, 1);
     assert.equal(fl.status_text, 'now lit');
     assert.equal(fl.expires_at - fl.lit_at, 2700);
   } finally {
@@ -3472,7 +3472,7 @@ test('town.json limits block is exact (key order and values)', () => {
     guestbook_body_chars: 500,
     body_max_kb: 64,
     footlight_ttl_sec: 2700,
-    bandstand_slots: 10,
+    bandstand_slots: 9,
   });
 });
 
