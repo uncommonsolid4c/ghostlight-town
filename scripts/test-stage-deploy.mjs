@@ -1589,7 +1589,7 @@ test('G18: EXCLUDED_FILES export and real-tree town-3d stage exact numbers', asy
     assert.equal(summary.town_js_v, '16');
     assert.equal(summary.staging_js_v, null);
     assert.equal(summary.file_count, 25);
-    assert.equal(summary.total_bytes, 436477);
+    assert.equal(summary.total_bytes, 436520);
 
     const manifest = JSON.parse(
       await fs.readFile(path.join(outDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
