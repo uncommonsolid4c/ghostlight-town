@@ -930,30 +930,30 @@ test('staging.js applyStagingState wires renderPromptBook with scroll-to-bottom'
   const stagingLines = stagingSrc.split('\n');
   assert.equal(stagingLines[25], "import { renderPromptBook } from './prompt-book.mjs';");
   assert.equal(stagingLines[777], 'function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, promptBookLinesEl = null, tavernGroup = null, eventBannerEl = null) {');
-  assert.equal(stagingLines[860], '  if (promptBookLinesEl) {');
-  assert.equal(stagingLines[861], '    renderPromptBook(promptBookLinesEl, state?.prompt_book, document);');
-  assert.equal(stagingLines[862], '    promptBookLinesEl.scrollTop = promptBookLinesEl.scrollHeight;');
-  assert.equal(stagingLines[863], '  }');
+  assert.equal(stagingLines[865], '  if (promptBookLinesEl) {');
+  assert.equal(stagingLines[866], '    renderPromptBook(promptBookLinesEl, state?.prompt_book, document);');
+  assert.equal(stagingLines[867], '    promptBookLinesEl.scrollTop = promptBookLinesEl.scrollHeight;');
+  assert.equal(stagingLines[868], '  }');
   assert.equal(stagingLines.filter((l) => l.includes('renderPromptBook(')).length, 1); // only the applyStagingState call
 });
 
 test('staging.js setPromptBookVisible toggles hidden, aria-expanded, and button label', async () => {
   const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
   const stagingLines = stagingSrc.split('\n');
-  assert.equal(stagingLines[1223], "  const promptBookEl = document.getElementById('prompt-book');");
-  assert.equal(stagingLines[1224], "  const promptBookToggleEl = document.getElementById('prompt-book-toggle');");
-  assert.equal(stagingLines[1225], "  const promptBookLinesEl = document.getElementById('prompt-book-lines');");
-  assert.equal(stagingLines[1226], "  const eventBannerEl = document.getElementById('prompt-book-event');");
-  assert.equal(stagingLines[1227], '  function setPromptBookVisible(visible) {');
-  assert.equal(stagingLines[1228], '    if (!promptBookEl || !promptBookToggleEl) return;');
-  assert.equal(stagingLines[1229], '    promptBookEl.hidden = !visible;');
-  assert.equal(stagingLines[1230], "    promptBookToggleEl.setAttribute('aria-expanded', String(visible));");
-  assert.equal(stagingLines[1231], "    promptBookToggleEl.textContent = visible ? 'Hide Prompt Book' : 'Prompt Book';");
-  assert.equal(stagingLines[1232], '  }');
-  assert.equal(stagingLines[1233], '  setPromptBookVisible(window.innerWidth >= 640);');
-  assert.equal(stagingLines[1234], "  promptBookToggleEl?.addEventListener('click', () => {");
-  assert.equal(stagingLines[1235], '    setPromptBookVisible(Boolean(promptBookEl?.hidden));');
-  assert.equal(stagingLines[1236], '  });');
+  assert.equal(stagingLines[1228], "  const promptBookEl = document.getElementById('prompt-book');");
+  assert.equal(stagingLines[1229], "  const promptBookToggleEl = document.getElementById('prompt-book-toggle');");
+  assert.equal(stagingLines[1230], "  const promptBookLinesEl = document.getElementById('prompt-book-lines');");
+  assert.equal(stagingLines[1231], "  const eventBannerEl = document.getElementById('prompt-book-event');");
+  assert.equal(stagingLines[1232], '  function setPromptBookVisible(visible) {');
+  assert.equal(stagingLines[1233], '    if (!promptBookEl || !promptBookToggleEl) return;');
+  assert.equal(stagingLines[1234], '    promptBookEl.hidden = !visible;');
+  assert.equal(stagingLines[1235], "    promptBookToggleEl.setAttribute('aria-expanded', String(visible));");
+  assert.equal(stagingLines[1236], "    promptBookToggleEl.textContent = visible ? 'Hide Prompt Book' : 'Prompt Book';");
+  assert.equal(stagingLines[1237], '  }');
+  assert.equal(stagingLines[1238], '  setPromptBookVisible(window.innerWidth >= 640);');
+  assert.equal(stagingLines[1239], "  promptBookToggleEl?.addEventListener('click', () => {");
+  assert.equal(stagingLines[1240], '    setPromptBookVisible(Boolean(promptBookEl?.hidden));');
+  assert.equal(stagingLines[1241], '  });');
 });
 
 test('prompt-book.mjs header line range matches town.js definitions and call site', async () => {
@@ -966,7 +966,7 @@ test('prompt-book.mjs header line range matches town.js definitions and call sit
   assert.equal(townLines[1921], '}');
   assert.equal(townLines[1922], '');
   assert.ok(townLines[1923].startsWith('export const SEED_HOME_PADS'));
-  assert.equal(townLines[2681], '  live.promptBook = formatPromptBookEntries(state?.prompt_book);');
+  assert.equal(townLines[2686], '  live.promptBook = formatPromptBookEntries(state?.prompt_book);');
 });
 
 test('formatPromptBookEntries returns new objects and never mutates its input array', () => {
@@ -1265,15 +1265,15 @@ test('formatPromptBookEntries deep-equals role and kind matrix (P19)', () => {
 test('staging.js applyStagingState call site and town.js ensureLiveStore init (P20)', async () => {
   const stagingSrc = await fs.readFile(STAGING_JS_PATH, 'utf8');
   const S = stagingSrc.split('\n');
-  assert.equal(S[1291], '      const footlightSlotByHandle = applyStagingState(');
-  assert.equal(S[1292], '        liveStore,');
-  assert.equal(S[1293], '        bandstandBuilt,');
-  assert.equal(S[1294], '        npcStandIns,');
-  assert.equal(S[1295], '        state,');
-  assert.equal(S[1296], '        promptBookLinesEl,');
-  assert.equal(S[1297], '        tavernGroup,');
-  assert.equal(S[1298], '        eventBannerEl');
-  assert.equal(S[1299], '      );');
+  assert.equal(S[1296], '      const footlightSlotByHandle = applyStagingState(');
+  assert.equal(S[1297], '        liveStore,');
+  assert.equal(S[1298], '        bandstandBuilt,');
+  assert.equal(S[1299], '        npcStandIns,');
+  assert.equal(S[1300], '        state,');
+  assert.equal(S[1301], '        promptBookLinesEl,');
+  assert.equal(S[1302], '        tavernGroup,');
+  assert.equal(S[1303], '        eventBannerEl');
+  assert.equal(S[1304], '      );');
   assert.equal(S.filter((l) => l.includes('applyStagingState(')).length, 2);
   assert.equal(S.filter((l) => l.includes('promptBookLinesEl,')).length, 2);
 
