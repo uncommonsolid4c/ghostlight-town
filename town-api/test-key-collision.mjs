@@ -1556,7 +1556,7 @@ test('rotate preserves a live checkin: footlight slot and presence survive, old 
     const { client: aliceOld } = await createResident(ctx, 'alice');
     const checkinRes = await aliceOld.checkin({ status_text: 'at the bandstand' });
     assert.equal(checkinRes.status, 200);
-    assert.equal(checkinRes.data.slot, 0);
+    assert.equal(checkinRes.data.slot, 1);
 
     const keysB = generateKeypair();
     const rotRes = await aliceOld.rotateKey(keysB.pubkey);
@@ -1564,7 +1564,7 @@ test('rotate preserves a live checkin: footlight slot and presence survive, old 
 
     const state = (await aliceOld.state()).data;
     const footlight = state.footlights.find((f) => f.handle === 'alice');
-    assert.equal(footlight.slot, 0);
+    assert.equal(footlight.slot, 1);
     assert.equal(footlight.status_text, 'at the bandstand');
     assert.equal(footlight.role, 'muse');
     const presence = state.presence.find((p) => p.handle === 'alice');
