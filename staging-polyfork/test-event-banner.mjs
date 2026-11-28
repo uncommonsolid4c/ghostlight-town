@@ -1147,12 +1147,12 @@ test('staging.js event-banner wiring pins import, store key, applyStagingState, 
   assert.equal(sl.filter((l) => l.includes('loadEvents()')).length, 1);
 });
 
-test('test-event-banner.mjs file hygiene pins 58 unique names, 7 imports, and forbidden-literal counts', async () => {
+test('test-event-banner.mjs file hygiene pins 59 unique names, 7 imports, and forbidden-literal counts', async () => {
   const self = await fs.readFile(path.join(HERE, 'test-event-banner.mjs'), 'utf8');
   const lines = self.split('\n');
   const names = [...self.matchAll(/^(?:await )?test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 58);
-  assert.equal(new Set(names).size, 58); // every top-level test name unique
+  assert.equal(names.length, 59);
+  assert.equal(new Set(names).size, 59); // every top-level test name unique
   assert.deepEqual(lines.filter((l) => l.startsWith('import ')), [
     "import test from 'node:test';",
     "import assert from 'node:assert/strict';",
@@ -1362,4 +1362,23 @@ test('P10 — updateEventBanner cache hit leaves the map object untouched', () =
   assert.equal(card.material.map, drawnMap);
   assert.equal(card.material.needsUpdate, false);
   assert.equal(calls, 1);
+});
+
+test('P11 — formatEventWhen pins America/Los_Angeles under hostile TZ=Pacific/Kiritimati and TZ=UTC', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const modUrl = pathToFileURL(path.join(HERE, 'event-banner.mjs')).href;
+  const script = [
+    `import assert from 'node:assert/strict';`,
+    `import { formatEventWhen } from ${JSON.stringify(modUrl)};`,
+    `assert.equal(formatEventWhen(Date.parse('2030-06-15T20:00:00Z')), 'Jun 15, 1:00 PM');`,
+    `assert.equal(formatEventWhen(Date.parse('2027-02-14T20:00:00Z')), 'Feb 14, 12:00 PM');`,
+  ].join('\n');
+  for (const tz of ['Pacific/Kiritimati', 'UTC']) {
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, TZ: tz },
+      encoding: 'utf8',
+    });
+  }
 });
