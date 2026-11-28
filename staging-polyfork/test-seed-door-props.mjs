@@ -1199,14 +1199,176 @@ test('manifest prop kinds are exact per seed, and no manifest carries a door-pro
   }
 });
 
-test('file hygiene: 53 tests, 8 imports, no banned literals', async () => {
+test('attachSeedDoorProp appends after pre-existing children and leaves cottage pose untouched', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  const deck = new THREE.Mesh(
+    new THREE.BoxGeometry(4.8, 0.18, 1.2),
+    new THREE.MeshStandardMaterial({ color: '#6b492b' })
+  );
+  deck.position.set(0, 0.09, 2.9);
+  const sign = new THREE.Group();
+  sign.position.set(2.3, 0.18, 2.6);
+  cottage.add(deck);
+  cottage.add(sign);
+  cottage.position.set(5, 0, 5);
+  cottage.rotation.y = 0.5;
+
+  const prop = attachSeedDoorProp(THREE, cottage, 'wick');
+  assert.equal(cottage.children.length, 3);
+  assert.equal(cottage.children[0], deck);
+  assert.equal(cottage.children[1], sign);
+  assert.equal(cottage.children[2], prop);
+  assertPos(deck, 0, 0.09, 2.9);
+  assertPos(sign, 2.3, 0.18, 2.6);
+  assertPos(cottage, 5, 0, 5);
+  assert.equal(cottage.rotation.y, 0.5);
+});
+
+test('cottage.add return value is ignored by attachSeedDoorProp', () => {
+  const THREE = makeFakeThree();
+  const cottage = new THREE.Group();
+  cottage.add = (child) => {
+    cottage.children.push(child);
+    return 'sentinel-add-return';
+  };
+  const prop = attachSeedDoorProp(THREE, cottage, 'maren');
+  assert.notEqual(prop, 'sentinel-add-return');
+  assert.equal(prop.name, 'seed_door_prop_maren');
+  assert.equal(cottage.children[0], prop);
+});
+
+test('missing THREE.Group throws TypeError before any add across all seed handles', () => {
+  const baseThree = makeFakeThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const THREE = makeFakeThree();
+    delete THREE.Group;
+    const cottage = new baseThree.Group();
+    assert.throws(
+      () => attachSeedDoorProp(THREE, cottage, handle),
+      { name: 'TypeError', message: /Group is not a constructor/ }
+    );
+    assert.equal(cottage.children.length, 0);
+  }
+  assert.ok(baseThree.Group);
+});
+
+test('seed-door-props.mjs source shape: constant counts and single placement literal', async () => {
+  const modSrc = await fs.readFile(MODULE_PATH, 'utf8');
+  const count = (lit) => modSrc.split(lit).length - 1;
+  assert.equal(count('SEED_DOOR_PROP_POS'), 4);
+  assert.equal(count('SEED_DOOR_PROPS'), 3);
+  assert.equal(count('-2.9'), 1);
+  assert.ok(
+    modSrc.includes('group.position.set(SEED_DOOR_PROP_POS[0], SEED_DOOR_PROP_POS[1], SEED_DOOR_PROP_POS[2]);')
+  );
+});
+
+test('door-prop distance and bearing from cottage origin place it in left-front quadrant', () => {
+  const THREE = makeFakeThree();
+  for (const handle of ['wick', 'maren', 'tomas']) {
+    const prop = attachSeedDoorProp(THREE, new THREE.Group(), handle);
+    const dist = Math.hypot(prop.position.x, prop.position.z);
+    const bearing = Math.atan2(prop.position.z, prop.position.x);
+    assert.ok(Math.abs(dist - 2.9 * Math.SQRT2) < 1e-9, `${handle} dist ${dist}`);
+    assert.ok(Math.abs(bearing - (3 * Math.PI) / 4) < 1e-9, `${handle} bearing ${bearing}`);
+    assert.ok(prop.position.x < 0 && prop.position.z > 0, `${handle} must be in left-front quadrant`);
+  }
+});
+
+test('SEED_HOME_PADS and TOWN_LAYOUT.plots shape exclude plot 1 from seed pads', () => {
+  assert.deepEqual(SEED_HOME_PADS, { wick: 2, maren: 3, tomas: 4 });
+  assert.equal(Object.prototype.hasOwnProperty.call(SEED_HOME_PADS, 'milo'), false);
+  assert.equal(TOWN_LAYOUT.plots.length, 8);
+  assert.deepEqual(
+    TOWN_LAYOUT.plots.map((p) => p.plotNumber),
+    [1, 2, 3, 4, 5, 6, 7, 8]
+  );
+  assert.equal(Math.min(...Object.values(SEED_HOME_PADS)), 2);
+
+  const plot1 = TOWN_LAYOUT.plots[0];
+  assert.equal(plot1.plotNumber, 1);
+  assert.equal(plot1.x, 17.919);
+  assert.equal(plot1.y, 0);
+  assert.equal(plot1.z, 4.601);
+  assert.equal(plot1.rotY, -1.8221);
+});
+
+test('CHARACTERS titles trace to the seed door props and exclude milo and lampmoth', () => {
+  const byHandle = Object.fromEntries(CHARACTERS.map((c) => [c.handle, c]));
+  assert.equal(byHandle.wick.title, 'Stagehand / Lamp-Trimmer');
+  assert.equal(byHandle.maren.title, 'Retired Typesetter');
+  assert.equal(byHandle.tomas.title, 'Props-Master / Tea-Urn Keeper');
+  assert.match(byHandle.wick.title, /Lamp/);
+  assert.match(byHandle.tomas.title, /Tea/);
+  assert.equal(CHARACTERS.find((c) => c.handle === 'milo'), undefined);
+  assert.equal(CHARACTERS.find((c) => c.handle === 'lampmoth'), undefined);
+});
+
+test('staging.js call-site context: two-line sequence, counts, function order, and milo guard', async () => {
+  const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
+  assert.ok(
+    stagingSrc.includes(
+      'attachPlotProps(THREE, cottage, Array.isArray(manifest.props) ? manifest.props : []);\n  attachSeedDoorProp(THREE, cottage, handle);'
+    )
+  );
+  assert.equal(stagingSrc.split('attachSeedDoorProp').length - 1, 2);
+  assert.equal(stagingSrc.split('seed-door-props').length - 1, 1);
+
+  const fnIdx = stagingSrc.indexOf('function applyStagingPlotManifest');
+  const callIdx = stagingSrc.indexOf('attachSeedDoorProp(THREE, cottage, handle);');
+  assert.ok(fnIdx !== -1 && callIdx !== -1 && fnIdx < callIdx);
+  assert.ok(
+    stagingSrc.includes("if (!handle || handle === 'milo' || !manifest || typeof manifest !== 'object') {")
+  );
+});
+
+test('direct builders return unnamed, unpositioned, unrotated groups with three children', async () => {
+  const {
+    buildProceduralOilLamp,
+    buildProceduralTypewriter,
+    buildProceduralTeapot,
+  } = await import('./interior-room.mjs');
+
+  const builders = [
+    ['wick', buildProceduralOilLamp],
+    ['maren', buildProceduralTypewriter],
+    ['tomas', buildProceduralTeapot],
+  ];
+  const THREE = makeFakeThree();
+  for (const [handle, buildFn] of builders) {
+    const direct = buildFn(THREE);
+    assert.equal(direct.name, '', `${handle} direct group must be unnamed`);
+    assertPos(direct, 0, 0, 0);
+    assert.deepEqual(direct.rotation, { x: 0, y: 0, z: 0 });
+    assert.equal(direct.children.length, 3, `${handle} direct group must have 3 children`);
+  }
+});
+
+test('town-3d/town.js PROP_PLACEMENTS order and parent/y fields for seed door props', async () => {
+  const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
+  const wickIdx = townSrc.indexOf("id: 'wick_oil_lamp'");
+  const tomasIdx = townSrc.indexOf("id: 'tomas_teapot'");
+  const marenIdx = townSrc.indexOf("id: 'maren_typewriter'");
+  assert.ok(wickIdx !== -1 && tomasIdx !== -1 && marenIdx !== -1);
+  assert.ok(wickIdx < tomasIdx && tomasIdx < marenIdx);
+
+  for (const id of ['wick_oil_lamp', 'tomas_teapot', 'maren_typewriter']) {
+    const block = townSrc.match(new RegExp(`\\{[^}]*?id:\\s*'${id}'[^}]*?\\}`));
+    assert.ok(block, `expected ${id} block in town-3d/town.js`);
+    assert.ok(block[0].includes("parent: 'scene',"), `expected parent: 'scene', in ${id}`);
+    assert.ok(block[0].includes('y: 0,'), `expected y: 0, in ${id}`);
+  }
+});
+
+test('file hygiene: 63 tests, 8 imports, no banned literals', async () => {
   const [modSrc, selfSrc] = await Promise.all([
     fs.readFile(MODULE_PATH, 'utf8'),
     fs.readFile(SELF_PATH, 'utf8'),
   ]);
   const names = [...selfSrc.matchAll(/^test\(['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-  assert.equal(names.length, 53);
-  assert.equal(new Set(names).size, 53);
+  assert.equal(names.length, 63);
+  assert.equal(new Set(names).size, 63);
   const importLines = [...selfSrc.matchAll(/^import .*$/gm)].map((m) => m[0]);
   assert.deepEqual(importLines, [
     "import test from 'node:test';",
