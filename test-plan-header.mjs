@@ -149,8 +149,8 @@ test('PLAN.md header deployed bundle ?v= and file count match staging-polyfork/i
   const stageTestSrc = fs.readFileSync(STAGE_TEST_PATH, 'utf8');
   assert.match(
     stageTestSrc,
-    new RegExp(`assert\\.equal\\(summary\\.file_count,\\s*${headerFiles}\\)`),
-    `scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === ${headerFiles}`
+    /assert\.equal\(summary\.file_count,\s*196\)/,
+    'scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === 196 (staged tree; deployed header stays 195 until the ?v=42 deploy)'
   );
 
   assert.equal(
@@ -546,10 +546,10 @@ test('PLAN.md bundle counts agree across header, README Status, §4 Performance 
   assert.ok(readmeStatus.includes(`\`?v=${bundleMatch[1]}\` / ${bundleMatch[2]}-file bundle`), 'README.md ## Status must match bundle version and 195-file count');
 
   assert.ok(planText.includes(`the ${fallbackMatch[2]}-file procedural fallback`), 'PLAN.md §4 must state the 25-file procedural fallback');
-  assert.ok(planText.includes(`whose staged bundle is ${bundleMatch[2]} files`), 'PLAN.md §4 must state staged bundle is 195 files');
+  assert.ok(planText.includes('whose staged bundle is 196 files'), 'PLAN.md §4 must state staged bundle is 196 files (staged tree; deployed stays 195 until the ?v=42 deploy)');
 
   const stageTestSrc = fs.readFileSync(STAGE_TEST_PATH, 'utf8');
-  assert.match(stageTestSrc, new RegExp(`assert\\.equal\\(summary\\.file_count,\\s*${bundleMatch[2]}\\)`), 'scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === 195');
+  assert.match(stageTestSrc, /assert\.equal\(summary\.file_count,\s*196\)/, 'scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === 196');
   assert.match(stageTestSrc, new RegExp(`assert\\.equal\\(summary\\.file_count,\\s*${fallbackMatch[2]}\\)`), 'scripts/test-stage-deploy.mjs must pin town-3d file_count === 25');
 });
 
@@ -638,18 +638,23 @@ test('PLAN.md §12.6, header, README Status, and staging-polyfork/index.html agr
   assert.ok(readmeStatus.includes(`The \`?v=${v}\` / 195-file bundle deployed 2026-11-23 (no pending deploy candidate)`), 'README.md ## Status must record deployed ?v=41 bundle with no pending deploy candidate');
 });
 
-test('README.md ## Status per-file test tiers fall between 54 and 65 and sum with unlisted suites to TOTAL', () => {
+test('README.md ## Status per-file test tiers fall between 54 and 65 (new small suites exempt) and sum with unlisted suites to TOTAL', () => {
   const { statusLine } = readPlanHeader();
-  const totalMatch = statusLine.match(/TOTAL pass=(\d+) fail=0 skipped=3 suites=66/);
-  assert.ok(totalMatch, 'PLAN.md **Status:** must record TOTAL pass=<N> fail=0 skipped=3 suites=66');
+  const totalMatch = statusLine.match(/TOTAL pass=(\d+) fail=0 skipped=3 suites=67/);
+  assert.ok(totalMatch, 'PLAN.md **Status:** must record TOTAL pass=<N> fail=0 skipped=3 suites=67');
 
   const readmeStatus = readReadmeStatusSection();
   const pins = [...readmeStatus.matchAll(/`([^`]+\.mjs)` (\d+)\/(\d+)/g)];
-  assert.equal(pins.length, 62, 'README.md ## Status must list 62 per-file test pins');
-  const counts = pins.map((m) => Number(m[2]));
+  assert.equal(pins.length, 63, 'README.md ## Status must list 63 per-file test pins');
+  const counts = pins
+    .filter((m) => m[1] !== 'staging-polyfork/test-catchup.mjs')
+    .map((m) => Number(m[2]));
   const minTier = Math.min(...counts);
   const maxTier = Math.max(...counts);
   assert.ok(minTier >= 54 && maxTier <= 65, `README.md per-file tier counts must fall in 54..65 (got ${minTier}..${maxTier})`);
+  const catchupPin = pins.find((m) => m[1] === 'staging-polyfork/test-catchup.mjs');
+  assert.ok(catchupPin, 'README.md ## Status must pin staging-polyfork/test-catchup.mjs');
+  assert.equal(Number(catchupPin[2]), 5, 'README.md ## Status must pin test-catchup.mjs at its true small count 5/5');
 });
 
 test('scripts/check-live.mjs and scripts/stage-deploy.mjs verify live and staged bundle integrity', () => {
@@ -668,7 +673,7 @@ test('run-tests.mjs summary parser matches node --test pass/fail/skipped output 
   assert.ok(runTestsSrc.includes('TOTAL pass=${totalPass} fail=${totalFail} skipped=${totalSkipped} suites=${suites.length}'), 'run-tests.mjs must print TOTAL pass=... fail=... skipped=... suites=...');
 
   const { statusLine } = readPlanHeader();
-  assert.match(statusLine, /`run-tests\.mjs` TOTAL pass=\d+ fail=0 skipped=3 suites=66/, 'PLAN.md **Status:** must record run-tests.mjs TOTAL line');
+  assert.match(statusLine, /`run-tests\.mjs` TOTAL pass=\d+ fail=0 skipped=3 suites=67/, 'PLAN.md **Status:** must record run-tests.mjs TOTAL line');
 });
 
 test('README.md named-list pins match actual top-level test counts', () => {
@@ -783,10 +788,10 @@ test('test-plan-body.mjs and test-plan-sections-9-12.mjs live top-level test cou
   }
 });
 
-test('README.md named-list pins are 62 unique existing files with equal counts, TOTAL after the last pin', () => {
+test('README.md named-list pins are 63 unique existing files with equal counts, TOTAL after the last pin', () => {
   const readmeStatus = readReadmeStatusSection();
   const pins = [...readmeStatus.matchAll(/`([^`]+\.mjs)` (\d+)\/(\d+)/g)];
-  assert.equal(pins.length, 62, 'README.md ## Status must contain exactly 62 per-file test-count pins');
+  assert.equal(pins.length, 63, 'README.md ## Status must contain exactly 63 per-file test-count pins');
   const files = pins.map((p) => p[1]);
   assert.equal(new Set(files).size, files.length, 'README.md ## Status pins must name each file once');
   for (const file of files) {
