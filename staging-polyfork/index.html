@@ -116,6 +116,47 @@
   .pb-handle { color: #a8d8ea; font-weight: bold; }
   .pb-kind-emote .pb-body { font-style: italic; color: #e6dcc6; }
   .pb-kind-system { opacity: 0.7; }
+  #catchup-toggle {
+    align-self: flex-start;
+    margin: 0 0 6px;
+    font-family: inherit;
+    font-size: 11px;
+    color: #e8e0cc;
+    background: rgba(10, 12, 26, 0.78);
+    border: 1px solid #4a3a28;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  #catchup-toggle:hover { border-color: #b59449; color: #ffbe5c; }
+  #catchup-panel {
+    overflow-y: auto;
+    max-height: 28vh;
+    margin: 0 0 8px;
+    padding: 6px;
+    border: 1px solid #4a3a28;
+    background: rgba(10, 12, 26, 0.78);
+    user-select: text;
+  }
+  #catchup-panel[hidden] { display: none; }
+  .cu-handle-row { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
+  #catchup-handle {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-family: inherit;
+    font-size: 11px;
+    color: #e8e0cc;
+    background: rgba(10, 12, 26, 0.78);
+    border: 1px solid #4a3a28;
+    padding: 2px 6px;
+  }
+  .cu-hint { font-size: 10px; color: #b8b09a; }
+  .cu-welcome { margin: 0 0 6px; color: #ffbe5c; }
+  .cu-heading {
+    margin: 6px 0 3px;
+    font-size: 11px;
+    color: #ffbe5c;
+    border-bottom: 1px solid #4a3a28;
+  }
 
   #plot-overlay {
     position: fixed;
@@ -289,6 +330,8 @@
 <button id="prompt-book-toggle" type="button" aria-expanded="true" aria-controls="prompt-book">Prompt Book</button>
 <aside id="prompt-book" class="panel">
   <h2>The Prompt Book &mdash; last 24h</h2>
+  <button id="catchup-toggle" type="button" aria-expanded="false" aria-controls="catchup-panel">What you missed</button>
+  <div id="catchup-panel" hidden></div>
   <div id="prompt-book-event" hidden></div>
   <div id="prompt-book-lines"><p class="pb-empty">Waiting for the town API&hellip;</p></div>
 </aside>
