@@ -1368,7 +1368,7 @@ test('inn-guestbook-overlay.mjs export surface and source hygiene discipline', a
   assert.equal(modSrc.includes(RETIRED_TERM), false);
   assert.ok(
     modSrc.startsWith(
-      '// Copied verbatim from town-3d/town.js (INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent, lines 1839-2162)'
+      '// Copied verbatim from town-3d/town.js (INN_ROOM_DETAILS through resolvePlotGuestbookOverlayContent);'
     )
   );
   const bodyAfterHeader = modSrc.split('\n').slice(3).join('\n');
@@ -1379,9 +1379,13 @@ test('inn-guestbook-overlay.mjs export surface and source hygiene discipline', a
   assert.equal(testSrc.includes(RETIRED_TERM), false);
 });
 
-test('town-3d/index.html open* wiring contract and honest non-verbatim header gap', async () => {
+test('town-3d/index.html open* wiring contract and adapted module header', async () => {
   const htmlSrc = await fs.readFile(path.join(REPO_ROOT, 'town-3d', 'index.html'), 'utf8');
   const modSrc = await fs.readFile(path.join(__dirname, 'inn-guestbook-overlay.mjs'), 'utf8');
+  const header = modSrc.split('\n').slice(0, 3).join('\n');
+
+  assert.ok(header.includes('adapted from town-3d/index.html'));
+  assert.equal(header.includes('and town-3d/index.html'), false);
 
   assert.ok(htmlSrc.includes('async function openPlotGuestbookOverlay(handle)'));
   assert.ok(htmlSrc.includes('async function openInnOverlay()'));
