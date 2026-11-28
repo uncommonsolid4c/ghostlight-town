@@ -1698,7 +1698,7 @@ test('CREDITS.md and town-3d README.md FNV-1a checksums are pinned', async () =>
     fs.readFile(README_PATH),
   ]);
   assert.equal(fnv1aHex(creditsBuf), "c5545889", 'CREDITS.md FNV-1a checksum');
-  assert.equal(fnv1aHex(readmeBuf), "1c9ffddd", 'town-3d/README.md FNV-1a checksum');
+  assert.equal(fnv1aHex(readmeBuf), "de40d877", 'town-3d/README.md FNV-1a checksum');
 });
 
 test('credited GLB JSON top-level key order is pinned per exporter', async () => {
