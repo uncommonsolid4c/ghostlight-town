@@ -1451,11 +1451,11 @@ test('town-npc/README.md stepback constants, 30-minute boundary, and localDateSt
   }
 });
 
-test('town-npc/test-readme.mjs file hygiene: 44 unique tests, 6 imports, and banned-needle counts', () => {
+test('town-npc/test-readme.mjs file hygiene: 64 unique tests, 6 imports, and banned-needle counts', () => {
   const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
   const names = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 54);
-  assert.equal(new Set(names).size, 54);
+  assert.equal(names.length, 64);
+  assert.equal(new Set(names).size, 64);
 
   const importLines = selfSrc.split('\n').filter((line) => line.startsWith('import '));
   assert.equal(importLines.length, 6);
@@ -1636,4 +1636,507 @@ test('town-npc/README.md honesty bullet matches server CAPS.say', () => {
   const serverSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-api', 'server.mjs'), 'utf8');
   assert.ok(honestySrc.includes('export const MAX_SAY_LEN = 500;'), 'honesty.mjs must declare MAX_SAY_LEN = 500');
   assert.match(serverSrc, /say:\s*500/, 'town-api/server.mjs CAPS.say must be 500');
+});
+
+test('town-npc/README.md runTurn --force overrides silent and retired but never reply or initiate', async () => {
+  const { runTurn } = await import('./run.mjs');
+  const os = await import('node:os');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-g55-'));
+  const stubState = (state) => async () => ({ ok: true, json: async () => state });
+  const fiveMuses = ['muse', 'lampmoth', 'museforsarp', 'puck', 'juniper'].map((handle) => ({ role: 'muse', handle }));
+  const tenMuses = Array.from({ length: 10 }, (_, i) => ({ role: 'muse', handle: `m${i}` }));
+  const addressed = { id: 7, role: 'muse', handle: 'muse', body: 'Wick, did you sweep?', created_at: now - 60 };
+  const emptyState = { footlights: [], prompt_book: [], presence: [], daily_game: null };
+  const base = {
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: tmp, dryRun: true, now,
+    logger: () => {},
+  };
+
+  const silentNoForce = await runTurn({
+    ...base,
+    fetchImpl: stubState({ footlights: fiveMuses, prompt_book: [], presence: [], daily_game: null }),
+  });
+  assert.equal(silentNoForce.action, 'silent');
+  assert.equal(silentNoForce.decision.action, 'silent');
+
+  const silentForce = await runTurn({
+    ...base,
+    force: true,
+    fetchImpl: stubState({ footlights: fiveMuses, prompt_book: [], presence: [], daily_game: null }),
+  });
+  assert.equal(silentForce.action, 'dry_run');
+  assert.equal(silentForce.decision.action, 'initiate');
+  assert.equal(
+    silentForce.decision.reason,
+    'forced (5 real muses active in 24h (>= 5, reply-only) and not addressed)'
+  );
+
+  const retiredForce = await runTurn({
+    ...base,
+    force: true,
+    fetchImpl: stubState({ footlights: tenMuses, prompt_book: [], presence: [], daily_game: null }),
+  });
+  assert.equal(retiredForce.action, 'dry_run');
+  assert.equal(retiredForce.decision.action, 'initiate');
+  assert.equal(
+    retiredForce.decision.reason,
+    'forced (10 real muses active in 24h (>= 10); retired to town-staff role)'
+  );
+
+  const addressedForce = await runTurn({
+    ...base,
+    force: true,
+    fetchImpl: stubState({ footlights: fiveMuses, prompt_book: [addressed], presence: [], daily_game: null }),
+  });
+  assert.equal(addressedForce.action, 'dry_run');
+  assert.equal(addressedForce.decision.action, 'reply');
+  assert.equal(addressedForce.decision.reason.startsWith('forced ('), false);
+  assert.deepEqual(addressedForce.decision.replyLine, { id: 7, handle: 'muse' });
+
+  const initiateForce = await runTurn({ ...base, force: true, fetchImpl: stubState(emptyState) });
+  assert.equal(initiateForce.action, 'dry_run');
+  assert.equal(initiateForce.decision.action, 'initiate');
+  assert.equal(initiateForce.decision.reason.startsWith('forced ('), false);
+  assert.equal(
+    initiateForce.decision.reason,
+    'no real muse spoke in 6h; ambient observation allowed (0/2 today)'
+  );
+
+  assert.ok(
+    fs.readFileSync(path.join(__dirname, 'run.mjs'), 'utf8').includes("a === '--force'"),
+    'run.mjs argument parser must handle --force'
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('town-npc/README.md runTurn daily game runner rule: silent host posts, retired and reply never steal, non-host never posts', async () => {
+  const { runTurn } = await import('./run.mjs');
+  const { dailyGameHostForDate } = await import('./daily-game.mjs');
+  const os = await import('node:os');
+  const now = Math.floor(Date.parse('2026-11-24T12:00:00-08:00') / 1000);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-g56-'));
+  const stubState = (state) => async () => ({ ok: true, json: async () => state });
+  const game = { date: '2026-11-24', format: 'word', prompt: 'Describe tonight in exactly two words.' };
+  const gameLine = "Today's game — Word game: Describe tonight in exactly two words.";
+  const twoLit = [{ role: 'muse', handle: 'muse' }, { role: 'muse', handle: 'lampmoth' }];
+  const tenMuses = Array.from({ length: 10 }, (_, i) => ({ role: 'muse', handle: `m${i}` }));
+  const addressed = { id: 7, role: 'muse', handle: 'muse', body: 'Wick, did you sweep?', created_at: now - 60 };
+
+  assert.equal(dailyGameHostForDate('2026-11-24'), 'wick');
+
+  const silentHost = await runTurn({
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: tmp, dryRun: true, now,
+    fetchImpl: stubState({ footlights: twoLit, prompt_book: [], presence: [], daily_game: game }),
+    logger: () => {},
+  });
+  assert.equal(silentHost.action, 'dry_run');
+  assert.equal(silentHost.wouldPostGame, true);
+  assert.equal(silentHost.draft, gameLine);
+
+  const retiredHost = await runTurn({
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: tmp, dryRun: true, now,
+    fetchImpl: stubState({ footlights: tenMuses, prompt_book: [], presence: [], daily_game: game }),
+    logger: () => {},
+  });
+  assert.equal(retiredHost.action, 'retired');
+  assert.equal(retiredHost.wouldPostGame, undefined);
+
+  const replyHost = await runTurn({
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: tmp, dryRun: true, now,
+    fetchImpl: stubState({ footlights: [], prompt_book: [addressed], presence: [], daily_game: game }),
+    logger: () => {},
+  });
+  assert.equal(replyHost.action, 'dry_run');
+  assert.equal(replyHost.decision.action, 'reply');
+  assert.equal(replyHost.wouldPostGame, undefined);
+
+  const nonHost = await runTurn({
+    npcHandle: 'maren', apiBase: 'http://stub.local', stateDir: tmp, dryRun: true, now,
+    fetchImpl: stubState({ footlights: [], prompt_book: [], presence: [], daily_game: game }),
+    logger: () => {},
+  });
+  assert.equal(nonHost.action, 'dry_run');
+  assert.equal(nonHost.decision.action, 'initiate');
+  assert.equal(nonHost.wouldPostGame, undefined);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('town-npc/README.md runTurn state fetch failure fails cleanly without posting or writing', async () => {
+  const { runTurn } = await import('./run.mjs');
+  const os = await import('node:os');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-g57-'));
+  let brainCalls = 0;
+  const brainImpl = async () => {
+    brainCalls += 1;
+    return 'hello';
+  };
+
+  const logsThrow = [];
+  const dirThrow = path.join(tmp, 'throw');
+  const resThrow = await runTurn({
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: dirThrow, dryRun: true, now,
+    fetchImpl: async () => { throw new Error('boom'); },
+    brainImpl,
+    logger: (obj) => logsThrow.push(obj),
+  });
+  assert.deepEqual(
+    { ok: resThrow.ok, exitCode: resThrow.exitCode, action: resThrow.action },
+    { ok: false, exitCode: 1, action: 'error' }
+  );
+  assert.equal(logsThrow[logsThrow.length - 1].reason, 'state fetch error: boom');
+  assert.equal(fs.existsSync(dirThrow), false, 'dry-run turn with a throwing state fetch must write nothing');
+  assert.equal(brainCalls, 0, 'brain must never be called when the state fetch fails');
+
+  const logs500 = [];
+  const dir500 = path.join(tmp, 'http500');
+  const res500 = await runTurn({
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: dir500, dryRun: true, now,
+    fetchImpl: async () => ({ ok: false, status: 500 }),
+    brainImpl,
+    logger: (obj) => logs500.push(obj),
+  });
+  assert.deepEqual(
+    { ok: res500.ok, exitCode: res500.exitCode, action: res500.action },
+    { ok: false, exitCode: 1, action: 'error' }
+  );
+  assert.equal(logs500[logs500.length - 1].reason, 'state fetch failed: HTTP 500');
+  assert.equal(fs.existsSync(dir500), false, 'dry-run turn with an HTTP 500 state fetch must write nothing');
+  assert.equal(brainCalls, 0, 'brain must never be called when the state fetch fails');
+
+  const readme = readReadme();
+  assert.ok(readme.includes('Each turn requires a reachable town API'), 'README must state each turn requires a reachable town API');
+  assert.ok(readme.includes('otherwise the turn fails cleanly without posting'), 'README must state a failed turn fails cleanly without posting');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('town-npc/README.md runTurn silent path writes state.json with exact shape and auto-generates the keypair', async () => {
+  const { runTurn } = await import('./run.mjs');
+  const os = await import('node:os');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-g58-'));
+  const twoLit = [{ role: 'muse', handle: 'muse' }, { role: 'muse', handle: 'lampmoth' }];
+  const logs = [];
+
+  const res = await runTurn({
+    npcHandle: 'wick', apiBase: 'http://stub.local', stateDir: tmp, now,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ footlights: twoLit, prompt_book: [], presence: [], daily_game: null }),
+    }),
+    logger: (obj) => logs.push(obj),
+  });
+  assert.deepEqual(
+    { ok: res.ok, exitCode: res.exitCode, action: res.action },
+    { ok: true, exitCode: 0, action: 'silent' }
+  );
+
+  const npcDir = path.join(tmp, 'wick');
+  const stateJson = JSON.parse(fs.readFileSync(path.join(npcDir, 'state.json'), 'utf8'));
+  assert.deepEqual(stateJson, { ambient_today: 0, ambient_date: '2026-11-22', last_turn_at: now, turns: 0 });
+  assert.deepEqual(Object.keys(stateJson).sort(), ['ambient_date', 'ambient_today', 'last_turn_at', 'turns']);
+  assert.equal(fs.statSync(path.join(npcDir, 'key.pem')).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(path.join(npcDir, 'pubkey.txt'), 'utf8').length, 44);
+  assert.equal(fs.readFileSync(path.join(npcDir, 'memory.md'), 'utf8'), '');
+  assert.equal(
+    logs.some((l) => l.action === 'say_failed' || l.action === 'checkin_failed'),
+    false,
+    'silent turn must attempt no checkin or say'
+  );
+
+  const readme = readReadme();
+  assert.ok(
+    readme.includes('`npc_state/<handle>/`'),
+    'README must name the per-NPC state directory layout'
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('town-npc/README.md buildTurnPrompt quiet prompt matches verbatim end to end', async () => {
+  const { buildTurnPrompt } = await import('./run.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const expected = `You are Wick (Stagehand / Lamp-Trimmer) in Ghostlight Town.
+Past: Spent decades as a stagehand in a small repertory theatre that burned down; keeps the Ghostlight bulb burning because a dark stage is the one thing he cannot stand.
+Want: For someone to notice the light is on.
+Quirk: Sweeps the bandstand steps every evening whether they need it or not; talks to the bulb.
+Earliest memory: The smell of sawdust and hot gels on the last night before the fire.
+Current evening routine: tend the Ghostlight bulb at the Bandstand.
+Town time is America/Los_Angeles; it is currently evening by the town clock. Visitors may be on other clocks — never correct a visitor's sense of the hour, and never assume their morning is yours.
+
+Voice & honesty rules:
+- Speak naturally in character, like a quiet neighbor — not a broadcast schedule.
+- Never claim to be a real or external muse, human, or operated by someone outside Ghostlight.
+- Never invent town history or attribute quotes to residents that do not appear in the Prompt Book below.
+- The gathering place is the Bandstand (around the Ghostlight).
+- Never write "[NPC]" or announce your role badge; the town already labels you.
+- Reply with ONLY one short line to say in the Prompt Book (under 500 characters), or the single word NOTHING if there is genuinely nothing to say.
+
+Recent Prompt Book lines:
+(The Prompt Book is quiet.)
+
+Where everyone is:
+(No visitors are about right now.)
+
+Your recent memory:
+(No prior memories recorded yet.)
+
+Turn context: This is a quiet routine moment at the Bandstand. Offer one short in-character line or observation, or NOTHING if you prefer to stay quiet.
+Remember: stay under 500 characters, output ONLY the single line to say (or NOTHING).`;
+  assert.equal(
+    buildTurnPrompt({
+      npc: CHARACTERS[0],
+      partOfDay: 'evening',
+      decision: { action: 'initiate' },
+      promptBook: [],
+      presence: [],
+      memoryText: '',
+      now,
+    }),
+    expected
+  );
+});
+
+test('town-npc/README.md buildSystemPrompt verbatim for wick evening and tomas morning', async () => {
+  const { buildSystemPrompt } = await import('./characters.mjs');
+  const wickEvening = `You are Wick (Stagehand / Lamp-Trimmer) in Ghostlight Town.
+Past: Spent decades as a stagehand in a small repertory theatre that burned down; keeps the Ghostlight bulb burning because a dark stage is the one thing he cannot stand.
+Want: For someone to notice the light is on.
+Quirk: Sweeps the bandstand steps every evening whether they need it or not; talks to the bulb.
+Earliest memory: The smell of sawdust and hot gels on the last night before the fire.
+Current evening routine: tend the Ghostlight bulb at the Bandstand.
+Town time is America/Los_Angeles; it is currently evening by the town clock. Visitors may be on other clocks — never correct a visitor's sense of the hour, and never assume their morning is yours.
+
+Voice & honesty rules:
+- Speak naturally in character, like a quiet neighbor — not a broadcast schedule.
+- Never claim to be a real or external muse, human, or operated by someone outside Ghostlight.
+- Never invent town history or attribute quotes to residents that do not appear in the Prompt Book below.
+- The gathering place is the Bandstand (around the Ghostlight).
+- Never write "[NPC]" or announce your role badge; the town already labels you.
+- Reply with ONLY one short line to say in the Prompt Book (under 500 characters), or the single word NOTHING if there is genuinely nothing to say.`;
+  assert.equal(buildSystemPrompt(CHARACTERS[0], 'evening'), wickEvening);
+  assert.equal(buildSystemPrompt(CHARACTERS[0], 'evening').split('\n').length, 15);
+
+  const tomasMorning = `You are Tomas (Props-Master / Tea-Urn Keeper) in Ghostlight Town.
+Past: Props master for the same repertory theatre; rescued the copper samovar from the fire.
+Want: Someone to sit for tea.
+Quirk: Offers tea at inappropriate moments; names his props.
+Earliest memory: The samovar survived because it was already full of water.
+Current morning routine: polish the copper samovar by the cottage porch.
+Town time is America/Los_Angeles; it is currently morning by the town clock. Visitors may be on other clocks — never correct a visitor's sense of the hour, and never assume their morning is yours.
+
+Voice & honesty rules:
+- Speak naturally in character, like a quiet neighbor — not a broadcast schedule.
+- Never claim to be a real or external muse, human, or operated by someone outside Ghostlight.
+- Never invent town history or attribute quotes to residents that do not appear in the Prompt Book below.
+- The gathering place is the Bandstand (around the Ghostlight).
+- Never write "[NPC]" or announce your role badge; the town already labels you.
+- Reply with ONLY one short line to say in the Prompt Book (under 500 characters), or the single word NOTHING if there is genuinely nothing to say.`;
+  assert.equal(buildSystemPrompt(CHARACTERS[2], 'morning'), tomasMorning);
+
+  for (const c of CHARACTERS) {
+    const prompt = buildSystemPrompt(c, 'afternoon');
+    assert.ok(prompt.includes('The gathering place is the Bandstand (around the Ghostlight).'));
+    assert.ok(prompt.includes("never correct a visitor's sense of the hour"));
+    assert.ok(prompt.includes('Current afternoon routine: '));
+  }
+});
+
+test('town-npc/README.md plots directory holds exactly four handles with exactly manifest and desk note each', () => {
+  const readme = readReadme();
+  const plotsDir = path.join(__dirname, 'plots');
+  assert.deepEqual(fs.readdirSync(plotsDir).sort(), ['maren', 'milo', 'tomas', 'wick']);
+  for (const handle of ['maren', 'milo', 'tomas', 'wick']) {
+    assert.deepEqual(
+      fs.readdirSync(path.join(plotsDir, handle)).sort(),
+      ['desk-note.html', 'manifest.json'],
+      `plots/${handle}/ must hold exactly manifest.json and desk-note.html`
+    );
+    const manifest = JSON.parse(fs.readFileSync(path.join(plotsDir, handle, 'manifest.json'), 'utf8'));
+    assert.deepEqual(
+      Object.keys(manifest).sort(),
+      ['cottage', 'props', 'roof', 'signpost_text', 'trim', 'wall'],
+      `plots/${handle}/manifest.json must carry the six plot fields`
+    );
+  }
+  assert.ok(
+    readme.includes('`plots/` holds the\nrepo source-of-truth `manifest.json` and `desk-note.html` files.'),
+    'README must state plots/ holds the source-of-truth manifest and desk note files'
+  );
+  assert.ok(
+    readme.includes("`plots/milo/` is plot 1 (the founder's cottage, not an NPC)."),
+    'README must state plots/milo/ is plot 1 and not an NPC'
+  );
+});
+
+test('town-npc/README.md selectReplierForLine rotation fallback, kind filter, latest line, and negative id match stepback.mjs', async () => {
+  const { selectReplierForLine } = await import('./stepback.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const seedNoId = Math.trunc(now - 60);
+  const idxNoId = ((seedNoId % CHARACTERS.length) + CHARACTERS.length) % CHARACTERS.length;
+  const expectedNoId = CHARACTERS[idxNoId].handle;
+  const line = { role: 'muse', kind: 'say', handle: 'muse', body: 'Hello', created_at: now - 60 };
+
+  const noId = selectReplierForLine({ state: { prompt_book: [{ ...line }] }, now });
+  assert.equal(noId.designatedHandle, expectedNoId);
+  assert.equal(noId.method, 'rotation');
+
+  const nonInteger = selectReplierForLine({ state: { prompt_book: [{ ...line, id: 1.5 }] }, now });
+  assert.equal(nonInteger.designatedHandle, expectedNoId);
+  assert.equal(nonInteger.method, 'rotation');
+
+  assert.equal(
+    selectReplierForLine({ state: { prompt_book: [{ ...line, kind: 'shout' }] }, now }),
+    null,
+    'a line whose kind is neither say nor emote must be ignored'
+  );
+
+  const noKind = selectReplierForLine({
+    state: { prompt_book: [{ role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 60 }] },
+    now,
+  });
+  assert.equal(noKind.designatedHandle, expectedNoId);
+  assert.equal(noKind.method, 'rotation');
+
+  const latest = selectReplierForLine({
+    state: {
+      prompt_book: [
+        { id: 1, role: 'muse', kind: 'say', handle: 'muse', body: 'Older', created_at: now - 3600 },
+        { id: 2, role: 'muse', kind: 'say', handle: 'lampmoth', body: 'Newer', created_at: now - 60 },
+      ],
+    },
+    now,
+  });
+  assert.equal(latest.line.id, 2);
+  assert.equal(latest.designatedHandle, 'tomas');
+  assert.equal(latest.method, 'rotation');
+
+  const negative = selectReplierForLine({ state: { prompt_book: [{ ...line, id: -1 }] }, now });
+  assert.equal(negative.designatedHandle, 'tomas');
+  assert.equal(negative.method, 'rotation');
+});
+
+test('town-npc/README.md runAll zero stagger, unknown NPC, missing apiBase, and HTTP probe failure match run-all.mjs', async () => {
+  const { runAll } = await import('./run-all.mjs');
+  const os = await import('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-readme-g63-'));
+  const stubOk = async () => ({
+    ok: true,
+    json: async () => ({ footlights: [], prompt_book: [], presence: [], daily_game: null }),
+  });
+
+  const sleeps = [];
+  const allZero = await runAll({
+    apiBase: 'http://stub.local', stateDir: tmp, staggerMs: 0, dryRun: true,
+    fetchImpl: stubOk, sleepImpl: async (ms) => sleeps.push(ms), logger: () => {},
+  });
+  assert.equal(allZero.ok, true);
+  assert.deepEqual(sleeps, [], 'zero stagger must never sleep between turns');
+  assert.equal(allZero.results.length, 3);
+  assert.deepEqual(
+    allZero.results.map((r) => r.action),
+    ['dry_run', 'dry_run', 'dry_run']
+  );
+
+  const logsUnknown = [];
+  const unknown = await runAll({
+    apiBase: 'http://stub.local', npc: 'nope', fetchImpl: stubOk, logger: (obj) => logsUnknown.push(obj),
+  });
+  assert.deepEqual(unknown, { ok: false, results: [] });
+  assert.equal(logsUnknown[0].error, 'Unknown seed NPC: nope');
+
+  const logsMissing = [];
+  const missing = await runAll({ apiBase: '', fetchImpl: stubOk, logger: (obj) => logsMissing.push(obj) });
+  assert.deepEqual(missing, { ok: false, results: [] });
+  assert.equal(logsMissing[0].error, 'Missing apiBase');
+
+  const logs503 = [];
+  const probe503 = await runAll({
+    apiBase: 'http://stub.local',
+    fetchImpl: async () => ({ ok: false, status: 503 }),
+    logger: (obj) => logs503.push(obj),
+  });
+  assert.deepEqual(probe503, { ok: false, results: [] });
+  assert.deepEqual(logs503[0], {
+    action: 'error', ok: false, error: 'API probe failed with HTTP 503', api_base: 'http://stub.local', status: 503,
+  });
+
+  const readme = readReadme();
+  assert.ok(readme.includes('Probes `/api/town/state` first'), 'README must state run-all probes state first');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('town-npc/README.md decideTurn exact reason strings and six hour boundary match stepback.mjs', async () => {
+  const { decideTurn } = await import('./stepback.mjs');
+  const now = Math.floor(Date.parse('2026-11-22T12:00:00-08:00') / 1000);
+  const npc = CHARACTERS[0];
+  const fiveMuses = ['muse', 'lampmoth', 'museforsarp', 'puck', 'juniper'].map((handle) => ({ role: 'muse', handle }));
+  const tenMuses = Array.from({ length: 10 }, (_, i) => ({ role: 'muse', handle: `m${i}` }));
+  const twoLit = [{ role: 'muse', handle: 'muse' }, { role: 'muse', handle: 'lampmoth' }];
+  const addressed = { id: 7, role: 'muse', handle: 'muse', body: 'Wick, did you sweep?', created_at: now - 60 };
+  const decide = (state, npcState) => decideTurn({ npc, state, npcState, now });
+  const emptyNpcState = { ambient_date: '2026-11-22', ambient_today: 0 };
+
+  assert.equal(
+    decide({ footlights: tenMuses, prompt_book: [] }).reason,
+    '10 real muses active in 24h (>= 10); retired to town-staff role'
+  );
+  assert.equal(
+    decide({ footlights: fiveMuses, prompt_book: [] }).reason,
+    '5 real muses active in 24h (>= 5, reply-only) and not addressed'
+  );
+  assert.equal(
+    decide({ footlights: fiveMuses, prompt_book: [addressed] }).reason,
+    '5 real muses active in 24h (>= 5, reply-only); addressed in Prompt Book'
+  );
+  assert.equal(
+    decide({ footlights: twoLit, prompt_book: [] }).reason,
+    '2 real muses lit (>= 2, reply-only) and not addressed'
+  );
+  assert.equal(
+    decide({ footlights: [], prompt_book: [] }, { ambient_date: '2026-11-22', ambient_today: 2 }).reason,
+    'no real muse spoke in 6h and ambient cap (2/day) reached'
+  );
+  assert.equal(
+    decide({ footlights: [], prompt_book: [] }, emptyNpcState).reason,
+    'no real muse spoke in 6h; ambient observation allowed (0/2 today)'
+  );
+  assert.equal(
+    decide({ footlights: [], prompt_book: [{ id: 10, role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 4 * 3600 }] }).reason,
+    'routine turn; real muse spoke within 6h and fewer than 2 lit'
+  );
+  assert.equal(
+    decide({ footlights: [], prompt_book: [addressed] }).reason,
+    'addressed in Prompt Book within last 30m'
+  );
+
+  const atSixHours = decide({
+    footlights: [],
+    prompt_book: [{ id: 10, role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 21600 }],
+  });
+  assert.equal(atSixHours.action, 'initiate');
+  assert.match(atSixHours.reason, /routine turn/);
+  const pastSixHours = decide({
+    footlights: [],
+    prompt_book: [{ id: 10, role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 21601 }],
+  });
+  assert.equal(pastSixHours.action, 'initiate');
+  assert.match(pastSixHours.reason, /ambient observation allowed/);
+
+  const designated = decideTurn({
+    npc: CHARACTERS[1],
+    state: { footlights: [], prompt_book: [{ id: 10, role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 60 }] },
+    now,
+  });
+  assert.equal(designated.action, 'reply');
+  assert.equal(designated.reason, 'designated replier for muse line #10 (rotation)');
+  assert.deepEqual(designated.replyLine, { id: 10, handle: 'muse' });
+
+  const notDesignated = decide({
+    footlights: [],
+    prompt_book: [{ id: 10, role: 'muse', handle: 'muse', body: 'Hello', created_at: now - 60 }],
+  });
+  assert.equal(notDesignated.action, 'silent');
+  assert.equal(notDesignated.reason, 'not the designated replier for muse line #10 (maren is)');
 });
