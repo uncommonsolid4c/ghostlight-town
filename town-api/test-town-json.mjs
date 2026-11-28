@@ -1099,8 +1099,8 @@ test('SKILL.md mentions all 30 paths; client covers 23 of 28 distinct paths', ()
 test('test-file hygiene: unique names, import list, needle counts as-true', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'town-api/test-town-json.mjs'), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 54);
-  assert.equal(new Set(names).size, 54);
+  assert.equal(names.length, 64);
+  assert.equal(new Set(names).size, 64);
 
   const imports = [...src.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
   assert.deepEqual(imports, ['node:test', 'node:assert/strict', 'node:fs', 'node:path', 'node:url']);
@@ -1356,4 +1356,249 @@ test('summaries are unique and README links the live base_url', () => {
     readmeSrc.includes(townJson.base_url),
     'README.md must link the live base_url town.json documents'
   );
+});
+
+test('handle_pattern extended boundaries: 2-char min, trailing dash and underscore, digits-only', () => {
+  const re = new RegExp(townJson.handle_pattern);
+
+  for (const valid of ['ab', 'a-', 'a_', 'a--b', 'a-b_c9', '12', 'z9', 'a'.repeat(32)]) {
+    assert.match(valid, re, `Expected handle_pattern to accept ${JSON.stringify(valid)}`);
+  }
+
+  for (const invalid of ['9', 'a', '_a', '-a', 'a/b', 'a b', 'a.b', 'A', 'a\nb', 'x'.repeat(33)]) {
+    assert.doesNotMatch(invalid, re, `Expected handle_pattern to reject ${JSON.stringify(invalid)}`);
+  }
+});
+
+test('admin summaries share the Milo-only prefix and the admin set is exactly four', () => {
+  const admins = townJson.endpoints.filter((ep) => ep.path.startsWith('/api/town/admin/'));
+
+  assert.deepEqual(
+    admins.map((ep) => `${ep.method} ${ep.path}`).sort(),
+    [
+      'POST /api/town/admin/approve',
+      'POST /api/town/admin/delete-line',
+      'POST /api/town/admin/guestbook',
+      'POST /api/town/admin/invite',
+    ]
+  );
+
+  for (const ep of admins) {
+    assert.ok(
+      ep.summary.startsWith('Milo-only operator endpoint: '),
+      `${ep.method} ${ep.path} summary must start with the Milo-only prefix`
+    );
+    assert.equal(ep.auth, 'admin', `${ep.method} ${ep.path} must have admin auth`);
+    assert.equal(ep.rate_limit, null, `${ep.method} ${ep.path} must have null rate_limit`);
+  }
+});
+
+test('state summary carries the gate, per-plot, derived-daily, and event-window phrases', () => {
+  const stateEp = townJson.endpoints.find(
+    (ep) => ep.method === 'GET' && ep.path === '/api/town/state'
+  );
+  assert.ok(stateEp, 'Missing endpoint GET /api/town/state');
+
+  for (const phrase of [
+    'Town Gate only',
+    'approved per-plot counts > 0',
+    'derived daily',
+    'omitted when the topics file is absent',
+    'omitted when the games file is absent',
+    'during an active event window',
+    'event: true',
+    'status_text = the event title',
+  ]) {
+    assert.ok(
+      stateEp.summary.includes(phrase),
+      `GET /api/town/state summary must include ${JSON.stringify(phrase)}`
+    );
+  }
+});
+
+test('guest endpoints are exactly eight, all POST and signed, all summaries name guests', () => {
+  const guests = townJson.endpoints.filter((ep) => ep.path.includes('/guest/'));
+
+  assert.deepEqual(
+    guests.map((ep) => `${ep.method} ${ep.path}`).sort(),
+    [
+      'POST /api/town/fish/guest/cast',
+      'POST /api/town/fish/guest/reel',
+      'POST /api/town/garden/guest/plant',
+      'POST /api/town/ghostlight/guest/checkin',
+      'POST /api/town/ghostlight/guest/say',
+      'POST /api/town/inn/guest/claim',
+      'POST /api/town/inn/guest/extend',
+      'POST /api/town/inn/guest/vacate',
+    ]
+  );
+
+  for (const ep of guests) {
+    assert.equal(ep.method, 'POST', `${ep.method} ${ep.path} must be POST`);
+    assert.equal(ep.auth, 'signed', `${ep.method} ${ep.path} must be signed`);
+    assert.ok(
+      /guest/i.test(ep.summary),
+      `${ep.method} ${ep.path} summary must name guests`
+    );
+  }
+});
+
+test('inn nights order 1, 3, 7 with max_total equal to max', () => {
+  assert.equal(townJson.inn_rooms.nights_min, 1);
+  assert.equal(townJson.inn_rooms.nights_default, 3);
+  assert.equal(townJson.inn_rooms.nights_max, 7);
+  assert.equal(townJson.inn_rooms.max_total_nights, townJson.inn_rooms.nights_max);
+  assert.ok(
+    townJson.inn_rooms.nights_min <= townJson.inn_rooms.nights_default &&
+      townJson.inn_rooms.nights_default <= townJson.inn_rooms.nights_max,
+    'nights must order min <= default <= max'
+  );
+
+  const claimEp = townJson.endpoints.find(
+    (ep) => ep.method === 'POST' && ep.path === '/api/town/inn/claim'
+  );
+  assert.ok(claimEp, 'Missing endpoint POST /api/town/inn/claim');
+  assert.ok(
+    claimEp.summary.includes('1-7 nights (default 3)'),
+    'POST /api/town/inn/claim summary must pin 1-7 nights (default 3)'
+  );
+});
+
+test('all GET endpoints are public with null rate_limit; public set is the four GETs plus POST guestbook', () => {
+  const gets = townJson.endpoints.filter((ep) => ep.method === 'GET');
+
+  assert.deepEqual(
+    gets.map((ep) => ep.path).sort(),
+    ['/api/town/fish/log', '/api/town/guestbook', '/api/town/plot', '/api/town/state']
+  );
+
+  for (const ep of gets) {
+    assert.equal(ep.auth, 'public', `${ep.method} ${ep.path} must be public`);
+    assert.equal(ep.rate_limit, null, `${ep.method} ${ep.path} must have null rate_limit`);
+  }
+
+  assert.deepEqual(
+    townJson.endpoints
+      .filter((ep) => ep.auth === 'public')
+      .map((ep) => `${ep.method} ${ep.path}`)
+      .sort(),
+    [
+      'GET /api/town/fish/log',
+      'GET /api/town/guestbook',
+      'GET /api/town/plot',
+      'GET /api/town/state',
+      'POST /api/town/guestbook',
+    ]
+  );
+});
+
+test('rate_limit value distribution across all 30 endpoints', () => {
+  const dist = {};
+  for (const ep of townJson.endpoints) {
+    const key = String(ep.rate_limit);
+    dist[key] = (dist[key] || 0) + 1;
+  }
+
+  assert.deepEqual(dist, {
+    null: 14,
+    '5/hour per IP': 1,
+    '1/min': 1,
+    '6/10 min': 1,
+    '1/5 min': 1,
+    '2/10 min': 1,
+    '10/hour': 5,
+    '2/hour': 4,
+    '3/hour': 1,
+    '3/hour per IP': 1,
+  });
+
+  assert.deepEqual(
+    townJson.endpoints
+      .filter((ep) => ep.rate_limit === '10/hour')
+      .map((ep) => `${ep.method} ${ep.path}`)
+      .sort(),
+    [
+      'POST /api/town/fish/cast',
+      'POST /api/town/garden/plant',
+      'POST /api/town/inn/claim',
+      'POST /api/town/inn/extend',
+      'PUT /api/town/plot',
+    ]
+  );
+
+  assert.deepEqual(
+    townJson.endpoints
+      .filter((ep) => ep.rate_limit === '2/hour')
+      .map((ep) => `${ep.method} ${ep.path}`)
+      .sort(),
+    [
+      'POST /api/town/fish/guest/cast',
+      'POST /api/town/garden/guest/plant',
+      'POST /api/town/inn/guest/claim',
+      'POST /api/town/inn/guest/extend',
+    ]
+  );
+});
+
+test('limits cross-field equalities: 500-char trio, 120-char pair, 64/32/16 KB ladder, 45-min TTL', () => {
+  assert.equal(townJson.limits.say_chars, 500);
+  assert.equal(townJson.limits.bio_chars, 500);
+  assert.equal(townJson.limits.guestbook_body_chars, 500);
+
+  assert.equal(townJson.plot.signpost_max_chars, 120);
+  assert.equal(townJson.limits.status_text_chars, 120);
+  assert.ok(
+    townJson.limits.guestbook_name_chars < townJson.limits.status_text_chars,
+    'guestbook name cap must sit below the status-text cap'
+  );
+
+  assert.equal(townJson.limits.body_max_kb, 64);
+  assert.equal(townJson.plot.html_max_kb, 32);
+  assert.equal(townJson.plot.manifest_max_kb, 16);
+
+  assert.equal(townJson.limits.footlight_ttl_sec, 2700);
+  assert.equal(townJson.limits.footlight_ttl_sec / 60, 45);
+});
+
+test('Ghostlight in eight summaries, Bandstand in four, with the exact Bandstand route list', () => {
+  let ghostlightCount = 0;
+  const bandstandRoutes = [];
+  for (const ep of townJson.endpoints) {
+    if (ep.summary.includes('Ghostlight')) ghostlightCount++;
+    if (ep.summary.includes('Bandstand')) bandstandRoutes.push(`${ep.method} ${ep.path}`);
+  }
+
+  assert.equal(ghostlightCount, 8, 'Exactly 8 endpoint summaries must mention Ghostlight');
+  assert.deepEqual(bandstandRoutes.sort(), [
+    'POST /api/town/garden/plant',
+    'POST /api/town/ghostlight/checkin',
+    'POST /api/town/ghostlight/guest/checkin',
+    'POST /api/town/ghostlight/leave',
+  ]);
+});
+
+test('gathering_place appears in the 3D page, the concept sheet, and SKILL.md', () => {
+  assert.equal(townJson.gathering_place, 'Ghostlight Bandstand');
+
+  const indexSrc = fs.readFileSync(path.join(REPO_ROOT, 'town-3d/index.html'), 'utf8');
+  const conceptSrc = fs.readFileSync(path.join(REPO_ROOT, 'CONCEPT.md'), 'utf8');
+
+  assert.equal(
+    (indexSrc.match(/Ghostlight Bandstand/g) || []).length,
+    1,
+    'town-3d/index.html must mention the gathering place once'
+  );
+  assert.equal(
+    (conceptSrc.match(/Ghostlight Bandstand/g) || []).length,
+    1,
+    'CONCEPT.md must mention the gathering place once'
+  );
+  assert.equal(
+    (skillSrc.match(/Ghostlight Bandstand/g) || []).length,
+    2,
+    'SKILL.md must mention the gathering place twice'
+  );
+
+  assert.equal(townJson.currency, null);
+  assert.equal(townJson.upkeep, null);
 });
