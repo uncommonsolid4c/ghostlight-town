@@ -1775,8 +1775,8 @@ test('decodeHtmlEntities further + data-URI spaces + test-plot self hygiene', ()
 
   const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 54);
-  assert.equal(new Set(names).size, 54);
+  assert.equal(names.length, 64);
+  assert.equal(new Set(names).size, 64);
   assert.equal(src.includes('Math' + '.' + 'random'), false);
   assert.equal(src.includes('Date' + '.' + 'now'), false);
   assert.equal(src.includes('TO' + 'DO'), false);
@@ -2221,5 +2221,230 @@ test('validateHtml closing tags: safe ones pass, forbidden ones still reject', (
     error: 'unsafe_html',
     reason: 'forbidden_tag:embed',
   });
+});
+
+test('validateHtml cite URI attribute: dangerous schemes rejected, fragment and data-image allowed', () => {
+  const badCases = [
+    ['<q cite="javascript:alert(1)">x</q>', 'javascript_uri'],
+    ['<blockquote cite="https://evil.example/x">x</blockquote>', 'external_uri'],
+    ['<q cite="data:text/html,hi">x</q>', 'disallowed_data_uri'],
+    ['<q cite="vbscript:msgbox(1)">x</q>', 'vbscript_uri'],
+  ];
+  for (const [html, reason] of badCases) {
+    assert.deepEqual(validateHtml(html), { ok: false, error: 'unsafe_html', reason });
+  }
+  assert.deepEqual(validateHtml('<q cite="#frag">x</q>'), { ok: true });
+  assert.deepEqual(validateHtml('<q cite="data:image/png;base64,x">x</q>'), { ok: true });
+});
+
+test('decodeHtmlEntities zero, out-of-range, and uppercase named entities', () => {
+  assert.equal(decodeHtmlEntities('&#0;'), '&#0;');
+  assert.equal(decodeHtmlEntities('&#x0;'), '&#x0;');
+  assert.equal(decodeHtmlEntities('&#X0;'), '&#X0;');
+  assert.equal(decodeHtmlEntities('&#x110000;'), '&#x110000;');
+  assert.equal(decodeHtmlEntities('&AMP;'), '&');
+  assert.equal(decodeHtmlEntities('&GT;'), '>');
+  assert.equal(decodeHtmlEntities('&QUOT;'), '"');
+  assert.equal(decodeHtmlEntities('&APOS;'), "'");
+  assert.equal(decodeHtmlEntities('&Tab;'), '\t');
+  assert.equal(decodeHtmlEntities('&NewLine;'), '\n');
+  assert.equal(decodeHtmlEntities('&LT;'), '<');
+});
+
+test('validateHtml entity-obfuscated CSS: url(, expression(, javascript: still caught', () => {
+  assert.deepEqual(validateHtml('<div style="background:&#117;rl(evil.png)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<style>p{background:&#117;rl(evil.png)}</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+  assert.deepEqual(validateHtml('<div style="width:&#101;xpression(alert(1))">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('<style>p{width:&#x65;xpression(alert(1))}</style>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_expression',
+  });
+  assert.deepEqual(validateHtml('<div style="background:&#106;avascript:alert(1)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+});
+
+test('validateHtml leading whitespace and control chars in tag names do not hide forbidden tags', () => {
+  const badCases = [
+    ['<\tscript>alert(1)</script>', 'forbidden_tag:script'],
+    ['<\niframe src="x">', 'forbidden_tag:iframe'],
+    ['< /script>', 'forbidden_tag:script'],
+    ['<\x0bform action="/x">', 'forbidden_tag:form'],
+  ];
+  for (const [html, reason] of badCases) {
+    assert.deepEqual(validateHtml(html), { ok: false, error: 'unsafe_html', reason });
+  }
+  assert.deepEqual(validateHtml('<\tp>x</p>'), { ok: true });
+});
+
+test('validateManifest check ordering across fields, props, axes, and rotation vs color', () => {
+  assert.deepEqual(validateManifest({ ...VALID_MANIFEST, cottage: 'castle', wall: '#zzz' }), {
+    ok: false,
+    error: 'invalid_cottage',
+  });
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      signpost_text: 'a'.repeat(121),
+      props: [{ kind: 'spaceship', x: 0, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'invalid_signpost_text', max: 120 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: Array.from({ length: 13 }, () => ({ kind: 'spaceship', x: 0, y: 0, z: 0, rot_y: 0 })),
+    }),
+    { ok: false, error: 'too_many_props', max: 12 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'spaceship', x: 99, y: 0, z: 0, rot_y: 0 }],
+    }),
+    { ok: false, error: 'invalid_prop_kind', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 99, y: 99, z: 99, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'x', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 99, z: 99, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'y', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 99, rot_y: 0 }],
+    }),
+    { ok: false, error: 'prop_coord_out_of_range', axis: 'z', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [{ kind: 'desk', x: 0, y: 0, z: 0, rot_y: 360, color: '#zzz' }],
+    }),
+    { ok: false, error: 'invalid_prop_rotation', index: 0 }
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...VALID_MANIFEST,
+      props: [
+        { kind: 'desk', x: 0, y: 0, z: 0, rot_y: 0 },
+        { kind: 'spaceship', x: 0, y: 0, z: 0, rot_y: 0 },
+      ],
+    }),
+    { ok: false, error: 'invalid_prop_kind', index: 1 }
+  );
+});
+
+test('validateHtml spaced equals around URI attributes still checked', () => {
+  assert.deepEqual(validateHtml('<a href = "javascript:alert(1)">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'javascript_uri',
+  });
+  assert.deepEqual(validateHtml('<a href\t=\t"//evil.example/x">x</a>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<img src = "data:text/html,hi">'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+  assert.deepEqual(validateHtml('<a href = "relative">x</a>'), { ok: true });
+});
+
+test('validateHtml CSS vbscript: is allowed; uppercase URL( is still css_url', () => {
+  assert.deepEqual(validateHtml('<div style="background:vbscript:msgbox(1)">x</div>'), { ok: true });
+  assert.deepEqual(validateHtml('<style>p{background:vbscript:x}</style>'), { ok: true });
+  assert.deepEqual(validateHtml('<div style="background:URL(evil.png)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'css_url',
+  });
+});
+
+test('decodeHtmlEntities no-semicolon numeric entities', () => {
+  assert.equal(decodeHtmlEntities('&#38'), '&');
+  assert.equal(decodeHtmlEntities('&#xD'), '\r');
+  assert.equal(decodeHtmlEntities('&#X41'), 'A');
+  assert.equal(decodeHtmlEntities('&#x41'), 'A');
+  assert.equal(decodeHtmlEntities('&#0'), '&#0');
+  assert.equal(decodeHtmlEntities('&#x110000'), '&#x110000');
+});
+
+test('validateHtml data URI attribute variants', () => {
+  assert.deepEqual(validateHtml('<div data="data:image/png;base64,x">x</div>'), { ok: true });
+  assert.deepEqual(validateHtml('<div data="data:text/html,hi">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'disallowed_data_uri',
+  });
+  assert.deepEqual(validateHtml('<div data="//evil.example/x">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'external_uri',
+  });
+  assert.deepEqual(validateHtml('<div data="vbscript:msgbox(1)">x</div>'), {
+    ok: false,
+    error: 'unsafe_html',
+    reason: 'vbscript_uri',
+  });
+});
+
+test('GET plot 404 for an approved resident with no plot; PUT then GET round-trips', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client } = await createApprovedResident(ctx, 'erin');
+    const { client: fred } = await createApprovedResident(ctx, 'fred');
+
+    // An approved resident with no plot yet gets plot_not_found — the 404 is
+    // about the plot files, not the resident.
+    const before = await client.getPlot('erin');
+    assert.equal(before.status, 404);
+    assert.deepEqual(before.data, { error: 'plot_not_found' });
+    const fredBefore = await fred.getPlot('fred');
+    assert.equal(fredBefore.status, 404);
+    assert.deepEqual(fredBefore.data, { error: 'plot_not_found' });
+
+    const put = await client.plot(VALID_MANIFEST, '<p>erin note</p>');
+    assert.equal(put.status, 200);
+
+    const after = await client.getPlot('erin');
+    assert.equal(after.status, 200);
+    assert.equal(after.data.html, '<p>erin note</p>');
+    assert.equal(after.data.manifest.cottage, 'gable');
+
+    // Erin's PUT does not conjure a plot for Fred.
+    const fredAfter = await fred.getPlot('fred');
+    assert.equal(fredAfter.status, 404);
+    assert.deepEqual(fredAfter.data, { error: 'plot_not_found' });
+  } finally {
+    await ctx.close();
+  }
 });
 
