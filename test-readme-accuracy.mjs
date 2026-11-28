@@ -138,9 +138,9 @@ test('README.md ## Status Social Gate state matches PLAN.md §12.6', () => {
   }
 });
 
-test('README.md ## Status deployed bundle is 195 files; staged collector is 196 files', async () => {
+test('README.md ## Status deployed bundle is 196 files; staged collector is 196 files', async () => {
   const statusSec = getSection(readmeMd, 'Status');
-  assert.ok(statusSec.includes('195-file'), 'README.md ## Status must state 195-file deployed bundle');
+  assert.ok(statusSec.includes('196-file'), 'README.md ## Status must state 196-file deployed bundle');
   const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
   assert.equal(files.length, 196, `Expected staging-polyfork bundle to contain 196 files, found ${files.length}`);
 });
@@ -574,9 +574,9 @@ test('README.md intro Gazette paper of record matches town-3d/gazette/latest.jso
 });
 
 
-test('README.md ## Status deployed-line ?v= and 195-file bundle count match staging-polyfork (staged collector 196)', async () => {
+test('README.md ## Status deployed-line ?v= and 196-file bundle count match staging-polyfork (staged collector 196)', async () => {
   const statusSec = norm(getSection(readmeMd, 'Status'));
-  const m = statusSec.match(/The `\?v=(\d+)` \/ 195-file bundle deployed 2026-11-23 \(no pending deploy candidate\)/);
+  const m = statusSec.match(/The `\?v=(\d+)` \/ 196-file bundle deployed 2026-11-28 \(no pending deploy candidate\)/);
   assert.ok(m, 'README Status must carry the deployed-line sentence');
   const staged = stagingHtml.match(/staging\.js\?v=(\d+)/);
   assert.ok(staged, 'staging html must reference staging.js?v=');
