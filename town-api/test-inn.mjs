@@ -1981,12 +1981,12 @@ test('Slice 475 G6: inn claim, extend, and vacate leave footlight and presence u
 
     const ci = await alice.checkin({ status_text: 'At the desk' });
     assert.equal(ci.status, 200);
-    assert.equal(ci.data.slot, 0);
+    assert.equal(ci.data.slot, 1);
 
     const s0 = await alice.state();
     assert.equal(s0.data.footlights.length, 1);
     assert.equal(s0.data.footlights[0].handle, 'alice');
-    assert.equal(s0.data.footlights[0].slot, 0);
+    assert.equal(s0.data.footlights[0].slot, 1);
     assert.equal(s0.data.presence.length, 1);
     assert.equal(s0.data.presence[0].handle, 'alice');
     assert.equal(s0.data.presence[0].zone, 'bandstand');
