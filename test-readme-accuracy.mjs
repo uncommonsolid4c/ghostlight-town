@@ -138,11 +138,11 @@ test('README.md ## Status Social Gate state matches PLAN.md §12.6', () => {
   }
 });
 
-test('README.md ## Status deploy-candidate bundle is 195 files', async () => {
+test('README.md ## Status deployed bundle is 195 files; staged collector is 196 files', async () => {
   const statusSec = getSection(readmeMd, 'Status');
-  assert.ok(statusSec.includes('195-file'), 'README.md ## Status must state 195-file deploy-candidate bundle');
+  assert.ok(statusSec.includes('195-file'), 'README.md ## Status must state 195-file deployed bundle');
   const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
-  assert.equal(files.length, 195, `Expected staging-polyfork bundle to contain 195 files, found ${files.length}`);
+  assert.equal(files.length, 196, `Expected staging-polyfork bundle to contain 196 files, found ${files.length}`);
 });
 
 test('README.md ## How a Muse Joins named endpoints exist in town.json', () => {
@@ -574,7 +574,7 @@ test('README.md intro Gazette paper of record matches town-3d/gazette/latest.jso
 });
 
 
-test('README.md ## Status deployed-line ?v= and 195-file bundle count match staging-polyfork', async () => {
+test('README.md ## Status deployed-line ?v= and 195-file bundle count match staging-polyfork (staged collector 196)', async () => {
   const statusSec = norm(getSection(readmeMd, 'Status'));
   const m = statusSec.match(/The `\?v=(\d+)` \/ 195-file bundle deployed 2026-11-23 \(no pending deploy candidate\)/);
   assert.ok(m, 'README Status must carry the deployed-line sentence');
@@ -582,7 +582,7 @@ test('README.md ## Status deployed-line ?v= and 195-file bundle count match stag
   assert.ok(staged, 'staging html must reference staging.js?v=');
   assert.equal(m[1], staged[1], 'deployed-line ?v must equal staged ?v');
   const { files } = await collectSourceFiles(REPO_ROOT, 'staging-polyfork');
-  assert.equal(files.length, 195);
+  assert.equal(files.length, 196);
 });
 
 test('README.md Gazette issues 001 and 002 titles and first headlines match town-3d/gazette/', () => {
@@ -693,7 +693,7 @@ test('README.md ## Status Town API bullet matches town.json live flag and dev_ba
 test('README.md ## Status per-file counts match live test counts; 4 suites unlisted (live-proxy x2, test.mjs, real-brain)', () => {
   const statusSec = getSection(readmeMd, 'Status');
   const pairs = [...statusSec.matchAll(/`([^`]+\.mjs)` (\d+)\/(\d+)/g)];
-  assert.equal(pairs.length, 62, `Expected 62 per-file pins in README.md ## Status, found ${pairs.length}`);
+  assert.equal(pairs.length, 63, `Expected 63 per-file pins in README.md ## Status, found ${pairs.length}`);
   for (const [, file, n1, n2] of pairs) {
     const full = path.join(REPO_ROOT, file);
     assert.ok(fs.existsSync(full), `README.md ## Status pins ${file} but it does not exist`);
@@ -706,7 +706,7 @@ test('README.md ## Status per-file counts match live test counts; 4 suites unlis
   const suitesMatch = runTestsSrc.match(/const TEST_SUITES = \[([\s\S]*?)\];/);
   assert.ok(suitesMatch, 'run-tests.mjs must define TEST_SUITES');
   const suites = [...suitesMatch[1].matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
-  assert.equal(suites.length, 66, `Expected 66 suites in run-tests.mjs, found ${suites.length}`);
+  assert.equal(suites.length, 67, `Expected 67 suites in run-tests.mjs, found ${suites.length}`);
   const listed = new Set(pairs.map((p) => p[1]));
   const unlisted = suites.filter((s) => !listed.has(s));
   assert.deepEqual(unlisted, ['town-api/test-live-proxy.mjs', 'town-api/test-live-proxy-inn.mjs', 'town-api/test.mjs', 'town-npc/test-real-brain.mjs']);
@@ -786,7 +786,7 @@ test('README.md ## Status remaining-gate sentence matches PLAN.md section 12.6',
   assert.ok(sec126.includes('Social Gate') && sec126.includes('unmet'), 'PLAN.md §12.6 must include Social Gate unmet');
 });
 
-test('README.md ## Running the Tests names only node run-tests.mjs and the runner lists 66 suites', () => {
+test('README.md ## Running the Tests names only node run-tests.mjs and the runner lists 67 suites', () => {
   const runningSec = getSection(readmeMd, 'Running the Tests');
   const fences = [...runningSec.matchAll(/```(\w*)\n([\s\S]*?)```/g)];
   assert.equal(fences.length, 1, `Expected exactly one fenced block in README.md ## Running the Tests, found ${fences.length}`);
@@ -798,7 +798,7 @@ test('README.md ## Running the Tests names only node run-tests.mjs and the runne
   const suitesMatch = runnerSrc.match(/const TEST_SUITES = \[([\s\S]*?)\];/);
   assert.ok(suitesMatch, 'run-tests.mjs must define TEST_SUITES');
   const suites = [...suitesMatch[1].matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
-  assert.equal(suites.length, 66, `Expected 66 suites in run-tests.mjs, found ${suites.length}`);
+  assert.equal(suites.length, 67, `Expected 67 suites in run-tests.mjs, found ${suites.length}`);
 });
 
 test('README.md accuracy guard file hygiene: 61 tests, 60 unique names, 7 imports, zero banned lines', () => {
