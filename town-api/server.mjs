@@ -916,7 +916,7 @@ export function createTownServer(opts = {}) {
 
     let slot;
     if (body.slot !== undefined && body.slot !== null) {
-      if (!Number.isInteger(body.slot) || body.slot < 0 || body.slot > 9) {
+      if (!Number.isInteger(body.slot) || body.slot < 1 || body.slot > 9) {
         sendJson(res, 400, { error: 'invalid_slot' });
         return;
       }
@@ -926,11 +926,11 @@ export function createTownServer(opts = {}) {
         return;
       }
       slot = body.slot;
-    } else if (callerExisting) {
+    } else if (callerExisting && callerExisting.slot >= 1) {
       slot = callerExisting.slot;
     } else {
       slot = -1;
-      for (let i = 0; i <= 9; i++) {
+      for (let i = 1; i <= 9; i++) {
         if (!usedSlots.has(i)) {
           slot = i;
           break;
