@@ -245,7 +245,7 @@ test('SKILL.md §4 plot limits, prop kinds, and bounds match plot-validation.mjs
   for (const cottage of cottages) {
     assert.ok(skillMd.includes(cottage), `SKILL.md must list cottage style ${cottage}`);
   }
-  assert.equal(propKinds.length, 9, 'Expected 9 VALID_PROP_KINDS');
+  assert.equal(propKinds.length, 10, 'Expected 10 VALID_PROP_KINDS');
   assert.ok(propKinds.includes('lantern') && propKinds.includes('planter'));
   for (const kind of propKinds) {
     assert.ok(skillMd.includes(`\`${kind}\``), `SKILL.md must list prop kind ${kind}`);
