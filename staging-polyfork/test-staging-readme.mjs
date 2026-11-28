@@ -1563,7 +1563,7 @@ test('staging-polyfork/README.md test-staging.mjs bullet matches test-staging.mj
     noRandom,
     'scoped `/api/town/state` + `/api/town/plot?handle=` fetches only',
     'no `TownLive`',
-    '`?v=41` cache bust',
+    '`?v=42` cache bust',
     '`#plot-overlay` markup + click wiring for cottages/newsstand/Inn/gatehouse',
   ]) {
     assert.ok(norm.includes(phrase), `test-staging.mjs bullet must include "${phrase}"`);
@@ -1571,8 +1571,8 @@ test('staging-polyfork/README.md test-staging.mjs bullet matches test-staging.mj
 
   const testStagingSrc = fs.readFileSync(path.join(BUNDLE_DIR, 'test-staging.mjs'), 'utf8');
   assert.ok(
-    testStagingSrc.includes("test('staging.html references staging.js?v=41"),
-    'test-staging.mjs must have the ?v=41 HTML test'
+    testStagingSrc.includes("test('staging.html references staging.js?v=42"),
+    'test-staging.mjs must have the ?v=42 HTML test'
   );
   assert.match(
     testStagingSrc,
