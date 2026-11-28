@@ -488,7 +488,7 @@ test('PLAN.md §12.3 WASD amendment — deterministic first-free slot, no (0,0,0
   assert.match(sec123, /deterministically assign\s+seats\/slots/, 'PLAN.md §12.3 must specify deterministic slot assignment');
 
   const serverMjs = fs.readFileSync(path.join(__dirname, 'town-api', 'server.mjs'), 'utf8');
-  assert.match(serverMjs, /for \(let i = 0; i <= 9; i\+\+\) \{\s+if \(!usedSlots\.has\(i\)\) \{/, 'town-api/server.mjs must assign first free slot 0–9');
+  assert.match(serverMjs, /for \(let i = 1; i <= 9; i\+\+\) \{\s+if \(!usedSlots\.has\(i\)\) \{/, 'town-api/server.mjs must assign first free slot 1–9');
   assert.ok(serverMjs.includes('body.slot > 9'), 'town-api/server.mjs must reject slot > 9');
   assert.ok(serverMjs.includes("error: 'slot_occupied'"), 'town-api/server.mjs must return 409 slot_occupied on taken slot');
 });
