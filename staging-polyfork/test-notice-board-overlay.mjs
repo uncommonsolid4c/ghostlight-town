@@ -861,7 +861,7 @@ test('staging.js notice-board-overlay import is unversioned with exactly one cal
   ]);
   const lines = stagingSrc.split('\n');
   assert.deepEqual(
-    lines[60],
+    lines[67],
     "import { openNoticeBoardOverlay } from './notice-board-overlay.mjs';",
   );
   assert.equal((stagingSrc.match(/openNoticeBoardOverlay\(/g) || []).length, 1);
