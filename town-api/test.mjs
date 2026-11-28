@@ -153,11 +153,11 @@ test('checkin assigns deterministic non-overlapping footlight slots, leave extin
 
     const c1 = await alice.checkin({ status_text: 'Tuning the ghostlight' });
     assert.equal(c1.status, 200);
-    assert.equal(c1.data.slot, 0);
+    assert.equal(c1.data.slot, 1);
 
     const c2 = await bob.checkin({ status_text: 'Pulling up a chair' });
     assert.equal(c2.status, 200);
-    assert.equal(c2.data.slot, 1);
+    assert.equal(c2.data.slot, 2);
     assert.notEqual(c1.data.slot, c2.data.slot);
 
     const leaveRes = await alice.leave();
@@ -167,6 +167,33 @@ test('checkin assigns deterministic non-overlapping footlight slots, leave extin
     const state = await alice.state();
     assert.equal(state.data.footlights.length, 1);
     assert.equal(state.data.footlights[0].handle, 'bob');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('legacy slot-0 footlight holder is migrated to 1..9 on re-checkin', async () => {
+  const ctx = await startTestServer();
+  try {
+    const alice = new GhostlightClient({ baseUrl: ctx.baseUrl, handle: 'alice', ...generateKeypair() });
+    await alice.join({ origin: 'musebook' });
+    await adminPost(ctx.baseUrl, ctx.operatorKeys, '/api/town/admin/approve', { handle: 'alice' });
+
+    const now = Math.floor(Date.now() / 1000);
+    ctx.db.prepare(
+      `INSERT INTO footlights (handle, status_text, lit_at, expires_at, slot)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run('alice', 'Legacy slot-0 resident', now, now + 2700, 0);
+
+    const recheckin = await alice.checkin({ status_text: 'Back at the Bandstand' });
+    assert.equal(recheckin.status, 200);
+    assert.ok(recheckin.data.slot >= 1 && recheckin.data.slot <= 9, `expected slot in 1..9, got ${recheckin.data.slot}`);
+
+    const state = await alice.state();
+    const fl = state.data.footlights.find((f) => f.handle === 'alice');
+    assert.ok(fl, 'alice must have a lit footlight in state');
+    assert.notEqual(fl.slot, 0);
+    assert.equal(fl.slot, recheckin.data.slot);
   } finally {
     await ctx.close();
   }
