@@ -2144,8 +2144,8 @@ test('Slice 410 G9: setAvatarStatusText truncation, scale, trimming, and clearin
 test('Slice 410 G10: test-3d.mjs file hygiene and pinned needle counts', async () => {
   const src = await fs.readFile(path.join(__dirname, 'test-3d.mjs'), 'utf8');
   const testNames = [...src.matchAll(/^(?:await )?test\((['"])((?:\\.|(?!\1).)*)\1/gm)].map((m) => m[2]);
-  assert.equal(testNames.length, 55);
-  assert.equal(new Set(testNames).size, 55);
+  assert.equal(testNames.length, 56);
+  assert.equal(new Set(testNames).size, 56);
 
   const importLines = src.match(/^import /gm) || [];
   assert.equal(importLines.length, 6);
@@ -2399,4 +2399,83 @@ test('Slice 472 G10: resolveGuestbookOverlayContent serves API entries and falls
   const r6 = await resolveGuestbookOverlayContent({ fetchFn: empty, apiBase: '' });
   assert.equal(r6.kind, 'api');
   assert.ok(r6.html.includes('No signatures yet'));
+});
+
+test('Slice 532: buildProp supports boot_planter with worked child geometry, porch remap, leather tint, and fallback', () => {
+  const THREE = createThreeStub();
+
+  const boot = buildProp(THREE, {
+    kind: 'boot_planter',
+    x: 1.1,
+    y: 0,
+    z: 0.9,
+    rot_y: 90,
+    color: '#5c3a21',
+  });
+  assert.ok(boot);
+  assert.equal(boot.name, 'prop_boot_planter');
+  assert.equal(boot.position.x, 1.1);
+  assert.ok(Math.abs(boot.position.y - 0.18) < 1e-12, 'interior z must lift by PORCH_FLOOR_Y 0.18');
+  assert.ok(boot.position.z >= 2.05 && boot.position.z <= 3.45, 'interior z must remap into [2.05, 3.45]');
+  assert.ok(Math.abs(boot.rotation.y - Math.PI / 2) < 1e-12);
+  assert.equal(boot.children.length, 6);
+
+  const byName = Object.fromEntries(boot.children.map((c) => [c.name, c]));
+
+  assert.equal(byName.prop_boot_planter_sole.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [byName.prop_boot_planter_sole.geometry.parameters.width, byName.prop_boot_planter_sole.geometry.parameters.height, byName.prop_boot_planter_sole.geometry.parameters.depth],
+    [0.42, 0.07, 0.17]
+  );
+  assert.equal(byName.prop_boot_planter_sole.material.color, '#5c3a21');
+  assert.deepEqual([byName.prop_boot_planter_sole.position.x, byName.prop_boot_planter_sole.position.y, byName.prop_boot_planter_sole.position.z], [0, 0.035, 0]);
+
+  assert.equal(byName.prop_boot_planter_foot.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [byName.prop_boot_planter_foot.geometry.parameters.width, byName.prop_boot_planter_foot.geometry.parameters.height, byName.prop_boot_planter_foot.geometry.parameters.depth],
+    [0.3, 0.12, 0.16]
+  );
+  assert.equal(byName.prop_boot_planter_foot.material.color, '#5c3a21');
+  assert.deepEqual([byName.prop_boot_planter_foot.position.x, byName.prop_boot_planter_foot.position.y, byName.prop_boot_planter_foot.position.z], [-0.04, 0.13, 0]);
+
+  assert.equal(byName.prop_boot_planter_shaft.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [byName.prop_boot_planter_shaft.geometry.parameters.width, byName.prop_boot_planter_shaft.geometry.parameters.height, byName.prop_boot_planter_shaft.geometry.parameters.depth],
+    [0.16, 0.34, 0.16]
+  );
+  assert.equal(byName.prop_boot_planter_shaft.material.color, '#5c3a21');
+  assert.deepEqual([byName.prop_boot_planter_shaft.position.x, byName.prop_boot_planter_shaft.position.y, byName.prop_boot_planter_shaft.position.z], [0.12, 0.24, 0]);
+
+  assert.equal(byName.prop_boot_planter_soil.geometry.type, 'BoxGeometry');
+  assert.deepEqual(
+    [byName.prop_boot_planter_soil.geometry.parameters.width, byName.prop_boot_planter_soil.geometry.parameters.height, byName.prop_boot_planter_soil.geometry.parameters.depth],
+    [0.12, 0.03, 0.12]
+  );
+  assert.equal(byName.prop_boot_planter_soil.material.color, '#4d3522');
+  assert.deepEqual([byName.prop_boot_planter_soil.position.x, byName.prop_boot_planter_soil.position.y, byName.prop_boot_planter_soil.position.z], [0.12, 0.41, 0]);
+
+  assert.equal(byName.prop_boot_planter_stem.geometry.type, 'CylinderGeometry');
+  assert.deepEqual(
+    [byName.prop_boot_planter_stem.geometry.parameters.radiusTop, byName.prop_boot_planter_stem.geometry.parameters.radiusBottom, byName.prop_boot_planter_stem.geometry.parameters.height, byName.prop_boot_planter_stem.geometry.parameters.radialSegments],
+    [0.015, 0.015, 0.22, 6]
+  );
+  assert.equal(byName.prop_boot_planter_stem.material.color, '#1f3f26');
+  assert.deepEqual([byName.prop_boot_planter_stem.position.x, byName.prop_boot_planter_stem.position.y, byName.prop_boot_planter_stem.position.z], [0.12, 0.53, 0]);
+
+  assert.equal(byName.prop_boot_planter_bloom.geometry.type, 'ConeGeometry');
+  assert.deepEqual(
+    [byName.prop_boot_planter_bloom.geometry.parameters.radius, byName.prop_boot_planter_bloom.geometry.parameters.height, byName.prop_boot_planter_bloom.geometry.parameters.radialSegments],
+    [0.09, 0.16, 6]
+  );
+  assert.equal(byName.prop_boot_planter_bloom.material.color, '#ff9a3c');
+  assert.deepEqual([byName.prop_boot_planter_bloom.position.x, byName.prop_boot_planter_bloom.position.y, byName.prop_boot_planter_bloom.position.z], [0.12, 0.68, 0]);
+
+  const fallback = buildProp(THREE, { kind: 'boot_planter', x: 0, y: 0, z: 2.2, rot_y: 0, color: 'not-a-hex' });
+  const fbByName = Object.fromEntries(fallback.children.map((c) => [c.name, c]));
+  assert.equal(fbByName.prop_boot_planter_sole.material.color, '#8a6240');
+  assert.equal(fbByName.prop_boot_planter_foot.material.color, '#8a6240');
+  assert.equal(fbByName.prop_boot_planter_shaft.material.color, '#8a6240');
+  assert.equal(fbByName.prop_boot_planter_soil.material.color, '#4d3522');
+  assert.equal(fbByName.prop_boot_planter_stem.material.color, '#1f3f26');
+  assert.equal(fbByName.prop_boot_planter_bloom.material.color, '#ff9a3c');
 });
