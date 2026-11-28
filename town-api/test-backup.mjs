@@ -1657,3 +1657,320 @@ test('VACUUM INTO failure error payload keys are exactly {status, error}', async
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('collision suffix advances to -6 when base, -2, -3, -4 and -5 already exist', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(outDir);
+    const expectedCounts = seedDatabase(dbPath);
+
+    const baseMs = Date.now();
+    for (let offset = 0; offset <= 5; offset++) {
+      const ts = formatUtcTimestamp(new Date(baseMs + offset * 1000));
+      for (const s of ['', '-2', '-3', '-4', '-5']) {
+        fs.writeFileSync(path.join(outDir, `town-${ts}${s}.db`), '');
+      }
+    }
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.match(payload.backup, /^town-\d{8}-\d{6}-6\.db$/);
+
+    const backupPath = path.join(outDir, payload.backup);
+    assert.ok(fs.existsSync(backupPath), 'Backup file must exist');
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      for (const table of SCHEMA_TABLES) {
+        const row = backupDb.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).get();
+        assert.equal(Number(row.count), expectedCounts[table], `Row count mismatch for ${table}`);
+      }
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('pre-existing files for other timestamps do not affect naming', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(outDir);
+    seedDatabase(dbPath);
+
+    const nowMs = Date.now();
+    for (const offset of [-30, -20, -10, 10, 20, 30]) {
+      const ts = formatUtcTimestamp(new Date(nowMs + offset * 1000));
+      fs.writeFileSync(path.join(outDir, `town-${ts}.db`), '');
+      fs.writeFileSync(path.join(outDir, `town-${ts}-2.db`), '');
+    }
+    fs.writeFileSync(path.join(outDir, 'town-other.db'), '');
+    fs.writeFileSync(path.join(outDir, 'keep.txt'), 'do not touch\n');
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.match(payload.backup, /^town-\d{8}-\d{6}\.db$/);
+    assert.ok(fs.existsSync(path.join(outDir, payload.backup)), 'Backup file must exist');
+    assert.equal(fs.readFileSync(path.join(outDir, 'keep.txt'), 'utf8'), 'do not touch\n');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--db with --help and --out-dir with --help print usage and create nothing', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const neverDir = path.join(tmpDir, 'never-created-by-help');
+    const neverDir2 = path.join(tmpDir, 'never-created-by-help-2');
+    seedDatabase(dbPath);
+
+    const res1 = await runBackupCli(['--db', dbPath, '--help']);
+    assert.equal(res1.code, 0);
+    assert.ok(
+      res1.stdout.startsWith('Usage: node town-api/backup.mjs'),
+      `Unexpected stdout: ${res1.stdout}`
+    );
+    assert.equal(res1.stderr, '');
+
+    const res2 = await runBackupCli(['--db', dbPath, '--out-dir', neverDir, '--help']);
+    assert.equal(res2.code, 0);
+    assert.equal(fs.existsSync(neverDir), false, 'out-dir must not be created when --help is passed');
+
+    const res3 = await runBackupCli(['--out-dir', neverDir2, '--help']);
+    assert.equal(res3.code, 0);
+    assert.ok(
+      res3.stdout.startsWith('Usage: node town-api/backup.mjs'),
+      `Unexpected stdout: ${res3.stdout}`
+    );
+    assert.equal(fs.existsSync(neverDir2), false, 'out-dir must not be created when --help is passed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('unknown argument after a valid --db errors and creates nothing', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const neverDir = path.join(tmpDir, 'never-created');
+    seedDatabase(dbPath);
+
+    const res = await runBackupCli(['--db', dbPath, '--bogus', '--out-dir', neverDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, 'Unknown argument: --bogus');
+    assert.equal(fs.existsSync(neverDir), false, 'out-dir must not be created on an unknown-argument error');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--db consumes the next flag as its value, so the out-dir path is the unknown argument', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const outDir = path.join(tmpDir, 'backups');
+
+    const res = await runBackupCli(['--db', '--out-dir', outDir]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errLines = res.stderr.trim().split('\n');
+    assert.equal(errLines.length, 1, 'Expected exactly one JSON line on stderr');
+    const errPayload = JSON.parse(errLines[0]);
+    assert.equal(errPayload.status, 'error');
+    assert.equal(errPayload.error, `Unknown argument: ${path.resolve(outDir)}`);
+    assert.equal(fs.existsSync(outDir), false, 'out-dir must not be created when --db consumes --out-dir');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('success payload tables keys are exactly SCHEMA_TABLES in order', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    const expectedCounts = seedDatabase(dbPath);
+
+    assert.equal(SCHEMA_TABLES.length, 12);
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.deepEqual(Object.keys(payload.tables), SCHEMA_TABLES);
+    assert.deepEqual(payload.tables, expectedCounts);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves PRAGMA user_version and application_id', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath, (db) => {
+      db.exec('PRAGMA user_version = 7;');
+      db.exec('PRAGMA application_id = 12345;');
+    });
+
+    const src = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      assert.equal(src.prepare('PRAGMA user_version').get().user_version, 7);
+      assert.equal(src.prepare('PRAGMA application_id').get().application_id, 12345);
+    } finally {
+      src.close();
+    }
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const dst = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      assert.equal(dst.prepare('PRAGMA user_version').get().user_version, 7);
+      assert.equal(dst.prepare('PRAGMA application_id').get().application_id, 12345);
+    } finally {
+      dst.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup preserves a view and a trigger in sqlite_master', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath, (db) => {
+      db.exec('CREATE VIEW v_resident_says AS SELECT handle, body FROM prompt_book;');
+      db.exec('CREATE TRIGGER trg_pb_after_insert AFTER INSERT ON prompt_book BEGIN SELECT 1; END;');
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const view = backupDb
+        .prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE type = 'view' AND name = ?")
+        .get('v_resident_says');
+      assert.ok(view, 'View must survive in the backup');
+      assert.equal(view.type, 'view');
+      assert.equal(view.tbl_name, 'v_resident_says');
+
+      const trigger = backupDb
+        .prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+        .get('trg_pb_after_insert');
+      assert.ok(trigger, 'Trigger must survive in the backup');
+      assert.equal(trigger.type, 'trigger');
+      assert.equal(trigger.tbl_name, 'prompt_book');
+
+      const viewRow = backupDb
+        .prepare("SELECT body FROM v_resident_says WHERE handle = 'alice'")
+        .get();
+      assert.equal(viewRow.body, 'Testing the Bandstand acoustics.');
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup passes integrity_check and keeps the source page_size', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath);
+
+    const src = new DatabaseSync(dbPath, { readOnly: true });
+    let srcPageSize;
+    try {
+      srcPageSize = src.prepare('PRAGMA page_size').get().page_size;
+    } finally {
+      src.close();
+    }
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    const backupPath = path.join(outDir, payload.backup);
+
+    const dst = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      assert.equal(dst.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+      assert.equal(dst.prepare('PRAGMA page_size').get().page_size, srcPageSize);
+    } finally {
+      dst.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('backup of 1000 prompt_book rows reports exact counts and keeps first/last bodies', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-backup-'));
+  try {
+    const dbPath = path.join(tmpDir, 'town.db');
+    const outDir = path.join(tmpDir, 'backups');
+    seedDatabase(dbPath, (db, now) => {
+      const insertSay = db.prepare(
+        'INSERT INTO prompt_book (handle, kind, body, created_at) VALUES (?, ?, ?, ?)'
+      );
+      for (let i = 0; i < 999; i++) {
+        insertSay.run('alice', 'say', `Line ${i}.`, now);
+      }
+    });
+
+    const res = await runBackupCli(['--db', dbPath, '--out-dir', outDir]);
+    assert.equal(res.code, 0, `Expected exit 0, got ${res.code}: ${res.stderr}`);
+
+    const payload = JSON.parse(res.stdout.trim());
+    assert.equal(payload.status, 'ok');
+    assert.equal(payload.tables.prompt_book, 1000);
+
+    const backupDb = new DatabaseSync(path.join(outDir, payload.backup), { readOnly: true });
+    try {
+      const first = backupDb
+        .prepare('SELECT body FROM prompt_book ORDER BY rowid ASC LIMIT 1')
+        .get();
+      assert.equal(first.body, 'Testing the Bandstand acoustics.');
+      const last = backupDb
+        .prepare('SELECT body FROM prompt_book ORDER BY rowid DESC LIMIT 1')
+        .get();
+      assert.equal(last.body, 'Line 998.');
+    } finally {
+      backupDb.close();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
