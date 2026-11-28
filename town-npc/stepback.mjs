@@ -16,16 +16,23 @@ const THREE_HOURS_SEC = 3 * 3600;
 const THIRTY_MIN_SEC = 30 * 60;
 export const AMBIENT_DAILY_CAP = 2;
 
+const TOWN_DATE_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 /**
- * Format unix seconds as local YYYY-MM-DD calendar date.
+ * Format unix seconds as town-clock (America/Los_Angeles) YYYY-MM-DD calendar date.
  * @param {number} nowSec
  * @returns {string}
  */
 export function localDateString(nowSec) {
-  const d = new Date(nowSec * 1000);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const parts = TOWN_DATE_FMT.formatToParts(new Date(nowSec * 1000));
+  const y = parts.find((p) => p.type === 'year').value;
+  const m = parts.find((p) => p.type === 'month').value;
+  const day = parts.find((p) => p.type === 'day').value;
   return `${y}-${m}-${day}`;
 }
 
