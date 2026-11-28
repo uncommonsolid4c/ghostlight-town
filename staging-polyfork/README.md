@@ -1,6 +1,6 @@
 # Ghostlight Town — the live town (Polyfork composition)
 
-The live town since the 2026-11-14 adoption (slice 77), now at `staging.js?v=41`:
+The live town since the 2026-11-14 adoption (slice 77), now at `staging.js?v=42`:
 Campground & Lake terrain + Medieval Village buildings + Village Tavern as
 the Inn + humanoid bodies for the three NPCs + the procedural Bandstand,
 Milo's cottage, and Milo's blue ghost ported from `town-3d/`. The old
@@ -123,7 +123,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   imports, no `Math.random`, scoped `/api/town/state` + `/api/town/plot?handle=`
   fetches only, no `TownLive`, bandstand & ghost options, plot-1 coordinates,
   decorative cottages removed, plot 2–8 terrain pads, NPC stand-in yield,
-  Prompt Book UI elements, `?v=41` cache bust, `#plot-overlay` markup + click
+  Prompt Book UI elements, `?v=42` cache bust, `#plot-overlay` markup + click
   wiring for cottages/newsstand/Inn/gatehouse) plus unit tests for `inn-nightly-call.mjs` (occupancy decision,
   per-room glow toggle, Nightly Call card redraw/cache/split).
 - `test-daylight-drift.mjs` — unit tests for `daylight-drift.mjs` (keyframe
@@ -276,7 +276,7 @@ click/glide on `pointerup`. Coarse-pointer devices swap the footer
 - `tap-glide.mjs` (65c): vendored `stepGlide` verbatim from `town-3d/town.js`,
   `deriveGlideMaxRadius` (38 m on the span-2 128 m island), `stepOrbitGlide`,
   and `createPointerTracker` (4 px drag threshold + multi-pointer pinch
-  suppression). `index.html` (`?v=41`) adds `#move-in-cta` (`href="move-in.html"`),
+  suppression). `index.html` (`?v=42`) adds `#move-in-cta` (`href="move-in.html"`),
   `#footer-bar` (`Move in →` + `← back to Milo's corner`), coarse-pointer hint
   swap, and the `@media (max-width: 640px)` mobile pass (44 px tap targets,
   HUD title ellipsis, Prompt Book repositioned below HUD, wrapped footer).
