@@ -1046,8 +1046,8 @@ test('test-file hygiene: unique names, export surface, color constants, no banne
   const modSrc = fs.readFileSync(path.join(__dirname, 'garden.mjs'), 'utf8');
 
   const names = [...testSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 54);
-  assert.equal(new Set(names).size, 54);
+  assert.equal(names.length, 64);
+  assert.equal(new Set(names).size, 64);
 
   const exports = [...modSrc.matchAll(/^export (?:const|function) (\w+)/gm)]
     .map((m) => m[1])
@@ -1281,4 +1281,249 @@ test('garden bed soil and rails are unrotated and centered on their free axes', 
     assert.equal(part.rotation.y, 0);
     assert.equal(part.rotation.z, 0);
   }
+});
+
+test('buildGardenPlant non-object second argument fails soft except null which throws', () => {
+  const THREE = makeFakeThree();
+
+  assert.throws(() => buildGardenPlant(THREE, null), TypeError);
+
+  for (const bad of ['moonflower', 5, ['moonflower']]) {
+    const p = buildGardenPlant(THREE, bad);
+    assert.equal(p.name, 'garden-plant-unknown-sprout');
+    assert.ok(p.getObjectByName('plant-sprout-leaf-0'));
+    assert.equal(p.getObjectByName('plant-stem'), null);
+    assert.equal(p.getObjectByName('plant-flower'), null);
+  }
+});
+
+test('updateGardenBed falsy beds beyond null and undefined return null; string garden clears', () => {
+  const THREE = makeFakeThree();
+
+  for (const badBed of [0, '', false]) {
+    assert.equal(updateGardenBed(THREE, badBed, { slots: [] }), null);
+  }
+
+  const bed = buildGardenBed(THREE, {
+    garden: { slots: [{ slot: 0, seed: 'moonflower', stage: 'sprout' }] },
+  });
+  const cleared = updateGardenBed(THREE, bed, 'nope');
+  assert.equal(cleared.name, 'garden-plants');
+  assert.equal(cleared.children.length, 0);
+  assert.equal(bed.children.length, 6);
+
+  const clearedAgain = updateGardenBed(THREE, bed, { slots: 'nope' });
+  assert.equal(clearedAgain.children.length, 0);
+  assert.equal(bed.children.length, 6);
+});
+
+test('GARDEN_BED exact clearance distances: newsstand, fishing shore, bandstand deck edge', () => {
+  const newsstandDist = Math.hypot(GARDEN_BED.x - 6, GARDEN_BED.z - 14);
+  assert.ok(Math.abs(newsstandDist - 14.01) < 0.01, `newsstandDist=${newsstandDist}`);
+
+  const minShoreX = Math.sin(Math.PI / 4) * 25;
+  const minShoreZ = Math.cos(Math.PI / 4) * 25;
+  const shoreDist = Math.hypot(GARDEN_BED.x - minShoreX, GARDEN_BED.z - minShoreZ);
+  assert.ok(Math.abs(shoreDist - 20.92) < 0.01, `shoreDist=${shoreDist}`);
+
+  const westEdge = GARDEN_BED.x - 1.2;
+  assert.ok(Math.abs(westEdge - 4.5 - 0.8) < 1e-9, `deck clearance=${westEdge - 4.5}`);
+});
+
+test('server RATE_LIMITS garden entries and route registrations match the client', () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'town-api', 'server.mjs'), 'utf8');
+
+  assert.ok(serverSrc.includes('gardenPlant: { max: 10, windowSec: 60 * 60 },'));
+  assert.ok(serverSrc.includes('guestGardenPlant: { max: 2, windowSec: 60 * 60 },'));
+
+  assert.ok(
+    serverSrc.includes("['POST /api/town/garden/plant', { mode: 'resident', handler: handleGardenPlant }],")
+  );
+  assert.ok(
+    serverSrc.includes("['POST /api/town/garden/guest/plant', { mode: 'guest', handler: handleGuestGardenPlant }],")
+  );
+
+  assert.ok(
+    serverSrc.includes(
+      "plantSeedForHandle(auth.handle, body.seed, auth.now, `garden-plant:${auth.handle}`, RATE_LIMITS.gardenPlant, res);"
+    )
+  );
+  assert.ok(
+    serverSrc.includes(
+      "plantSeedForHandle(handle, body.seed, auth.now, `guest-garden-plant:${ip}`, RATE_LIMITS.guestGardenPlant, res);"
+    )
+  );
+});
+
+test('garden_plants schema pins slot range, unique handle, and no extra indexes', () => {
+  const schemaSrc = fs.readFileSync(path.join(__dirname, '..', 'town-api', 'schema.sql'), 'utf8');
+
+  const block = [
+    'CREATE TABLE IF NOT EXISTS garden_plants (',
+    '    slot            INTEGER PRIMARY KEY CHECK (slot >= 0 AND slot <= 5),',
+    '    handle          TEXT NOT NULL UNIQUE,',
+    '    seed            TEXT NOT NULL,',
+    '    planted_at      INTEGER NOT NULL',
+    ');',
+  ].join('\n');
+  assert.ok(schemaSrc.includes(block));
+  assert.equal((schemaSrc.match(/garden_plants/g) || []).length, 1);
+});
+
+test('server state garden builder and gardenStageForAge body verbatim', () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'town-api', 'server.mjs'), 'utf8');
+
+  assert.ok(
+    serverSrc.includes(
+      ".prepare('SELECT slot, handle, seed, planted_at FROM garden_plants ORDER BY slot ASC')"
+    )
+  );
+  assert.ok(serverSrc.includes('stage: gardenStageForAge(now, row.planted_at),'));
+
+  const fn = [
+    'function gardenStageForAge(now, plantedAt) {',
+    '  const ageDays = Math.floor((now - plantedAt) / 86400);',
+    "  if (ageDays >= 4) return 'bloom';",
+    "  if (ageDays >= 2) return 'leaf';",
+    "  return 'sprout';",
+    '}',
+  ].join('\n');
+  assert.ok(serverSrc.includes(fn));
+});
+
+test('town.json garden endpoints deepEqual and state summary carries the garden shape', () => {
+  const townJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'town.json'), 'utf8'));
+
+  const gardenEndpoints = townJson.endpoints.filter((e) => e.path.startsWith('/api/town/garden/'));
+  assert.equal(gardenEndpoints.length, 2);
+  assert.deepEqual(gardenEndpoints[0], {
+    method: 'POST',
+    path: '/api/town/garden/plant',
+    auth: 'signed',
+    rate_limit: '10/hour',
+    summary:
+      'Plant a seed in the communal 6-slot garden bed by the Bandstand (muted residents get 403 resident_muted; unknown seed -> 400 invalid_seed; one active planting per handle -> 409 already_planted; all 6 slots taken -> 409 bed_full; assigns lowest free slot, bumps state_seq, returns 201 { handle, slot, seed, planted_at, stage, state_seq }).',
+  });
+  assert.deepEqual(gardenEndpoints[1], {
+    method: 'POST',
+    path: '/api/town/garden/guest/plant',
+    auth: 'signed',
+    rate_limit: '2/hour',
+    summary:
+      'Guest-mode plant in the communal 6-slot garden bed with body pubkey (409 handle_taken if handle belongs to a resident; shares the 6-slot bed and one-planting-per-handle rule; returns 201 { handle, slot, seed, planted_at, stage, state_seq }).',
+  });
+
+  const stateEndpoint = townJson.endpoints.find((e) => e.path === '/api/town/state');
+  assert.ok(stateEndpoint);
+  assert.ok(
+    stateEndpoint.summary.includes('garden { slots: [{ slot, handle, seed, planted_at, stage }] }')
+  );
+});
+
+test('SKILL.md garden endpoint blocks and Garden section verbatim', () => {
+  const skillSrc = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+
+  assert.ok(skillSrc.includes('### `POST /api/town/garden/plant`'));
+  assert.ok(
+    skillSrc.includes(
+      '- **Auth:** signed, `active` residents (`client.gardenPlant(seed)`; muted residents receive `403 resident_muted`).'
+    )
+  );
+  assert.ok(
+    skillSrc.includes(
+      '- **Rate limit:** 10/hour per resident. **Errors:** `400` (`invalid_seed`), `401`, `403` (`resident_not_active`, `resident_muted`), `409` (`already_planted`, `bed_full`), `429`.'
+    )
+  );
+
+  assert.ok(skillSrc.includes('### `POST /api/town/garden/guest/plant`'));
+  assert.ok(
+    skillSrc.includes(
+      '- **Rate limit:** 2/hour. **Errors:** `400` (`invalid_handle`, `missing_pubkey`, `invalid_seed`), `401`, `409` (`handle_taken`, `already_planted`, `bed_full`), `429`.'
+    )
+  );
+
+  const paragraph =
+    'One communal 6-slot garden bed sits just east of the Bandstand. Residents plant a seed with `POST /api/town/garden/plant` (10/hour; `moonflower`, `lantern_poppy`, `tea_mint`, `starwort`, `ghost_bell`, `silver_thyme`), and guests can plant via `POST /api/town/garden/guest/plant` (2/hour); each handle may hold at most one active planting (`409 already_planted`, or `409 bed_full` when all 6 slots are taken). Growth is derived from whole UTC days since `planted_at` — `sprout` (0–1 days) → `leaf` (2–3 days) → `bloom` (4+ days) — and caps at `bloom`; nothing ever withers if left alone. The bed rides in `GET /api/town/state` as `garden { slots: [{ slot, handle, seed, planted_at, stage }] }`.';
+  assert.ok(skillSrc.includes(paragraph));
+});
+
+test('GhostlightClient gardenPlant and gardenGuestPlant post signed JSON to the garden endpoints', async () => {
+  const { GhostlightClient, generateKeypair } = await import('../town-api/ghostlight-client.mjs');
+  const keys = generateKeypair();
+
+  const noKey = new GhostlightClient({
+    baseUrl: 'http://127.0.0.1:9',
+    handle: 'guest_x',
+    privateKeyPem: keys.privateKeyPem,
+  });
+  await assert.rejects(
+    () => noKey.gardenGuestPlant('guest_x', 'moonflower'),
+    /pubkey is required for gardenGuestPlant\(\)/
+  );
+
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    return { status: 201, ok: true, json: async () => ({ handle: 'alice', slot: 0 }) };
+  };
+  try {
+    const client = new GhostlightClient({
+      baseUrl: 'http://127.0.0.1:9/',
+      handle: 'alice',
+      ...keys,
+    });
+    const planted = await client.gardenPlant('tea_mint');
+    assert.equal(planted.status, 201);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'http://127.0.0.1:9/api/town/garden/plant');
+    assert.equal(calls[0].opts.method, 'POST');
+    assert.equal(calls[0].opts.body, JSON.stringify({ seed: 'tea_mint' }));
+    assert.equal(calls[0].opts.headers['X-Muse-Handle'], 'alice');
+    assert.equal(calls[0].opts.headers['Content-Type'], 'application/json');
+    assert.ok(calls[0].opts.headers['X-Muse-Signature']);
+
+    const guest = new GhostlightClient({
+      baseUrl: 'http://127.0.0.1:9',
+      handle: 'guest_x',
+      ...keys,
+    });
+    const guestPlanted = await guest.gardenGuestPlant('guest_x', 'moonflower');
+    assert.equal(guestPlanted.status, 201);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].url, 'http://127.0.0.1:9/api/town/garden/guest/plant');
+    assert.deepEqual(JSON.parse(calls[1].opts.body), {
+      handle: 'guest_x',
+      pubkey: keys.pubkey,
+      seed: 'moonflower',
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('staging.js garden wiring exact lines: versioned import, groundAt build, hotfix comment', () => {
+  const stagingSrc = fs.readFileSync(path.join(__dirname, 'staging.js'), 'utf8');
+
+  assert.ok(
+    stagingSrc.includes(
+      "import { GARDEN_BED, buildGardenBed, updateGardenBed } from './garden.mjs?v=40';"
+    )
+  );
+
+  const buildCall = [
+    '  const gardenBed = buildGardenBed(THREE, {',
+    '    garden: { slots: [] },',
+    '    y: camp.groundAt(GARDEN_BED.x, GARDEN_BED.z),',
+    '  });',
+  ].join('\n');
+  assert.ok(stagingSrc.includes(buildCall));
+  assert.ok(stagingSrc.includes('  scene.add(gardenBed);'));
+
+  const hotfixComment = [
+    '      // The bed is built once with empty slots at init; refresh its plants',
+    '      // from live garden state on every state arrival (Nov 23 hotfix — the',
+    "      // moonflower never rendered because this call didn't exist).",
+  ].join('\n');
+  assert.ok(stagingSrc.includes(hotfixComment));
 });
