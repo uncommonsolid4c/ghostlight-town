@@ -360,8 +360,8 @@ test("CONCEPT.md Don'ts campfire exclusion is enforced in staging.js scatter poo
   }
   assert.equal(hits.length, 2, `Expected exactly 2 campfire hits in shipped sources, got ${hits.join(', ')}`);
   assert.ok(
-    hits.every((h) => h.startsWith('staging-polyfork/staging.js:98')),
-    `Both campfire hits must be in staging-polyfork/staging.js:98x, got ${hits.join(', ')}`
+    hits.every((h) => /^staging-polyfork\/staging\.js:9[89]\d$/.test(h)),
+    `Both campfire hits must be in staging-polyfork/staging.js:98x/99x, got ${hits.join(', ')}`
   );
 
   const stagingJs = fs.readFileSync(path.join(__dirname, 'staging-polyfork', 'staging.js'), 'utf8');
@@ -647,7 +647,7 @@ test("CONCEPT.md Don'ts no-money rule holds in shipped sources", () => {
   allowlistHits.sort();
   assert.deepEqual(allowlistHits, [
     'staging-polyfork/inn-guestbook-overlay.mjs:92',
-    'staging-polyfork/staging.js:1037',
+    'staging-polyfork/staging.js:1044',
     'town-3d/town.js:2042',
     'town-3d/town.js:941',
   ]);
