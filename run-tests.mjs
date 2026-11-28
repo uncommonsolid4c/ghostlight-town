@@ -80,13 +80,14 @@ const TEST_SUITES = [
   'town-npc/test-real-brain.mjs',
   'town-npc/test-register.mjs',
   'town-npc/test-run-all.mjs',
-  // staging-polyfork (20)
+  // staging-polyfork (21)
   'staging-polyfork/test-staging.mjs',
   'staging-polyfork/test-staging-readme.mjs',
   'staging-polyfork/test-daylight-drift.mjs',
   'staging-polyfork/test-fishing.mjs',
   'staging-polyfork/test-garden.mjs',
   'staging-polyfork/test-prompt-book.mjs',
+  'staging-polyfork/test-catchup.mjs',
   'staging-polyfork/test-avatar.mjs',
   'staging-polyfork/test-plot-overlay.mjs',
   'staging-polyfork/test-inn-guestbook-overlay.mjs',
