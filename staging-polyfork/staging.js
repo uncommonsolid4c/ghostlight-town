@@ -25,6 +25,13 @@ import { createConceptMilosCottage } from './concept-cottage.js';
 import { createConceptMiloGhost } from './concept-ghost.js';
 import { renderPromptBook } from './prompt-book.mjs';
 import {
+  loadSeenSnapshot,
+  saveSeenSnapshot,
+  buildSnapshot,
+  computeCatchUp,
+  renderCatchUp,
+} from './catchup.mjs?v=41';
+import {
   updateStagingInnOccupancy,
   updateStagingNightlyCallCard,
 } from './inn-nightly-call.mjs?v=39';
@@ -1227,6 +1234,26 @@ async function init() {
   setPromptBookVisible(window.innerWidth >= 640);
   promptBookToggleEl?.addEventListener('click', () => {
     setPromptBookVisible(Boolean(promptBookEl?.hidden));
+  });
+
+  const catchupToggleEl = document.getElementById('catchup-toggle');
+  const catchupPanelEl = document.getElementById('catchup-panel');
+  catchupToggleEl?.addEventListener('click', () => {
+    if (!catchupPanelEl) return;
+    if (!catchupPanelEl.hidden) {
+      catchupPanelEl.hidden = true;
+      catchupToggleEl.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const state = liveStore.lastState || {};
+    const snapshot = loadSeenSnapshot(globalThis.localStorage);
+    const handleInputEl = document.getElementById('catchup-handle');
+    const handle = handleInputEl ? handleInputEl.value : (snapshot?.handle || '');
+    const catchup = computeCatchUp(snapshot, state, handle);
+    renderCatchUp(catchupPanelEl, catchup, document);
+    saveSeenSnapshot(globalThis.localStorage, buildSnapshot(state, handle));
+    catchupPanelEl.hidden = false;
+    catchupToggleEl.setAttribute('aria-expanded', 'true');
   });
 
   loadEvents()
