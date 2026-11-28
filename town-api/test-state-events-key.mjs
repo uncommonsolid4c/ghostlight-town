@@ -425,8 +425,8 @@ test('GET /api/town/state annotates now-event host footlight without flagging ot
   });
 
   try {
-    await registerAndCheckin(ctx, 'host', 'my own words', 0);
-    await registerAndCheckin(ctx, 'other', 'other words', 1);
+    await registerAndCheckin(ctx, 'host', 'my own words', 1);
+    await registerAndCheckin(ctx, 'other', 'other words', 2);
 
     const { status, body } = await ctx.getState();
     assert.equal(status, 200);
@@ -696,7 +696,7 @@ test('GET /api/town/state host annotation clears after the window ends', async (
   });
 
   try {
-    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    await registerAndCheckin(ctx, 'host', 'my own words', 1);
 
     const before = await ctx.getState();
     assert.equal(before.status, 200);
@@ -755,8 +755,8 @@ test('GET /api/town/state annotates only the earliest-start host among overlappi
   });
 
   try {
-    await registerAndCheckin(ctx, 'hosta', 'aaa', 0);
-    await registerAndCheckin(ctx, 'hostb', 'bbb', 1);
+    await registerAndCheckin(ctx, 'hosta', 'aaa', 1);
+    await registerAndCheckin(ctx, 'hostb', 'bbb', 2);
 
     const { status, body } = await ctx.getState();
     assert.equal(status, 200);
@@ -793,7 +793,7 @@ test('GET /api/town/state gives an expired footlight no annotation', async () =>
   });
 
   try {
-    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    await registerAndCheckin(ctx, 'host', 'my own words', 1);
     ctx.advanceClock(2701);
 
     const { status, body } = await ctx.getState();
@@ -1472,7 +1472,7 @@ test('GET /api/town/state drops an uppercase host_handle and trims a padded one'
   });
 
   try {
-    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    await registerAndCheckin(ctx, 'host', 'my own words', 1);
     const { status, body } = await ctx.getState();
     assert.equal(status, 200);
     assert.equal(body.events.now.title, 'Padded Host');
@@ -2037,7 +2037,7 @@ test('GET /api/town/state still annotates a muted or suspended now-event host fo
     },
   });
   try {
-    const host = await registerAndCheckin(muted, 'host', 'my own words', 0);
+    const host = await registerAndCheckin(muted, 'host', 'my own words', 1);
     muted.db.prepare("UPDATE residents SET status = 'muted' WHERE handle = 'host'").run();
     const { body } = await muted.getState();
     const row = body.footlights.find((r) => r.handle === 'host');
@@ -2045,7 +2045,7 @@ test('GET /api/town/state still annotates a muted or suspended now-event host fo
     assert.equal(row.status_text, 'Muted Show');
     assert.equal(row.event, true);
     muted.advanceClock(61);
-    const again = await host.checkin({ status_text: 'still here', slot: 0 });
+    const again = await host.checkin({ status_text: 'still here', slot: 1 });
     assert.equal(again.status, 200);
   } finally {
     await muted.close();
@@ -2067,7 +2067,7 @@ test('GET /api/town/state still annotates a muted or suspended now-event host fo
     },
   });
   try {
-    const host = await registerAndCheckin(suspended, 'host', 'my own words', 0);
+    const host = await registerAndCheckin(suspended, 'host', 'my own words', 1);
     suspended.db.prepare("UPDATE residents SET status = 'suspended' WHERE handle = 'host'").run();
     const { body } = await suspended.getState();
     const row = body.footlights.find((r) => r.handle === 'host');
@@ -2075,7 +2075,7 @@ test('GET /api/town/state still annotates a muted or suspended now-event host fo
     assert.equal(row.status_text, 'Suspended Show');
     assert.equal(row.event, true);
     suspended.advanceClock(61);
-    const again = await host.checkin({ status_text: 'still here', slot: 0 });
+    const again = await host.checkin({ status_text: 'still here', slot: 1 });
     assert.equal(again.status, 403);
     assert.equal(again.data.error, 'resident_not_active');
   } finally {
@@ -2109,8 +2109,8 @@ test('GET /api/town/state leaves both future-event hosts unflagged when there is
     },
   });
   try {
-    await registerAndCheckin(ctx, 'hosta', 'aaa', 0);
-    await registerAndCheckin(ctx, 'hostb', 'bbb', 1);
+    await registerAndCheckin(ctx, 'hosta', 'aaa', 1);
+    await registerAndCheckin(ctx, 'hostb', 'bbb', 2);
     const { status, body } = await ctx.getState();
     assert.equal(status, 200);
     assert.equal(body.events.now, null);
@@ -2434,7 +2434,7 @@ test('GET /api/town/state footlight TTL boundary is lit at +2699 and gone at +27
   const ctx = await startStateServer({ baseNow });
 
   try {
-    await registerAndCheckin(ctx, 'host', 'my own words', 0);
+    await registerAndCheckin(ctx, 'host', 'my own words', 1);
     ctx.advanceClock(2699);
     const lit = await ctx.getState();
     assert.equal(lit.status, 200);
