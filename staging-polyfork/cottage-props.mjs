@@ -1,7 +1,7 @@
 // Staging-local cottage plot props builder (Slice 69).
 // No top-level THREE or document access so unit tests can run headless in Node.
 
-// Verbatim from town-3d/town.js (:182-197)
+// Verbatim from town-3d/town.js (:182-198)
 const VALID_PROP_KINDS = new Set([
   'desk',
   'bookshelf',
@@ -12,6 +12,7 @@ const VALID_PROP_KINDS = new Set([
   'poster_frame',
   'lantern',
   'planter',
+  'boot_planter',
 ]);
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -19,7 +20,7 @@ function safeColor(hex, fallback) {
   return typeof hex === 'string' && HEX_COLOR_RE.test(hex) ? hex : fallback;
 }
 
-// Verbatim from town-3d/town.js (:454-563)
+// Verbatim from town-3d/town.js (:455-596)
 function buildProp(THREE, prop) {
   if (!prop || typeof prop !== 'object') return null;
   if (!VALID_PROP_KINDS.has(prop.kind)) return null;
@@ -120,6 +121,38 @@ function buildProp(THREE, prop) {
         foliage.position.set(fx, 0.48, 0);
         mesh.add(foliage);
       }
+      break;
+    }
+    case 'boot_planter': {
+      mesh = new THREE.Group();
+      mesh.position.set(prop.x, baseY, propZ);
+      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.07, 0.17), mat);
+      sole.name = 'prop_boot_planter_sole';
+      sole.position.set(0, 0.035, 0);
+      mesh.add(sole);
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.16), mat);
+      foot.name = 'prop_boot_planter_foot';
+      foot.position.set(-0.04, 0.13, 0);
+      mesh.add(foot);
+      const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.34, 0.16), mat);
+      shaft.name = 'prop_boot_planter_shaft';
+      shaft.position.set(0.12, 0.24, 0);
+      mesh.add(shaft);
+      const soilMat = new THREE.MeshStandardMaterial({ color: '#4d3522', roughness: 0.95 });
+      const soil = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.12), soilMat);
+      soil.name = 'prop_boot_planter_soil';
+      soil.position.set(0.12, 0.41, 0);
+      mesh.add(soil);
+      const stemMat = new THREE.MeshStandardMaterial({ color: '#1f3f26', roughness: 0.9 });
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 6), stemMat);
+      stem.name = 'prop_boot_planter_stem';
+      stem.position.set(0.12, 0.53, 0);
+      mesh.add(stem);
+      const bloomMat = new THREE.MeshStandardMaterial({ color: '#ff9a3c', roughness: 0.75 });
+      const bloom = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.16, 6), bloomMat);
+      bloom.name = 'prop_boot_planter_bloom';
+      bloom.position.set(0.12, 0.68, 0);
+      mesh.add(bloom);
       break;
     }
     default:
