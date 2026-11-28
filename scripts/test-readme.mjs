@@ -308,7 +308,7 @@ test('scripts/README.md staging-polyfork exclusions: test suites and README.md s
     );
     const summary = JSON.parse(stageOut.trim());
     assert.equal(summary.ok, true);
-    assert.equal(summary.file_count, 195);
+    assert.equal(summary.file_count, 196);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
@@ -421,16 +421,16 @@ test('scripts/README.md MANIFEST.json shape matches a real staging-polyfork dry 
     );
     const summary = JSON.parse(stageOut.trim());
     assert.equal(summary.ok, true);
-    assert.equal(summary.file_count, 195);
+    assert.equal(summary.file_count, 196);
     assert.equal(String(summary.staging_js_v), '41');
     assert.equal(summary.town_js_v, null);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
     );
-    assert.equal(manifest.file_count, 195);
+    assert.equal(manifest.file_count, 196);
     assert.equal(String(manifest.staging_js_v), '41');
-    assert.equal(manifest.files.length, 195);
+    assert.equal(manifest.files.length, 196);
 
     let sumBytes = 0;
     for (const entry of manifest.files) {
@@ -720,7 +720,7 @@ test('scripts/README.md check-live getExpectedFiles matches stage-deploy collect
     stagingExpected,
     stagingCollected.map((entry) => entry.relPath)
   );
-  assert.equal(stagingExpected.length, 195);
+  assert.equal(stagingExpected.length, 196);
 
   const town3dExpected = await getExpectedFiles(ROOT_DIR, 'town-3d');
   const town3dListed = await listStagedFiles(path.join(ROOT_DIR, 'town-3d'));
@@ -1122,7 +1122,7 @@ test('scripts/README.md stage-deploy summary and MANIFEST exact key sets match b
   assert.equal(staging.summary.bundle, 'staging-polyfork');
   assert.equal(staging.summary.town_js_v, null);
   assert.equal(staging.summary.staging_js_v, '41');
-  assert.equal(staging.summary.file_count, 195);
+  assert.equal(staging.summary.file_count, 196);
 
   assert.deepEqual(Object.keys(staging.manifest), [
     'staged_at',
@@ -1418,7 +1418,7 @@ test('scripts/README.md staging-polyfork expected files carry all 12 shared town
   ];
 
   const stagingExpected = await getExpectedFiles(ROOT_DIR, 'staging-polyfork');
-  assert.equal(stagingExpected.length, 195);
+  assert.equal(stagingExpected.length, 196);
   for (const shared of sharedTown3dFiles) {
     assert.ok(stagingExpected.includes(shared), `staging-polyfork expected files must include shared ${shared}`);
   }
@@ -1438,7 +1438,7 @@ test('scripts/README.md staging facts sentence and test-suites line stay verbati
   const norm = readme.replace(/\s+/g, ' ');
   assert.ok(
     norm.includes(
-      'staging bundle `staging-polyfork` stages **195 files** with `staging_js_v` **41** (verified with `--bundle staging-polyfork` and `--verify`).'
+      'staging bundle `staging-polyfork` stages **196 files** with `staging_js_v` **41** (verified with `--bundle staging-polyfork` and `--verify`).'
     )
   );
   assert.ok(
@@ -1677,8 +1677,8 @@ test('Slice 510: stage-deploy --verify success JSON exact keys and values for st
     ]);
     assert.equal(result.status, 'ok');
     assert.equal(result.bundle, 'staging-polyfork');
-    assert.equal(result.checked, 195);
-    assert.equal(result.ok, 195);
+    assert.equal(result.checked, 196);
+    assert.equal(result.ok, 196);
     assert.deepEqual(result.mismatch, []);
     assert.deepEqual(result.missing, []);
     assert.deepEqual(result.extra, []);
@@ -1868,7 +1868,7 @@ test('Slice 510: stage-deploy --verify missing directory and manifest errors (P8
   }
 });
 
-test('Slice 510: staging-polyfork collector splits 195 files into 183 native plus 12 shared (P9)', async () => {
+test('Slice 510: staging-polyfork collector splits 196 files into 184 native plus 12 shared (P9)', async () => {
   const { collectSourceFilesFromStagingPolyfork } = await import('./stage-deploy.mjs');
   const { files, excluded } = await collectSourceFilesFromStagingPolyfork(
     path.join(ROOT_DIR, 'staging-polyfork'),
@@ -1888,24 +1888,24 @@ test('Slice 510: staging-polyfork collector splits 195 files into 183 native plu
     'guestbook/index.html',
     'move-in.html',
   ];
-  assert.equal(files.length, 195);
+  assert.equal(files.length, 196);
   const rels = files.map((entry) => entry.relPath);
   for (const sharedFile of shared) {
     assert.ok(rels.includes(sharedFile), `staging-polyfork files must include shared ${sharedFile}`);
   }
   assert.equal(
     rels.filter((rel) => !shared.includes(rel)).length,
-    183,
-    'staging-polyfork native files must number 183'
+    184,
+    'staging-polyfork native files must number 184'
   );
   const byPath = new Map(excluded.map((entry) => [entry.path, entry.reason]));
   assert.equal(
     excluded.filter((entry) => entry.reason === 'test suite, not served content').length,
-    20,
-    'staging-polyfork must exclude exactly 20 test suites'
+    21,
+    'staging-polyfork must exclude exactly 21 test suites'
   );
   assert.equal(byPath.get('README.md'), 'documentation, not served content');
-  assert.equal(excluded.length, 21);
+  assert.equal(excluded.length, 22);
   const paths = excluded.map((entry) => entry.path);
   assert.deepEqual(paths, [...paths].sort(), 'excluded entries must be sorted by path');
 });
