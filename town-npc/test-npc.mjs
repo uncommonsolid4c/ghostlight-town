@@ -604,7 +604,7 @@ test('runTurn checkin posts in-character status_text for unlit Wick (fake fetch 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-status-checkin-'));
   const origFetch = globalThis.fetch;
   try {
-    const morningNow = Math.floor(new Date(2026, 10, 13, 9, 0, 0).getTime() / 1000);
+    const morningNow = townTimeEpochSec(2026, 11, 13, 9, 0);
     const fakeState = {
       footlights: [],
       prompt_book: [],
@@ -806,7 +806,7 @@ test('runTurn passes reply_to when decision is reply and omits it when decision 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-reply-to-'));
   const origFetch = globalThis.fetch;
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     const posted = [];
     let currentState = {
       footlights: [{ handle: 'wick', slot: 2, lit_at: now - 60, expires_at: now + 2000 }],
@@ -871,7 +871,7 @@ test('runTurn passes reply_to when decision is reply and omits it when decision 
 
 test('buildTurnPrompt composes emote/[NPC] badges, last-20 slice, memory fallback, and reply guidance', () => {
   const wick = CHARACTERS.find((c) => c.handle === 'wick');
-  const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+  const now = townTimeEpochSec(2026, 11, 13, 10, 0);
   const book25 = Array.from({ length: 25 }, (_, i) => ({
     id: i + 1,
     handle: i % 2 === 0 ? 'lampmoth' : 'wick',
@@ -928,7 +928,7 @@ test('runTurn --force converts silent to initiate and retired+addressed to reply
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-force-'));
   try {
     const wick = CHARACTERS[0];
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     assert.equal(localDateString(now), '2026-11-13');
 
     const twoLit = {
@@ -1003,7 +1003,7 @@ test('runTurn --force converts silent to initiate and retired+addressed to reply
 test('runTurn brain returning NOTHING or empty posts nothing and leaves memory empty', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-nothing-'));
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     const quiet = { footlights: [], prompt_book: [], presence: [] };
     const fakeFetch = async () => ({ ok: true, status: 200, json: async () => quiet });
 
@@ -1034,7 +1034,7 @@ test('runTurn brain returning NOTHING or empty posts nothing and leaves memory e
 test('runTurn state fetch failure returns error without calling the brain or writing files (dry-run)', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-fetch-err-'));
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     let brainCalls = 0;
     const brainImpl = async () => {
       brainCalls += 1;
@@ -1086,7 +1086,7 @@ test('runTurn tolerates a failed checkin but reports a failed say', async () => 
   const tmpB = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-say-fail-'));
   const origFetch = globalThis.fetch;
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     const quiet = { footlights: [], prompt_book: [], presence: [] };
 
     const postedUrlsA = [];
@@ -1162,7 +1162,7 @@ test('runTurn persists dated memory and state counters after a successful post',
   const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc-persist-long-'));
   const origFetch = globalThis.fetch;
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     let currentState = { footlights: [], prompt_book: [], presence: [] };
     const fakeFetch = async (url, init) => {
       if (init && init.method === 'POST') {
@@ -1886,9 +1886,9 @@ test('buildSystemPrompt exact lines: identity, routine, Bandstand, NOTHING instr
 });
 
 test('localDateString: local dates and LA midnight boundary', () => {
-  assert.equal(localDateString(Math.floor(new Date(2026, 10, 25, 0, 0, 0).getTime() / 1000)), '2026-11-25');
-  assert.equal(localDateString(Math.floor(new Date(2026, 10, 25, 12, 0, 0).getTime() / 1000)), '2026-11-25');
-  assert.equal(localDateString(Math.floor(new Date(2026, 0, 1, 0, 0, 0).getTime() / 1000)), '2026-01-01');
+  assert.equal(localDateString(townTimeEpochSec(2026, 11, 25, 0, 0)), '2026-11-25');
+  assert.equal(localDateString(townTimeEpochSec(2026, 11, 25, 12, 0)), '2026-11-25');
+  assert.equal(localDateString(townTimeEpochSec(2026, 1, 1, 0, 0)), '2026-01-01');
   assert.equal(localDateString(townTimeEpochSec(2026, 11, 25, 0, 0)), '2026-11-25');
   assert.equal(localDateString(Date.UTC(2026, 10, 25, 8, 0, 0) / 1000), '2026-11-25');
   assert.equal(localDateString(Date.UTC(2026, 10, 25, 7, 59, 59) / 1000), '2026-11-24');
@@ -2102,7 +2102,7 @@ test('keygen edges: half-present pair, allowExisting, force regenerates, invalid
 });
 
 test('runTurn lowercase nothing and whitespace brain post nothing and persist state', async () => {
-  const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+  const now = townTimeEpochSec(2026, 11, 13, 10, 0);
   const fakeFetch = async () => ({
     ok: true,
     status: 200,
@@ -2149,8 +2149,8 @@ test('file hygiene: 46 unique names, 13 imports, zero banned terms, pinned as-tr
     const m = line.match(/^test\('([^']+)'/);
     if (m) names.push(m[1]);
   }
-  assert.equal(names.length, 56);
-  assert.equal(new Set(names).size, 56);
+  assert.equal(names.length, 57);
+  assert.equal(new Set(names).size, 57);
 
   assert.equal(lines.filter((l) => l.startsWith('import ')).length, 13);
   assert.equal(lines.filter((l) => l.includes('TO' + 'DO')).length, 0);
@@ -2269,7 +2269,7 @@ test('Slice 480 G5: runTurn designated reply for 2h-old line posts with reply_to
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc480-g5-'));
   const origFetch = globalThis.fetch;
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     const posted = [];
     let brainCalls = 0;
     const state = {
@@ -2316,7 +2316,7 @@ test('Slice 480 G5: runTurn designated reply for 2h-old line posts with reply_to
 test('Slice 480 G6: runTurn skips checkin when lit and carries status_text when unlit', async () => {
   const origFetch = globalThis.fetch;
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     const runOnce = async (lit) => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc480-g6-'));
       const posted = [];
@@ -2378,7 +2378,7 @@ test('Slice 480 G8: runTurn state fetch failure still creates files and keypair'
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-npc480-g8-'));
   const origFetch = globalThis.fetch;
   try {
-    const now = Math.floor(new Date(2026, 10, 13, 10, 0, 0).getTime() / 1000);
+    const now = townTimeEpochSec(2026, 11, 13, 10, 0);
     let brainCalls = 0;
     const fakeFetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'boom' }) });
     globalThis.fetch = fakeFetch;
@@ -2487,4 +2487,22 @@ test('Slice 480 G10: buildTurnPrompt reply guidance with null and zero reply-lin
 
   const pZero = buildTurnPrompt({ ...base, decision: { action: 'reply', replyLine: { id: 0, handle: 'alice' } } });
   assert.ok(pZero.includes("Answer alice's line #0 briefly in character."));
+});
+
+test('Slice 522: localDateString pins America/Los_Angeles under hostile TZ=Pacific/Kiritimati and TZ=UTC', () => {
+  const dir = path.dirname(new URL(import.meta.url).pathname);
+  const modUrl = new URL('./stepback.mjs', import.meta.url).href;
+  const script = [
+    `import assert from 'node:assert/strict';`,
+    `import { localDateString } from ${JSON.stringify(modUrl)};`,
+    `assert.equal(localDateString(Date.UTC(2026, 10, 25, 8, 0, 0) / 1000), '2026-11-25');`,
+    `assert.equal(localDateString(Date.UTC(2026, 10, 25, 7, 59, 59) / 1000), '2026-11-24');`,
+  ].join('\n');
+  for (const tz of ['Pacific/Kiritimati', 'UTC']) {
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: dir,
+      env: { ...process.env, TZ: tz },
+      encoding: 'utf8',
+    });
+  }
 });
