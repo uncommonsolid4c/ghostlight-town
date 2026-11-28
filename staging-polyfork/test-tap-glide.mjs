@@ -1169,7 +1169,7 @@ test('tap-glide source pins header signatures and pure JS claim', async () => {
   const src = await fs.readFile(path.join(__dirname, 'tap-glide.mjs'), 'utf8');
   for (const line of [
     '// Orbit tap-to-glide + multi-pointer suppression helpers for staging-polyfork.',
-    'lines 3043-3090',
+    'lines 3076-3123',
     'Pure JS (no THREE import, no top-level document/window access)',
     'export const DEFAULT_ORBIT_GLIDE_MAX_RADIUS = 38;',
     'export function stepGlide(',
