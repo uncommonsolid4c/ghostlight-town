@@ -71,7 +71,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   document access).
 - `cottage-props.mjs` — staging-local porch deck, porch trim, and starter plot
   prop builders (`attachPorchDeck`, `attachPorchTrim`, `attachPlotProps`,
-  `MILO_PLOT_PROPS`, 9 valid prop kinds matching `town-3d/town.js`).
+  `MILO_PLOT_PROPS`, 10 valid prop kinds matching `town-3d/town.js`).
 - `empty-pad.mjs` — stone slab + `OPEN PLOT #N` signpost markers
   (`buildEmptyPadMarker`, `syncEmptyPadMarkers`) for unclaimed pads in plots 2–8.
 - `interior-room.mjs` — standalone procedural cottage interior room
