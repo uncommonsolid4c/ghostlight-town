@@ -958,15 +958,15 @@ test('staging.js setPromptBookVisible toggles hidden, aria-expanded, and button 
 
 test('prompt-book.mjs header line range matches town.js definitions and call site', async () => {
   const pbSrc = await fs.readFile(PROMPT_BOOK_PATH, 'utf8');
-  assert.equal(pbSrc.split('\n')[0], '// Copied verbatim from town-3d/town.js (formatPromptBookEntries + renderPromptBook, lines 1813-1889).');
+  assert.equal(pbSrc.split('\n')[0], '// Copied verbatim from town-3d/town.js (formatPromptBookEntries + renderPromptBook, lines 1846-1922).');
   const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
   const townLines = townSrc.split('\n');
-  assert.equal(townLines[1812], 'export function formatPromptBookEntries(promptBook) {');
-  assert.equal(townLines[1829], 'export function renderPromptBook(containerEl, promptBook, doc = globalThis.document) {');
-  assert.equal(townLines[1888], '}');
-  assert.equal(townLines[1889], '');
-  assert.ok(townLines[1890].startsWith('export const SEED_HOME_PADS'));
-  assert.equal(townLines[2648], '  live.promptBook = formatPromptBookEntries(state?.prompt_book);');
+  assert.equal(townLines[1845], 'export function formatPromptBookEntries(promptBook) {');
+  assert.equal(townLines[1862], 'export function renderPromptBook(containerEl, promptBook, doc = globalThis.document) {');
+  assert.equal(townLines[1921], '}');
+  assert.equal(townLines[1922], '');
+  assert.ok(townLines[1923].startsWith('export const SEED_HOME_PADS'));
+  assert.equal(townLines[2681], '  live.promptBook = formatPromptBookEntries(state?.prompt_book);');
 });
 
 test('formatPromptBookEntries returns new objects and never mutates its input array', () => {
@@ -1185,24 +1185,24 @@ test('renderPromptBook doc.created tag accounting for single-entry renders (P15)
 test('town.js internal line pins for formatPromptBookEntries and renderPromptBook (P16)', async () => {
   const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
   const L = townSrc.split('\n');
-  assert.equal(L[1813], '  if (!Array.isArray(promptBook)) return [];');
-  assert.equal(L[1814], '  const sliced = promptBook.length > 100 ? promptBook.slice(promptBook.length - 100) : promptBook;');
-  assert.equal(L[1815], '  return sliced.map((entry) => ({');
-  assert.equal(L[1816], '    id: entry?.id ?? null,');
-  assert.equal(L[1818], "    kind: entry?.kind === 'emote' || entry?.kind === 'system' ? entry.kind : 'say',");
-  assert.equal(L[1822], "    role: entry?.role === 'npc' ? 'npc' : entry?.role === 'guest' ? 'guest' : 'muse',");
-  assert.equal(L[1823], '  }));');
-  assert.equal(L[1830], '  if (!containerEl || !doc) return;');
-  assert.equal(L[1831], '  while (containerEl.firstChild) {');
-  assert.equal(L[1836], "    const empty = doc.createElement('p');");
-  assert.equal(L[1837], "    empty.className = 'pb-empty';");
-  assert.equal(L[1838], "    empty.textContent = 'No remarks yet in the last 24h.';");
-  assert.equal(L[1843], '  const handleById = new Map();');
-  assert.equal(L[1845], '    if (entry.id != null) {');
-  assert.equal(L[1846], '      handleById.set(entry.id, entry.handle);');
-  assert.equal(L[1867], "      const replyEl = doc.createElement('span');");
-  assert.equal(L[1868], "      replyEl.className = 'pb-reply-to';");
-  assert.equal(L[1869], '      const targetHandle = handleById.get(entry.reply_to);');
+  assert.equal(L[1846], '  if (!Array.isArray(promptBook)) return [];');
+  assert.equal(L[1847], '  const sliced = promptBook.length > 100 ? promptBook.slice(promptBook.length - 100) : promptBook;');
+  assert.equal(L[1848], '  return sliced.map((entry) => ({');
+  assert.equal(L[1849], '    id: entry?.id ?? null,');
+  assert.equal(L[1851], "    kind: entry?.kind === 'emote' || entry?.kind === 'system' ? entry.kind : 'say',");
+  assert.equal(L[1855], "    role: entry?.role === 'npc' ? 'npc' : entry?.role === 'guest' ? 'guest' : 'muse',");
+  assert.equal(L[1856], '  }));');
+  assert.equal(L[1863], '  if (!containerEl || !doc) return;');
+  assert.equal(L[1864], '  while (containerEl.firstChild) {');
+  assert.equal(L[1869], "    const empty = doc.createElement('p');");
+  assert.equal(L[1870], "    empty.className = 'pb-empty';");
+  assert.equal(L[1871], "    empty.textContent = 'No remarks yet in the last 24h.';");
+  assert.equal(L[1876], '  const handleById = new Map();');
+  assert.equal(L[1878], '    if (entry.id != null) {');
+  assert.equal(L[1879], '      handleById.set(entry.id, entry.handle);');
+  assert.equal(L[1900], "      const replyEl = doc.createElement('span');");
+  assert.equal(L[1901], "      replyEl.className = 'pb-reply-to';");
+  assert.equal(L[1902], '      const targetHandle = handleById.get(entry.reply_to);');
   assert.ok(townSrc.includes('        ? \`\\u21a9 #${entry.reply_to} @${targetHandle}\`\n        : \`\\u21a9 #${entry.reply_to}\`;'));
 });
 
@@ -1279,8 +1279,8 @@ test('staging.js applyStagingState call site and town.js ensureLiveStore init (P
 
   const townSrc = await fs.readFile(TOWN_JS_PATH, 'utf8');
   const T = townSrc.split('\n');
-  assert.equal(T[1795], 'function ensureLiveStore(town) {');
-  assert.equal(T[1801], '      promptBook: [],');
-  assert.equal(T[1802], '      nightlyCallTopic: null,');
+  assert.equal(T[1828], 'function ensureLiveStore(town) {');
+  assert.equal(T[1834], '      promptBook: [],');
+  assert.equal(T[1835], '      nightlyCallTopic: null,');
   assert.equal(T.filter((l) => l.includes('promptBook: []')).length, 1);
 });
