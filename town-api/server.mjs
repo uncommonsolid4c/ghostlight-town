@@ -41,6 +41,8 @@ const FOOTLIGHT_TTL_SEC = 45 * 60;
 const PROMPT_BOOK_RETENTION_SEC = 7 * 24 * 60 * 60;
 const INVITE_TTL_SEC = 7 * 24 * 60 * 60;
 const MAX_BODY_BYTES = 64 * 1024;
+// Extra drain allowance past MAX_BODY_BYTES so an oversized body can drain and receive 413 before socket destroy.
+const MAX_BODY_DRAIN_BYTES = 1024 * 1024;
 
 const INN_ROOMS = ['lantern', 'window', 'quiet'];
 const INN_ROOM_SET = new Set(INN_ROOMS);
@@ -244,17 +246,38 @@ function readRawBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
+    let oversized = false;
+    let settled = false;
+    const drainLimit = MAX_BODY_BYTES + MAX_BODY_DRAIN_BYTES;
     req.on('data', (chunk) => {
+      if (settled) return;
       total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
+      if (total > drainLimit) {
+        settled = true;
         reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
         req.destroy();
         return;
       }
+      if (total > MAX_BODY_BYTES) {
+        oversized = true;
+        return;
+      }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      if (oversized) {
+        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
   });
 }
 
