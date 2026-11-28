@@ -137,8 +137,8 @@ test('PLAN.md header town-3d/ fallback town.js?v= matches town-3d/index.html', (
 
 test('PLAN.md header deployed bundle ?v= and file count match staging-polyfork/index.html and test-stage-deploy.mjs', () => {
   const { statusLine } = readPlanHeader();
-  const depMatch = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed 2026-11-23, no pending deploy candidate/);
-  assert.ok(depMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deployed 2026-11-23, no pending deploy candidate');
+  const depMatch = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed 2026-11-28, no pending deploy candidate/);
+  assert.ok(depMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <count> files deployed 2026-11-28, no pending deploy candidate');
   const [, headerV, headerFiles] = depMatch;
 
   const stagingHtml = fs.readFileSync(STAGING_HTML_PATH, 'utf8');
@@ -150,7 +150,7 @@ test('PLAN.md header deployed bundle ?v= and file count match staging-polyfork/i
   assert.match(
     stageTestSrc,
     /assert\.equal\(summary\.file_count,\s*196\)/,
-    'scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === 196 (staged tree; deployed header stays 195 until the ?v=42 deploy)'
+    'scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === 196'
   );
 
   assert.equal(
@@ -348,7 +348,7 @@ test('PLAN.md header and README.md ## Status agree there is no pending deploy ca
     false,
     'README.md ## Status must not contain next repo-only deploy candidate'
   );
-  assert.ok(readmeStatus.includes('deployed 2026-11-23'), 'README.md ## Status must include deployed 2026-11-23');
+  assert.ok(readmeStatus.includes('deployed 2026-11-28'), 'README.md ## Status must include deployed 2026-11-28');
 });
 
 test('town.json live fields agree with PLAN.md header', () => {
@@ -389,13 +389,13 @@ test('PLAN.md §12.6 live-API deploy record agrees with the header', () => {
     /Phase 2 code is complete as of\s+slice 93/,
     'PLAN.md §12.6 must record Phase 2 code is complete as of slice 93'
   );
-  assert.ok(sec126.includes('`?v=41` / 195 files'), 'PLAN.md §12.6 must record `?v=41` / 195 files');
-  assert.ok(sec126.includes('deployed 2026-11-23'), 'PLAN.md §12.6 must record deployed 2026-11-23');
-  assert.ok(sec126.includes('serves `staging.js?v=41`'), 'PLAN.md §12.6 must record serves `staging.js?v=41`');
+  assert.ok(sec126.includes('`?v=42` / 196 files'), 'PLAN.md §12.6 must record `?v=42` / 196 files');
+  assert.ok(sec126.includes('deployed 2026-11-28'), 'PLAN.md §12.6 must record deployed 2026-11-28');
+  assert.ok(sec126.includes('serves `staging.js?v=42`'), 'PLAN.md §12.6 must record serves `staging.js?v=42`');
 
   const liveMatch = statusLine.match(/live Polyfork town at `staging\.js\?v=(\d+)`/);
   assert.ok(liveMatch, 'PLAN.md **Status:** must state live Polyfork town at `staging.js?v=<N>`');
-  assert.equal(liveMatch[1], '41', 'PLAN.md **Status:** live staging.js?v= must be 41');
+  assert.equal(liveMatch[1], '42', 'PLAN.md **Status:** live staging.js?v= must be 42');
 });
 
 test('README.md per-file pins are all listed in run-tests.mjs TEST_SUITES', () => {
@@ -476,7 +476,7 @@ test('No pending deploy candidate: live equals staged and README says deployed, 
     false,
     'README.md ## Status must not contain (not yet deployed)'
   );
-  assert.ok(readmeStatus.includes('deployed 2026-11-23'), 'README.md ## Status must include deployed 2026-11-23');
+  assert.ok(readmeStatus.includes('deployed 2026-11-28'), 'README.md ## Status must include deployed 2026-11-28');
 });
 
 test('PLAN.md header status-line disclaimer — live counters not pinned, no state_seq number in the header', () => {
@@ -534,19 +534,19 @@ test('README.md ## Status pins no live state_seq number', () => {
 
 test('PLAN.md bundle counts agree across header, README Status, §4 Performance budget, and test-stage-deploy.mjs', () => {
   const { planText, statusLine } = readPlanHeader();
-  const bundleMatch = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed 2026-11-23/);
-  assert.ok(bundleMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <M> files deployed 2026-11-23');
-  assert.equal(bundleMatch[2], '195', 'Header deployed bundle count must be 195');
+  const bundleMatch = statusLine.match(/`\?v=(\d+)` bundle \/ (\d+) files deployed 2026-11-28/);
+  assert.ok(bundleMatch, 'PLAN.md **Status:** must state `?v=<N>` bundle / <M> files deployed 2026-11-28');
+  assert.equal(bundleMatch[2], '196', 'Header deployed bundle count must be 196');
 
   const fallbackMatch = statusLine.match(/`town\.js\?v=(\d+)`\s*\/\s*(\d+) files/);
   assert.ok(fallbackMatch, 'PLAN.md **Status:** must state `town.js?v=<N>` / <M> files');
   assert.equal(fallbackMatch[2], '25', 'Header fallback bundle count must be 25');
 
   const readmeStatus = readReadmeStatusSection();
-  assert.ok(readmeStatus.includes(`\`?v=${bundleMatch[1]}\` / ${bundleMatch[2]}-file bundle`), 'README.md ## Status must match bundle version and 195-file count');
+  assert.ok(readmeStatus.includes(`\`?v=${bundleMatch[1]}\` / ${bundleMatch[2]}-file bundle`), 'README.md ## Status must match bundle version and 196-file count');
 
   assert.ok(planText.includes(`the ${fallbackMatch[2]}-file procedural fallback`), 'PLAN.md §4 must state the 25-file procedural fallback');
-  assert.ok(planText.includes('whose staged bundle is 196 files'), 'PLAN.md §4 must state staged bundle is 196 files (staged tree; deployed stays 195 until the ?v=42 deploy)');
+  assert.ok(planText.includes('whose staged bundle is 196 files'), 'PLAN.md §4 must state staged bundle is 196 files');
 
   const stageTestSrc = fs.readFileSync(STAGE_TEST_PATH, 'utf8');
   assert.match(stageTestSrc, /assert\.equal\(summary\.file_count,\s*196\)/, 'scripts/test-stage-deploy.mjs must pin staging-polyfork file_count === 196');
@@ -624,7 +624,7 @@ test('PLAN.md §12.6, header, and README Status agree on the Social Gate check',
   }
 });
 
-test('PLAN.md §12.6, header, README Status, and staging-polyfork/index.html agree on deployed live ?v=41', () => {
+test('PLAN.md §12.6, header, README Status, and staging-polyfork/index.html agree on deployed live ?v=42', () => {
   const { planText, statusLine } = readPlanHeader();
   const sec126 = readSection126(planText);
   const readmeStatus = readReadmeStatusSection();
@@ -633,9 +633,9 @@ test('PLAN.md §12.6, header, README Status, and staging-polyfork/index.html agr
   assert.ok(htmlV, 'staging-polyfork/index.html must reference staging.js?v=<N>');
   const v = htmlV[1];
 
-  assert.ok(statusLine.includes(`\`?v=${v}\` bundle / 195 files deployed 2026-11-23, no pending deploy candidate`), 'PLAN.md **Status:** must record deployed ?v=41 bundle with no pending deploy candidate');
-  assert.ok(sec126.includes(`serves \`staging.js?v=${v}\` (the \`?v=${v}\` / 195 files bundle deployed 2026-11-23)`), 'PLAN.md §12.6 must record deployed ?v=41 bundle');
-  assert.ok(readmeStatus.includes(`The \`?v=${v}\` / 195-file bundle deployed 2026-11-23 (no pending deploy candidate)`), 'README.md ## Status must record deployed ?v=41 bundle with no pending deploy candidate');
+  assert.ok(statusLine.includes(`\`?v=${v}\` bundle / 196 files deployed 2026-11-28, no pending deploy candidate`), 'PLAN.md **Status:** must record deployed ?v=42 bundle with no pending deploy candidate');
+  assert.ok(sec126.includes(`serves \`staging.js?v=${v}\` (the \`?v=${v}\` / 196 files bundle deployed 2026-11-28`), 'PLAN.md §12.6 must record deployed ?v=42 bundle');
+  assert.ok(readmeStatus.includes(`The \`?v=${v}\` / 196-file bundle deployed 2026-11-28 (no pending deploy candidate)`), 'README.md ## Status must record deployed ?v=42 bundle with no pending deploy candidate');
 });
 
 test('README.md ## Status per-file test tiers fall between 54 and 65 (new small suites exempt) and sum with unlisted suites to TOTAL', () => {
@@ -664,7 +664,7 @@ test('scripts/check-live.mjs and scripts/stage-deploy.mjs verify live and staged
 
   assert.ok(checkLiveSrc.includes('staging.js?v='), 'scripts/check-live.mjs must verify staging.js?v=');
   assert.ok(stageDeploySrc.includes('collectSourceFilesFromTown3d'), 'scripts/stage-deploy.mjs must export collectSourceFilesFromTown3d');
-  assert.ok(statusLine.includes('`staging.js?v=41`'), 'PLAN.md **Status:** must pin staging.js?v=41');
+  assert.ok(statusLine.includes('`staging.js?v=42`'), 'PLAN.md **Status:** must pin staging.js?v=42');
 });
 
 test('run-tests.mjs summary parser matches node --test pass/fail/skipped output format', () => {
