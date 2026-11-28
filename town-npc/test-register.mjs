@@ -1882,3 +1882,279 @@ test('wrong Ed25519 operator key fails with exact 401 JSON and the keypair was a
     await ctx.close();
   }
 });
+
+test('bare positional argument is a usage error naming the argument', async () => {
+  const res = await runRegisterCli(['wick']);
+  assert.equal(res.code, 1);
+  assert.equal(
+    res.stderr,
+    'Error: Unknown or incomplete argument: wick\nUsage: node town-npc/register.mjs --api-base <url> [--state-dir ./npc_state] --operator-key <path-to-operator-key.pem> [--npc wick|maren|tomas]\n'
+  );
+});
+
+test('--help with trailing args prints the usage line only', async () => {
+  const res = await runRegisterCli(['--help', '--npc', 'wick']);
+  assert.equal(res.code, 1);
+  assert.equal(
+    res.stderr,
+    'Usage: node town-npc/register.mjs --api-base <url> [--state-dir ./npc_state] --operator-key <path-to-operator-key.pem> [--npc wick|maren|tomas]\n'
+  );
+});
+
+test('duplicate --npc flag with invalid last value fails before probing', async () => {
+  const ctx = await startTestServer();
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+      '--npc',
+      'bogus',
+    ]);
+    assert.equal(res.code, 1);
+    assert.ok(
+      res.stderr.includes('Invalid --npc "bogus" (expected one of: wick, maren, tomas)'),
+      `unexpected stderr: ${res.stderr}`
+    );
+    assert.equal(fs.existsSync(stateDir), false);
+    assert.deepEqual(readResidents(ctx.dbPath), []);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('--npc consuming the next flag leaves the URL as a bare positional', async () => {
+  const ctx = await startTestServer();
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli([
+      '--npc',
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(
+      res.stderr,
+      `Error: Unknown or incomplete argument: ${ctx.baseUrl}\nUsage: node town-npc/register.mjs --api-base <url> [--state-dir ./npc_state] --operator-key <path-to-operator-key.pem> [--npc wick|maren|tomas]\n`
+    );
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("empty TOWN_API_BASE env is treated as missing --api-base", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-emptyenv-'));
+  const operatorKeys = generateKeypair();
+  const operatorKeyPath = path.join(tmpDir, 'operator.pem');
+  fs.writeFileSync(operatorKeyPath, operatorKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(tmpDir, 'npc_state');
+  try {
+    const res = await runRegisterCli(
+      ['--state-dir', stateDir, '--operator-key', operatorKeyPath],
+      os.tmpdir(),
+      { TOWN_API_BASE: '' }
+    );
+    assert.equal(res.code, 1);
+    assert.equal(
+      res.stderr,
+      'Error: Missing --api-base (or TOWN_API_BASE)\nUsage: node town-npc/register.mjs --api-base <url> [--state-dir ./npc_state] --operator-key <path-to-operator-key.pem> [--npc wick|maren|tomas]\n'
+    );
+    assert.equal(fs.existsSync(stateDir), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('--operator-key flag overrides a wrong TOWN_OPERATOR_KEY env value', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  const wrongKeys = generateKeypair();
+  const wrongKeyPath = path.join(ctx.tmpDir, 'wrong-operator.pem');
+  fs.writeFileSync(wrongKeyPath, wrongKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  try {
+    const res = await runRegisterCli(
+      ['--state-dir', stateDir, '--operator-key', ctx.operatorKeyPath, '--npc', 'wick'],
+      os.tmpdir(),
+      { TOWN_API_BASE: ctx.baseUrl, TOWN_OPERATOR_KEY: wrongKeyPath }
+    );
+    assert.equal(res.code, 0, res.stderr);
+
+    const row = JSON.parse(res.stdout.trim());
+    assert.equal(row.handle, 'wick');
+    assert.equal(row.joined, 'created');
+    assert.equal(row.approved, 'created');
+    assert.equal(row.plot, 'ok');
+
+    const residents = readResidents(ctx.dbPath);
+    assert.equal(residents.length, 1);
+    assert.equal(residents[0].handle, 'wick');
+    assert.equal(residents[0].role, 'npc');
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('single-NPC re-run advances state_seq by exactly 2', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const readSeq = async () =>
+      (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+    const cliArgs = [
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ];
+    assert.equal(await readSeq(), 0);
+
+    const first = await runRegisterCli(cliArgs);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(await readSeq(), 3, 'join + approve + plot is exactly 3 state_seq bumps');
+
+    const second = await runRegisterCli(cliArgs);
+    assert.equal(second.code, 0, second.stderr);
+    const row = JSON.parse(second.stdout.trim());
+    assert.equal(row.joined, 'existing');
+    assert.equal(row.approved, 'existing');
+    assert.equal(row.plot, 'ok');
+    // Re-approving an already-approved NPC still bumps state_seq (approve + plot).
+    assert.equal(await readSeq(), 5);
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('wrong operator key leaves state_seq at 0 and writes no key_history', async () => {
+  const ctx = await startTestServer();
+  const wrongKeys = generateKeypair();
+  const wrongKeyPath = path.join(ctx.tmpDir, 'wrong-operator.pem');
+  fs.writeFileSync(wrongKeyPath, wrongKeys.privateKeyPem, { encoding: 'utf8', mode: 0o600 });
+  const stateDir = path.join(ctx.tmpDir, 'npc_state');
+  try {
+    const readSeq = async () =>
+      (await (await fetch(`${ctx.baseUrl}/api/town/state`)).json()).state_seq;
+    assert.equal(await readSeq(), 0);
+
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      wrongKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(await readSeq(), 0);
+
+    const db = new DatabaseSync(ctx.dbPath, { readOnly: true });
+    let historyCount;
+    try {
+      historyCount = db.prepare('SELECT COUNT(*) AS n FROM key_history').get().n;
+    } finally {
+      db.close();
+    }
+    assert.equal(historyCount, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('--state-dir pointing at an existing file fails with JSON error', async () => {
+  const ctx = await startTestServer();
+  const stateFile = path.join(ctx.tmpDir, 'not-a-dir');
+  fs.writeFileSync(stateFile, 'x', { encoding: 'utf8' });
+  try {
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateFile,
+      '--operator-key',
+      ctx.operatorKeyPath,
+      '--npc',
+      'wick',
+    ]);
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout.trim(), '');
+
+    const errObj = JSON.parse(res.stderr.trim());
+    assert.equal(errObj.ok, false);
+    assert.ok(
+      typeof errObj.error === 'string' && errObj.error.includes('ENOTDIR'),
+      `expected ENOTDIR error, got: ${errObj.error}`
+    );
+    assert.equal(res.stderr.includes('BEGIN'), false);
+    assert.equal(res.stderr.includes('PRIVATE'), false);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('created_at and plot_updated_at are unix seconds near now after a full run', async () => {
+  const ctx = await startTestServer();
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostlight-register-state-'));
+  try {
+    const before = Math.floor(Date.now() / 1000);
+    const res = await runRegisterCli([
+      '--api-base',
+      ctx.baseUrl,
+      '--state-dir',
+      stateDir,
+      '--operator-key',
+      ctx.operatorKeyPath,
+    ]);
+    const after = Math.floor(Date.now() / 1000);
+    assert.equal(res.code, 0, res.stderr);
+
+    const db = new DatabaseSync(ctx.dbPath, { readOnly: true });
+    let residents;
+    let history;
+    try {
+      residents = db
+        .prepare('SELECT handle, created_at, plot_updated_at FROM residents ORDER BY handle')
+        .all()
+        .map((r) => ({ handle: r.handle, created_at: r.created_at, plot_updated_at: r.plot_updated_at }));
+      history = db
+        .prepare('SELECT handle, created_at FROM key_history ORDER BY handle')
+        .all()
+        .map((r) => ({ handle: r.handle, created_at: r.created_at }));
+    } finally {
+      db.close();
+    }
+
+    assert.equal(residents.length, 3);
+    for (const r of residents) {
+      assert.ok(Number.isInteger(r.created_at) && r.created_at >= before && r.created_at <= after, `${r.handle} created_at ${r.created_at} outside [${before}, ${after}]`);
+      assert.ok(Number.isInteger(r.plot_updated_at) && r.plot_updated_at >= before && r.plot_updated_at <= after, `${r.handle} plot_updated_at ${r.plot_updated_at} outside [${before}, ${after}]`);
+      assert.ok(r.plot_updated_at >= r.created_at, `${r.handle} plot_updated_at < created_at`);
+    }
+
+    assert.equal(history.length, 3);
+    for (const h of history) {
+      assert.ok(Number.isInteger(h.created_at) && h.created_at >= before && h.created_at <= after, `${h.handle} history created_at ${h.created_at} outside [${before}, ${after}]`);
+    }
+  } finally {
+    await ctx.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
