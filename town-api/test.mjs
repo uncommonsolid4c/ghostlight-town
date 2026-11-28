@@ -829,3 +829,84 @@ test('startup migration activates pre-existing pending residents without approve
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('request body at exact 64 KB cap (65536 B) passes cap and reaches handler', async () => {
+  const ctx = await startTestServer();
+  try {
+    const res = await fetch(`${ctx.baseUrl}/api/town/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(65536),
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.deepEqual(data, { error: 'invalid_json' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('oversized request bodies (65537 B and 200 KB) return observable 413 body_too_large JSON', async () => {
+  const ctx = await startTestServer();
+  try {
+    for (const size of [65537, 200 * 1024]) {
+      const res = await fetch(`${ctx.baseUrl}/api/town/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'x'.repeat(size),
+      });
+      assert.equal(res.status, 413, `expected 413 for ${size} bytes`);
+      const contentType = res.headers.get('content-type') || '';
+      assert.match(contentType, /application\/json/i);
+      const data = await res.json();
+      assert.deepEqual(data, { error: 'body_too_large' });
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('request body past drain allowance (2 MB) triggers transport failure instead of 413', async () => {
+  const ctx = await startTestServer();
+  try {
+    await assert.rejects(
+      () =>
+        fetch(`${ctx.baseUrl}/api/town/join`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: 'x'.repeat(2 * 1024 * 1024),
+        }),
+      (err) => err instanceof Error
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('413 body_too_large leaves state_seq unchanged and creates no resident, prompt_book line, or plot', async () => {
+  const ctx = await startTestServer();
+  try {
+    const beforeRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(beforeRes.status, 200);
+    const beforeState = await beforeRes.json();
+
+    const oversizedRes = await fetch(`${ctx.baseUrl}/api/town/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(70 * 1024),
+    });
+    assert.equal(oversizedRes.status, 413);
+
+    const afterRes = await fetch(`${ctx.baseUrl}/api/town/state`);
+    assert.equal(afterRes.status, 200);
+    const afterState = await afterRes.json();
+
+    assert.equal(afterState.state_seq, beforeState.state_seq);
+    assert.equal(afterState.prompt_book.length, 0);
+    assert.deepEqual(afterState.plots, {});
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) AS n FROM residents').get().n, 0);
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) AS n FROM prompt_book').get().n, 0);
+  } finally {
+    await ctx.close();
+  }
+});
