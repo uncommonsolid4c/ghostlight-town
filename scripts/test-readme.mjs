@@ -422,14 +422,14 @@ test('scripts/README.md MANIFEST.json shape matches a real staging-polyfork dry 
     const summary = JSON.parse(stageOut.trim());
     assert.equal(summary.ok, true);
     assert.equal(summary.file_count, 196);
-    assert.equal(String(summary.staging_js_v), '41');
+    assert.equal(String(summary.staging_js_v), '42');
     assert.equal(summary.town_js_v, null);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'ghostlight-town', 'MANIFEST.json'), 'utf8')
     );
     assert.equal(manifest.file_count, 196);
-    assert.equal(String(manifest.staging_js_v), '41');
+    assert.equal(String(manifest.staging_js_v), '42');
     assert.equal(manifest.files.length, 196);
 
     let sumBytes = 0;
@@ -505,7 +505,7 @@ test('scripts/README.md --verify rejection claims hold against a real tampered s
     const driftRes = runVerify();
     assert.equal(driftRes.exitCode, 1);
     assert.equal(driftRes.json.status, 'fail');
-    assert.equal(driftRes.json.staged_staging_js_v, '41');
+    assert.equal(driftRes.json.staged_staging_js_v, '42');
     assert.equal(driftRes.json.staging_js_v, '39');
     fs.writeFileSync(manifestPath, origManifestRaw);
 
@@ -1121,7 +1121,7 @@ test('scripts/README.md stage-deploy summary and MANIFEST exact key sets match b
   assert.equal(staging.summary.ok, true);
   assert.equal(staging.summary.bundle, 'staging-polyfork');
   assert.equal(staging.summary.town_js_v, null);
-  assert.equal(staging.summary.staging_js_v, '41');
+  assert.equal(staging.summary.staging_js_v, '42');
   assert.equal(staging.summary.file_count, 196);
 
   assert.deepEqual(Object.keys(staging.manifest), [
@@ -1438,7 +1438,7 @@ test('scripts/README.md staging facts sentence and test-suites line stay verbati
   const norm = readme.replace(/\s+/g, ' ');
   assert.ok(
     norm.includes(
-      'staging bundle `staging-polyfork` stages **196 files** with `staging_js_v` **41** (verified with `--bundle staging-polyfork` and `--verify`).'
+      'staging bundle `staging-polyfork` stages **196 files** with `staging_js_v` **42** (verified with `--bundle staging-polyfork` and `--verify`).'
     )
   );
   assert.ok(
@@ -1683,7 +1683,7 @@ test('Slice 510: stage-deploy --verify success JSON exact keys and values for st
     assert.deepEqual(result.missing, []);
     assert.deepEqual(result.extra, []);
     assert.equal(result.town_js_v, null);
-    assert.equal(result.staging_js_v, '41');
+    assert.equal(result.staging_js_v, '42');
     assert.equal('staged_town_js_v' in result, false, 'clean verify must not carry staged_town_js_v');
     assert.equal('staged_staging_js_v' in result, false, 'clean verify must not carry staged_staging_js_v');
   } finally {
