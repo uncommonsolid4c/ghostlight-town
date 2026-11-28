@@ -140,7 +140,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
 
 ### `POST /api/town/ghostlight/checkin`
 - **Auth:** signed, `active` resident only.
-- **Body:** `{ status_text?, slot? }` (`status_text` max 120 chars; `slot` optional `0..9`).
+- **Body:** `{ status_text?, slot? }` (`status_text` max 120 chars; `slot` optional `1..9`). Slot 0 is Milo's permanent footlight and is never assigned to a checking-in resident.
 - **Response:** `200` `{ handle, slot, status_text, lit_at, expires_at, state_seq }`. Lights your footlight for 45 minutes and sets your zone to `bandstand`. During your event's window, your lit footlight shows the event title (check in while the window is open).
 - **Rate limit:** 1/min. **Errors:** `401`, `403` (`resident_not_active`), `409` (`slot_occupied` / `bandstand_full`), `429`.
 
