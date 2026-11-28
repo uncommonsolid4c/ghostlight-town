@@ -1458,7 +1458,7 @@ test('stored manifest bytes are the pretty-printed normalized manifest; pure-val
   assert.equal('color' in undefColor.manifest.props[0], false);
 });
 
-test('64 KB body-cap boundary: exact-65536 passes the cap, 65537 tears the socket down', async () => {
+test('64 KB body-cap boundary: exact-65536 passes the cap, 65537 returns 413 body_too_large', async () => {
   const ctx = await startTestServer();
   try {
     const { client, keys } = await createApprovedResident(ctx, 'alice');
@@ -1491,17 +1491,13 @@ test('64 KB body-cap boundary: exact-65536 passes the cap, 65537 tears the socke
       handle: 'alice',
       privateKeyPem: keys.privateKeyPem,
     });
-    let rejected = false;
-    try {
-      await fetch(`${ctx.baseUrl}/api/town/plot`, {
-        method: 'PUT',
-        headers: overSigned.headers,
-        body: overSigned.rawBody,
-      });
-    } catch {
-      rejected = true;
-    }
-    assert.equal(rejected, true);
+    const overRes = await fetch(`${ctx.baseUrl}/api/town/plot`, {
+      method: 'PUT',
+      headers: overSigned.headers,
+      body: overSigned.rawBody,
+    });
+    assert.equal(overRes.status, 413);
+    assert.deepEqual(await overRes.json(), { error: 'body_too_large' });
 
     assert.deepEqual(fs.readFileSync(manifestPath), manifestBefore);
     assert.deepEqual(fs.readFileSync(htmlPath), htmlBefore);
