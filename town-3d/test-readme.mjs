@@ -51,12 +51,12 @@ test('town-3d/README.md states pine.glb is local-only and never committed or shi
   assert.match(readme, /procedural trees stay/i);
 });
 
-test('town-3d/README.md states the 152 (< 155) mesh budget, 9 VALID_PROP_KINDS, and omits banned terms', () => {
+test('town-3d/README.md states the 152 (< 155) mesh budget, 10 VALID_PROP_KINDS, and omits banned terms', () => {
   const readme = readReadme();
   assert.match(readme, /\b152\b/);
   assert.match(readme, /<\s*155\b/);
   assert.match(readme, /VALID_PROP_KINDS/);
-  assert.match(readme, /\b9\b/);
+  assert.match(readme, /\b10\b/);
   assert.doesNotMatch(readme, BANNED_TERM_RE);
 });
 
@@ -733,8 +733,8 @@ test('town-3d/README.md Starter props order matches VALID_PROP_KINDS in town.js'
   const block = townJs.match(/const VALID_PROP_KINDS = new Set\(\[([\s\S]*?)\]\);/);
   assert.ok(block, 'town.js must define VALID_PROP_KINDS');
   const kinds = [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
-  assert.deepEqual(kinds, ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter']);
-  const m = readmeNorm.match(/Starter props:.*?`desk`, `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`, `lantern`, `planter`/);
+  assert.deepEqual(kinds, ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter', 'boot_planter']);
+  const m = readmeNorm.match(/Starter props:.*?`desk`, `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`, `lantern`, `planter`, `boot_planter`/);
   assert.ok(m, 'README Starter props bullet must list VALID_PROP_KINDS in exact order');
   for (const k of kinds) {
     const n = (readme.match(new RegExp('`' + k + '`', 'g')) ?? []).length;
