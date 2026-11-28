@@ -681,8 +681,9 @@ test('staging-polyfork/README.md header live-state poller discipline matches sta
     /if\s*\(res\.status\s*===\s*304\)\s*\{[\s\S]*?this\.currentIntervalMs\s*=\s*this\.baseIntervalMs;/,
     'StagingLive.pollOnce must reset interval on 304'
   );
-  assert.ok(
-    stagingJs.includes('Number.isInteger(row.slot) && row.slot >= 1 && row.slot < footlights.length'),
+  assert.match(
+    stagingJs,
+    /Number\.isInteger\(row\.slot\) &&\s*row\.slot >= 1 &&\s*row\.slot < footlights\.length/,
     'applyStagingState must only light slots >= 1'
   );
   assert.ok(
