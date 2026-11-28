@@ -285,7 +285,7 @@ test('Build Gate (local form): single resident full journey', async () => {
     assert.equal(s0.status, 200);
     const seq0 = s0.data.state_seq;
 
-    // 2. Checkin -> lit footlight in slot 0..9 + real non-(0,0,0) bandstand spot
+    // 2. Checkin -> lit footlight in slot 1..9 + real non-(0,0,0) bandstand spot
     const checkinRes = await client.checkin({ status_text: 'Checking the bandstand lantern.' });
     assert.equal(checkinRes.status, 200);
 
@@ -418,7 +418,7 @@ test('join creates active resident and admin/approve succeeds with state_seq bum
   }
 });
 
-test('checkin lights a footlight in slot 0..9 and places avatar at non-origin bandstand spot', async () => {
+test('checkin lights a footlight in slot 1..9 and places avatar at non-origin bandstand spot', async () => {
   const ctx = await startTestServer();
   try {
     const client = await createApprovedClient(ctx);
@@ -647,21 +647,21 @@ test('two residents check in to distinct slots with status_text in footlights', 
 
     const alphaCheckin = await alpha.checkin({ status_text: 'Alpha here.' });
     assert.equal(alphaCheckin.status, 200);
-    assert.equal(alphaCheckin.data.slot, 0);
+    assert.equal(alphaCheckin.data.slot, 1);
 
     const betaCheckin = await beta.checkin({ status_text: 'Beta here.' });
     assert.equal(betaCheckin.status, 200);
-    assert.equal(betaCheckin.data.slot, 1);
+    assert.equal(betaCheckin.data.slot, 2);
 
     const s = await alpha.state();
     assert.equal(s.status, 200);
     const flAlpha = s.data.footlights.find((f) => f.handle === 'alpha');
     const flBeta = s.data.footlights.find((f) => f.handle === 'beta');
     assert.ok(flAlpha);
-    assert.equal(flAlpha.slot, 0);
+    assert.equal(flAlpha.slot, 1);
     assert.equal(flAlpha.status_text, 'Alpha here.');
     assert.ok(flBeta);
-    assert.equal(flBeta.slot, 1);
+    assert.equal(flBeta.slot, 2);
     assert.equal(flBeta.status_text, 'Beta here.');
   } finally {
     await ctx.close();
@@ -960,7 +960,7 @@ test('checkin status_text too-long is rejected before rate limiter and omitted d
 
     const okRes = await client.checkin();
     assert.equal(okRes.status, 200);
-    assert.equal(okRes.data.slot, 0);
+    assert.equal(okRes.data.slot, 1);
     assert.equal(okRes.data.status_text, '');
 
     const s = await client.state();
@@ -1025,7 +1025,7 @@ async function signedCheckinAtServerTime(ctx, handle, privateKeyPem, statusText 
   return { status: res.status, data: await res.json().catch(() => null) };
 }
 
-test('bandstand full: ten residents fill slots 0..9 and the eleventh checkin is rejected 409 bandstand_full', async () => {
+test('bandstand full: nine residents fill slots 1..9 and the tenth checkin is rejected 409 bandstand_full', async () => {
   const ctx = await startTestServer();
   try {
     const now = Math.floor(Date.now() / 1000);
@@ -1033,35 +1033,35 @@ test('bandstand full: ten residents fill slots 0..9 and the eleventh checkin is 
       "INSERT INTO residents (handle, pubkey, origin, status, role, bio, plot_updated_at, created_at) VALUES (?, ?, 'musebook', 'active', 'muse', '', NULL, ?)"
     );
     const clients = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 1; i <= 9; i++) {
       const handle = `seat${i}`;
       const keys = generateKeypair();
       insertResident.run(handle, keys.pubkey, now);
       clients.push(new GhostlightClient({ baseUrl: ctx.baseUrl, handle, ...keys }));
     }
 
-    for (let i = 0; i < 10; i++) {
-      const res = await clients[i].checkin({ status_text: `Seat ${i}` });
+    for (let i = 0; i < 9; i++) {
+      const res = await clients[i].checkin({ status_text: `Seat ${i + 1}` });
       assert.equal(res.status, 200);
-      assert.equal(res.data.slot, i);
+      assert.equal(res.data.slot, i + 1);
     }
 
     const s1 = await clients[0].state();
     assert.equal(s1.status, 200);
     assert.deepEqual(
       s1.data.footlights.map((f) => f.slot),
-      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9]
     );
 
-    const eleventh = await createApprovedClient(ctx, 'eleventh');
-    const fullRes = await eleventh.checkin({ status_text: 'Late arrival' });
+    const tenth = await createApprovedClient(ctx, 'tenth');
+    const fullRes = await tenth.checkin({ status_text: 'Late arrival' });
     assert.equal(fullRes.status, 409);
     assert.equal(fullRes.data.error, 'bandstand_full');
 
-    const s2 = await eleventh.state();
+    const s2 = await tenth.state();
     assert.equal(s2.status, 200);
-    assert.equal(s2.data.footlights.length, 10);
-    assert.equal(s2.data.footlights.some((f) => f.handle === 'eleventh'), false);
+    assert.equal(s2.data.footlights.length, 9);
+    assert.equal(s2.data.footlights.some((f) => f.handle === 'tenth'), false);
   } finally {
     await ctx.close();
   }
@@ -1150,7 +1150,7 @@ test('footlight expires after the 45-minute TTL and the slot frees for re-checki
 
     const c1 = await client.checkin({ status_text: 'First watch' });
     assert.equal(c1.status, 200);
-    assert.equal(c1.data.slot, 0);
+    assert.equal(c1.data.slot, 1);
 
     const s1 = await client.state();
     assert.equal(s1.status, 200);
@@ -1166,7 +1166,7 @@ test('footlight expires after the 45-minute TTL and the slot frees for re-checki
 
     const c2 = await signedCheckinAtServerTime(ctx, 'gatekeeper', keys.privateKeyPem, 'Back again');
     assert.equal(c2.status, 200);
-    assert.equal(c2.data.slot, 0);
+    assert.equal(c2.data.slot, 1);
     assert.equal(c2.data.expires_at, ctx.nowSec() + 45 * 60);
   } finally {
     await ctx.close();
@@ -2045,14 +2045,14 @@ test('admin approve with the wrong operator key is rejected (G22)', async () => 
   }
 });
 
-test('leave does not reset checkin rate limiter and re-checkin after 61s re-lights slot 0 (G23)', async () => {
+test('leave does not reset checkin rate limiter and re-checkin after 61s re-lights slot 1 (G23)', async () => {
   const ctx = await startClockTestServer();
   try {
     const client = await createApprovedClient(ctx, 'gatekeeper');
 
     const c1 = await client.checkin({ status_text: 'first watch' });
     assert.equal(c1.status, 200);
-    assert.equal(c1.data.slot, 0);
+    assert.equal(c1.data.slot, 1);
     const t0 = c1.data.lit_at;
 
     const lv = await client.leave();
@@ -2074,7 +2074,7 @@ test('leave does not reset checkin rate limiter and re-checkin after 61s re-ligh
     const c2 = await signedCheckinAtServerTime(ctx, 'gatekeeper', client.privateKeyPem, 'back again');
     const tAfter = ctx.nowSec();
     assert.equal(c2.status, 200);
-    assert.equal(c2.data.slot, 0);
+    assert.equal(c2.data.slot, 1);
     assert.ok(c2.data.lit_at >= tBefore && c2.data.lit_at <= tAfter);
     assert.equal(c2.data.expires_at, c2.data.lit_at + 2700);
     assert.ok(c2.data.lit_at > t0);
