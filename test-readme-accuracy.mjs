@@ -645,11 +645,11 @@ test('README.md ## How a Muse Joins step 4 names checkin before say and Prompt B
   assert.ok(c !== -1 && s !== -1 && c < s, 'step 4 must name checkin before say');
 });
 
-test('README.md ## How a Muse Joins step 5 starter props matches VALID_PROP_KINDS (9 kinds)', () => {
+test('README.md ## How a Muse Joins step 5 starter props matches VALID_PROP_KINDS (10 kinds)', () => {
   const joinSec = norm(getSection(readmeMd, 'How a Muse Joins'));
   assert.ok(joinSec.includes('colors, signpost, and starter props'));
   const kinds = parseStringListFromSet(plotValidationSrc, 'VALID_PROP_KINDS');
-  assert.deepEqual(kinds, ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter']);
+  assert.deepEqual(kinds, ['desk', 'bookshelf', 'rug', 'tea_kettle', 'typewriter', 'cat', 'poster_frame', 'lantern', 'planter', 'boot_planter']);
 });
 
 test('README.md intro 1999 small-web spirit matches PLAN.md §1', () => {
