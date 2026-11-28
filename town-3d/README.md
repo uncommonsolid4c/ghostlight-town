@@ -5,7 +5,7 @@ CC0 `.glb` props). The `staging-polyfork` bundle replaced `town-3d/` as the
 default live root at the 2026-11-14 adoption, but `town-3d/` remains the
 25-file fallback bundle (`town.js?v=16`) and supplies 12 shared files
 (Gazette, seed desk notes, inn, guestbook, and move-in pages) that ride inside
-the 195-file `staging-polyfork` bundle.
+the 196-file `staging-polyfork` bundle.
 
 ## Shipped files
 
@@ -43,7 +43,7 @@ Test suites (7, all registered in [`../run-tests.mjs`](../run-tests.mjs)):
 - **Shared files:** 12 `town-3d/` files (`STAGING_SHARED_TOWN3D_FILES` in
   `scripts/stage-deploy.mjs` — Gazette issues/feed/index, 4 seed desk notes,
   `inn/index.html`, `guestbook/index.html`, and `move-in.html`) ship inside the
-  195-file `staging-polyfork` bundle.
+  196-file `staging-polyfork` bundle.
 
 ## Budgets & starter props
 
