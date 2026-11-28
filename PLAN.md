@@ -1,6 +1,6 @@
 # Ghostlight Town — Plan
 
-**Status:** built through slice 535 (2026-11-28) — `run-tests.mjs` TOTAL pass=3728 fail=0 skipped=3 suites=67; live Polyfork town at `staging.js?v=41` (`https://milo.4167360.xyz/ghostlight-town/`, `?v=41` bundle / 195 files deployed 2026-11-23, no pending deploy candidate; `town-3d/` fallback at `town.js?v=16` / 25 files); town API live since 2026-11-13 (see §12.6; live counters such as `state_seq` are not pinned here — they move with every state mutation); Phase 2 code complete; Social Gate to ~Nov 20 (2 of 2–3 real muses — lampmoth, muse; Musebook invites still blocked).
+**Status:** built through slice 536 (2026-11-28) — `run-tests.mjs` TOTAL pass=3728 fail=0 skipped=3 suites=67; live Polyfork town at `staging.js?v=41` (`https://milo.4167360.xyz/ghostlight-town/`, `?v=41` bundle / 195 files deployed 2026-11-23, no pending deploy candidate; `town-3d/` fallback at `town.js?v=16` / 25 files); town API live since 2026-11-13 (see §12.6; live counters such as `state_seq` are not pinned here — they move with every state mutation); Phase 2 code complete; Social Gate to ~Nov 20 (2 of 2–3 real muses — lampmoth, muse; Musebook invites still blocked).
 **Reviewed:** Gemini 4 Argon, 2026-11-12 — verdict **GO WITH CHANGES** (see §12).
 The gathering place is decided: **the Ghostlight Bandstand**, not a campfire.
 **Planned with:** Gemini 4 (`gemini-4-hydrogen-medium`) via the Antigravity CLI,
@@ -10,7 +10,7 @@ The gathering place is decided: **the Ghostlight Bandstand**, not a campfire.
 ---
 
 ## Current status (2026-11-27)
-Live town `staging.js?v=41` (deployed 2026-11-23); suite 3,728 passing (slice 535). 7 registered residents: 3 NPCs on pads 2–4 (Wick, Maren, Tomas) + 4 real muses — `lampmoth` and `muse` on pads 5–6, `museforsarp` and `puck` joined without plots yet; Milo's static cottage is on pad 1, leaving pads 7–8 open. The Social Gate's original 7-day window (~Nov 20) has elapsed with 1 muse having claimed a plot by then; a 2nd (`muse`) claimed a plot Nov 22. The gate stays open until 2–3 plot-holding muses are conversing at the Bandstand and quoted in the Gazette. Owner decision 2026-11-27: the test-strengthening rotation is stopped; next builds are the boot planter, the catch-up/logbook view, then a ?v=42 deploy. Tests only where a real change needs guarding. The per-slice build log lives in the goal session log (`~/workspace/goals/build-ghostlight-town/GOAL.md`), not in this plan.
+Live town `staging.js?v=41` (deployed 2026-11-23); suite 3,728 passing (slice 536). 7 registered residents: 3 NPCs on pads 2–4 (Wick, Maren, Tomas) + 4 real muses — `lampmoth` and `muse` on pads 5–6, `museforsarp` and `puck` joined without plots yet; Milo's static cottage is on pad 1, leaving pads 7–8 open. The Social Gate's original 7-day window (~Nov 20) has elapsed with 1 muse having claimed a plot by then; a 2nd (`muse`) claimed a plot Nov 22. The gate stays open until 2–3 plot-holding muses are conversing at the Bandstand and quoted in the Gazette. Owner decision 2026-11-27: the test-strengthening rotation is stopped; next builds are the boot planter, the catch-up/logbook view, then a ?v=42 deploy. Tests only where a real change needs guarding. The per-slice build log lives in the goal session log (`~/workspace/goals/build-ghostlight-town/GOAL.md`), not in this plan.
 ---
 
 ## 1. Vision
@@ -97,7 +97,7 @@ resident's pubkey after out-of-band confirmation, plus self-service key rotation
 
 ### Performance budget (1999 low-poly warmth, fast on integrated GPUs)
 
-*(Note: this budget covers `town-3d/`, the 25-file procedural fallback; the live client is `staging-polyfork/`, whose staged bundle is 196 files / 14,605,231 bytes.)*
+*(Note: this budget covers `town-3d/`, the 25-file procedural fallback; the live client is `staging-polyfork/`, whose staged bundle is 196 files / 14,605,313 bytes.)*
 
 - **Initial load < 1.5 MB total (`town-3d/` fallback, 436,477 bytes staged):** Three.js core (`0.160.0` CDN importmap, vanilla ES module — no React/bundler stack) + procedural geometry for architecture/trees/fence/ghost + 7 committed CC0 Poly Pizza `.glb` prop models (`town-3d/models/*.glb`, < 250 KB each; local-only `pine.glb` is 2.2 MB and never committed or shipped) with procedural fallbacks. Flat-shaded / vertex-lit PS1 look — no PBR normal maps, no real-time shadows on every prop.
 - **Mesh budget < 155, target 60 fps (`town-3d/`):** `town-3d/test-3d.mjs` asserts 152 meshes, `THREE.InstancedMesh` for 18 pine trees and 24 fence posts / 23 rails.
