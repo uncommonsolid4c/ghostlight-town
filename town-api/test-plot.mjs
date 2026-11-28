@@ -483,6 +483,7 @@ test('validateManifest defaults, shape errors, and VALID_PROP_KINDS catalog', ()
     'poster_frame',
     'lantern',
     'planter',
+    'boot_planter',
   ]);
 });
 
@@ -1308,8 +1309,8 @@ test('PUT auth: pending resident 403, unknown handle 401 unknown_resident', asyn
   }
 });
 
-test('validateManifest accepts every starter-catalog kind', () => {
-  assert.equal(VALID_PROP_KINDS.size, 9);
+test('validateManifest accepts every prop kind in the catalog', () => {
+  assert.equal(VALID_PROP_KINDS.size, 10);
   for (const kind of VALID_PROP_KINDS) {
     const res = validateManifest({
       ...VALID_MANIFEST,
@@ -1775,8 +1776,8 @@ test('decodeHtmlEntities further + data-URI spaces + test-plot self hygiene', ()
 
   const src = fs.readFileSync(new URL(import.meta.url), 'utf8');
   const names = [...src.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(names.length, 64);
-  assert.equal(new Set(names).size, 64);
+  assert.equal(names.length, 65);
+  assert.equal(new Set(names).size, 65);
   assert.equal(src.includes('Math' + '.' + 'random'), false);
   assert.equal(src.includes('Date' + '.' + 'now'), false);
   assert.equal(src.includes('TO' + 'DO'), false);
@@ -2443,6 +2444,71 @@ test('GET plot 404 for an approved resident with no plot; PUT then GET round-tri
     const fredAfter = await fred.getPlot('fred');
     assert.equal(fredAfter.status, 404);
     assert.deepEqual(fredAfter.data, { error: 'plot_not_found' });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('boot_planter requires caught old_boot per prop, ignores other residents, and rejected PUT does not consume rate-limit budget', async () => {
+  const ctx = await startTestServer();
+  try {
+    const { client: alice } = await createApprovedResident(ctx, 'alice');
+    const { client: bob } = await createApprovedResident(ctx, 'bob');
+
+    const oneBootManifest = {
+      ...VALID_MANIFEST,
+      props: [{ kind: 'boot_planter', x: 1.1, y: 0, z: 0.9, rot_y: 0, color: '#8a6240' }],
+    };
+    const twoBootManifest = {
+      ...VALID_MANIFEST,
+      props: [
+        { kind: 'boot_planter', x: 1.1, y: 0, z: 0.9, rot_y: 0, color: '#8a6240' },
+        { kind: 'boot_planter', x: -1.1, y: 0, z: 0.9, rot_y: 90 },
+      ],
+    };
+
+    const seqBefore = Number(ctx.db.prepare("SELECT value FROM meta WHERE key = 'state_seq'").get().value);
+
+    // (a) No boot in log -> 400 boot_planter_requires_boot, no files written, state_seq unchanged
+    const r0 = await alice.plot(oneBootManifest, VALID_HTML);
+    assert.equal(r0.status, 400);
+    assert.deepEqual(r0.data, { error: 'boot_planter_requires_boot', have: 0, need: 1 });
+    assert.equal(fs.existsSync(path.join(ctx.plotsDir, 'alice', 'manifest.json')), false);
+    assert.equal(Number(ctx.db.prepare("SELECT value FROM meta WHERE key = 'state_seq'").get().value), seqBefore);
+
+    // (f) Rejected PUTs do not consume rate-limit budget (repeat rejections beyond plot limit, then valid PUT -> 200)
+    for (let i = 0; i < 12; i++) {
+      const rej = await alice.plot(oneBootManifest, VALID_HTML);
+      assert.equal(rej.status, 400);
+    }
+
+    // (b) Seed 1 old_boot -> PUT with 1 boot_planter -> 200, manifest stored
+    const insertCatch = ctx.db.prepare(
+      'INSERT INTO fish_catches (handle, kind, label, flavor, created_at) VALUES (?, ?, ?, ?, ?)'
+    );
+    insertCatch.run('alice', 'old_boot', 'An old boot', 'Waterlogged.', 1000);
+
+    const r1 = await alice.plot(oneBootManifest, VALID_HTML);
+    assert.equal(r1.status, 200);
+    const stored1 = JSON.parse(fs.readFileSync(path.join(ctx.plotsDir, 'alice', 'manifest.json'), 'utf8'));
+    assert.equal(stored1.props[0].kind, 'boot_planter');
+
+    // (c) 2 boot_planter props with 1 boot -> 400 have: 1, need: 2
+    const r2 = await alice.plot(twoBootManifest, VALID_HTML);
+    assert.equal(r2.status, 400);
+    assert.deepEqual(r2.data, { error: 'boot_planter_requires_boot', have: 1, need: 2 });
+
+    // (d) Seed a 2nd old_boot -> PUT with 2 boot_planter props -> 200
+    insertCatch.run('alice', 'old_boot', 'An old boot', 'Another one.', 1001);
+    const r3 = await alice.plot(twoBootManifest, VALID_HTML);
+    assert.equal(r3.status, 200);
+    const stored2 = JSON.parse(fs.readFileSync(path.join(ctx.plotsDir, 'alice', 'manifest.json'), 'utf8'));
+    assert.equal(stored2.props.length, 2);
+
+    // (e) Another resident's boot does not count
+    const bobRes = await bob.plot(oneBootManifest, VALID_HTML);
+    assert.equal(bobRes.status, 400);
+    assert.deepEqual(bobRes.data, { error: 'boot_planter_requires_boot', have: 0, need: 1 });
   } finally {
     await ctx.close();
   }
