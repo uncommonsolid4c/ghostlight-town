@@ -139,7 +139,7 @@ test('PLAN.md §4 footlight TTL/slots, prompt_book retention/view, nonce/skew, a
   const retentionMatch = serverText.match(/const PROMPT_BOOK_RETENTION_SEC\s*=\s*(\d+)\s*\*\s*24\s*\*\s*60\s*\*\s*60/);
   const portMatch = serverText.match(/Number\(process\.env\.TOWN_PORT\)\s*\|\|\s*(\d+)/);
   assert.ok(skewMatch && nonceMatch && footlightMatch && retentionMatch && portMatch, 'server.mjs must define timing and port constants');
-  assert.match(serverText, /body\.slot < 0 \|\| body\.slot > 9/, 'server.mjs must enforce slot 0..9');
+  assert.match(serverText, /body\.slot < 1 \|\| body\.slot > 9/, 'server.mjs must enforce slot 1..9');
   assert.match(serverText, /cutoff24h\s*=\s*now\s*-\s*24\s*\*\s*60\s*\*\s*60/, 'server.mjs must use 24h prompt_book state cutoff');
   assert.match(serverText, /ORDER BY id DESC LIMIT 100/, 'server.mjs must use 100-line prompt_book state fallback');
   assert.match(serverText, /const nonces = new Map\(\)/, 'server.mjs must store nonces in an in-memory Map');
@@ -147,7 +147,7 @@ test('PLAN.md §4 footlight TTL/slots, prompt_book retention/view, nonce/skew, a
   const { body } = readPlanBodySections();
   const nonceMin = Number(nonceMatch[1]) / 60;
   assert.match(body, new RegExp(`TTL ${footlightMatch[1]} min`), 'PLAN.md §4 must match footlight TTL');
-  assert.match(body, /`slot` \(`0\.\.9`\)/, 'PLAN.md §4 must document slot 0..9');
+  assert.match(body, /`slot` \(`1\.\.9`/, 'PLAN.md §4 must document slot 1..9');
   assert.match(body, new RegExp(`${retentionMatch[1]}-day retention prune`), 'PLAN.md §4 must match prompt_book retention');
   assert.match(body, /shows last 24h or 100 lines/, 'PLAN.md §4 must match prompt_book 24h/100-line view');
   assert.match(body, new RegExp(`in-memory \`Map\` in \`town-api/server\\.mjs\` with a ${nonceMin}-min TTL`), 'PLAN.md §4 must match nonce Map and TTL');
