@@ -1402,7 +1402,7 @@ test('CREDITS.md and town-3d/README.md exact byte sizes and line geometry are pi
   }
   assert.equal(lines[47].trim(), '- Licence: CC0 1.0', 'CREDITS.md line 48 must be the last entry 4th field');
 
-  assert.equal(readmeStat.size, 4255, 'town-3d/README.md exact byte size');
+  assert.equal(readmeStat.size, 4272, 'town-3d/README.md exact byte size');
   assert.equal(readmeMd.split('\n').length, 83, 'town-3d/README.md split("\\n") length');
 });
 
@@ -1698,7 +1698,7 @@ test('CREDITS.md and town-3d README.md FNV-1a checksums are pinned', async () =>
     fs.readFile(README_PATH),
   ]);
   assert.equal(fnv1aHex(creditsBuf), "c5545889", 'CREDITS.md FNV-1a checksum');
-  assert.equal(fnv1aHex(readmeBuf), "d4d53ad8", 'town-3d/README.md FNV-1a checksum');
+  assert.equal(fnv1aHex(readmeBuf), "1c9ffddd", 'town-3d/README.md FNV-1a checksum');
 });
 
 test('credited GLB JSON top-level key order is pinned per exporter', async () => {
