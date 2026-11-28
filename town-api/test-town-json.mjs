@@ -207,7 +207,10 @@ test('plot block matches plot-validation.mjs constants and bounds', () => {
   assert.equal(townJson.plot.max_props, parsePlotConstNumber('MAX_PROPS'));
 
   assert.deepEqual(townJson.plot.cottage_styles, parseStringListFromSet(plotValidationSrc, 'VALID_COTTAGES'));
-  assert.deepEqual(townJson.plot.starter_props, parseStringListFromSet(plotValidationSrc, 'VALID_PROP_KINDS'));
+  assert.deepEqual(
+    [...townJson.plot.starter_props, ...townJson.plot.earned_props],
+    parseStringListFromSet(plotValidationSrc, 'VALID_PROP_KINDS')
+  );
 
   // Coord bounds in plot-validation.mjs:101 (`p[axis] < -12 || p[axis] > 12`)
   const coordMatch = plotValidationSrc.match(/p\[axis\]\s*<\s*(-?\d+)\s*\|\|\s*p\[axis\]\s*>\s*(-?\d+)/);
@@ -385,6 +388,7 @@ test('block key sets are closed (no silent additions or drops)', () => {
     'signpost_max_chars',
     'cottage_styles',
     'starter_props',
+    'earned_props',
     'max_props',
     'coord_range',
     'rot_y_range',
@@ -981,6 +985,7 @@ test('literal plot block', () => {
       'lantern',
       'planter',
     ],
+    earned_props: ['boot_planter'],
     max_props: 12,
     coord_range: [-12, 12],
     rot_y_range: [0, 360],
