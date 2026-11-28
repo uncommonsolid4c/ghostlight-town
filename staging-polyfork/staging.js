@@ -73,7 +73,7 @@ import {
   updateStagingWander,
   getStagingNewsstandFrontPosition,
 } from './npc-wander.mjs';
-import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=36';
+import { attachPorchDeck, attachPorchTrim, attachPlotProps, MILO_PLOT_PROPS } from './cottage-props.mjs?v=41';
 import { buildInteriorRoom, setInteriorVisible, setInteriorPalette, setInteriorDressing } from './interior-room.mjs?v=34';
 import { isDoorHit, rayHitsInteriorDoor, createInteriorVisit } from './interior-visit.mjs?v=34';
 import { syncEmptyPadMarkers } from './empty-pad.mjs?v=35';
