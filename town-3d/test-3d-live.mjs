@@ -2301,40 +2301,59 @@ test('Slice 501: updateInnOccupancy direct claim shape decides palette and non-o
   assert.equal(getInnWindow(town, 4).material.emissiveIntensity, before);
 });
 
-test('Slice 501: applyState trusts a slot-0 row for a non-milo handle (P8)', () => {
+test('Slice 537: applyState ignores slot-0 rows and lights slot-1 rows (P8)', () => {
   const town = buildTown(createThreeStub(), { loadProps: false });
   const fl0 = town.parts.footlights[0];
+  const fl1 = town.parts.footlights[1];
   assert.equal(fl0.userData.handle, 'milo');
   assert.equal(fl0.userData.lit, true);
   assert.equal(fl0.userData.permanent, true);
-  applyState(town, { footlights: [{ handle: 'wick', slot: 0, role: 'npc' }], presence: [] });
-  assert.equal(fl0.userData.handle, 'wick');
+  applyState(town, {
+    footlights: [
+      { handle: 'wick', slot: 0, role: 'npc' },
+      { handle: 'wick', slot: 1, role: 'npc' },
+    ],
+    presence: [],
+  });
+  assert.equal(fl0.userData.handle, 'milo');
   assert.equal(fl0.userData.lit, true);
-  assert.equal(fl0.userData.role, 'npc');
+  assert.equal(fl0.userData.role, 'muse');
   assert.equal(fl0.userData.permanent, true);
-  assert.equal(fl0.userData.shell.material.emissiveIntensity, 1.0);
+  assert.equal(fl0.userData.shell.material.emissiveIntensity, 0.9);
+  assert.equal(fl1.userData.lit, true);
+  assert.equal(fl1.userData.handle, 'wick');
+  assert.equal(fl1.userData.role, 'npc');
+  assert.equal(fl1.userData.shell.material.emissiveIntensity, 1.0);
 });
 
-test('Slice 501: permanent flag is sticky so slot 0 stays lit as wick after row disappears (P9)', () => {
+test('Slice 537: slot-0 stays milo after a rejected slot-0 row and empty state (P9)', () => {
   const town = buildTown(createThreeStub(), { loadProps: false });
   applyState(town, { footlights: [{ handle: 'wick', slot: 0, role: 'npc' }], presence: [] });
   applyState(town, { footlights: [], presence: [] });
   const fl0 = town.parts.footlights[0];
   assert.equal(fl0.userData.lit, true);
-  assert.equal(fl0.userData.handle, 'wick');
+  assert.equal(fl0.userData.handle, 'milo');
 });
 
-test('Slice 501: handle-less footlight row lights slot with muse palette and milo placard (P10)', () => {
+test('Slice 537: handle-less and empty-handle footlight rows light nothing (P10)', () => {
   withRecordingCanvas((draws) => {
     const town = buildTown(createThreeStub(), { loadProps: false });
     draws.length = 0;
     applyState(town, { footlights: [{ slot: 3 }], presence: [] });
     const fl3 = town.parts.footlights[3];
-    assert.equal(fl3.userData.lit, true);
-    assert.equal(fl3.userData.handle, undefined);
+    assert.equal(fl3.userData.lit, false);
+    assert.equal(fl3.userData.handle, null);
     assert.equal(fl3.userData.statusText, null);
-    assert.equal(fl3.userData.role, 'muse');
-    assert.equal(fl3.userData.shell.material.emissiveIntensity, 0.9);
-    assert.deepEqual(draws.map((d) => d.text), ['milo']);
+    assert.equal(fl3.userData.role, null);
+    assert.equal(fl3.userData.shell.material.emissiveIntensity, 0);
+    assert.deepEqual(draws.map((d) => d.text), []);
+
+    applyState(town, { footlights: [{ handle: '', slot: 3 }], presence: [] });
+    assert.equal(fl3.userData.lit, false);
+    assert.equal(fl3.userData.handle, null);
+    assert.equal(fl3.userData.statusText, null);
+    assert.equal(fl3.userData.role, null);
+    assert.equal(fl3.userData.shell.material.emissiveIntensity, 0);
+    assert.deepEqual(draws.map((d) => d.text), []);
   });
 });
