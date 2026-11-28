@@ -53,7 +53,7 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
   holds one scheduled one-off reading (`"Gazette #3 — read aloud at the
   Bandstand"`, host `milo`, `2026-11-18T15:30:00Z` / Wed 2026-11-18
   07:30–08:30 PST, 60 min, at `the Bandstand`). Ships in the
-  `staging-polyfork` bundle (195 files, verified by
+  `staging-polyfork` bundle (196 files, verified by
   `scripts/stage-deploy.mjs --bundle staging-polyfork`).
 - `daylight-drift.mjs` — dynamic minimal daylight controller (`DAYLIGHT_DRIFT_CONFIG`,
   `daylightAt`, `buildDaylightDrift`): 30-minute town-clock cycle
@@ -92,6 +92,11 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 - `prompt-book.mjs` — verbatim copy of `formatPromptBookEntries` and
   `renderPromptBook` from `town-3d/town.js` (renders `[NPC]` `.pb-npc-pill`
   and `[guest]` `.pb-guest-pill` badges; no THREE dependency).
+- `catchup.mjs` — client-side "What you missed" catch-up diff and DOM
+  renderer (`loadSeenSnapshot`, `saveSeenSnapshot`, `buildSnapshot`,
+  `computeCatchUp`, `renderCatchUp`) backed by `localStorage`
+  (`ghostlight.catchup.seen.v1`); no THREE dependency, no top-level
+  document access.
 - `plot-overlay.mjs` — verbatim copy of `resolvePlotOverlayContent` from
   `town-3d/town.js` plus the Gazette `gazette/latest.json` resolver and
   sandboxed `#plot-overlay` open/close helpers from `town-3d/index.html` (no
@@ -154,6 +159,9 @@ Bandstand's Nightly Call card from `state.nightly_call`. Judged against
 - `test-prompt-book.mjs` — unit tests for `prompt-book.mjs` (100-entry cap,
   chronological order, `[NPC]` pill, `reply_to` threading, say vs emote, empty
   state, `textContent`-only XSS safety).
+- `test-catchup.mjs` — unit tests for `catchup.mjs` (snapshot round-trip,
+  corrupt/throwing storage, first-visit welcome, reply/neighbor/garden/line
+  diffs, handle input, `textContent`-only safety).
 - `test-seed-door-props.mjs` — unit tests for `seed-door-props.mjs`.
 - `test-staging-readme.mjs` — drift-guard tests for this `README.md` against
   `PLAN.md`, `staging-polyfork/index.html`, `staging.js`, `events.json`,
