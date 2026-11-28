@@ -496,8 +496,8 @@ test('server integration: host footlight override, state_seq bump on flip, since
     const host = await registerActiveResident(ctx, 'host');
     const other = await registerActiveResident(ctx, 'other');
 
-    await host.checkin({ status_text: 'my own words', slot: 0 });
-    await other.checkin({ status_text: 'other words', slot: 1 });
+    await host.checkin({ status_text: 'my own words', slot: 1 });
+    await other.checkin({ status_text: 'other words', slot: 2 });
 
     // Before start_at: events.next is populated, host keeps 'my own words' and has no event flag
     const beforeRes = await fetch(`${ctx.baseUrl}/api/town/state`);
@@ -658,7 +658,7 @@ test('server integration: file edit picked up via mtime without server restart',
   const ctx = await startTestServer({ baseNow, eventsPath });
   try {
     const host = await registerActiveResident(ctx, 'host');
-    await host.checkin({ status_text: 'initial', slot: 0 });
+    await host.checkin({ status_text: 'initial', slot: 1 });
 
     const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
     assert.equal(res1.status, 200);
@@ -949,7 +949,7 @@ test('server integration: host who checks in during the window gets event title 
     ctx.advanceClock(360);
     const checkinRes = await signedCheckin(ctx, keys, 'host', {
       status_text: 'my own words',
-      slot: 0,
+      slot: 1,
     });
     assert.equal(checkinRes.status, 200);
 
@@ -1096,7 +1096,7 @@ test('server integration: host checked in before the window gets the event title
     const { keys } = await registerResidentWithKeys(ctx, 'host');
     const checkinRes = await signedCheckin(ctx, keys, 'host', {
       status_text: 'my own words',
-      slot: 0,
+      slot: 1,
     });
     assert.equal(checkinRes.status, 200);
 
@@ -1495,7 +1495,7 @@ test('server integration: adding a next event while now is live does not bump st
     const { keys } = await registerResidentWithKeys(ctx, 'host');
     const checkinRes = await signedCheckin(ctx, keys, 'host', {
       status_text: 'mine',
-      slot: 0,
+      slot: 1,
     });
     assert.equal(checkinRes.status, 200);
 
@@ -1568,8 +1568,8 @@ test('server integration: host-only change does not bump state_seq (304) and pla
   try {
     const { keys: keysA } = await registerResidentWithKeys(ctx, 'hosta');
     const { keys: keysB } = await registerResidentWithKeys(ctx, 'hostb');
-    assert.equal((await signedCheckin(ctx, keysA, 'hosta', { status_text: 'a-words', slot: 0 })).status, 200);
-    assert.equal((await signedCheckin(ctx, keysB, 'hostb', { status_text: 'b-words', slot: 1 })).status, 200);
+    assert.equal((await signedCheckin(ctx, keysA, 'hosta', { status_text: 'a-words', slot: 1 })).status, 200);
+    assert.equal((await signedCheckin(ctx, keysB, 'hostb', { status_text: 'b-words', slot: 2 })).status, 200);
 
     const res1 = await fetch(`${ctx.baseUrl}/api/town/state`);
     assert.equal(res1.status, 200);
@@ -1655,8 +1655,8 @@ test('server integration: overlapping now events override earliest-start host an
   try {
     const { keys: kEarly } = await registerResidentWithKeys(ctx1, 'early');
     const { keys: kLate } = await registerResidentWithKeys(ctx1, 'late');
-    assert.equal((await signedCheckin(ctx1, kEarly, 'early', { status_text: 'e-words', slot: 0 })).status, 200);
-    assert.equal((await signedCheckin(ctx1, kLate, 'late', { status_text: 'l-words', slot: 1 })).status, 200);
+    assert.equal((await signedCheckin(ctx1, kEarly, 'early', { status_text: 'e-words', slot: 1 })).status, 200);
+    assert.equal((await signedCheckin(ctx1, kLate, 'late', { status_text: 'l-words', slot: 2 })).status, 200);
 
     const res = await fetch(`${ctx1.baseUrl}/api/town/state`);
     assert.equal(res.status, 200);
@@ -1704,8 +1704,8 @@ test('server integration: overlapping now events override earliest-start host an
   try {
     const { keys: kFirst } = await registerResidentWithKeys(ctx2, 'first');
     const { keys: kSecond } = await registerResidentWithKeys(ctx2, 'second');
-    assert.equal((await signedCheckin(ctx2, kFirst, 'first', { status_text: 'f-words', slot: 0 })).status, 200);
-    assert.equal((await signedCheckin(ctx2, kSecond, 'second', { status_text: 's-words', slot: 1 })).status, 200);
+    assert.equal((await signedCheckin(ctx2, kFirst, 'first', { status_text: 'f-words', slot: 1 })).status, 200);
+    assert.equal((await signedCheckin(ctx2, kSecond, 'second', { status_text: 's-words', slot: 2 })).status, 200);
 
     const res = await fetch(`${ctx2.baseUrl}/api/town/state`);
     assert.equal(res.status, 200);
