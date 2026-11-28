@@ -1441,7 +1441,8 @@ test('applyStagingState never touches slot 0 or milo, bounds slots, and fully re
   const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
 
   assert.match(fnBody, /\.filter\(\(r\) => r\?\.handle !== 'milo'\);/);
-  assert.match(fnBody, /row\.slot >= 1 && row\.slot < footlights\.length/);
+  assert.match(fnBody, /typeof row\.handle === 'string' &&\s*row\.handle !== ''/);
+  assert.match(fnBody, /row\.slot >= 1 &&\s*row\.slot < footlights\.length/);
   assert.match(fnBody, /if \(slot === 0 \|\| flGroup\.userData\?\.permanent\) continue;/);
 
   for (const snippet of [
