@@ -1377,22 +1377,22 @@ test('P7 staging.js animation-loop glide call-site source lines', async () => {
   const stagingSrc = await fs.readFile(path.join(__dirname, 'staging.js'), 'utf8');
   const sl = stagingSrc.split('\n');
   assert.equal(
-    sl[1512],
+    sl[1539],
     '    if (glideTarget && (!plotOverlayEl || plotOverlayEl.hidden) && !interiorVisit.isInside()) {'
   );
-  assert.equal(sl[1513], '      const next = stepOrbitGlide(');
-  assert.equal(sl[1514], '        controls.target,');
-  assert.equal(sl[1515], '        camera.position,');
-  assert.equal(sl[1516], '        glideTarget,');
-  assert.equal(sl[1517], '        dt,');
-  assert.equal(sl[1518], '        { speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }');
-  assert.equal(sl[1519], '      );');
-  assert.equal(sl[1520], '      controls.target.x = next.targetX;');
-  assert.equal(sl[1521], '      controls.target.z = next.targetZ;');
-  assert.equal(sl[1522], '      camera.position.x = next.cameraX;');
-  assert.equal(sl[1523], '      camera.position.z = next.cameraZ;');
-  assert.equal(sl[1524], '      if (next.arrived) {');
-  assert.equal(sl[1525], '        glideTarget = null;');
+  assert.equal(sl[1540], '      const next = stepOrbitGlide(');
+  assert.equal(sl[1541], '        controls.target,');
+  assert.equal(sl[1542], '        camera.position,');
+  assert.equal(sl[1543], '        glideTarget,');
+  assert.equal(sl[1544], '        dt,');
+  assert.equal(sl[1545], '        { speed: 14, maxRadius: glideMaxRadius, arriveDist: 0.3 }');
+  assert.equal(sl[1546], '      );');
+  assert.equal(sl[1547], '      controls.target.x = next.targetX;');
+  assert.equal(sl[1548], '      controls.target.z = next.targetZ;');
+  assert.equal(sl[1549], '      camera.position.x = next.cameraX;');
+  assert.equal(sl[1550], '      camera.position.z = next.cameraZ;');
+  assert.equal(sl[1551], '      if (next.arrived) {');
+  assert.equal(sl[1552], '        glideTarget = null;');
 });
 
 test('P8 stepGlide Infinity / NaN speed and a tiny dt', () => {
