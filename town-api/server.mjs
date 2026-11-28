@@ -1146,6 +1146,21 @@ export function createTownServer(opts = {}) {
       return;
     }
 
+    const bootPlanters = manifestRes.manifest.props.filter((p) => p.kind === 'boot_planter').length;
+    if (bootPlanters > 0) {
+      const boots = db
+        .prepare('SELECT COUNT(*) AS n FROM fish_catches WHERE handle = ? AND kind = ?')
+        .get(handle, 'old_boot').n;
+      if (boots < bootPlanters) {
+        sendJson(res, 400, {
+          error: 'boot_planter_requires_boot',
+          have: boots,
+          need: bootPlanters,
+        });
+        return;
+      }
+    }
+
     const rl = rateLimiter.consume(`plot:${handle}`, RATE_LIMITS.plot.max, RATE_LIMITS.plot.windowSec, now);
     if (!rl.allowed) {
       sendJson(res, 429, { error: 'rate_limited', retry_after: rl.retryAfter });
