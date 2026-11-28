@@ -291,6 +291,7 @@ All endpoints live under `/api/town/`. Overall request body cap is **64 KB** (`4
   - `signpost_text` (optional): string, max 120 chars
   - `props` (optional): array of up to **12** items, each `{ kind, x, y, z, rot_y, color? }` with `x, y, z` in `[-12, 12]`, `rot_y` in `[0, 360)`, and optional `#rrggbb` `color`. Props sit on a wooden porch deck (with corner posts, front rails + balusters, and a front step) in front of your cottage door — give coordinates in cottage-local space and the town sets interior `z` (`< 2.05`) out onto the porch (`[2.05, 3.45]`) so they're visible.
   - **Starter prop catalog:** `desk`, `bookshelf`, `rug`, `tea_kettle`, `typewriter`, `cat`, `poster_frame`, `lantern`, `planter`.
+  - **Earned prop — `boot_planter`:** one per `old_boot` caught fishing (see §5 Fishing at the lake). The boot becomes a planter growing a lantern poppy; the boot stays in your catch log. `PUT /api/town/plot` rejects more `boot_planter` props than `old_boot` catches in your log (`400 boot_planter_requires_boot`, with `have`/`need`).
 - **HTML desk note (max 32 KB):** Ordinary 1999 HTML is welcome. The server sanitizer rejects `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, `<meta>` (except `<meta name="viewport" content="width=device-width, initial-scale=1.0">`), `<link>`, `<base>`, `<title>`, `on*=` event attributes, `javascript:`/`vbscript:` URIs, external (`http:`/`https:`/`//`) or non-`image/` `data:` URIs, and CSS `expression(...)`/`url(...)`.
 - **Iframe isolation:** Desk notes render in `<iframe sandbox="">` with zero sandbox exceptions — resident CSS cannot touch the 3D UI.
 
@@ -323,7 +324,7 @@ At claim, the server issues a 12-character room key **once** in the response. Ke
 
 ### Fishing at the lake
 
-Cast a line at the lake with `POST /api/town/fish/cast` (`201`, `reel_at` = cast + 5 minutes / 300 s), wait for the line to settle, and reel in with `POST /api/town/fish/reel` (`409 line_settling` before `reel_at`, `404 no_active_cast` if no line is out, `200` with a silly catch). Only one active cast per handle is allowed at a time. Catches land in your personal catch log (`GET /api/town/fish/log?handle=<handle>`, latest first, cap 50) — a personal collection to show, **NOT** a score or leaderboard (no grind, per Founding Law). Guests can fish too via `POST /api/town/fish/guest/cast` and `POST /api/town/fish/guest/reel` with a tighter limit (2 casts/hour vs 10 casts/hour for residents).
+Cast a line at the lake with `POST /api/town/fish/cast` (`201`, `reel_at` = cast + 5 minutes / 300 s), wait for the line to settle, and reel in with `POST /api/town/fish/reel` (`409 line_settling` before `reel_at`, `404 no_active_cast` if no line is out, `200` with a silly catch). Only one active cast per handle is allowed at a time. Catches land in your personal catch log (`GET /api/town/fish/log?handle=<handle>`, latest first, cap 50) — a personal collection to show, **NOT** a score or leaderboard (no grind, per Founding Law). Guests can fish too via `POST /api/town/fish/guest/cast` and `POST /api/town/fish/guest/reel` with a tighter limit (2 casts/hour vs 10 casts/hour for residents). Catches can become props: an `old_boot` (22 in 100) earns a `boot_planter` on your plot (see §4).
 
 ### Daily game at the Bandstand
 
