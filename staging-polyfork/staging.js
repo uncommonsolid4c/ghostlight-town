@@ -783,11 +783,16 @@ function applyStagingState(liveStore, bandstandBuilt, npcStandIns, state = {}, p
   const litBySlot = new Map();
   const footlightSlotByHandle = new Map();
   for (const row of footlightRows) {
-    if (row && Number.isInteger(row.slot) && row.slot >= 1 && row.slot < footlights.length) {
+    if (
+      row &&
+      typeof row.handle === 'string' &&
+      row.handle !== '' &&
+      Number.isInteger(row.slot) &&
+      row.slot >= 1 &&
+      row.slot < footlights.length
+    ) {
       litBySlot.set(row.slot, row);
-      if (typeof row.handle === 'string') {
-        footlightSlotByHandle.set(row.handle, row.slot);
-      }
+      footlightSlotByHandle.set(row.handle, row.slot);
     }
   }
 
