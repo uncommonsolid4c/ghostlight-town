@@ -1134,13 +1134,13 @@ test('event-banner.mjs source pins header, single import, validation constants, 
 test('staging.js event-banner wiring pins import, store key, applyStagingState, and loadEvents calls', async () => {
   const stagingSrc = await fs.readFile(path.join(HERE, 'staging.js'), 'utf8');
   const sl = stagingSrc.split('\n');
-  assert.equal(sl[36], '  loadEvents,');
-  assert.equal(sl[536], '    eventBannerKey: null,');
-  assert.equal(sl[836], '  const selectedEvent = selectCurrentEvent(liveStore.events, ' + 'Date' + '.now());');
-  assert.equal(sl[837], '  updateEventBanner(');
-  assert.equal(sl[847], '  renderEventBannerHeader(');
-  assert.equal(sl[1231], '  loadEvents()');
-  assert.equal(sl[1235], '        const selectedEvent = selectCurrentEvent(liveStore.events, ' + 'Date' + '.now());');
+  assert.equal(sl[43], '  loadEvents,');
+  assert.equal(sl[543], '    eventBannerKey: null,');
+  assert.equal(sl[843], '  const selectedEvent = selectCurrentEvent(liveStore.events, ' + 'Date' + '.now());');
+  assert.equal(sl[844], '  updateEventBanner(');
+  assert.equal(sl[854], '  renderEventBannerHeader(');
+  assert.equal(sl[1258], '  loadEvents()');
+  assert.equal(sl[1262], '        const selectedEvent = selectCurrentEvent(liveStore.events, ' + 'Date' + '.now());');
   assert.equal(sl.filter((l) => l.includes('selectCurrentEvent(')).length, 2);
   assert.equal(sl.filter((l) => l.includes('updateEventBanner(')).length, 2);
   assert.equal(sl.filter((l) => l.includes('renderEventBannerHeader(')).length, 2);
@@ -1286,41 +1286,41 @@ test('P6 — eventBannerLines wraps a 30-char word plus trailing words', () => {
 
 test('P7 — staging.js applyStagingState event block source lines', async () => {
   const sl = (await fs.readFile(path.join(HERE, 'staging.js'), 'utf8')).split('\n');
-  assert.equal(sl[838], '    {');
-  assert.equal(sl[839], '      THREE,');
-  assert.equal(sl[840], '      bandstandBuilt,');
-  assert.equal(sl[841], '      liveStore,');
-  assert.equal(sl[842], '      makeTextTexture: makeBandstandTextTexture,');
-  assert.equal(sl[843], '    },');
-  assert.equal(sl[844], '    selectedEvent?.event || null,');
-  assert.equal(sl[845], '    selectedEvent?.status || null');
-  assert.equal(sl[846], '  );');
-  assert.equal(sl[848], '    eventBannerEl,');
-  assert.equal(sl[849], '    selectedEvent?.event || null,');
-  assert.equal(sl[850], '    selectedEvent?.status || null');
-  assert.equal(sl[851], '  );');
+  assert.equal(sl[845], '    {');
+  assert.equal(sl[846], '      THREE,');
+  assert.equal(sl[847], '      bandstandBuilt,');
+  assert.equal(sl[848], '      liveStore,');
+  assert.equal(sl[849], '      makeTextTexture: makeBandstandTextTexture,');
+  assert.equal(sl[850], '    },');
+  assert.equal(sl[851], '    selectedEvent?.event || null,');
+  assert.equal(sl[852], '    selectedEvent?.status || null');
+  assert.equal(sl[853], '  );');
+  assert.equal(sl[855], '    eventBannerEl,');
+  assert.equal(sl[856], '    selectedEvent?.event || null,');
+  assert.equal(sl[857], '    selectedEvent?.status || null');
+  assert.equal(sl[858], '  );');
 });
 
 test('P8 — staging.js loadEvents().then block source lines', async () => {
   const sl = (await fs.readFile(path.join(HERE, 'staging.js'), 'utf8')).split('\n');
-  assert.equal(sl[1232], '    .then(({ events }) => {');
-  assert.equal(sl[1233], '      liveStore.events = Array.isArray(events) ? events : [];');
-  assert.equal(sl[1234], '      if (liveStore.lastState) {');
-  assert.equal(sl[1236], '        updateEventBanner(');
-  assert.equal(sl[1237], '          {');
-  assert.equal(sl[1238], '            THREE,');
-  assert.equal(sl[1239], '            bandstandBuilt,');
-  assert.equal(sl[1240], '            liveStore,');
-  assert.equal(sl[1241], '            makeTextTexture: makeBandstandTextTexture,');
-  assert.equal(sl[1242], '          },');
-  assert.equal(sl[1243], '          selectedEvent?.event || null,');
-  assert.equal(sl[1244], '          selectedEvent?.status || null');
-  assert.equal(sl[1245], '        );');
-  assert.equal(sl[1246], '        renderEventBannerHeader(');
-  assert.equal(sl[1247], '          eventBannerEl,');
-  assert.equal(sl[1248], '          selectedEvent?.event || null,');
-  assert.equal(sl[1249], '          selectedEvent?.status || null');
-  assert.equal(sl[1250], '        );');
+  assert.equal(sl[1259], '    .then(({ events }) => {');
+  assert.equal(sl[1260], '      liveStore.events = Array.isArray(events) ? events : [];');
+  assert.equal(sl[1261], '      if (liveStore.lastState) {');
+  assert.equal(sl[1263], '        updateEventBanner(');
+  assert.equal(sl[1264], '          {');
+  assert.equal(sl[1265], '            THREE,');
+  assert.equal(sl[1266], '            bandstandBuilt,');
+  assert.equal(sl[1267], '            liveStore,');
+  assert.equal(sl[1268], '            makeTextTexture: makeBandstandTextTexture,');
+  assert.equal(sl[1269], '          },');
+  assert.equal(sl[1270], '          selectedEvent?.event || null,');
+  assert.equal(sl[1271], '          selectedEvent?.status || null');
+  assert.equal(sl[1272], '        );');
+  assert.equal(sl[1273], '        renderEventBannerHeader(');
+  assert.equal(sl[1274], '          eventBannerEl,');
+  assert.equal(sl[1275], '          selectedEvent?.event || null,');
+  assert.equal(sl[1276], '          selectedEvent?.status || null');
+  assert.equal(sl[1277], '        );');
 });
 
 test('P9 — selectCurrentEvent returns the normalized event for next too', () => {
