@@ -1428,8 +1428,8 @@ test('test-credits.mjs file hygiene and CREDITS.md Poly Pizza URL exclusivity ar
   ]);
 
   const testNames = [...selfSrc.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
-  assert.equal(testNames.length, 54, 'test-credits.mjs must have exactly 54 top-level tests');
-  assert.equal(new Set(testNames).size, 54, 'all 54 top-level test names must be unique');
+  assert.equal(testNames.length, 64, 'test-credits.mjs must have exactly 54 top-level tests');
+  assert.equal(new Set(testNames).size, 64, 'all 54 top-level test names must be unique');
 
   const importLines = selfSrc.match(/^import /gm) ?? [];
   assert.equal(importLines.length, 6, 'test-credits.mjs must have exactly 6 top-level import lines');
@@ -1699,4 +1699,167 @@ test('CREDITS.md and town-3d README.md FNV-1a checksums are pinned', async () =>
   ]);
   assert.equal(fnv1aHex(creditsBuf), "c5545889", 'CREDITS.md FNV-1a checksum');
   assert.equal(fnv1aHex(readmeBuf), "d4d53ad8", 'town-3d/README.md FNV-1a checksum');
+});
+
+test('credited GLB JSON top-level key order is pinned per exporter', async () => {
+  const expected = new Map([
+    ['post-lantern.glb', ['asset', 'scene', 'buffers', 'bufferViews', 'scenes', 'accessors', 'images', 'samplers', 'textures', 'materials', 'meshes', 'nodes']],
+    ['lantern.glb', ['asset', 'scene', 'buffers', 'bufferViews', 'scenes', 'accessors', 'images', 'samplers', 'textures', 'materials', 'meshes', 'nodes']],
+    ['bench.glb', ['asset', 'scene', 'buffers', 'bufferViews', 'scenes', 'accessors', 'images', 'samplers', 'textures', 'materials', 'meshes', 'nodes']],
+    ['bookshelf.glb', ['asset', 'scene', 'buffers', 'bufferViews', 'scenes', 'accessors', 'images', 'samplers', 'textures', 'materials', 'meshes', 'nodes']],
+    ['street-light.glb', ['asset', 'scene', 'buffers', 'bufferViews', 'scenes', 'accessors', 'samplers', 'materials', 'meshes', 'nodes']],
+    ['oil-lamp.glb', ['asset', 'scene', 'buffers', 'bufferViews', 'scenes', 'accessors', 'samplers', 'materials', 'meshes', 'nodes']],
+    ['teapot.glb', ['accessors', 'asset', 'buffers', 'bufferViews', 'images', 'materials', 'meshes', 'nodes', 'samplers', 'scene', 'scenes', 'textures']],
+  ]);
+  const glbs = await loadAllCreditedGlbs();
+  assert.equal(glbs.length, expected.size);
+  for (const { file, gltf } of glbs) {
+    assert.deepEqual(Object.keys(gltf), expected.get(file), `${file} top-level key order`);
+  }
+});
+
+test('credited GLB material key sets and alphaMode are pinned', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (const mat of gltf.materials) {
+      assert.equal(mat.alphaMode, 'OPAQUE', `${file} ${mat.name} alphaMode`);
+      if (file === 'teapot.glb') {
+        assert.deepEqual(Object.keys(mat), ['name', 'pbrMetallicRoughness', 'emissiveFactor', 'alphaMode', 'doubleSided'], `${file} material keys`);
+      } else {
+        assert.deepEqual(Object.keys(mat), ['name', 'alphaMode', 'extras', 'pbrMetallicRoughness'], `${file} ${mat.name} material keys`);
+        assert.equal('doubleSided' in mat, false, `${file} ${mat.name} must have no doubleSided key`);
+        assert.equal('emissiveFactor' in mat, false, `${file} ${mat.name} must have no emissiveFactor key`);
+      }
+    }
+  }
+});
+
+test('credited GLB asset is exactly generator plus version and no animation skin camera or extension keys exist', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    const generator = file === 'teapot.glb' ? 'obj2gltf' : 'FBX2glTF v0.9.7';
+    assert.deepEqual(gltf.asset, { generator, version: '2.0' }, `${file} asset`);
+    assert.equal('copyright' in gltf.asset, false, `${file} asset must have no copyright key`);
+    for (const key of ['animations', 'skins', 'cameras', 'extensionsUsed', 'extensionsRequired', 'extensions']) {
+      assert.equal(key in gltf, false, `${file} must have no ${key} key`);
+    }
+  }
+});
+
+test('credited GLB chunk-type magic and buffer naming are pinned', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, buf, jsonLen, gltf } of glbs) {
+    assert.equal(buf.readUInt32LE(16), 0x4E4F534A, `${file} JSON chunk type must be 0x4E4F534A`);
+    assert.equal(buf.readUInt32LE(20 + jsonLen + 4), 0x004E4942, `${file} BIN chunk type must be 0x004E4942`);
+    assert.equal(gltf.buffers.length, 1, `${file} must have exactly 1 buffer`);
+    if (file === 'teapot.glb') {
+      assert.equal(gltf.buffers[0].name, 'misc_kettle', `${file} buffer name`);
+    } else {
+      assert.equal('name' in gltf.buffers[0], false, `${file} buffer must have no name key`);
+    }
+  }
+});
+
+test('credited GLB mesh primitive and attribute key order is pinned', async () => {
+  const glbs = await loadAllCreditedGlbs();
+  for (const { file, gltf } of glbs) {
+    for (const mesh of gltf.meshes) {
+      assert.deepEqual(Object.keys(mesh), ['name', 'primitives'], `${file} mesh keys`);
+      for (const prim of mesh.primitives) {
+        const wantPrim = file === 'teapot.glb'
+          ? ['attributes', 'indices', 'material', 'mode']
+          : ['material', 'mode', 'attributes', 'indices'];
+        assert.deepEqual(Object.keys(prim), wantPrim, `${file} primitive keys`);
+        const wantAttr = file === 'teapot.glb'
+          ? ['POSITION', 'NORMAL', 'TEXCOORD_0']
+          : (file === 'street-light.glb' || file === 'oil-lamp.glb'
+            ? ['NORMAL', 'POSITION']
+            : ['NORMAL', 'POSITION', 'TEXCOORD_0']);
+        assert.deepEqual(Object.keys(prim.attributes), wantAttr, `${file} attribute keys`);
+      }
+    }
+  }
+});
+
+test('credit parsers handle synthetic edge inputs without leaking fields', () => {
+  const synthetic = [
+    'intro `models/not-a-model.png` and models/bare.glb are not entries',
+    '- **Alpha** (`models/alpha.glb`)',
+    '  - Author: Someone',
+    '  - Poly Pizza ID: `ABCDEFGHIJ`',
+    '  - Page: https://poly.pizza/m/ABCDEFGHIJ',
+    '  - Licence: CC0 1.0',
+    '  - Colour: red',
+    '- **Beta** (`models/beta.glb`)',
+    '  - Author: Other',
+    '  - Poly Pizza ID: `0123456789`',
+    '  - Page: https://poly.pizza/m/0123456789',
+    '- **Gamma** (models/gamma.glb)',
+    '  - Author: NoBackticks',
+    '- **Alpha** (`models/alpha.glb`)',
+    '  - Author: Someone Again',
+    '  - Poly Pizza ID: `ABCDEFGHIJ`',
+    '  - Page: https://poly.pizza/m/ABCDEFGHIJ',
+    '  - Licence: CC0 1.0',
+    '',
+  ].join('\n');
+  assert.deepEqual(parseCreditedModels(synthetic), ['alpha.glb', 'beta.glb', 'alpha.glb']);
+  const entries = parseCreditEntries(synthetic);
+  assert.equal(entries.length, 3, 'synthetic input must yield 3 entries');
+  assert.deepEqual(entries[0], { displayName: 'Alpha', file: 'alpha.glb', author: 'Someone', id: 'ABCDEFGHIJ', page: 'https://poly.pizza/m/ABCDEFGHIJ', licence: 'CC0 1.0' });
+  assert.equal(entries[1].licence, null, 'Beta is missing Licence so licence must be null');
+  assert.deepEqual([entries[1].displayName, entries[1].file, entries[1].author, entries[1].id, entries[1].page], ['Beta', 'beta.glb', 'Other', '0123456789', 'https://poly.pizza/m/0123456789']);
+  assert.deepEqual(Object.keys(entries[0]), ['displayName', 'file', 'author', 'id', 'page', 'licence']);
+  assert.equal(entries.some((e) => e.displayName === 'Gamma'), false, 'Gamma has no backticked path so it is not an entry');
+  assert.equal(entries[2].author, 'Someone Again', 'duplicate Alpha heading is a second entry');
+  assert.equal(entries[0].page, 'https://poly.pizza/m/ABCDEFGHIJ', 'no field leaks across entries');
+});
+
+test('CREDITS.md line geometry is pinned', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const lines = creditsMd.split('\n');
+  assert.equal(lines.length, 49, 'CREDITS.md split on newline must have 49 parts');
+  assert.equal(lines.at(-1), '', 'CREDITS.md must end with a trailing newline');
+  assert.equal(lines.length - 1, 48, 'CREDITS.md must have 48 content lines');
+  const headerLines = lines.map((l, i) => (l.startsWith('- **') ? i + 1 : null)).filter(Boolean);
+  assert.deepEqual(headerLines, [8, 14, 20, 26, 32, 38, 44], 'entry header lines');
+  const blankLines = lines.map((l, i) => (l === '' && i + 1 < 49 ? i + 1 : null)).filter(Boolean);
+  assert.deepEqual(blankLines, [2, 7, 13, 19, 25, 31, 37, 43], 'blank content lines');
+  assert.equal(creditsMd.includes('\r'), false, 'CREDITS.md must have no carriage returns');
+});
+
+test('town-3d README.md models paragraph lines are pinned verbatim', async () => {
+  const readmeMd = await fs.readFile(README_PATH, 'utf8');
+  const lines = readmeMd.split('\n');
+  assert.deepEqual(lines.slice(25, 30), [
+    '- **Models (`models/`):** 8 `.glb` files locally — 7 committed CC0 props',
+    '  (`bench.glb`, `bookshelf.glb`, `lantern.glb`, `oil-lamp.glb`,',
+    '  `post-lantern.glb`, `street-light.glb`, `teapot.glb`; see `CREDITS.md`).',
+    '  `pine.glb` is **local-only** (~2.2 MB, deliberately never committed or',
+    '  shipped; procedural trees stay, and `stage-deploy.mjs` excludes it).',
+  ]);
+  assert.equal(lines[30].startsWith('- **Gazette'), true, 'line 31 must start the Gazette bullet');
+});
+
+test('town.js procedural fallback builder inventory and dispatch order are pinned', async () => {
+  const townJs = await fs.readFile(path.join(__dirname, 'town.js'), 'utf8');
+  const builders = [...townJs.matchAll(/^export function (buildProcedural[A-Z]\w+)|^function (buildProcedural[A-Z]\w+)/gm)]
+    .map((m) => m[1] ?? m[2]);
+  assert.deepEqual(builders, ['buildProceduralPostLantern', 'buildProceduralLantern', 'buildProceduralBench', 'buildProceduralStreetLight', 'buildProceduralBookshelf', 'buildProceduralOilLamp', 'buildProceduralTypewriter', 'buildProceduralTeapot', 'buildProceduralProp']);
+  const exported = [...townJs.matchAll(/^export function (buildProcedural[A-Z]\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exported, ['buildProceduralStreetLight', 'buildProceduralBookshelf', 'buildProceduralOilLamp', 'buildProceduralTypewriter', 'buildProceduralTeapot', 'buildProceduralProp']);
+  const dispatch = [...townJs.matchAll(/if \(kind === '([a-z-]+)'\) return buildProcedural\w+\(THREE\);/g)].map((m) => m[1]);
+  assert.deepEqual(dispatch, ['post-lantern', 'lantern', 'bench', 'street-light', 'bookshelf', 'oil-lamp', 'typewriter', 'teapot']);
+  assert.equal(townJs.includes('return new THREE.Group();'), true, 'unknown kind must fall through to an empty Group');
+  assert.equal(/export function buildProceduralProp\(THREE, kind\) \{[\s\S]*?return new THREE\.Group\(\);/.test(townJs), true, 'fallthrough must be inside buildProceduralProp');
+});
+
+test('credited GLB loader returns files in CREDITS.md order', async () => {
+  const creditsMd = await fs.readFile(CREDITS_PATH, 'utf8');
+  const credited = parseCreditedModels(creditsMd);
+  assert.deepEqual(credited, ['post-lantern.glb', 'lantern.glb', 'bench.glb', 'street-light.glb', 'bookshelf.glb', 'oil-lamp.glb', 'teapot.glb']);
+  assert.deepEqual(credited.map((f) => `models/${f}`), EXPECTED_TUPLES.map((t) => t[1]));
+  const glbs = await loadAllCreditedGlbs();
+  assert.deepEqual(glbs.map((g) => g.file), credited, 'loader must return files in CREDITS.md order');
+  assert.equal(glbs.length, 7, 'loader must return 7 credited GLBs');
 });
